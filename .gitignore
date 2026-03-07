@@ -11,3 +11,4 @@ dist
 .testcontainers.properties
 tmp
 .sessions/
+drafts/
