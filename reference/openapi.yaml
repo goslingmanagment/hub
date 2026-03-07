@@ -1,0 +1,3778 @@
+openapi: 3.0.3
+info:
+  title: Fansly API
+  description: |
+    Reverse-engineered Fansly API specification.
+
+    ## Key conventions
+    - All IDs are string-encoded 64-bit integers (e.g. `"737077689877278720"`)
+    - Wallet balances are in **cents** (divide by 100 for USD)
+    - Earnings/transactions are in **mills** (divide by 1000 for USD)
+    - Timestamps are in **milliseconds** (Unix epoch), except `Post.createdAt` which is in **seconds**
+    - All GET requests include `ngsw-bypass=true` query parameter to bypass Angular service worker caching
+    - The `authorization` header uses a raw token (no `Bearer` prefix)
+  version: "1.0.0"
+  contact:
+    name: Reverse Engineering Project
+
+servers:
+  - url: https://apiv3.fansly.com/api/v1
+    description: Main REST API
+  - url: https://mediav2.fansly.com/api/v1
+    description: Media Upload API
+
+security:
+  - authToken: []
+
+tags:
+  - name: Account
+    description: Account management and lookup
+  - name: Messaging
+    description: Direct messages and conversations
+  - name: Subscribers
+    description: Creator subscriber management
+  - name: Subscriptions
+    description: User subscription management
+  - name: Followers
+    description: Follower management
+  - name: Posts
+    description: Post creation and retrieval
+  - name: Timeline
+    description: Timeline/feed endpoints
+  - name: Media
+    description: Media objects and account media
+  - name: Vault
+    description: Media vault and album management
+  - name: Earnings
+    description: Earnings, wallets, and payments
+  - name: Notifications
+    description: Notification management
+  - name: Settings
+    description: Account settings
+  - name: Analytics
+    description: Statistics and analytics
+  - name: Lists
+    description: Custom user lists
+  - name: Ignore
+    description: Block/mute management
+  - name: Notes
+    description: User notes
+  - name: MediaUpload
+    description: Media upload (mediav2.fansly.com)
+  - name: Streaming
+    description: Livestreaming and chatrooms
+  - name: ContentDiscovery
+    description: Content discovery and suggestions
+  - name: Utilities
+    description: Versioning, products, tracking links
+
+paths:
+  # ──────────────────────────────────────────────
+  # Account
+  # ──────────────────────────────────────────────
+  /account/me:
+    get:
+      operationId: getMyAccount
+      summary: Get authenticated user's account
+      tags: [Account]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Current user account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_AccountMe'
+              example:
+                success: true
+                response:
+                  account:
+                    id: "772956494390898689"
+                    username: "example_user"
+                    displayName: "Example User"
+                    flags: 50
+                    version: 17
+                    createdAt: 1745781549000
+                    followCount: 474
+                    subscriberCount: 6
+                    timelineStats:
+                      imageCount: 78
+                      videoCount: 5
+                      bundleCount: 15
+                    statusId: 3
+                    accountMediaLikes: 2249
+                    postLikes: 730
+                  wallets:
+                    - id: "775700594068299776"
+                      balance: 153792
+                      type: 2
+                  subscriptionTiers: []
+
+  /account:
+    get:
+      operationId: getAccounts
+      summary: Get accounts by IDs or usernames
+      description: Batch limit 100 per request.
+      tags: [Account]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: ids
+          in: query
+          description: Comma-separated account IDs (max 100)
+          schema:
+            type: string
+        - name: usernames
+          in: query
+          description: Comma-separated usernames (case-insensitive)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Array of accounts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_AccountArray'
+
+  /account/search:
+    get:
+      operationId: searchAccounts
+      summary: Search for accounts
+      tags: [Account]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: query
+          in: query
+          required: true
+          description: URL-encoded search term
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit100'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_AccountArray'
+
+  /account/walls:
+    get:
+      operationId: getAccountWalls
+      summary: Get account walls/timelines
+      tags: [Account]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: correlationPostIds
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Array of wall objects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_WallArray'
+
+  /account/{accountId}/wallets:
+    get:
+      operationId: getAccountWallets
+      summary: Get wallets for an account
+      tags: [Account]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Array of wallets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_WalletArray'
+
+  /account/ignore:
+    post:
+      operationId: ignoreAccount
+      summary: Block or ignore an account
+      tags: [Ignore]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ignoredId, ignoreFlags]
+              properties:
+                ignoredId:
+                  type: string
+                  description: Account ID to ignore
+                ignoreFlags:
+                  type: integer
+                  description: Bitmask (1=mute, 2=block, 4=vip, 8=suggestion_mute, 16=dm_bypass)
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /account/media:
+    get:
+      operationId: getAccountMedia
+      summary: Get account media by IDs
+      tags: [Media]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: ids
+          in: query
+          required: true
+          description: Comma-separated account media IDs
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Array of account media
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericArray'
+    post:
+      operationId: createAccountMedia
+      summary: Create account media (link uploaded media to account)
+      tags: [Media]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  mediaId:
+                    type: string
+                  previewId:
+                    type: string
+                    nullable: true
+                  permissionFlags:
+                    type: integer
+                    default: 0
+                  price:
+                    type: integer
+                    default: 0
+                  whitelist:
+                    type: array
+                    items:
+                      type: string
+                  permissions:
+                    type: object
+                    properties:
+                      permissionFlags:
+                        type: array
+                        items:
+                          type: integer
+                  tags:
+                    type: array
+                    items:
+                      type: string
+      responses:
+        '200':
+          description: Created account media
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericArray'
+
+  /account/media/bundle:
+    get:
+      operationId: getAccountMediaBundles
+      summary: Get account media bundles by IDs
+      tags: [Media]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: ids
+          in: query
+          required: true
+          description: Comma-separated bundle IDs
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Array of media bundles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericArray'
+    post:
+      operationId: createAccountMediaBundle
+      summary: Create a media bundle
+      tags: [Media]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Created bundle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /account/media/permissions:
+    post:
+      operationId: editMediaPermissions
+      summary: Edit permissions for a single account media item
+      tags: [Media]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, mediaId]
+              properties:
+                id:
+                  type: string
+                  description: Account media ID
+                mediaId:
+                  type: string
+                previewId:
+                  type: string
+                  nullable: true
+                permissionFlags:
+                  type: integer
+                price:
+                  type: integer
+                whitelist:
+                  type: array
+                  items:
+                    type: string
+                permissions:
+                  type: object
+                  properties:
+                    permissionFlags:
+                      type: array
+                      items:
+                        type: integer
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Permissions updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /account/media/bundle/permissions:
+    post:
+      operationId: editBundlePermissions
+      summary: Edit permissions for a media bundle
+      tags: [Media]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  type: string
+                  description: Bundle ID
+                previewId:
+                  type: string
+                  nullable: true
+                permissionFlags:
+                  type: integer
+                price:
+                  type: integer
+                accountMediaModels:
+                  type: array
+                  items:
+                    type: object
+                whitelist:
+                  type: array
+                  items:
+                    type: string
+                permissions:
+                  type: object
+                  properties:
+                    permissionFlags:
+                      type: array
+                      items:
+                        type: integer
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Permissions updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  # ──────────────────────────────────────────────
+  # Followers
+  # ──────────────────────────────────────────────
+  /account/{accountId}/followersnew:
+    get:
+      operationId: getFollowers
+      summary: Get followers for an account
+      tags: [Followers]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit100'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/After'
+        - name: search
+          in: query
+          description: Filter by username
+          schema:
+            type: string
+        - name: lastSeenAfter
+          in: query
+          description: Filter by last seen timestamp (ms)
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Followers list with aggregation data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_Followers'
+
+  # ──────────────────────────────────────────────
+  # Messaging
+  # ──────────────────────────────────────────────
+  /messaging/groups:
+    get:
+      operationId: getMessagingGroups
+      summary: List DM conversation groups
+      tags: [Messaging]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - $ref: '#/components/parameters/Offset'
+        - name: sortOrder
+          in: query
+          description: "Sort order (0 or 1)"
+          schema:
+            type: integer
+            default: 1
+        - name: flags
+          in: query
+          description: "Filter flags (0=all, 32=unread only)"
+          schema:
+            type: integer
+            default: 0
+        - name: search
+          in: query
+          description: Username search query
+          schema:
+            type: string
+        - name: subscriptionTierId
+          in: query
+          description: Filter by subscription tier
+          schema:
+            type: string
+        - name: listIds
+          in: query
+          description: Comma-separated list IDs
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Conversation groups
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_MessagingGroupsList'
+
+  /group:
+    post:
+      operationId: createGroup
+      summary: Create a new DM conversation group
+      tags: [Messaging]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [users, type]
+              properties:
+                users:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      userId:
+                        type: string
+                      permissionFlags:
+                        type: integer
+                        default: 0
+                recipients:
+                  type: array
+                  items:
+                    type: object
+                lastMessage:
+                  nullable: true
+                userSettings:
+                  nullable: true
+                type:
+                  type: integer
+                  description: "1 = DM"
+                  default: 1
+      responses:
+        '200':
+          description: Created group
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_Group'
+
+  /group/{groupId}:
+    get:
+      operationId: getGroup
+      summary: Get a specific conversation group
+      tags: [Messaging]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Group details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_Group'
+
+  /message:
+    get:
+      operationId: getMessages
+      summary: Get messages in a conversation
+      tags: [Messaging]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: groupId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 25
+        - name: before
+          in: query
+          description: Message ID cursor (get messages before this)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Messages with related data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_Messages'
+    post:
+      operationId: sendMessage
+      summary: Send a message
+      tags: [Messaging]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [groupId, content, type]
+              properties:
+                type:
+                  type: integer
+                  default: 1
+                groupId:
+                  type: string
+                content:
+                  type: string
+                attachments:
+                  type: array
+                  items:
+                    type: object
+                likes:
+                  type: array
+                  items:
+                    type: object
+                scheduledFor:
+                  type: integer
+                  default: 0
+                inReplyTo:
+                  type: string
+                  nullable: true
+                createdAt:
+                  type: integer
+                  format: int64
+                  description: Timestamp in ms
+      responses:
+        '200':
+          description: Sent message
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  response:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+
+  /message/ack:
+    post:
+      operationId: acknowledgeMessages
+      summary: Mark messages as read
+      tags: [Messaging]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messageIds, type]
+              properties:
+                messageIds:
+                  type: array
+                  items:
+                    type: string
+                type:
+                  type: integer
+                  description: "2 = read acknowledgment"
+                  default: 2
+      responses:
+        '200':
+          description: Acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /message/typing:
+    post:
+      operationId: sendTypingIndicator
+      summary: Send typing indicator
+      tags: [Messaging]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [groupId]
+              properties:
+                groupId:
+                  type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /message/unread:
+    get:
+      operationId: getUnreadMessages
+      summary: Get unread message summary
+      tags: [Messaging]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - $ref: '#/components/parameters/Limit100'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: Unread messages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /message/delete:
+    post:
+      operationId: deleteMessage
+      summary: Delete a message
+      tags: [Messaging]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messageId, id]
+              properties:
+                messageId:
+                  type: string
+                id:
+                  type: string
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /message/automated:
+    get:
+      operationId: getAutomatedMessages
+      summary: Get configured automated messages
+      tags: [Messaging]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Automated message configs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  response:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AutomatedMessage'
+
+  /message/broadcast:
+    post:
+      operationId: broadcastMessage
+      summary: Send a mass direct message
+      tags: [Messaging]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Broadcast sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  # ──────────────────────────────────────────────
+  # Subscribers (Creator)
+  # ──────────────────────────────────────────────
+  /subscribers:
+    get:
+      operationId: getSubscribers
+      summary: Get subscriber list (for creators)
+      tags: [Subscribers]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: status
+          in: query
+          description: "Comma-separated status codes (e.g. 3,4)"
+          schema:
+            type: string
+            default: "3,4"
+        - $ref: '#/components/parameters/Limit100'
+        - $ref: '#/components/parameters/Offset'
+        - name: search
+          in: query
+          description: Username search
+          schema:
+            type: string
+        - name: subscriptionTierId
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/After'
+      responses:
+        '200':
+          description: Subscribers list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_Subscribers'
+              example:
+                success: true
+                response:
+                  stats:
+                    totalActive: 6
+                    totalExpired: 7
+                    total: 13
+                  subscriptions:
+                    - id: "883584485138907136"
+                      subscriberId: "586780754529234944"
+                      subscriptionTierId: "877260451656769536"
+                      subscriptionTierName: "Premium"
+                      status: 3
+                      price: 20000
+                      renewPrice: 20000
+                      autoRenew: 1
+                      billingCycle: 30
+                      duration: 30
+
+  # ──────────────────────────────────────────────
+  # Subscriptions (User)
+  # ──────────────────────────────────────────────
+  /subscriptions:
+    get:
+      operationId: getSubscriptions
+      summary: Get subscriptions the user has purchased
+      tags: [Subscriptions]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: User subscriptions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_Subscriptions'
+
+  /subscriptions/tiers:
+    get:
+      operationId: getSubscriptionTiers
+      summary: Get subscription tiers for the authenticated account
+      tags: [Subscriptions]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Subscription tiers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericArray'
+
+  # ──────────────────────────────────────────────
+  # Posts
+  # ──────────────────────────────────────────────
+  /post:
+    get:
+      operationId: getPosts
+      summary: Get posts by IDs
+      tags: [Posts]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: ids
+          in: query
+          required: true
+          description: Comma-separated post IDs
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Posts with related data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_PostsData'
+    post:
+      operationId: createPost
+      summary: Create a new post
+      tags: [Posts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                wallIds:
+                  type: array
+                  items:
+                    type: string
+                attachments:
+                  type: array
+                  items:
+                    type: object
+                fypFlags:
+                  type: integer
+                  default: 0
+                  description: "0=none, 2=hashtag, 4=overwrite"
+                inReplyTo:
+                  type: string
+                  nullable: true
+                quotedPostId:
+                  type: string
+                  nullable: true
+                scheduledFor:
+                  type: integer
+                  default: 0
+                  description: Unix timestamp in seconds (0 = publish now)
+                expiresAt:
+                  type: integer
+                  default: 0
+                postReplyPermissionFlags:
+                  type: array
+                  items:
+                    type: integer
+                pinned:
+                  type: integer
+                  default: 0
+                pinWallIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Created post
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /post/scheduled:
+    get:
+      operationId: getScheduledPosts
+      summary: Get scheduled posts
+      tags: [Posts]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Scheduled posts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  response:
+                    type: object
+                    properties:
+                      scheduledPosts:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Post'
+
+  /post/scheduled/{postId}/cancel:
+    post:
+      operationId: cancelScheduledPost
+      summary: Cancel a scheduled post
+      tags: [Posts]
+      parameters:
+        - name: postId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  # ──────────────────────────────────────────────
+  # Timeline
+  # ──────────────────────────────────────────────
+  /timeline/home:
+    get:
+      operationId: getHomeTimeline
+      summary: Get home feed
+      tags: [Timeline]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/After'
+        - name: mode
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Home timeline posts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_PostsData'
+
+  /timelinenew/{accountId}:
+    get:
+      operationId: getAccountTimeline
+      summary: Get timeline for a specific account
+      tags: [Timeline]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/After'
+        - name: wallId
+          in: query
+          description: Filter by wall ID
+          schema:
+            type: string
+        - name: contentSearch
+          in: query
+          description: Search within post content
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_PostsData'
+
+  /timeline/permissions:
+    get:
+      operationId: getTimelinePermissions
+      summary: Get timeline access permissions
+      tags: [Timeline]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Timeline permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  # ──────────────────────────────────────────────
+  # Media
+  # ──────────────────────────────────────────────
+  /media:
+    get:
+      operationId: getMedia
+      summary: Get raw media objects by IDs
+      description: Batch limit 25 per request.
+      tags: [Media]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: ids
+          in: query
+          required: true
+          description: Comma-separated media IDs (max 25)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Media objects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  response:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Media'
+
+  /mediaoffers/location:
+    get:
+      operationId: getMediaOffers
+      summary: Get media offers for a location
+      tags: [Media]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: locationId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: locationType
+          in: query
+          schema:
+            type: integer
+            default: 4001
+        - name: accountId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: mediaType
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Limit100'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Media offers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_MediaOffers'
+
+  /media/orderhistory:
+    get:
+      operationId: getMediaOrderHistory
+      summary: Get media purchase/order history
+      tags: [Media]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: accountMediaId
+          in: query
+          schema:
+            type: string
+        - name: accountMediaBundleId
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit100'
+        - name: accountIds
+          in: query
+          description: Comma-separated buyer account IDs
+          schema:
+            type: string
+        - name: accountQuery
+          in: query
+          description: Search by buyer username
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: Order history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_OrderHistory'
+
+  /mediastories:
+    post:
+      operationId: createMediaStory
+      summary: Create a media story
+      tags: [Media]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Story creation object (structure varies)
+      responses:
+        '200':
+          description: Created story
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /mediastories/following:
+    get:
+      operationId: getFollowingStories
+      summary: Get stories from followed accounts
+      tags: [Media]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Following stories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  # ──────────────────────────────────────────────
+  # Vault
+  # ──────────────────────────────────────────────
+  /vault/albumsnew:
+    get:
+      operationId: getVaultAlbums
+      summary: Get vault albums
+      tags: [Vault]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Vault albums
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_VaultAlbums'
+
+  /uservault/albumsnew:
+    get:
+      operationId: getUserVaultAlbums
+      summary: Get user's vault albums (legacy)
+      tags: [Vault]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: accountId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Vault albums
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /vault/albums:
+    post:
+      operationId: createVaultAlbum
+      summary: Create a vault album
+      tags: [Vault]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+      responses:
+        '200':
+          description: Created album
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /vault/albums/edit:
+    post:
+      operationId: editVaultAlbum
+      summary: Edit a vault album
+      tags: [Vault]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /vault/albums/delete:
+    post:
+      operationId: deleteVaultAlbum
+      summary: Delete a vault album
+      tags: [Vault]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [albumId]
+              properties:
+                albumId:
+                  type: string
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /vault/albums/order:
+    post:
+      operationId: reorderVaultAlbums
+      summary: Reorder vault albums
+      tags: [Vault]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [oldPos, newPos]
+              properties:
+                oldPos:
+                  type: integer
+                newPos:
+                  type: integer
+      responses:
+        '200':
+          description: Reordered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /vault/albums/media:
+    post:
+      operationId: addMediaToAlbum
+      summary: Add media to a vault album
+      tags: [Vault]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [albumId, mediaIds]
+              properties:
+                albumId:
+                  type: string
+                mediaIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /vault/albums/media/delete:
+    post:
+      operationId: removeMediaFromAlbum
+      summary: Remove media from a vault album
+      tags: [Vault]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [albumId, mediaIds]
+              properties:
+                albumId:
+                  type: string
+                mediaIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /vault/albums/media/rename:
+    post:
+      operationId: renameVaultMedia
+      summary: Rename a vault media item
+      tags: [Vault]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [albumId, mediaId, customFilename]
+              properties:
+                albumId:
+                  type: string
+                mediaId:
+                  type: string
+                customFilename:
+                  type: string
+      responses:
+        '200':
+          description: Renamed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /media/vaultnew:
+    get:
+      operationId: getVaultMedia
+      summary: Get media from vault
+      tags: [Vault]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: albumId
+          in: query
+          description: Album ID (use this OR type)
+          schema:
+            type: string
+        - name: type
+          in: query
+          description: "Vault type (1000=Posts, 5000=Messages, 38000=All)"
+          schema:
+            type: string
+        - name: mediaType
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/After'
+      responses:
+        '200':
+          description: Vault media
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  # ──────────────────────────────────────────────
+  # Earnings & Payments
+  # ──────────────────────────────────────────────
+  /account/wallets/earnings:
+    get:
+      operationId: getEarnings
+      summary: Get earnings overview with pending balance
+      description: Monetary values in mills (divide by 1000 for USD).
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Earnings overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_Earnings'
+
+  /account/wallets/earnings/accounts:
+    get:
+      operationId: getEarningsByAccount
+      summary: Get earnings broken down by subscriber
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - $ref: '#/components/parameters/BeforeTimestamp'
+        - $ref: '#/components/parameters/AfterTimestamp'
+      responses:
+        '200':
+          description: Earnings by account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /account/wallets/earnings/stats:
+    get:
+      operationId: getEarningsStats
+      summary: Get earnings statistics
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - $ref: '#/components/parameters/BeforeTimestamp'
+        - $ref: '#/components/parameters/AfterTimestamp'
+      responses:
+        '200':
+          description: Earnings stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /account/wallets/earnings/stats/accounts:
+    get:
+      operationId: getEarningsStatsByAccount
+      summary: Get earnings statistics for a specific subscriber
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: correlationAccountId
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/BeforeTimestamp'
+        - $ref: '#/components/parameters/AfterTimestamp'
+      responses:
+        '200':
+          description: Earnings stats for account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /account/wallets/earnings/monthlystats:
+    get:
+      operationId: getMonthlyEarningsStats
+      summary: Get monthly earnings statistics with leaderboard rank
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Monthly earnings stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /account/wallets/earnings/monthlystats/accounts:
+    get:
+      operationId: getMonthlyEarningsStatsByAccount
+      summary: Get monthly earnings from a specific subscriber
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: correlationAccountId
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/BeforeTimestamp'
+        - $ref: '#/components/parameters/AfterTimestamp'
+      responses:
+        '200':
+          description: Monthly earnings for account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /account/wallets/earnings/transactions:
+    get:
+      operationId: getEarningsTransactions
+      summary: Get individual earnings transactions
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - $ref: '#/components/parameters/BeforeTimestamp'
+        - $ref: '#/components/parameters/AfterTimestamp'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Transactions list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /payments/wallets:
+    get:
+      operationId: getPaymentWallets
+      summary: Get payment wallets
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Payment wallets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /payments/payoutmethods:
+    get:
+      operationId: getPayoutMethods
+      summary: Get configured payout methods
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Payout methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /payments/payout/requests:
+    get:
+      operationId: getPayoutRequests
+      summary: Get payout request history
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - $ref: '#/components/parameters/BeforeTimestamp'
+        - $ref: '#/components/parameters/AfterTimestamp'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Payout requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /payouts/documentation:
+    get:
+      operationId: getPayoutDocumentation
+      summary: Get payout documentation requirements
+      tags: [Earnings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: type
+          in: query
+          description: "Comma-separated doc type codes (e.g. 1,2)"
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Documentation requirements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  # ──────────────────────────────────────────────
+  # Notifications
+  # ──────────────────────────────────────────────
+  /notifications/unack:
+    get:
+      operationId: getUnacknowledgedNotifications
+      summary: Get counts of unread notifications by type
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Notification counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  response:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: integer
+                        total:
+                          type: integer
+
+  /notifications:
+    get:
+      operationId: getNotifications
+      summary: Get notifications filtered by type
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: type
+          in: query
+          description: Comma-separated notification type codes
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Limit100'
+      responses:
+        '200':
+          description: Notifications list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_Notifications'
+              example:
+                success: true
+                response:
+                  notifications:
+                    - id: "885755141217607682"
+                      accountId: "772956494390898689"
+                      type: 2002
+                      correlationId: "870585695649939456"
+                      correlationGroupId: "791369300727312384"
+                      acknowledgedAt: null
+                      createdAt: 1772674842
+                      metadata: "{\"likeId\":\"885755126923419648\"}"
+
+  # ──────────────────────────────────────────────
+  # Settings
+  # ──────────────────────────────────────────────
+  /settings:
+    get:
+      operationId: getSettings
+      summary: Get settings by category IDs
+      tags: [Settings]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: categoryIds
+          in: query
+          required: true
+          description: "Comma-separated category IDs (2000=General, 4000=Messaging, 5000=Notifications, 12000=Privacy, 44000=Display)"
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Settings list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  response:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Setting'
+    post:
+      operationId: updateSetting
+      summary: Update a setting value
+      tags: [Settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [categoryId, keyId]
+              properties:
+                categoryId:
+                  type: string
+                keyId:
+                  type: string
+                value:
+                  oneOf:
+                    - type: string
+                    - type: integer
+                metadata:
+                  type: string
+                  description: JSON-encoded value
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  # ──────────────────────────────────────────────
+  # Analytics
+  # ──────────────────────────────────────────────
+  /it/amoie/stats:
+    get:
+      operationId: getAggregateMediaStats
+      summary: Get comprehensive profile and media statistics
+      tags: [Analytics]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: beforeDate
+          in: query
+          required: true
+          description: End timestamp (ms)
+          schema:
+            type: integer
+            format: int64
+        - name: afterDate
+          in: query
+          required: true
+          description: Start timestamp (ms)
+          schema:
+            type: integer
+            format: int64
+        - name: period
+          in: query
+          description: "Aggregation period in ms (300000=5min, 3600000=1hr, 21600000=6hr, 86400000=1day)"
+          schema:
+            type: integer
+            format: int64
+            default: 86400000
+        - name: year
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: month
+          in: query
+          description: "1-12, 0=none"
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Aggregate stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_StatsDataset'
+
+  /it/moie/statsnew:
+    get:
+      operationId: getMediaOfferStats
+      summary: Get detailed statistics for a specific media item
+      tags: [Analytics]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: mediaOfferId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: beforeDate
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: afterDate
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: period
+          in: query
+          schema:
+            type: integer
+            format: int64
+            default: 86400000
+      responses:
+        '200':
+          description: Media stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_StatsDataset'
+
+  /it/pis:
+    post:
+      operationId: trackImpressions
+      summary: Track page/content impressions
+      tags: [Analytics]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                IS:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: integer
+                      contentId:
+                        type: string
+                      timestamp:
+                        type: integer
+                        format: int64
+      responses:
+        '200':
+          description: Tracked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  # ──────────────────────────────────────────────
+  # Lists
+  # ──────────────────────────────────────────────
+  /lists:
+    get:
+      operationId: getLists
+      summary: Get all user-created lists
+      tags: [Lists]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Lists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericArray'
+    post:
+      operationId: createList
+      summary: Create a new list
+      tags: [Lists]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label:
+                  type: string
+      responses:
+        '200':
+          description: Created list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /lists/account:
+    get:
+      operationId: getListMembership
+      summary: Check list membership for an account
+      tags: [Lists]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: itemId
+          in: query
+          description: Account ID (empty string for all lists)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List membership
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /lists/itemsnew:
+    get:
+      operationId: getListItems
+      summary: Get items in a specific list
+      tags: [Lists]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: listId
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit100'
+        - $ref: '#/components/parameters/After'
+        - name: sortMode
+          in: query
+          schema:
+            type: integer
+            default: 3
+      responses:
+        '200':
+          description: List items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /lists/items/add:
+    post:
+      operationId: addListItems
+      summary: Add accounts to a list
+      description: Batched in chunks of 25.
+      tags: [Lists]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [listItems]
+              properties:
+                listItems:
+                  type: array
+                  maxItems: 25
+                  items:
+                    type: object
+                    required: [id, listId, type]
+                    properties:
+                      id:
+                        type: string
+                        description: Account ID
+                      listId:
+                        type: string
+                      type:
+                        type: integer
+                        default: 1
+      responses:
+        '200':
+          description: Added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  # ──────────────────────────────────────────────
+  # Ignore/Block
+  # ──────────────────────────────────────────────
+  /ignore:
+    get:
+      operationId: getIgnoreList
+      summary: Get blocked/ignored accounts
+      tags: [Ignore]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: noAggregation
+          in: query
+          schema:
+            type: string
+            default: "true"
+      responses:
+        '200':
+          description: Ignore list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_IgnoreList'
+
+  # ──────────────────────────────────────────────
+  # Notes
+  # ──────────────────────────────────────────────
+  /notes:
+    post:
+      operationId: createNote
+      summary: Create a note on an account
+      tags: [Notes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contentType, contentId, title, note]
+              properties:
+                contentType:
+                  type: integer
+                  description: "12000 = account note"
+                  default: 12000
+                contentId:
+                  type: string
+                  description: Account ID
+                title:
+                  type: string
+                note:
+                  type: string
+      responses:
+        '200':
+          description: Created note
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /notes/edit:
+    post:
+      operationId: editNote
+      summary: Edit an existing note
+      tags: [Notes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, contentType, contentId, title, note]
+              properties:
+                id:
+                  type: string
+                  description: Note ID
+                contentType:
+                  type: integer
+                  default: 12000
+                contentId:
+                  type: string
+                title:
+                  type: string
+                note:
+                  type: string
+      responses:
+        '200':
+          description: Updated note
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  # ──────────────────────────────────────────────
+  # Media Upload (mediav2.fansly.com)
+  # ──────────────────────────────────────────────
+  /media/upload/create:
+    post:
+      operationId: createMediaUpload
+      summary: Initiate a multipart media upload
+      description: |
+        Returns pre-signed S3 URLs for direct upload.
+        Upload flow:
+        1. Call this endpoint to get upload URLs
+        2. PUT each chunk directly to the S3 `uploadUrl`
+        3. Call `/media/upload/complete` with all part ETags
+        4. Poll `/media/upload/{id}` until `status >= 6`
+      tags: [MediaUpload]
+      servers:
+        - url: https://mediav2.fansly.com/api/v1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fileSize, mimeType, fileName]
+              properties:
+                fileSize:
+                  type: integer
+                mimeType:
+                  type: string
+                fileName:
+                  type: string
+      responses:
+        '200':
+          description: Upload descriptor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  response:
+                    $ref: '#/components/schemas/MediaUpload'
+
+  /media/upload/complete:
+    post:
+      operationId: completeMediaUpload
+      summary: Complete a multipart upload
+      tags: [MediaUpload]
+      servers:
+        - url: https://mediav2.fansly.com/api/v1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, type, partSize, parts]
+              properties:
+                id:
+                  type: string
+                type:
+                  type: integer
+                  default: 1
+                partSize:
+                  type: integer
+                status:
+                  type: integer
+                  default: 0
+                parts:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      index:
+                        type: integer
+                      eTag:
+                        type: string
+                waitForComplete:
+                  type: integer
+                  default: 0
+      responses:
+        '200':
+          description: Upload completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseBase'
+
+  /media/upload/{uploadId}:
+    get:
+      operationId: getMediaUploadStatus
+      summary: Check media upload/processing status
+      tags: [MediaUpload]
+      servers:
+        - url: https://mediav2.fansly.com/api/v1
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Upload status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  response:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      status:
+                        type: integer
+                        description: "0=Unknown, 1=Created, 2=Uploading, 3=Uploaded, 4=Completing, 5=Processing, 6=Completed"
+                      mediaId:
+                        type: string
+                      media:
+                        $ref: '#/components/schemas/Media'
+
+  # ──────────────────────────────────────────────
+  # Streaming & Chatrooms
+  # ──────────────────────────────────────────────
+  /streaming/followingstreams/online:
+    get:
+      operationId: getOnlineFollowingStreams
+      summary: Get live streams from followed accounts
+      tags: [Streaming]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Online streams
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /chatroom/chatters:
+    get:
+      operationId: getChatroomChatters
+      summary: Get chatroom participants
+      tags: [Streaming]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: chatRoomIds
+          in: query
+          required: true
+          description: Comma-separated chat room IDs
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit100'
+        - $ref: '#/components/parameters/Offset'
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Chatroom participants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                $ref: '#/components/schemas/ApiResponse_ChatroomChatters'
+
+  /chatroom/goal/tips:
+    get:
+      operationId: getChatroomGoalTips
+      summary: Get tips for a chatroom goal
+      tags: [Streaming]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: chatRoomGoalId
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Limit100'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Goal tips
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_ChatroomGoalTips'
+
+  # ──────────────────────────────────────────────
+  # Content Discovery
+  # ──────────────────────────────────────────────
+  /contentdiscovery/suggestions:
+    get:
+      operationId: getCreatorSuggestions
+      summary: Get creator suggestions
+      tags: [ContentDiscovery]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Creator suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /contentdiscovery/livesuggestions:
+    get:
+      operationId: getLiveSuggestions
+      summary: Get live stream suggestions
+      tags: [ContentDiscovery]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Live suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /contentdiscovery/media/suggestionsnew:
+    get:
+      operationId: getMediaSuggestions
+      summary: Get media content suggestions
+      tags: [ContentDiscovery]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/After'
+        - name: tagIds
+          in: query
+          description: Comma-separated FYP tag IDs
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Media suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  # ──────────────────────────────────────────────
+  # Utilities
+  # ──────────────────────────────────────────────
+  /versioning:
+    get:
+      operationId: getVersioning
+      summary: Get API version information
+      tags: [Utilities]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Version info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  response:
+                    type: object
+                    properties:
+                      version:
+                        type: string
+                      latest:
+                        type: string
+
+  /orders/products:
+    get:
+      operationId: getProducts
+      summary: Get available products
+      tags: [Utilities]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Products
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /trackinglinks:
+    get:
+      operationId: getTrackingLinks
+      summary: Get referral/tracking links with stats
+      tags: [Utilities]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Tracking links
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /intercom/authorize:
+    get:
+      operationId: getIntercomAuth
+      summary: Get authorization for Intercom chat integration
+      tags: [Utilities]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+      responses:
+        '200':
+          description: Intercom auth
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+  /watermarks/signed-url:
+    get:
+      operationId: getWatermarkSignedUrl
+      summary: Get signed URL for watermarked content
+      tags: [Utilities]
+      parameters:
+        - $ref: '#/components/parameters/NgswBypass'
+        - name: action
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: i
+          in: query
+          required: true
+          description: Item/media identifier
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Signed URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse_GenericObject'
+
+# ════════════════════════════════════════════════
+# Components
+# ════════════════════════════════════════════════
+components:
+  securitySchemes:
+    authToken:
+      type: apiKey
+      in: header
+      name: authorization
+      description: Raw auth token (no Bearer prefix)
+    clientId:
+      type: apiKey
+      in: header
+      name: fansly-client-id
+      description: Client identifier (injected by Fansly app)
+    clientCheck:
+      type: apiKey
+      in: header
+      name: fansly-client-check
+      description: Client integrity check (injected by Fansly app)
+    clientTs:
+      type: apiKey
+      in: header
+      name: fansly-client-ts
+      description: Current timestamp in ms
+    sessionId:
+      type: apiKey
+      in: header
+      name: fansly-session-id
+      description: Session identifier
+
+  parameters:
+    NgswBypass:
+      name: ngsw-bypass
+      in: query
+      description: Bypass Angular service worker caching
+      schema:
+        type: boolean
+        default: true
+    Limit100:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 100
+        maximum: 100
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        default: 0
+    Before:
+      name: before
+      in: query
+      description: Pagination cursor (ID or timestamp)
+      schema:
+        type: string
+        default: "0"
+    After:
+      name: after
+      in: query
+      description: Forward pagination cursor
+      schema:
+        type: string
+        default: "0"
+    BeforeTimestamp:
+      name: before
+      in: query
+      description: End timestamp (ms)
+      schema:
+        type: string
+    AfterTimestamp:
+      name: after
+      in: query
+      description: Start timestamp (ms)
+      schema:
+        type: string
+
+  schemas:
+    # ── Base response ──
+    ApiResponseBase:
+      type: object
+      properties:
+        success:
+          type: boolean
+        error:
+          type: object
+          properties:
+            code:
+              type: integer
+            message:
+              type: string
+
+    # ── Generic wrappers ──
+    ApiResponse_GenericObject:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+
+    ApiResponse_GenericArray:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: array
+          items:
+            type: object
+
+    # ── Account responses ──
+    ApiResponse_AccountMe:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            account:
+              $ref: '#/components/schemas/Account'
+            wallets:
+              type: array
+              items:
+                $ref: '#/components/schemas/Wallet'
+            subscriptionTiers:
+              type: array
+              items:
+                type: object
+
+    ApiResponse_AccountArray:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+
+    ApiResponse_WallArray:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: array
+          items:
+            $ref: '#/components/schemas/Wall'
+
+    ApiResponse_WalletArray:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: array
+          items:
+            $ref: '#/components/schemas/Wallet'
+
+    # ── Follower response ──
+    ApiResponse_Followers:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            followers:
+              type: array
+              items:
+                $ref: '#/components/schemas/Follower'
+            aggregationData:
+              $ref: '#/components/schemas/AggregationData'
+
+    # ── Messaging responses ──
+    ApiResponse_MessagingGroups:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Group'
+            aggregationData:
+              $ref: '#/components/schemas/AggregationData'
+
+    ApiResponse_Group:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          $ref: '#/components/schemas/Group'
+
+    ApiResponse_Messages:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            messages:
+              type: array
+              items:
+                $ref: '#/components/schemas/Message'
+            accountMedia:
+              type: array
+              items:
+                type: object
+            accountMediaBundles:
+              type: array
+              items:
+                type: object
+            tips:
+              type: array
+              items:
+                type: object
+            tipGoals:
+              type: array
+              items:
+                type: object
+            accountMediaOrders:
+              type: array
+              items:
+                type: object
+            stories:
+              type: array
+              items:
+                type: object
+            storyOrders:
+              type: array
+              items:
+                type: object
+
+    # ── Subscriber response ──
+    ApiResponse_Subscribers:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            stats:
+              type: object
+              properties:
+                totalActive:
+                  type: integer
+                totalExpired:
+                  type: integer
+                total:
+                  type: integer
+            subscriptions:
+              type: array
+              items:
+                $ref: '#/components/schemas/Subscription'
+
+    # ── Post response ──
+    ApiResponse_PostsData:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            posts:
+              type: array
+              items:
+                $ref: '#/components/schemas/Post'
+            accountMediaBundles:
+              type: array
+              items:
+                type: object
+            accountMedia:
+              type: array
+              items:
+                type: object
+            accounts:
+              type: array
+              items:
+                $ref: '#/components/schemas/Account'
+            tips:
+              type: array
+              items:
+                type: object
+
+    # ── Media offer response ──
+    ApiResponse_MediaOffers:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            data:
+              type: array
+              items:
+                type: object
+                properties:
+                  mediaId:
+                    type: string
+                  mediaOfferId:
+                    type: string
+            aggregationData:
+              $ref: '#/components/schemas/AggregationData'
+
+    # ── Stats response ──
+    ApiResponse_StatsDataset:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            dataset:
+              type: object
+              properties:
+                period:
+                  type: integer
+                dateBefore:
+                  type: integer
+                  format: int64
+                dateAfter:
+                  type: integer
+                  format: int64
+                datapointLimit:
+                  type: integer
+                datapoints:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: integer
+                        format: int64
+                      stats:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            type:
+                              type: integer
+                              description: "0=FYP views, 1=Direct views"
+                            views:
+                              type: integer
+                profileDatapoints:
+                  type: array
+                  items:
+                    type: object
+                topMediaOffers:
+                  type: array
+                  items:
+                    type: object
+                topFypMediaOffers:
+                  type: array
+                  items:
+                    type: object
+                topFypTags:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      tagId:
+                        type: string
+                      views:
+                        type: integer
+                      previewViews:
+                        type: integer
+                      interactionTime:
+                        type: integer
+                      previewInteractionTime:
+                        type: integer
+            aggregationData:
+              $ref: '#/components/schemas/AggregationData'
+
+    # ── Data Models ──
+    Account:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        username:
+          type: string
+        displayName:
+          type: string
+        flags:
+          type: integer
+          description: "Bitmask: 2=Model, 8=Admin, 16=EmailVerified, 32=TwoFA, 64=Staff"
+        version:
+          type: integer
+        createdAt:
+          type: integer
+          format: int64
+          description: Timestamp in ms
+        followCount:
+          type: integer
+        subscriberCount:
+          type: integer
+        permissions:
+          type: object
+          properties:
+            accountPermissionFlags:
+              type: object
+              properties:
+                flags:
+                  type: integer
+        timelineStats:
+          $ref: '#/components/schemas/TimelineStats'
+        statusId:
+          type: integer
+        lastSeenAt:
+          type: integer
+          format: int64
+        accountMediaLikes:
+          type: integer
+        postLikes:
+          type: integer
+        earningsWallet:
+          $ref: '#/components/schemas/Wallet'
+        mainWallet:
+          $ref: '#/components/schemas/Wallet'
+        walls:
+          type: array
+          items:
+            $ref: '#/components/schemas/Wall'
+        notes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Note'
+        streaming:
+          type: object
+          properties:
+            channel:
+              type: object
+              properties:
+                chatRoomId:
+                  type: string
+
+    Wall:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+
+    Wallet:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Wallet ID (-1 for empty main wallet)
+        accountId:
+          type: string
+        type:
+          type: integer
+          description: "1=Main wallet, 2=Earnings wallet"
+        balance:
+          type: integer
+          description: Balance in cents
+        balance64:
+          type: integer
+          format: int64
+        flags:
+          type: integer
+        walletVersion:
+          type: integer
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: integer
+        dataVersion:
+          type: integer
+        content:
+          type: string
+        groupId:
+          type: string
+        senderId:
+          type: string
+        correlationId:
+          type: string
+        inReplyTo:
+          type: string
+          nullable: true
+        inReplyToRoot:
+          type: string
+          nullable: true
+        createdAt:
+          type: integer
+          format: int64
+          description: Timestamp in ms
+        attachments:
+          type: array
+          items:
+            type: object
+        embeds:
+          type: array
+          items:
+            type: object
+        interactions:
+          type: array
+          items:
+            type: object
+        likes:
+          type: array
+          items:
+            type: object
+        totalTipAmount:
+          type: integer
+          description: In cents
+
+    Post:
+      type: object
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        content:
+          type: string
+        fypFlags:
+          type: integer
+          description: "0=none, 2=hashtag, 4=overwrite"
+        inReplyTo:
+          type: string
+          nullable: true
+        inReplyToRoot:
+          type: string
+          nullable: true
+        replyPermissionFlags:
+          nullable: true
+        createdAt:
+          type: integer
+          description: Unix timestamp in SECONDS (not ms)
+        expiresAt:
+          type: integer
+          nullable: true
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostAttachment'
+        wallIds:
+          type: array
+          items:
+            type: string
+        likeCount:
+          type: integer
+        timelineReadPermissionFlags:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionFlagEntry'
+        accountTimelineReadPermissionFlags:
+          type: object
+          properties:
+            flags:
+              type: integer
+            metadata:
+              type: string
+        mediaLikeCount:
+          type: integer
+        totalTipAmount:
+          type: integer
+          description: In cents
+        attachmentTipAmount:
+          type: integer
+        accountMentions:
+          type: array
+          items:
+            type: string
+        scheduledFor:
+          type: integer
+        pinned:
+          type: integer
+        quotedPostId:
+          type: string
+          nullable: true
+        postReplyPermissionFlags:
+          type: array
+          items:
+            type: integer
+        pinWallIds:
+          type: array
+          items:
+            type: string
+
+    Media:
+      type: object
+      properties:
+        id:
+          type: string
+        mimetype:
+          type: string
+        filename:
+          type: string
+        location:
+          type: string
+          description: CDN path (prepend https://cdn3.fansly.com)
+        locations:
+          type: array
+          items:
+            type: object
+            properties:
+              location:
+                type: string
+        variants:
+          type: array
+          items:
+            type: object
+            properties:
+              mimetype:
+                type: string
+              location:
+                type: string
+              height:
+                type: integer
+
+    Group:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: integer
+          description: "1 = DM"
+        groupFlags:
+          type: integer
+        groupFlagsMetadata:
+          type: string
+        createdBy:
+          type: string
+        users:
+          type: array
+          items:
+            type: object
+            properties:
+              userId:
+                type: string
+              permissionFlags:
+                type: integer
+        permissionFlags:
+          type: array
+          items:
+            type: object
+        recipients:
+          type: array
+          items:
+            type: object
+        userSettings:
+          type: object
+          properties:
+            customName:
+              type: string
+              nullable: true
+            hidden:
+              type: boolean
+        lastMessage:
+          $ref: '#/components/schemas/Message'
+        hasDmPermissionFlags:
+          type: boolean
+        dmPermissionFlags:
+          type: array
+          items:
+            type: object
+        accountDmPermissionFlags:
+          type: object
+          properties:
+            flags:
+              type: integer
+            metadata:
+              type: string
+
+    Subscription:
+      type: object
+      properties:
+        id:
+          type: string
+        historyId:
+          type: string
+        subscriberId:
+          type: string
+        subscriptionTierId:
+          type: string
+        subscriptionTierName:
+          type: string
+        subscriptionTierColor:
+          type: string
+        planId:
+          type: string
+        promoId:
+          type: string
+        giftCodeId:
+          type: string
+          nullable: true
+        paymentMethodId:
+          type: string
+        status:
+          type: integer
+          description: "1=Idle, 2=CreatingPayment, 3=Active, 4=PaymentCreated, 5=Expired, 6=Error, 10=Activating"
+        price:
+          type: integer
+          description: Price in cents
+        renewPrice:
+          type: integer
+          description: Renewal price in cents
+        renewCorrelationId:
+          type: string
+        autoRenew:
+          type: integer
+          description: "1=enabled"
+        billingCycle:
+          type: integer
+          description: Billing cycle in days
+        duration:
+          type: integer
+          description: Duration in days
+        renewDate:
+          type: integer
+          format: int64
+          description: Timestamp in ms
+        version:
+          type: integer
+        createdAt:
+          type: integer
+          format: int64
+        updatedAt:
+          type: integer
+          format: int64
+        endsAt:
+          type: integer
+          format: int64
+        promoPrice:
+          type: integer
+          nullable: true
+        promoDuration:
+          type: integer
+          nullable: true
+        promoStatus:
+          type: integer
+          nullable: true
+        promoStartsAt:
+          type: integer
+          format: int64
+          nullable: true
+        promoEndsAt:
+          type: integer
+          format: int64
+          nullable: true
+        plans:
+          type: array
+          items:
+            type: object
+            properties:
+              status:
+                type: integer
+
+    Follower:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Follower edge ID
+        followerId:
+          type: string
+          description: Account ID of follower
+        lastSeenAt:
+          type: integer
+          format: int64
+
+    Setting:
+      type: object
+      properties:
+        categoryId:
+          type: integer
+        keyId:
+          type: integer
+        value:
+          type: string
+        metadata:
+          type: string
+          description: JSON-encoded value
+
+    AutomatedMessage:
+      type: object
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        triggerType:
+          type: integer
+          description: "3 = new subscription"
+        triggerMetadata:
+          type: string
+        delay:
+          type: integer
+        cooldown:
+          type: integer
+        messageTemplate:
+          type: object
+          properties:
+            type:
+              type: integer
+            content:
+              type: string
+            attachments:
+              type: array
+              items:
+                type: object
+            senderId:
+              type: string
+
+    MediaUpload:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: integer
+        partSize:
+          type: integer
+          description: Chunk size in bytes
+        parts:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              uploadUrl:
+                type: string
+                description: Pre-signed S3 upload URL
+
+    AggregationData:
+      type: object
+      description: Denormalized related entities included in many responses
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/Group'
+        accountMedia:
+          type: array
+          items:
+            type: object
+        accountMediaBundles:
+          type: array
+          items:
+            type: object
+        accountMediaOrders:
+          type: array
+          items:
+            type: object
+        posts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Post'
+        stories:
+          type: array
+          items:
+            type: object
+        tips:
+          type: array
+          items:
+            type: object
+        media:
+          type: array
+          items:
+            $ref: '#/components/schemas/Media'
+        subscriptions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Subscription'
+        subscriptionHistory:
+          type: array
+          items:
+            type: object
+        tags:
+          type: array
+          items:
+            type: object
+        creatorMediaOfferLocations:
+          type: array
+          items:
+            type: object
+
+    # ── New detailed models ──
+    Note:
+      type: object
+      properties:
+        id:
+          type: string
+        contentType:
+          type: integer
+          description: "12000=Account note"
+        contentId:
+          type: string
+        title:
+          type: string
+        note:
+          type: string
+
+    TimelineStats:
+      type: object
+      properties:
+        accountId:
+          type: string
+        imageCount:
+          type: integer
+        videoCount:
+          type: integer
+        bundleCount:
+          type: integer
+        bundleImageCount:
+          type: integer
+        bundleVideoCount:
+          type: integer
+        fetchedAt:
+          type: integer
+          format: int64
+
+    PostAttachment:
+      type: object
+      properties:
+        postId:
+          type: string
+        pos:
+          type: integer
+          description: Position/order of attachment
+        contentType:
+          type: integer
+          description: "1=AccountMedia"
+        contentId:
+          type: string
+          description: References an account media ID
+
+    PermissionFlagEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        type:
+          type: integer
+        flags:
+          type: integer
+        metadata:
+          type: string
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        type:
+          type: integer
+          description: See NotificationType enum
+        correlationId:
+          type: string
+        correlationGroupId:
+          type: string
+        acknowledgedAt:
+          type: integer
+          nullable: true
+          description: Timestamp in seconds
+        createdAt:
+          type: integer
+          description: Timestamp in seconds
+        metadata:
+          type: string
+          nullable: true
+          description: JSON-encoded extra data
+
+    IgnoreEntry:
+      type: object
+      properties:
+        ignoredId:
+          type: string
+        ignoreFlags:
+          type: integer
+          description: "Bitmask: 1=mute, 2=block, 4=VIP, 8=suggestion_mute, 16=DM_bypass"
+
+    MessagingGroupSummary:
+      type: object
+      properties:
+        account_id:
+          type: string
+        groupId:
+          type: string
+        partnerAccountId:
+          type: string
+        partnerUsername:
+          type: string
+        flags:
+          type: integer
+        unreadCount:
+          type: integer
+        subscriptionTierId:
+          type: string
+          nullable: true
+        lastMessageId:
+          type: string
+        lastUnreadMessageId:
+          type: string
+          nullable: true
+
+    VaultAlbum:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        pos:
+          type: integer
+        mediaCount:
+          type: integer
+
+    ChatRoomGoalTip:
+      type: object
+      properties:
+        tipId:
+          type: string
+        tipAmount:
+          type: integer
+          description: Tip amount in cents
+        accountId:
+          type: string
+        tipMessage:
+          type: string
+        createdAt:
+          type: integer
+          format: int64
+
+    # ── Enum schemas ──
+    NotificationType:
+      type: integer
+      description: |
+        1002=MediaLike, 1004=MediaLikeUndo, 1005=MediaLikeRedo,
+        2002=PostLike, 2007=PostLikeUndo, 2008=PostLikeRedo,
+        3002=NewFollower, 3003=FollowedBack, 5003=MessageLike,
+        7001=Tip, 7100=TipGoal, 15006=NewSubscriber,
+        15007=SubscriberRenewalFail, 15011=SubscriptionCanceled,
+        15016=RenewedSubscription
+      enum: [1002, 1004, 1005, 2002, 2007, 2008, 3002, 3003, 5003, 7001, 7100, 15006, 15007, 15011, 15016]
+
+    TransactionType:
+      type: integer
+      description: |
+        2010=MediaLegacy, 2016=MediaSetsLegacy, 2110=Media, 2116=MediaSets,
+        6002=SpecialWallet, 6101=Transaction6101, 6515=SubscriptionPurchase,
+        7001=TipsLegacy, 7101=Tips, 14001=Transaction14001,
+        15001=Subscriptions, 18001=Referrals, 18002=ReferralVariant,
+        24101=LeaderboardPrizeMoney, 32001=StoryBundle, 32101=BundleVariant,
+        42001=Poll, 45001=StreamTickets, 45101=StreamTicketsVariant
+      enum: [2010, 2016, 2110, 2116, 6002, 6101, 6515, 7001, 7101, 14001, 15001, 18001, 18002, 24101, 32001, 32101, 42001, 45001, 45101]
+
+    MediaType:
+      type: integer
+      description: "0=Unknown, 1=Image, 2=Video, 3=Audio"
+      enum: [0, 1, 2, 3]
+
+    SubscriptionStatus:
+      type: integer
+      description: "1=Idle, 2=CreatingPayment, 3=Active, 4=PaymentCreated, 5=Expired, 6=Error, 10=Activating"
+      enum: [1, 2, 3, 4, 5, 6, 10]
+
+    WalletType:
+      type: integer
+      description: "1=Main, 2=Earnings"
+      enum: [1, 2]
+
+    FypFlags:
+      type: integer
+      description: "0=none, 2=hashtag, 4=overwrite"
+      enum: [0, 2, 4]
+
+    NoteContentType:
+      type: integer
+      description: "12000=Account note"
+      enum: [12000]
+
+    LocationType:
+      type: integer
+      description: "4001=Default media offer location"
+      enum: [4001]
+
+    MessageGroupFilterFlags:
+      type: integer
+      description: "0=all, 32=unread only"
+      enum: [0, 32]
+
+    SettingsCategoryId:
+      type: integer
+      description: "2000=MEDIA"
+      enum: [2000]
+
+    # ── Additional response wrappers ──
+    ApiResponse_Notifications:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            notifications:
+              type: array
+              items:
+                $ref: '#/components/schemas/Notification'
+
+    ApiResponse_IgnoreList:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            ignoring:
+              type: array
+              items:
+                $ref: '#/components/schemas/IgnoreEntry'
+
+    ApiResponse_Earnings:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            pendingBalance:
+              type: integer
+              description: Balance in mills (divide by 1000 for USD)
+
+    ApiResponse_VaultAlbums:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            albums:
+              type: array
+              items:
+                $ref: '#/components/schemas/VaultAlbum'
+
+    ApiResponse_ChatroomChatters:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            chatters:
+              type: array
+              items:
+                type: object
+                properties:
+                  accountId:
+                    type: string
+            aggregationData:
+              $ref: '#/components/schemas/AggregationData'
+
+    ApiResponse_ChatroomGoalTips:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            chatRoomGoalTips:
+              type: array
+              items:
+                $ref: '#/components/schemas/ChatRoomGoalTip'
+            aggregationData:
+              $ref: '#/components/schemas/AggregationData'
+
+    ApiResponse_MessagingGroupsList:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/MessagingGroupSummary'
+            aggregationData:
+              $ref: '#/components/schemas/AggregationData'
+
+    ApiResponse_Subscriptions:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            stats:
+              type: object
+              properties:
+                totalActive:
+                  type: integer
+            subscriptions:
+              type: array
+              items:
+                $ref: '#/components/schemas/Subscription'
+            subscriptionPlans:
+              type: array
+              items:
+                type: object
+
+    ApiResponse_OrderHistory:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            accountMediaOrderHistory:
+              type: array
+              items:
+                type: object
+            aggregationData:
+              $ref: '#/components/schemas/AggregationData'
+
+    ApiResponse_ScheduledPosts:
+      type: object
+      properties:
+        success:
+          type: boolean
+        response:
+          type: object
+          properties:
+            scheduledPosts:
+              type: array
+              items:
+                $ref: '#/components/schemas/Post'

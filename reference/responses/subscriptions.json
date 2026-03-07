@@ -1,0 +1,19 @@
+{
+  "_meta": {
+    "endpoint": "subscriptions",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:43:55.661966+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": {
+      "stats": {
+        "totalActive": 0,
+        "totalExpired": 0,
+        "total": 0
+      },
+      "subscriptions": [],
+      "subscriptionPlans": []
+    }
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "_meta": {
+    "endpoint": "trackinglinks",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:45:09.616600+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": [
+      {
+        "id": "777077432506130438",
+        "accountId": "772956494390898689",
+        "internalId": "2",
+        "type": 1,
+        "status": 1,
+        "label": "Fansly Suggestions",
+        "description": "The Fansly Suggestions tracking link tracks statistics from users that found you via the Account Suggestions on Fansly.",
+        "metadata": "{}",
+        "createdAt": 1746764057000,
+        "clicks": 0,
+        "claims": 245,
+        "follows": 78,
+        "subscriptions": 1,
+        "totalNet": 0,
+        "totalGross": 255000
+      },
+      {
+        "id": "774445125756526594",
+        "accountId": "772956494390898689",
+        "internalId": "1",
+        "type": 1,
+        "status": 1,
+        "label": "Fansly FYP",
+        "description": "The Fansly FYP tracking link tracks statistics from users that found you via the FYP.",
+        "metadata": "{}",
+        "createdAt": 1746136466000,
+        "clicks": 0,
+        "claims": 990,
+        "follows": 391,
+        "subscriptions": 8,
+        "totalNet": 0,
+        "totalGross": 1589000
+      },
+      {
+        "id": "774063548417449984",
+        "accountId": "772956494390898689",
+        "internalId": "3",
+        "type": 1,
+        "status": 1,
+        "label": "Fansly Search",
+        "description": "The Fansly Search tracking link tracks statistics from users that found you via the Fansly search.",
+        "metadata": "{}",
+        "createdAt": 1746045491000,
+        "clicks": 0,
+        "claims": 101,
+        "follows": 28,
+        "subscriptions": 2,
+        "totalNet": 0,
+        "totalGross": 221990
+      },
+      {
+        "id": "875552575192047616",
+        "accountId": "772956494390898689",
+        "internalId": "1001",
+        "type": 1000,
+        "status": 1,
+        "label": "Reddit rsr",
+        "description": "v1",
+        "metadata": "{}",
+        "createdAt": 1770242360000,
+        "clicks": 2002,
+        "claims": 209,
+        "follows": 103,
+        "subscriptions": 4,
+        "totalNet": 0,
+        "totalGross": 117000
+      }
+    ]
+  }
+}

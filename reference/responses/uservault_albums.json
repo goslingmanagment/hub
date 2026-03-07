@@ -1,0 +1,400 @@
+{
+  "_meta": {
+    "endpoint": "uservault_albums",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:45:06.078984+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": {
+      "albums": [
+        {
+          "id": "773281436047253504",
+          "accountId": "772956494390898689",
+          "public": 0,
+          "pos": 0,
+          "title": "Likes",
+          "description": null,
+          "type": 2002,
+          "status": 0,
+          "itemCount": null,
+          "lastItemId": "881858953535827968",
+          "thumbnailId": null,
+          "version": 0,
+          "createdAt": 1745859021000
+        },
+        {
+          "id": "772957809028378624",
+          "accountId": "772956494390898689",
+          "public": 0,
+          "pos": 1,
+          "title": "Purchases",
+          "description": null,
+          "type": 2007,
+          "status": 0,
+          "itemCount": 0,
+          "lastItemId": null,
+          "thumbnailId": null,
+          "version": 20,
+          "createdAt": 1745781862000
+        }
+      ],
+      "aggregationData": {
+        "media": [],
+        "accountMedia": [
+          {
+            "id": "881340287752871936",
+            "accountId": "772956494390898689",
+            "mediaId": "881340136128790528",
+            "previewId": "881334203159949312",
+            "permissionFlags": 0,
+            "price": 0,
+            "createdAt": 1771622259,
+            "deletedAt": null,
+            "deleted": false,
+            "permissions": {
+              "permissionFlags": [
+                {
+                  "id": "881340287752888326",
+                  "accountMediaId": "881340287752871936",
+                  "type": 0,
+                  "flags": 1,
+                  "price": 13990,
+                  "metadata": "{\"1\":\"{\\\"price\\\":13990}\"}",
+                  "validAfter": null,
+                  "validBefore": null,
+                  "verificationFlags": 1,
+                  "verificationMetadata": "{}"
+                },
+                {
+                  "id": "881340287752888327",
+                  "accountMediaId": "881340287752871936",
+                  "type": 0,
+                  "flags": 4,
+                  "price": 0,
+                  "metadata": "{\"4\":\"{\\\"subscriptionTierId\\\":\\\"877260451656769536\\\",\\\"before\\\":0,\\\"after\\\":0,\\\"subscriptionTierName\\\":\\\"Videos (Nude videos & Some Attention) \ud83c\udfac\\\"}\"}",
+                  "validAfter": null,
+                  "validBefore": null,
+                  "verificationFlags": 0,
+                  "verificationMetadata": "{\"4\":\"{\\\"errors\\\":[{\\\"code\\\":1}],\\\"missingSubscriptionTierId\\\":\\\"877260451656769536\\\"}\"}"
+                },
+                {
+                  "id": "881340287752888328",
+                  "accountMediaId": "881340287752871936",
+                  "type": 0,
+                  "flags": 4,
+                  "price": 0,
+                  "metadata": "{\"4\":\"{\\\"subscriptionTierId\\\":\\\"877260632854908928\\\",\\\"before\\\":0,\\\"after\\\":0,\\\"subscriptionTierName\\\":\\\"Advanced (Free custom, Close friends & More Attention) \ud83d\udc8e\\\"}\"}",
+                  "validAfter": null,
+                  "validBefore": null,
+                  "verificationFlags": 0,
+                  "verificationMetadata": "{\"4\":\"{\\\"errors\\\":[{\\\"code\\\":1}],\\\"missingSubscriptionTierId\\\":\\\"877260632854908928\\\"}\"}"
+                },
+                {
+                  "id": "881340287752888329",
+                  "accountMediaId": "881340287752871936",
+                  "type": 0,
+                  "flags": 4,
+                  "price": 0,
+                  "metadata": "{\"4\":\"{\\\"subscriptionTierId\\\":\\\"880236876370292736\\\",\\\"before\\\":0,\\\"after\\\":0,\\\"subscriptionTierName\\\":\\\"Master (Free Sexting or Custom video, Maximum Attention) \ud83d\udc51\\\"}\"}",
+                  "validAfter": null,
+                  "validBefore": null,
+                  "verificationFlags": 0,
+                  "verificationMetadata": "{\"4\":\"{\\\"errors\\\":[{\\\"code\\\":1}],\\\"missingSubscriptionTierId\\\":\\\"880236876370292736\\\"}\"}"
+                }
+              ],
+              "accountPermissionFlags": {
+                "flags": 255,
+                "metadata": "{}"
+              }
+            },
+            "likeCount": 5,
+            "media": {
+              "id": "881340136128790528",
+              "type": 2,
+              "status": 1,
+              "accountId": "772956494390898689",
+              "mimetype": "video/mp4",
+              "flags": 10,
+              "filename": "full.mp4",
+              "location": "/772956494390898689/881340136128790528.mp4",
+              "width": 720,
+              "height": 1280,
+              "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":287.833333,\"resolutionMode\":2,\"frameRate\":30}",
+              "updatedAt": 1771622338,
+              "createdAt": 1771622223,
+              "variants": [
+                {
+                  "id": "881340136128790529",
+                  "type": 1,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "filename": "full_frame.jpeg",
+                  "location": "/772956494390898689/881340136128790529.jpeg",
+                  "width": 480,
+                  "height": 854,
+                  "metadata": "{\"resolutionMode\":2}",
+                  "updatedAt": 1771622259,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/772956494390898689/881340136128790529.jpeg?ngsw-bypass=true&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jZG4zLmZhbnNseS5jb20vNzcyOTU2NDk0MzkwODk4Njg5Lzg4MTM0MDEzNjEyODc5MDUyOS5qcGVnP25nc3ctYnlwYXNzPXRydWUiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE3NzMyOTQ3MTV9LCJJcEFkZHJlc3MiOnsiQVdTOlNvdXJjZUlwIjoiNDUuMTM1LjE2NS40Mi8yNCJ9fX1dfQ__&Key-Pair-Id=K23PG5J1AWEZX5&Signature=eCErL4aE3--kskQ6o2rKaQKh5S9jRxtFmz9TtbMqHbxZBHIqEyoMAqV-d2xasfvcb8dEpnCL93eod59zQHlFPveDUa9psKHkMPv2WatOKUNXJeEcdk0Wr4w5c9jGP-rS2u-J20FrZcUSk3RrzRKeXKneilE38EAP2BU-h3YKteK9Ly69DjsApA~lHZQyl~CdIATKlYWc3b6QnCZjIJAzm0y7oEumZM7LBQq-ppoT9iyZfmodcC89pFykl~C-LyaLaxYwuxPGdeL2KbfuyNMMpNFa2JthlaIu9RIQ1B6VTIYPU1tzxOLGnz5bNjNLL6O4RRvbiqfue5vFHKyWWVH4Gg__"
+                    }
+                  ]
+                },
+                {
+                  "id": "881340136128790530",
+                  "type": 3,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "filename": "full_frame.jpeg",
+                  "location": "/772956494390898689/881340136128790530.jpeg",
+                  "width": 480,
+                  "height": 854,
+                  "metadata": "{\"resolutionMode\":2}",
+                  "updatedAt": 1771622258,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/772956494390898689/881340136128790530.jpeg?ngsw-bypass=true&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jZG4zLmZhbnNseS5jb20vNzcyOTU2NDk0MzkwODk4Njg5Lzg4MTM0MDEzNjEyODc5MDUzMC5qcGVnP25nc3ctYnlwYXNzPXRydWUiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE3NzMyOTQxMDN9LCJJcEFkZHJlc3MiOnsiQVdTOlNvdXJjZUlwIjoiNDUuMTM1LjE2NS40Mi8yNCJ9fX1dfQ__&Key-Pair-Id=K23PG5J1AWEZX5&Signature=I89yxhGlUXbVZMp8zYM2-x2i40pp5XOcEIvbYqXbKdiihgyoF8xz4nbvdPT7zfbZ7PbIJohBnardqS8f7igQpz~wxDrhHErnqFJeOS7aPcDRwGg-FWYiicxlxgKpuKDgmWsfTan~4Tmm7hOv6b6QA15etzYpGja3WUECRmWC5dP1Zfn~zuScf1z6HrgtP~gTVYAvjdPZrH7HWQrlNgrXNTwaifo2cPbM0Cw51yTk6j21urDNm7pCr4dtPUUztKc4ARiQYx1C8-QhenvyF2VpLR3XRZIbsqxmOODsagTJJdc48oiSQF6wpJ83vZ5dU~26cIyd5saBxFBO2G9exOgS7Q__"
+                    }
+                  ]
+                },
+                {
+                  "id": "881340136128790531",
+                  "type": 4,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "filename": "full_thumbnails.jpeg",
+                  "location": "/772956494390898689/881340136128790531.jpeg",
+                  "width": 144,
+                  "height": 256,
+                  "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":287.833333,\"resolutionMode\":2,\"frameRate\":30,\"thumbnailDistance\":2.4,\"thumbnailCount\":120,\"thumbnailGrid\":[11,11],\"frameDistance\":72}",
+                  "updatedAt": 1771622258,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/772956494390898689/881340136128790531.jpeg?ngsw-bypass=true&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jZG4zLmZhbnNseS5jb20vNzcyOTU2NDk0MzkwODk4Njg5Lzg4MTM0MDEzNjEyODc5MDUzMS5qcGVnP25nc3ctYnlwYXNzPXRydWUiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE3NzMyOTU2NTJ9LCJJcEFkZHJlc3MiOnsiQVdTOlNvdXJjZUlwIjoiNDUuMTM1LjE2NS40Mi8yNCJ9fX1dfQ__&Key-Pair-Id=K23PG5J1AWEZX5&Signature=nB5GO~TOUtM1YCkbQOeHs1d5EZaqGK5421iP9gmdMrS-fbIbMt1k7t8QsvHF5TwR1KeKGcvLyG9ntdbmZfu1ZmgRpVXUqJH1vLYssgPrJ9utrnW4aUnyZH3e0qF4lW9MuSHxdVzyLEUaa~9lLf6eE3ZMmGUP0omcv0K5tFqWQ-0RR9LObu8xO4yxyhbN3TM8oUiF61Y3f83v67bQjKbZYCoh~PIJdGxcrLR39h1ui51tZrZHGgF1jw75G9uXmJIPkswINJZ9360vpYUaaxC0pSahFKKZ7deoIpG3umBdw3ysSNb34YUf-Srt1rYg9DpWcdUVFwuC1tl5PRdNpYzLGg__"
+                    }
+                  ]
+                },
+                {
+                  "id": "881340139203207168",
+                  "type": 302,
+                  "status": 1,
+                  "mimetype": "application/vnd.apple.mpegurl",
+                  "flags": 0,
+                  "filename": "881340139203207168.m3u8",
+                  "location": null,
+                  "width": 1080,
+                  "height": 1920,
+                  "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":287.833333,\"resolutionMode\":2,\"frameRate\":30,\"variants\":[{\"w\":1080,\"h\":1920},{\"w\":720,\"h\":1280},{\"w\":480,\"h\":854},{\"w\":360,\"h\":640}]}",
+                  "updatedAt": 1771622512,
+                  "locations": [
+                    {
+                      "locationId": "102",
+                      "location": "https://cdn3.fansly.com/new/772956494390898689/881340139203207168/881340139203207168.m3u8",
+                      "metadata": {
+                        "Key-Pair-Id": "K23PG5J1AWEZX5",
+                        "Signature": "SuVZ9TXbnb-W0xuKW8Yj720DB9EVDbo3RpIJtMVbYmJkn4kiDFAV0x3TWML9N-ifn9RONLxX~iKtGfYFdMqgxubXKebDulBSaQjYM4qIoQvCkj8t8ugb5qqy7yZ5c3Qu89zFVpZARzdvpyVlicpvamtOFGx~lsqmfdbRrtU1a~Xva37Vf7wXPWsmcjUijaPYvOgIdTKvF3F1MQeRjGBBSU8Lnl4R5JUY9H84dutGHw2zeqB8a9-x7VVpmvc4hYT4R~D8GjNvhSg3EfqZoUpouO9q1cLkhXxDiikE2aDXeFBu3OZOyYqNKw9jLy8UDC~6D7PiitoWUGiSyjMenczRuw__",
+                        "Policy": "eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jZG4zLmZhbnNseS5jb20vbmV3Lzc3Mjk1NjQ5NDM5MDg5ODY4OS84ODEzNDAxMzkyMDMyMDcxNjgvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc3MzI5NDcyNn0sIklwQWRkcmVzcyI6eyJBV1M6U291cmNlSXAiOiI0NS4xMzUuMTY1LjQyLzI0In19fV19"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "881340139203207169",
+                  "type": 303,
+                  "status": 1,
+                  "mimetype": "application/dash+xml",
+                  "flags": 0,
+                  "filename": "881340139203207169.mpd",
+                  "location": null,
+                  "width": 1080,
+                  "height": 1920,
+                  "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":287.833333,\"resolutionMode\":2,\"frameRate\":30,\"variants\":[{\"w\":1080,\"h\":1920},{\"w\":720,\"h\":1280},{\"w\":480,\"h\":854},{\"w\":360,\"h\":640}]}",
+                  "updatedAt": 1771622517,
+                  "locations": [
+                    {
+                      "locationId": "103",
+                      "location": "https://cdn3.fansly.com/new/772956494390898689/881340139203207169/881340139203207169.mpd",
+                      "metadata": {
+                        "Key-Pair-Id": "K23PG5J1AWEZX5",
+                        "Signature": "dWzY5rjJCnlW8IOz~W3GZ5b-WeTH5jd2unRWNxk4VfYxatGK0T8e0Kg4-d8baFOt4GH~HnJru1avo4YopYYZpIxbxNpdrgHwbBfmzkMWHit6YSPQZkh5ynE8RdQgbAqqTvzVKmlMmo14~Deo7ivRPmincpDA2yVf9GDJ3lFz-mCwv7ZmhHYP-LdV3lgJs0UJalbMXn1-cLo4F2wnmuVnCYJ6qgNouMGF-yyXR~ppKUMjev-LLYA-jM7371Bg-xWy9mzgsBgLsYOk-pHcMijsZ12KXuMbtZHQ8-umqFsfi0pasP9x3vBEU2ovAxHy~ulGWkT5HXeOX1mB8W24f4Bc9Q__",
+                        "Policy": "eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jZG4zLmZhbnNseS5jb20vbmV3Lzc3Mjk1NjQ5NDM5MDg5ODY4OS84ODEzNDAxMzkyMDMyMDcxNjkvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc3MzI5NDUxM30sIklwQWRkcmVzcyI6eyJBV1M6U291cmNlSXAiOiI0NS4xMzUuMTY1LjQyLzI0In19fV19"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "variantHash": {},
+              "locations": [
+                {
+                  "locationId": "1",
+                  "location": "https://cdn3.fansly.com/772956494390898689/881340136128790528.mp4?ngsw-bypass=true&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jZG4zLmZhbnNseS5jb20vNzcyOTU2NDk0MzkwODk4Njg5Lzg4MTM0MDEzNjEyODc5MDUyOC5tcDQ~bmdzdy1ieXBhc3M9dHJ1ZSIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc3MzI5NTUxMX0sIklwQWRkcmVzcyI6eyJBV1M6U291cmNlSXAiOiI0NS4xMzUuMTY1LjQyLzI0In19fV19&Key-Pair-Id=K23PG5J1AWEZX5&Signature=GZeM-C2eMyrhu5RvqtCytUdnEyAGMQleH~O6Ud4dTA20toVcobqbgTwuejrG4Obw23xlX~FwoyXwffDs1lIFOC6SttEvZ51DWTTG9r~v5BymGmBNmQrIcePjM1NZP~dnSflxHSEagBKDIpm5xIsO2VO7kq1ZtY0DaWkdZhAZa~k-T3BdA2p1fmBJtsd5dOs3aH5Dn2yrS6pyXqBdoOo3tbKBqnriyF5NvgdpLaVwOtoBvCPovuan1iL-hF2oIn9IWJFEW65LI7Rd~zy7VKoxB2DaZ3YPkwr9UBaGMTIFtrd2oSAcknzkPIPGVV24eo5QPRb9FRvgNTyHbNAT4oZJKA__"
+                }
+              ]
+            },
+            "preview": {
+              "id": "881334203159949312",
+              "type": 2,
+              "status": 1,
+              "accountId": "772956494390898689",
+              "mimetype": "video/mp4",
+              "flags": 2058,
+              "filename": "promo lana 2.mp4",
+              "location": "/772956494390898689/881334203159949312.mp4",
+              "width": 720,
+              "height": 1280,
+              "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":64.166667,\"resolutionMode\":2,\"frameRate\":30}",
+              "updatedAt": 1771620838,
+              "createdAt": 1771620808,
+              "variants": [
+                {
+                  "id": "881334203159949313",
+                  "type": 1,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "filename": "promo lana 2_frame.jpeg",
+                  "location": "/772956494390898689/881334203159949313.jpeg",
+                  "width": 480,
+                  "height": 854,
+                  "metadata": "{\"resolutionMode\":2}",
+                  "updatedAt": 1771620821,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/772956494390898689/881334203159949313.jpeg?ngsw-bypass=true&Expires=1773345106&Key-Pair-Id=K23PG5J1AWEZX5&Signature=LKORKj3H9LTk5b15PzS3bg7kHyUHUQ9XbdZqhn0RLbOD5FE9RK8u3N6SkLoWWt~DV3y6~lvPHE7NgduHV9LQ-9h4YNTKNnyrGpD3MBktOtM2tC3597b8zJUGke28ZzA0b-PXEjfKVZQOzKwrKks4EIiLY0LQ0TcXuLI2dXyW1le1eV4QyEwVUnRC1321fy~YHK15uuhqYxdLR3gjTGrG9QSBl4SutwA1nO9-EEqU5zNJWIl2nirdFUp4RcR-7laSbrgaQuBb2aWvFweKHi9trXJNyqI7736MZcZ8yYkfY1Rujj1qcOZ9Dz37P-8hA1eoYACz8jeVG8icR389yTYluA__"
+                    }
+                  ]
+                },
+                {
+                  "id": "881334203159949314",
+                  "type": 3,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "filename": "promo lana 2_frame.jpeg",
+                  "location": "/772956494390898689/881334203159949314.jpeg",
+                  "width": 480,
+                  "height": 854,
+                  "metadata": "{\"resolutionMode\":2}",
+                  "updatedAt": 1771620820,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/772956494390898689/881334203159949314.jpeg?ngsw-bypass=true&Expires=1773308014&Key-Pair-Id=K23PG5J1AWEZX5&Signature=pAe2A0UR5SmcGsShTDdlesIle2oWfSQGXbeE2heJXPD129NXlLMtXX0x9JEsWpKmLnuvulWS6h4LcQt0MumWnGAovv53t4WKO5ZR3-ge40Dg35zOvssjNcnwKyqF3~UNbhxFOtOSYiet5nvVtQTQMTAk~IuRAWJMkP7k0v2Zq0ccpHL3vg5BudSPIv21A5y7hFtK1tQVJlB31obEf8qyHZFdz0hmHfh0OZEXmtNS5SjtvVb9LaiVYLQZ0ItyWh3haP0SLMKwSljhvqdcNETxENzlc~U-gpo99orNtIgdNADL5-jlSyB9melz99EsFuoGYBAGZM12guVg4EuxjZnG9w__"
+                    }
+                  ]
+                },
+                {
+                  "id": "881334203159949315",
+                  "type": 4,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "filename": "promo lana 2_thumbnails.jpeg",
+                  "location": "/772956494390898689/881334203159949315.jpeg",
+                  "width": 144,
+                  "height": 256,
+                  "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":64.166667,\"resolutionMode\":2,\"frameRate\":30,\"thumbnailDistance\":1,\"thumbnailCount\":65,\"thumbnailGrid\":[9,8],\"frameDistance\":30}",
+                  "updatedAt": 1771620820,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/772956494390898689/881334203159949315.jpeg?ngsw-bypass=true&Expires=1773313927&Key-Pair-Id=K23PG5J1AWEZX5&Signature=lAPwGA1NR8GluAviphVnmduwlUyy2VbK~ypMGDYHUmzxGeVIMZdN3ZIjAxqyVVYbCtuJpIfWkzJWum66jxZm73GQY0PkZmngkUHQkKlmyw3VSCZc-XmbZPD~Xc796cJEzvhezHj~zhlNExASN-wa8WnmDKFCfPInN~co8gg19sBkNbkQaD1L3UZTWnkHgivLQt~EKsLZyx5TKp9vYRQgaPvY37ggMAIhKlbqiqv-VgCGYQP3uNum-v00hUg~VTdtO1xgg5qyQJxreBjY0V0bgff9k-ede9GTAwxwRQL3xC7eQQKmc92fm-Dut5mkIKO2DB8G7QMwt8G5ES13Wk29sg__"
+                    }
+                  ]
+                },
+                {
+                  "id": "881334206523777024",
+                  "type": 302,
+                  "status": 1,
+                  "mimetype": "application/vnd.apple.mpegurl",
+                  "flags": 0,
+                  "filename": "881334206523777024.m3u8",
+                  "location": null,
+                  "width": 1080,
+                  "height": 1920,
+                  "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":64.166667,\"resolutionMode\":2,\"frameRate\":30,\"variants\":[{\"w\":1080,\"h\":1920},{\"w\":720,\"h\":1280},{\"w\":480,\"h\":854},{\"w\":360,\"h\":640}]}",
+                  "updatedAt": 1771620876,
+                  "locations": [
+                    {
+                      "locationId": "102",
+                      "location": "https://cdn3.fansly.com/new/772956494390898689/881334206523777024/881334206523777024.m3u8",
+                      "metadata": {
+                        "Key-Pair-Id": "K23PG5J1AWEZX5",
+                        "Signature": "M6KhgOvDi1e9PODcVvSVguZq59SmAQZxTOLeGuZ0zv6f-sSJ-r1xu7EUfkIifVVPXB6ROYO-IpAgxThatNutCeEzM0dZ6lK76e1ofJffMZzDzPBtrHaVSff8o1FvDv2QxUJWmmpuJg9~G0QCVyCEDrotyzxsT~t3B5oNEKIwN7X-6gm5GgPyuupSXi68FPbilG5MtptDm1dS4IuXPEZOwEjUsE0f7wJclw~YIiHv6hxwO-sL4qqIdSb3~2Ni9MbBhWJd0eIKslj4AtIqtOQ~BgS55075ZFiFyZkSOGINx8EZZK30YmzNXGtEqr4kfkZfzoIdFrka-fnJzWUvjpukPg__",
+                        "Policy": "eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jZG4zLmZhbnNseS5jb20vbmV3Lzc3Mjk1NjQ5NDM5MDg5ODY4OS84ODEzMzQyMDY1MjM3NzcwMjQvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc3MzMxMjQzN319fV19"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "881334206523777025",
+                  "type": 303,
+                  "status": 1,
+                  "mimetype": "application/dash+xml",
+                  "flags": 0,
+                  "filename": "881334206523777025.mpd",
+                  "location": null,
+                  "width": 1080,
+                  "height": 1920,
+                  "metadata": "{\"originalHeight\":1920,\"originalWidth\":1080,\"duration\":64.166667,\"resolutionMode\":2,\"frameRate\":30,\"variants\":[{\"w\":1080,\"h\":1920},{\"w\":720,\"h\":1280},{\"w\":480,\"h\":854},{\"w\":360,\"h\":640}]}",
+                  "updatedAt": 1771620878,
+                  "locations": [
+                    {
+                      "locationId": "103",
+                      "location": "https://cdn3.fansly.com/new/772956494390898689/881334206523777025/881334206523777025.mpd",
+                      "metadata": {
+                        "Key-Pair-Id": "K23PG5J1AWEZX5",
+                        "Signature": "gD56mvlX8X-NDdkN9XOP1uztGgwRadHHlIrhDgYJKdz~vu8I9W9Ne8pOZ0b6kjBqoR6XYb9Lruik6sF0nwBFI9iX~ZDUFc4hUBRob~aPr0zzbB6dBx6Q~JKZKtlzCGzk7MXAc0EMc8GtsnJvIwLu4U7IxVqoY0K6AngUaMfHk8Q0K-2hh7lQYScWtKbD6dLlG7Xa2niARHqCAIQ1Z3uhjx~6M3Zc5V-aaCfgrB034geNoI0I1mP22e3wH-m~RaMJr5LiToAAlnkutNuu2H2DNHSWXxe1dnOpqyZNYaPXPeiNGT25OCuBN9gTQ4suSFsp7Obt75RQUdBSyQMrbe43mQ__",
+                        "Policy": "eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9jZG4zLmZhbnNseS5jb20vbmV3Lzc3Mjk1NjQ5NDM5MDg5ODY4OS84ODEzMzQyMDY1MjM3NzcwMjUvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc3MzMxODY5MX19fV19"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "variantHash": {},
+              "locations": [
+                {
+                  "locationId": "1",
+                  "location": "https://cdn3.fansly.com/772956494390898689/881334203159949312.mp4?ngsw-bypass=true&Expires=1773342196&Key-Pair-Id=K23PG5J1AWEZX5&Signature=LBa2JNg87mo3Q7jMtcGQKUAk8yK1HdjeWj0SnsRVP9h0JDZc4oM~-h10~dGy-SFLAQnCb27L7SwnQtpv6SmAw8raWiMEUxRJ63XXyurjVyNSzcWNXBnahOXD-Wcxhq-fMe-t3ECEPgZW-zgb6RrocwEKTv0jhQFiYsagQ5cT1tURtKyrlS3~QxPL3cIPBW6MGFTEYfLHAwwMcelUOvltf4ur241bP3Jctf2tmX1EWD4csIa5etxgFHart5VPOBIYEckFZ3kVQt6i44AgtQYUPbqblCWvVTXEvPmtskE~hX9jnQ7JMSBEQzPMiIONkkQH2-BTu-a0Wha9GbCwpmdYuQ__"
+                }
+              ]
+            },
+            "saleStats": {
+              "sales": 1,
+              "total": 11192,
+              "pending": 0
+            },
+            "liked": true,
+            "purchased": true,
+            "whitelisted": true,
+            "accountPermissionFlags": 255,
+            "access": true
+          }
+        ],
+        "accountMediaBundles": [],
+        "albumContent": [
+          {
+            "id": "881858953535827968",
+            "mediaOfferId": "881340287752871936",
+            "mediaOfferType": 2001,
+            "mediaOfferBundleId": null,
+            "mediaId": "881340136128790528",
+            "mediaType": 2,
+            "previewId": "881334203159949312",
+            "albumId": "773281436047253504",
+            "accountId": "772956494390898689",
+            "createdAt": 1771745918000
+          }
+        ]
+      }
+    }
+  }
+}

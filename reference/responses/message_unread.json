@@ -1,0 +1,292 @@
+{
+  "_meta": {
+    "endpoint": "message_unread",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:43:59.606326+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": [
+      {
+        "messageId": "885009482470408192",
+        "groupId": "885009482168410112",
+        "userId": "772956494390898689",
+        "deliveredAt": 1772560869383,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "884971738700472320",
+        "groupId": "880225447290363904",
+        "userId": "772956494390898689",
+        "deliveredAt": 1772560869383,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "882764436127899648",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1771962815227,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "882297922031476736",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1771854438080,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "882257256773591040",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1771854438080,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "857609310060945408",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "853488276282032128",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "828458988969410560",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1760167673955,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "826369496045350912",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "826369484234170368",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "824693334248275968",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1758742345893,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "824693312555347969",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1758742345893,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "819508192387014656",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1756887309276,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "819114177908994048",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "806258576275300352",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "805879577854365696",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "805228115604283392",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1753495223348,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "802921772574855168",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "802860054817554432",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "797867897216049152",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "795443091422060981",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "795324910627991552",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1751114599888,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "794724489593102336",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "789202851875266560",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "786013918811136000",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "779753684618719233",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "776016244217229313",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1770879514942,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      },
+      {
+        "messageId": "776015543722323968",
+        "groupId": null,
+        "userId": "772956494390898689",
+        "deliveredAt": 1746510886823,
+        "readAt": null,
+        "deletedAt": null,
+        "attachments": [],
+        "validMessage": true
+      }
+    ]
+  }
+}

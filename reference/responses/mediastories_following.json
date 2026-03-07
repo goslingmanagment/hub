@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "endpoint": "mediastories_following",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:44:14.154432+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": [
+      {
+        "accountId": "312359385328267264",
+        "status": 2,
+        "storyCount": 0,
+        "version": 886,
+        "createdAt": 1640477945000,
+        "updatedAt": 1772626930000
+      },
+      {
+        "accountId": "651815380611772416",
+        "status": 2,
+        "storyCount": 0,
+        "version": 2297,
+        "createdAt": 1717906399000,
+        "updatedAt": 1772659463000
+      },
+      {
+        "accountId": "816282169621110784",
+        "status": 2,
+        "storyCount": 0,
+        "version": 196,
+        "createdAt": 1760435798000,
+        "updatedAt": 1772661835000
+      }
+    ]
+  }
+}

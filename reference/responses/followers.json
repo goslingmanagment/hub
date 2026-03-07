@@ -1,0 +1,545 @@
+{
+  "_meta": {
+    "endpoint": "followers",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:44:26.104155+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": {
+      "followers": [
+        {
+          "id": "885754550978359296",
+          "followerId": "870585695649939456"
+        },
+        {
+          "id": "885708430495465472",
+          "followerId": "733876271917838336"
+        },
+        {
+          "id": "885666446498082816",
+          "followerId": "885666326700388352"
+        },
+        {
+          "id": "885582446916038660",
+          "followerId": "225588701160275968"
+        },
+        {
+          "id": "885452428311285761",
+          "followerId": "536857641612222464"
+        },
+        {
+          "id": "885398482095976448",
+          "followerId": "442491222481711104"
+        },
+        {
+          "id": "885313406763032578",
+          "followerId": "645999067507204096"
+        },
+        {
+          "id": "885151932379852800",
+          "followerId": "428106204305170432"
+        },
+        {
+          "id": "885072786849013760",
+          "followerId": "322662955646722048"
+        },
+        {
+          "id": "884989407424172034",
+          "followerId": "286636747066978304"
+        }
+      ],
+      "aggregationData": {
+        "accounts": [
+          {
+            "id": "225588701160275968",
+            "username": "WichRoom",
+            "displayName": null,
+            "flags": 16,
+            "version": 4,
+            "createdAt": 1615278897000,
+            "followCount": 3,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "225588701160275968",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "225588701160275968",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1772260784877
+            },
+            "statusId": 1,
+            "lastSeenAt": 0,
+            "accountMediaLikes": 0,
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "profileAccess": true
+          },
+          {
+            "id": "286636747066978304",
+            "username": "sshanem",
+            "displayName": null,
+            "flags": 16,
+            "version": 2,
+            "createdAt": 1629833885000,
+            "followCount": 2,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "286636747066978304",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "286636747066978304",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1771872359498
+            },
+            "statusId": 1,
+            "lastSeenAt": 0,
+            "accountMediaLikes": 0,
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "about": "Hey, I am using Fansly.",
+            "location": "",
+            "profileSocials": [],
+            "profileBadges": [],
+            "avatar": {
+              "id": "521093874924396547",
+              "type": 1,
+              "status": 1,
+              "accountId": "286636747066978304",
+              "mimetype": "image/jpeg",
+              "flags": 6,
+              "location": "/286636747066978304/521093874924396547.jpeg",
+              "width": 1980,
+              "height": 1980,
+              "metadata": "{\"dominant\":{\"r\":40,\"g\":24,\"b\":40},\"resolutionMode\":1}",
+              "updatedAt": 1685732823,
+              "createdAt": 1685732821,
+              "variants": [
+                {
+                  "id": "521093874924396548",
+                  "type": 1,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "location": "/286636747066978304/521093874924396548.jpeg",
+                  "width": 1080,
+                  "height": 1080,
+                  "metadata": "{\"resolutionMode\":1}",
+                  "updatedAt": 1685732823,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/286636747066978304/521093874924396548.jpeg?ngsw-bypass=true&Expires=1773375030&Key-Pair-Id=K23PG5J1AWEZX5&Signature=DrBIgVZ~veUzh8Kk7o8bzcqOTskgUDbiXtDsREizn7lSFh8sRQiZZqQy-vgVOVL1DeHcIHJ9dqotg0~GkdZNUzcc7orA15wWxjaG-FMM~g7DfFspk0zzyQo06Jh3myBB3DqZCdt71yEAqIzk2yvJQMPonzA0EgyndNo2Xg5zSM1XIZTY0wAmB~lNDSfhZF8r~zOS5xCwn5q6ePI1kXimcaoXXZgO0WR8b7FizIXRrw0N4dM1tnG6ThGloGNQrWrTB3UMuivkgYRRSfnsl5Ek5D4oZ3AQMLgQEqapQJxv836Vja5FtQ72dDINNzfysOhECaWE23zwG5Ti0EI~A7Uckg__"
+                    }
+                  ]
+                },
+                {
+                  "id": "521093874924396549",
+                  "type": 1,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "location": "/286636747066978304/521093874924396549.jpeg",
+                  "width": 720,
+                  "height": 720,
+                  "metadata": "{\"resolutionMode\":1}",
+                  "updatedAt": 1685732822,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/286636747066978304/521093874924396549.jpeg?ngsw-bypass=true&Expires=1773376059&Key-Pair-Id=K23PG5J1AWEZX5&Signature=UKu1A~F0PbiFNXVdBAzFLtbMmF6jdaWjqztQr4Ru1QS~oiYwBehfiBjYYnVlD1ooVb~PT~QD85ktv2RgVRN3KicoTbzV-ujFTtW9OV9O4GRoMgp5fyRI3kJ0XAYyfdBF7TX1wGay78-bSYcfVBjkqRHCWcfPDwbcpgaJgrG5gEkI~wfrTAjKLLYJmEJ0BMDbHK2QFIMlz~58WMHM6xyB2-bJxe6dgjOO1FKzdkcEirSCu5COQqEYnm9wV3jDAUstYwnk5Y1f74m0JRt6s2go2hrRTobB4YW3s8CrCsmls0~c8bBwDsLwnJZtpi88kjNC~ZeroNYDrjZbgI8mURMHSg__"
+                    }
+                  ]
+                },
+                {
+                  "id": "521093874924396550",
+                  "type": 1,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "location": "/286636747066978304/521093874924396550.jpeg",
+                  "width": 480,
+                  "height": 480,
+                  "metadata": "{\"resolutionMode\":1}",
+                  "updatedAt": 1685732822,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/286636747066978304/521093874924396550.jpeg?ngsw-bypass=true&Expires=1773305212&Key-Pair-Id=K23PG5J1AWEZX5&Signature=H0TdbwDMR2pR0-akgbSl5v0wQnLPtfDJcJ-XZo29ao1zr9WdriKY7tV4CDHTrajYanYOzYKx1IWp4g1vsRHVuehKcHcKUOJ1B92i9WMh839QtJ0oz4aeRqgL8U5cOOeYDuC8p2Lwf9~CaMT0ubxjDvR93NBlY46gI471Ynw3NosKAZS4i~J8IV8lQfbgzh4dk-U24wiBWVWmq1FwHZogU8hSVemq3btylnsuaCxlcualnEryoeDdqJsRbQomEm4RVOGKan4yDYwd-23GWF1EwfP6RrW-bRqwoSb1LEVcMcG6i5F02cCXtlvFRvuM~VGDWcZLYUaUEaE0Ai~B6laD7w__"
+                    }
+                  ]
+                },
+                {
+                  "id": "521093874924396551",
+                  "type": 1,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "location": "/286636747066978304/521093874924396551.jpeg",
+                  "width": 360,
+                  "height": 360,
+                  "metadata": "{\"resolutionMode\":1}",
+                  "updatedAt": 1685732822,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/286636747066978304/521093874924396551.jpeg?ngsw-bypass=true&Expires=1773373062&Key-Pair-Id=K23PG5J1AWEZX5&Signature=E8p3tLEw-d~rp-iQ-~Qk6Wr-40~fQPfLathIoh9Cr4zApgHAIL7g1gwgu6QPAd-ya037TqMapRkW~S3xXbWnw9CYDvWBFapxpIemMKhoWm6uCTEkFmaNpprdmfhE8-zlj1p6pNbX-K4LafLSA8YgbQBMUgrqZC-GHe415cZD43IhcN~sdGOF1U7CgK73db8FtUODxbbn8slPViSvNQE87psZI-CmnO5jYFWRAuKpQ1AM97BCDqYQNEnRum~VUpX9zkQs~mvw-ereJsZTJnddFm~SyVDe83A2gk9KZcbU5Z4CDDHYHCllT048rwalFxjhsEewfRIdzbdgNZY1on9LUQ__"
+                    }
+                  ]
+                },
+                {
+                  "id": "521093874924396552",
+                  "type": 3,
+                  "status": 1,
+                  "mimetype": "image/jpeg",
+                  "flags": 0,
+                  "location": "/286636747066978304/521093874924396552.jpeg",
+                  "width": 240,
+                  "height": 240,
+                  "metadata": "{\"resolutionMode\":1}",
+                  "updatedAt": 1685732822,
+                  "locations": [
+                    {
+                      "locationId": "1",
+                      "location": "https://cdn3.fansly.com/286636747066978304/521093874924396552.jpeg?ngsw-bypass=true&Expires=1773318876&Key-Pair-Id=K23PG5J1AWEZX5&Signature=nUd391h-v33v5qe4HpQ~bJXRwO1Y31DPrQZEwXfopk-ytF7UYleLZXu0cciFAJMINDKBRguPn9htzHaJFQg~v93I-Von0INnwJDxBTNiyu3EOLvwRd~Ln41OeIldywIQOikD5l-Tq9Sxl4CNquYQ6kJXSDw9hCBu~DO0rubI8Y7npgCgvF0owyNMJkee5V9~W8llO7rkm~cG2OSmObeBwA7wrFJCkYg9zlJ7EIfvBlELQLealj~zuNRcacs5c7h5eDvB5Ty59ZZTOh2YePmqm3AD3eFdoPVqYoi73cgGg0Csq7QoP4PfCiO~46sfJSWvqAwkta~GGPUK16QP6d~7eQ__"
+                    }
+                  ]
+                }
+              ],
+              "variantHash": {},
+              "locations": [
+                {
+                  "locationId": "1",
+                  "location": "https://cdn3.fansly.com/286636747066978304/521093874924396547.jpeg?ngsw-bypass=true&Expires=1773285044&Key-Pair-Id=K23PG5J1AWEZX5&Signature=n0Iriz8IFER7SfJrzDikd0YurKN3Sz3ywKhVXHO0t45~6EosrV91poSSN4~MBi~1t~-ySHJPwCLJaF2ur2ysfi0RD6ZyR8CDtveYMZPcXN5qw8Xa2n2r2jpwA--N4XKZKsmW4lG3BQMhCwfX~EvMg66AR~x5RipCcagIi8guJ5z45fDyzZK~1ErFKqp7skaXkSWa~37kcQAYH76Rj2nsdhwTGm4fmI~4JZKAcg6PAjKKXkTEgEGQA4I2M-vxd1qhoOBiv-KZLGt42gs-hmm0GkchE-smpXqMZKTv~fanCIDiD3cABwxms8xrKswMAaT0Xiulet2qepHBmnpMQcZcYQ__"
+                }
+              ]
+            },
+            "followsYou": true,
+            "profileAccess": true
+          },
+          {
+            "id": "322662955646722048",
+            "username": "clash77",
+            "displayName": null,
+            "flags": 16,
+            "version": 2,
+            "createdAt": 1638423203000,
+            "followCount": 1,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "322662955646722048",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "322662955646722048",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1771250716953
+            },
+            "statusId": 1,
+            "lastSeenAt": 0,
+            "accountMediaLikes": 0,
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "profileAccess": true
+          },
+          {
+            "id": "428106204305170432",
+            "username": "user428106185195925504",
+            "displayName": null,
+            "flags": 16,
+            "version": 2,
+            "createdAt": 1663562832000,
+            "followCount": 45,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "428106204305170432",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "428106204305170432",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1771349238343
+            },
+            "statusId": 1,
+            "lastSeenAt": 0,
+            "accountMediaLikes": 0,
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "profileAccess": true
+          },
+          {
+            "id": "442491222481711104",
+            "username": "anima_libera122",
+            "displayName": null,
+            "flags": 16,
+            "version": 5,
+            "createdAt": 1666992488000,
+            "followCount": 0,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "442491222481711104",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "442491222481711104",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1772580573310
+            },
+            "statusId": 1,
+            "lastSeenAt": 0,
+            "accountMediaLikes": 0,
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "profileAccess": true
+          },
+          {
+            "id": "536857641612222464",
+            "username": "user536857618136707072",
+            "displayName": "Narkobijec",
+            "flags": 16,
+            "version": 2,
+            "createdAt": 1689491196000,
+            "followCount": 1,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "536857641612222464",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "536857641612222464",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1772437726118
+            },
+            "statusId": 1,
+            "lastSeenAt": 0,
+            "accountMediaLikes": 0,
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "profileAccess": true
+          },
+          {
+            "id": "645999067507204096",
+            "username": "user645998641797935104",
+            "displayName": "Sanky",
+            "flags": 16,
+            "version": 2,
+            "createdAt": 1715512539000,
+            "followCount": 1,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "645999067507204096",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "645999067507204096",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1772176967257
+            },
+            "statusId": 1,
+            "lastSeenAt": 0,
+            "accountMediaLikes": 0,
+            "postLikes": 2,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "profileAccess": true
+          },
+          {
+            "id": "733876271917838336",
+            "username": "user733876228536152066",
+            "displayName": null,
+            "flags": 16,
+            "version": 1,
+            "createdAt": 1736464098000,
+            "followCount": 0,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "733876271917838336",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "733876271917838336",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1770913433033
+            },
+            "statusId": 1,
+            "lastSeenAt": 1772663694000,
+            "accountMediaLikes": 0,
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "profileAccess": true
+          },
+          {
+            "id": "870585695649939456",
+            "username": "user870585675538251776",
+            "displayName": null,
+            "flags": 16,
+            "version": 1,
+            "createdAt": 1769058164000,
+            "followCount": 0,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "870585695649939456",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "870585695649939456",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1772692420691
+            },
+            "statusId": 1,
+            "lastSeenAt": 1772675400000,
+            "accountMediaLikes": 0,
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "profileAccess": true
+          },
+          {
+            "id": "885666326700388352",
+            "username": "user885666301970771968",
+            "displayName": null,
+            "flags": 16,
+            "version": 1,
+            "createdAt": 1772653667000,
+            "followCount": 0,
+            "subscriberCount": 0,
+            "permissions": {
+              "accountPermissionFlags": {
+                "flags": 0
+              }
+            },
+            "streaming": {
+              "accountId": "885666326700388352",
+              "channel": null,
+              "enabled": true
+            },
+            "timelineStats": {
+              "accountId": "885666326700388352",
+              "imageCount": 0,
+              "videoCount": 0,
+              "bundleCount": 0,
+              "bundleImageCount": 0,
+              "bundleVideoCount": 0,
+              "fetchedAt": 1772734152111
+            },
+            "statusId": 1,
+            "lastSeenAt": 1772653676000,
+            "accountMediaLikes": 0,
+            "postLikes": 0,
+            "profileAccessFlags": 0,
+            "profileFlags": 0,
+            "followsYou": true,
+            "profileAccess": true
+          }
+        ]
+      }
+    }
+  }
+}

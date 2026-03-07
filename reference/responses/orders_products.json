@@ -1,0 +1,85 @@
+{
+  "_meta": {
+    "endpoint": "orders_products",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:45:07.846929+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": [
+      {
+        "id": "1",
+        "categoryId": "1",
+        "name": "$0.10 Wallet Balance",
+        "price": 100,
+        "discount": 0,
+        "bonus": 0,
+        "showInShop": false
+      },
+      {
+        "id": "2",
+        "categoryId": "1",
+        "name": "$0.01 Wallet Balance",
+        "nameHtml": "$0.01 Wallet Balance",
+        "price": 10,
+        "discount": 0,
+        "bonus": 0,
+        "showInShop": false
+      },
+      {
+        "id": "102",
+        "categoryId": "1",
+        "name": "$5 Wallet Balance",
+        "price": 5000,
+        "discount": 0,
+        "bonus": 0,
+        "showInShop": true
+      },
+      {
+        "id": "103",
+        "categoryId": "1",
+        "name": "$10 Wallet Balance",
+        "price": 10000,
+        "discount": 0,
+        "bonus": 0,
+        "showInShop": true
+      },
+      {
+        "id": "104",
+        "categoryId": "1",
+        "name": "$25 Wallet Balance",
+        "price": 25000,
+        "discount": 0,
+        "bonus": 0,
+        "showInShop": true
+      },
+      {
+        "id": "105",
+        "categoryId": "1",
+        "name": "$50 Wallet Balance",
+        "price": 50000,
+        "discount": 0,
+        "bonus": 0,
+        "showInShop": true
+      },
+      {
+        "id": "106",
+        "categoryId": "1",
+        "name": "$100 Wallet Balance",
+        "price": 100000,
+        "discount": 0,
+        "bonus": 0,
+        "showInShop": true
+      },
+      {
+        "id": "107",
+        "categoryId": "1",
+        "name": "$500 Wallet Balance",
+        "price": 500000,
+        "discount": 0,
+        "bonus": 0,
+        "showInShop": true
+      }
+    ]
+  }
+}

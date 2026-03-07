@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "endpoint": "earnings",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:43:52.123159+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": {
+      "pendingBalance": 96000
+    }
+  }
+}

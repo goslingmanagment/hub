@@ -1,0 +1,17 @@
+{
+  "_meta": {
+    "endpoint": "versioning",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:44:10.583279+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": {
+      "platformId": "web",
+      "version": "0.45.17",
+      "latest": "0.46.18",
+      "ts": 1772678641386,
+      "sessionIp": "45.135.165.42"
+    }
+  }
+}

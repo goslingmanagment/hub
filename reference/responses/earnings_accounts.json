@@ -1,0 +1,198 @@
+{
+  "_meta": {
+    "endpoint": "earnings_accounts",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:44:38.388352+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": [
+      {
+        "totalGross": 560000,
+        "totalNet": 448000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "620553353419567105"
+      },
+      {
+        "totalGross": 288000,
+        "totalNet": 230400,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "462351663991103488"
+      },
+      {
+        "totalGross": 258000,
+        "totalNet": 206400,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "782686052681785344"
+      },
+      {
+        "totalGross": 152000,
+        "totalNet": 121600,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "585269573079539713"
+      },
+      {
+        "totalGross": 125990,
+        "totalNet": 100792,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "295458113396420608"
+      },
+      {
+        "totalGross": 86000,
+        "totalNet": 68800,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "777189254160719872"
+      },
+      {
+        "totalGross": 65000,
+        "totalNet": 52000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "321458333145903104"
+      },
+      {
+        "totalGross": 61000,
+        "totalNet": 48800,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "796279185990492160"
+      },
+      {
+        "totalGross": 55000,
+        "totalNet": 44000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "788509959821205504"
+      },
+      {
+        "totalGross": 52000,
+        "totalNet": 41600,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "740975569134428160"
+      },
+      {
+        "totalGross": 50000,
+        "totalNet": 40000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "562442941126160384"
+      },
+      {
+        "totalGross": 50000,
+        "totalNet": 40000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "882453143755972608"
+      },
+      {
+        "totalGross": 50000,
+        "totalNet": 40000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "874902223241359360"
+      },
+      {
+        "totalGross": 50000,
+        "totalNet": 40000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "769844823770279936"
+      },
+      {
+        "totalGross": 43000,
+        "totalNet": 34400,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "403512819590377472"
+      },
+      {
+        "totalGross": 36000,
+        "totalNet": 28800,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "787364912593645568"
+      },
+      {
+        "totalGross": 32000,
+        "totalNet": 25600,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "797064347519033344"
+      },
+      {
+        "totalGross": 27000,
+        "totalNet": 21600,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "765958556733157378"
+      },
+      {
+        "totalGross": 25000,
+        "totalNet": 20000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "777977043433304064"
+      },
+      {
+        "totalGross": 20000,
+        "totalNet": 16000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "586780754529234944"
+      },
+      {
+        "totalGross": 20000,
+        "totalNet": 16000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "641943275057459201"
+      },
+      {
+        "totalGross": 17000,
+        "totalNet": 13600,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "777015422347124736"
+      },
+      {
+        "totalGross": 16000,
+        "totalNet": 12800,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "789189374980927489"
+      },
+      {
+        "totalGross": 15000,
+        "totalNet": 12000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "778233817138733058"
+      },
+      {
+        "totalGross": 12000,
+        "totalNet": 9600,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "622205078341689346"
+      },
+      {
+        "totalGross": 12000,
+        "totalNet": 9600,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "782079259169533952"
+      },
+      {
+        "totalGross": 5000,
+        "totalNet": 4000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "630504772255887360"
+      },
+      {
+        "totalGross": 5000,
+        "totalNet": 4000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "788829553962262529"
+      },
+      {
+        "totalGross": 5000,
+        "totalNet": 4000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "678377390585425920"
+      },
+      {
+        "totalGross": 5000,
+        "totalNet": 4000,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "285836990983708672"
+      },
+      {
+        "totalGross": 3000,
+        "totalNet": 2400,
+        "accountId": "772956494390898689",
+        "correlationAccountId": "788503492288323584"
+      }
+    ]
+  }
+}

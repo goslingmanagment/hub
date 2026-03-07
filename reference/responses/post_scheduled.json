@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "endpoint": "post_scheduled",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:44:01.389033+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": {
+      "scheduledPosts": [],
+      "aggregationData": {
+        "posts": null,
+        "accountMediaBundles": [],
+        "accountMedia": [],
+        "accounts": [],
+        "tips": []
+      }
+    }
+  }
+}
