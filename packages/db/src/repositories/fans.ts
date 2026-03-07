@@ -297,3 +297,16 @@ export async function getCurrentSubscribers(db: Database, platformAccountId: num
     order by ps.ends_at asc nulls last
   `);
 }
+
+export async function getFollowersForPage(db: Database, platformAccountId: number) {
+  return db.execute(sql`
+    select f.username,
+           f.platform_user_id,
+           pf.followed_at
+    from page_follows pf
+    join fans f on f.id = pf.fan_id
+    where pf.platform_account_id = ${platformAccountId}
+      and pf.is_active = true
+    order by pf.followed_at desc, pf.id desc
+  `);
+}

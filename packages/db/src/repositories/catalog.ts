@@ -10,9 +10,35 @@ import {
   platformAccounts,
 } from "../schema.ts";
 
+function hasErrorCode(error: unknown, code: string) {
+  let current: unknown = error;
+
+  while (typeof current === "object" && current !== null) {
+    if ("code" in current && current.code === code) {
+      return true;
+    }
+    if (!("cause" in current)) {
+      return false;
+    }
+    current = current.cause;
+  }
+
+  return false;
+}
+
 export async function createModel(db: Database, input: { slug: string; name: string }) {
-  const [created] = await db.insert(models).values(input).returning();
-  return created;
+  try {
+    const [created] = await db.insert(models).values(input).returning();
+    return created;
+  } catch (error) {
+    if (hasErrorCode(error, "23505")) {
+      throw new Error(`Model "${input.slug}" already exists`, {
+        cause: error instanceof Error ? error : undefined,
+      });
+    }
+
+    throw error;
+  }
 }
 
 export async function findModelBySlug(db: Database, slug: string) {

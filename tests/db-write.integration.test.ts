@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createFanslyPage,
   createModel,
+  getFollowersForPage,
   storeFanslySession,
   storeProxyConfig,
   upsertCheckpoint,
@@ -45,6 +46,103 @@ describe("db write safety", () => {
                platform_account_credentials, platform_accounts, models
       restart identity cascade
     `);
+  });
+
+  it("returns a friendly error for duplicate model slugs", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+
+    await expect(
+      createModel(testDb.db, {
+        slug: "lora",
+        name: "Lora 2",
+      }),
+    ).rejects.toThrow('Model "lora" already exists');
+
+    const modelRows = await testDb.pool.query(`
+      select count(*)::int as count
+      from models
+      where slug = 'lora'
+    `);
+    expect(modelRows.rows[0]?.count).toBe(1);
+  });
+
+  it("lists active followers newest first with platform id fallback", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "lora-main",
+    });
+    const fans = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-old",
+        username: "oldest",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-mid",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-new",
+        username: "newest",
+      },
+    ]);
+
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fans[0]!.id,
+      platformFollowId: "follow-old",
+      followedAt: new Date("2026-03-01T00:00:00.000Z"),
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fans[1]!.id,
+      platformFollowId: "follow-mid",
+      followedAt: new Date("2026-03-03T00:00:00.000Z"),
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fans[2]!.id,
+      platformFollowId: "follow-new",
+      followedAt: new Date("2026-03-05T00:00:00.000Z"),
+    });
+    await testDb.pool.query(`
+      update page_follows
+      set is_active = false
+      where platform_account_id = ${page.id}
+        and platform_follow_id = 'follow-old'
+    `);
+
+    const result = await getFollowersForPage(testDb.db, page.id);
+
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows.map((row) => row.username ?? row.platform_user_id)).toEqual([
+      "newest",
+      "fan-mid",
+    ]);
+    expect(
+      result.rows.map((row) => new Date(row.followed_at as string | Date).toISOString()),
+    ).toEqual([
+      "2026-03-05T00:00:00.000Z",
+      "2026-03-03T00:00:00.000Z",
+    ]);
   });
 
   it("uses database-native upserts for unique-key sync writes", async (context) => {

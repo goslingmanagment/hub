@@ -8,6 +8,7 @@ import {
 } from "@fansly-connect/db";
 import {
   formatUsdFromMills,
+  parsePeriod,
   toMills,
   type TransactionType,
 } from "@fansly-connect/shared";
@@ -15,6 +16,7 @@ import {
 import { createAppContext } from "./bootstrap.ts";
 import {
   fanSpendForPage,
+  listFollowers,
   listSubscribers,
   revenueBreakdownForPage,
   runAllSync,
@@ -26,6 +28,14 @@ import { loadSessionBundleFromFile, saveEncryptedSession, saveProxy, resolvePage
 const program = new Command();
 
 program.name("pnpm cli");
+
+function requireCustomPeriod(from?: string, to?: string) {
+  if (!from || !to) {
+    throw new Error("Custom period requires from/to dates");
+  }
+
+  return { from, to };
+}
 
 const model = program.command("model");
 
@@ -156,16 +166,17 @@ program
   .option("--from <from>")
   .option("--to <to>")
   .action(async (options) => {
+    const period = parsePeriod(options.period);
+    const custom = period === "custom"
+      ? requireCustomPeriod(options.from, options.to)
+      : undefined;
     const app = await createAppContext();
     try {
-      const period = options.period as "today" | "7d" | "30d" | "all" | "custom";
       const breakdown = await revenueBreakdownForPage(
         app,
         options.page,
         period,
-        period === "custom"
-          ? { from: options.from, to: options.to }
-          : undefined,
+        custom,
       );
 
       const totals = new Map(
@@ -174,7 +185,7 @@ program
       const overall = Array.from(totals.values()).reduce((sum, value) => sum + value, 0n);
 
       console.log(`Page: ${options.page}`);
-      console.log(`${options.period} net revenue: ${formatUsdFromMills(overall)}`);
+      console.log(`${period} net revenue: ${formatUsdFromMills(overall)}`);
       const labels: Record<TransactionType, string> = {
         subscription: "Subscriptions",
         tip: "Tips",
@@ -195,6 +206,22 @@ program
           continue;
         }
         console.log(`  ${label}: ${formatUsdFromMills(total)}`);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+program
+  .command("followers")
+  .requiredOption("--page <label>")
+  .action(async (options) => {
+    const app = await createAppContext();
+    try {
+      const rows = await listFollowers(app, options.page);
+      for (const row of rows) {
+        const followedAt = new Date(row.followed_at as string | Date).toISOString();
+        console.log(`${row.username ?? row.platform_user_id} followed_at=${followedAt}`);
       }
     } finally {
       await app.close();

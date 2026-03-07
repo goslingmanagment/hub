@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatUsdFromMills,
   millsToDecimalString,
+  parsePeriod,
   resolvePeriodBounds,
 } from "@fansly-connect/shared";
 
@@ -22,5 +23,18 @@ describe("money helpers", () => {
     expect(sevenDay.to?.toISOString()).toBe("2026-03-07T21:00:00.000Z");
     expect(thirtyDay.from?.toISOString()).toBe("2026-02-05T21:00:00.000Z");
     expect(thirtyDay.to?.toISOString()).toBe("2026-03-07T21:00:00.000Z");
+  });
+
+  it("rejects unsupported periods with the canonical option list", () => {
+    expect(() => parsePeriod("90d")).toThrow(
+      'Unsupported period "90d". Valid options: today, 7d, 30d, all, custom.',
+    );
+  });
+
+  it("keeps custom period validation specific to custom ranges", () => {
+    const now = new Date("2026-03-07T10:00:00.000Z");
+    expect(() => resolvePeriodBounds("custom", now)).toThrow(
+      "Custom period requires from/to dates",
+    );
   });
 });

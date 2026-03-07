@@ -26,6 +26,7 @@ import type {
 } from "@fansly-connect/fansly";
 
 import {
+  listFollowers,
   revenueBreakdownForPage,
   runAllSync,
   runLightSync,
@@ -260,6 +261,60 @@ describe("sync integration", () => {
       "select distinct transaction_state from daily_revenue order by transaction_state",
     );
     expect(stateRows.rows.map((row: { transaction_state: string }) => row.transaction_state)).toEqual(["pending", "posted"]);
+  });
+
+  it("lists synced followers most recent first", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const transactionsFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/earnings_transactions.json"), "utf8"),
+    ).data.response.data as FanslyEarningsTransaction[];
+    const subscribersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/subscribers.json"), "utf8"),
+    ).data.response.subscriptions as FanslySubscriber[];
+    const followersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
+    ).data.response.followers as FanslyFollower[];
+
+    const { page } = await seedFanslyPage(testDb.db, encryptionKey);
+    const app = {
+      db: testDb.db,
+      pool: testDb.pool,
+      logger: testDb.logger,
+      config: {
+        databaseUrl: "",
+        encryptionKey,
+        encryptionKeyVersion: 1,
+        logLevel: "silent",
+        fanslyBaseUrl: "https://example.invalid",
+        followerPageDelayMs: 0,
+        transactionLookbackDays: 7,
+      },
+      adapter: new FakeFanslyAdapter({
+        accountMe: accountMeFixture,
+        transactions: transactionsFixture,
+        subscribers: subscribersFixture,
+        followers: followersFixture,
+      }),
+      async close() {},
+    };
+
+    await runAllSync(app, page.label);
+
+    const rows = await listFollowers(app, page.label);
+
+    expect(rows).toHaveLength(followersFixture.length);
+    for (let index = 1; index < rows.length; index += 1) {
+      const previous = new Date(rows[index - 1]!.followed_at as string | Date).getTime();
+      const current = new Date(rows[index]!.followed_at as string | Date).getTime();
+      expect(previous).toBeGreaterThanOrEqual(current);
+    }
   });
 
   it("stores payout reversals for audit but excludes them from revenue", async (context) => {

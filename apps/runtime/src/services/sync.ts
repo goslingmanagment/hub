@@ -18,6 +18,7 @@ import {
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
+  getFollowersForPage,
   setPageSubscriptionsCurrentFlag,
   startSyncRun,
   finishSyncRun,
@@ -607,6 +608,15 @@ export async function listSubscribers(app: AppContext, label: string) {
     throw new Error(`Page not found for label "${label}"`);
   }
   const result = await getCurrentSubscribers(app.db, page.page.id);
+  return result.rows;
+}
+
+export async function listFollowers(app: AppContext, label: string) {
+  const page = await findPageByLabel(app.db, label);
+  if (!page) {
+    throw new Error(`Page not found for label "${label}"`);
+  }
+  const result = await getFollowersForPage(app.db, page.page.id);
   return result.rows;
 }
 

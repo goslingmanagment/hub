@@ -221,6 +221,14 @@ Supported periods:
 
 Revenue periods are resolved in the `Europe/Moscow` business timezone.
 
+### `followers`
+
+List currently tracked active followers for a page, newest first.
+
+```bash
+pnpm cli followers --page lora-main
+```
+
 ### `subscribers`
 
 List currently tracked subscribers for a page.

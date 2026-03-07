@@ -1,4 +1,5 @@
 export const MOSCOW_TIME_ZONE = "Europe/Moscow";
+export const PERIOD_OPTIONS = ["today", "7d", "30d", "all", "custom"] as const;
 
 interface DateParts {
   year: number;
@@ -9,11 +10,25 @@ interface DateParts {
   second: number;
 }
 
-export type Period = "today" | "7d" | "30d" | "all" | "custom";
+export type Period = (typeof PERIOD_OPTIONS)[number];
 
 export interface PeriodBounds {
   from: Date | null;
   to: Date | null;
+}
+
+export function isPeriod(value: string): value is Period {
+  return (PERIOD_OPTIONS as readonly string[]).includes(value);
+}
+
+export function parsePeriod(value: string): Period {
+  if (isPeriod(value)) {
+    return value;
+  }
+
+  throw new Error(
+    `Unsupported period "${value}". Valid options: ${PERIOD_OPTIONS.join(", ")}.`,
+  );
 }
 
 function getDateParts(date: Date, timeZone: string): DateParts {
