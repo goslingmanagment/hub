@@ -1356,6 +1356,7 @@ Get signed URL for watermarked content.
 | 45001 | StreamTickets | Stream ticket sale |
 | 45101 | StreamTicketsVariant | Stream ticket sale (variant) |
 | 58000 | Transaction58000 | [UNKNOWN] |
+| 16013 | PayoutReversal | Payout reversal — canonical internal type `payout_reversal`. Store for audit/completeness, but exclude from net revenue reporting and `daily_revenue`. No fan attached. Seen live: $331, destination=2, status=2 |
 
 ### 3.11 Revenue Types (Earnings Stats)
 
@@ -1370,6 +1371,8 @@ Revenue types are a subset of transaction types used for earnings stats breakdow
 | 18001 | Referrals |
 | 24101 | LeaderboardPrizeMoney |
 | 45001 | StreamTickets |
+
+`PayoutReversal` (`16013`) is not a revenue type. Store it for audit/completeness, but exclude it from net revenue calculations and rollups.
 
 ### 3.12 Payout Provider IDs
 

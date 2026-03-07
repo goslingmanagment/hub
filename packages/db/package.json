@@ -1,0 +1,13 @@
+{
+  "name": "@fansly-connect/db",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fansly-connect/shared": "workspace:*",
+    "drizzle-orm": "^0.44.5",
+    "pg": "^8.16.3"
+  }
+}

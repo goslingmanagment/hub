@@ -1,0 +1,24 @@
+{
+  "name": "fansly-connect",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "cli": "node --import tsx/esm apps/runtime/src/cli.ts",
+    "worker": "node --import tsx/esm apps/runtime/src/worker.ts",
+    "db:generate": "drizzle-kit generate --config=packages/db/drizzle.config.ts",
+    "db:migrate": "node --import tsx/esm packages/db/src/migrate.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:db": "docker compose up -d postgres"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.6",
+    "drizzle-kit": "^0.31.0",
+    "testcontainers": "^11.7.2",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.4"
+  }
+}

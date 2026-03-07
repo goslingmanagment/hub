@@ -32,7 +32,7 @@
 | 27 | Notifications | DB-backed alerts + queued Telegram Bot API delivery; owner-only critical alerts plus one daily summary destination |
 | 28 | Raw Payload Retention | Store mapping-critical and failed payload snapshots as `jsonb` for 180 days |
 | 29 | Sync Idempotency | Checkpointed syncs: upsert raw events first, then rebuild projections |
-| 30 | Transaction Taxonomy | Compact 8-bucket internal enum with adapter mappings |
+| 30 | Transaction Taxonomy | Compact 9-bucket internal enum with adapter mappings |
 | 31 | Notes / Summary History | Append-only notes; summaries append new versions instead of overwriting |
 | 32 | Reporting Rollups | Precomputed daily fact tables for revenue, followers, and subscribers |
 | 33 | Logging | Pino structured JSON logs |
@@ -46,6 +46,8 @@
 | 41 | Backups | Nightly full Postgres backups stored off-VPS, with restore drills |
 | 42 | Health Checks | Lightweight `/health` plus token/proxy health checks |
 | 43 | Audit Trail | Append-only audit log for sensitive admin actions |
+| 44 | Fansly Auth Headers | Only `authorization` header is required; `fansly-client-id`, `fansly-client-check`, `fansly-session-id` are optional — include when available, omit when not |
+| 45 | Payout Reversal (16013) | Fansly raw_type 16013 maps to `payout_reversal` — store in transactions for audit, but exclude from net revenue calculations and `daily_revenue` rollups |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -221,7 +223,7 @@
 - **Hub-owned AI gateway:** Route all Claude traffic through one backend gateway that records feature, chatter, page, provider response ID, token usage, cost, cache hit, and quota decisions.
 - **Raw payload retention:** Store mapping-critical upstream payloads and all failed payloads as `jsonb`, tagged with `mapper_version` and sync run ID, and retain them for 180 days.
 - **Sync idempotency and checkpointing:** Every sync should write per-account checkpoints and idempotency keys so reruns can safely upsert raw events first and rebuild derived projections without duplication.
-- **Unified transaction taxonomy:** Use one compact internal enum of `subscription`, `tip`, `message_purchase`, `post_purchase`, `stream_tip`, `chargeback`, `refund`, and `other`, then map platform-specific codes inside the adapters.
+- **Unified transaction taxonomy:** Use one compact internal enum of `subscription`, `tip`, `message_purchase`, `post_purchase`, `stream_tip`, `chargeback`, `refund`, `payout_reversal`, and `other`, then map platform-specific codes inside the adapters.
 - **Append-only notes and summaries:** Notes are immutable records, and AI summaries append new versions rather than overwriting prior history.
 - **Precomputed rollups:** Maintain daily fact tables for revenue, followers, and subscribers so dashboard and report queries stay simple and consistent.
 - **Proxy handling:** Store per-page proxy configuration in the database and apply it inside platform adapters rather than scattering proxy logic across services.

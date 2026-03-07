@@ -1,0 +1,13 @@
+{
+  "name": "@fansly-connect/shared",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "pino": "^9.9.0",
+    "zod": "^4.1.5"
+  }
+}

@@ -1,0 +1,175 @@
+import { eq } from "drizzle-orm";
+
+import type { FanslySessionBundle, ProxyConfig } from "@fansly-connect/shared";
+
+import type { Database } from "../client.ts";
+import {
+  models,
+  platformAccountCredentials,
+  platformAccountProxies,
+  platformAccounts,
+} from "../schema.ts";
+
+export async function createModel(db: Database, input: { slug: string; name: string }) {
+  const [created] = await db.insert(models).values(input).returning();
+  return created;
+}
+
+export async function findModelBySlug(db: Database, slug: string) {
+  return db.query.models.findFirst({
+    where: eq(models.slug, slug),
+  });
+}
+
+export async function createFanslyPage(
+  db: Database,
+  input: {
+    modelId: number;
+    label: string;
+  },
+) {
+  const [created] = await db
+    .insert(platformAccounts)
+    .values({
+      modelId: input.modelId,
+      platform: "fansly",
+      label: input.label,
+    })
+    .returning();
+
+  return created;
+}
+
+export async function storeFanslySession(
+  db: Database,
+  platformAccountId: number,
+  encryptedSession: string,
+  keyVersion: number,
+) {
+  const [credential] = await db
+    .insert(platformAccountCredentials)
+    .values({
+      platformAccountId,
+      encryptedSession,
+      keyVersion,
+    })
+    .onConflictDoUpdate({
+      target: platformAccountCredentials.platformAccountId,
+      set: {
+        encryptedSession,
+        keyVersion,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  return credential;
+}
+
+export async function storeProxyConfig(
+  db: Database,
+  platformAccountId: number,
+  input: {
+    url: string;
+    encryptedAuth: string | null;
+    keyVersion: number | null;
+  },
+) {
+  const [proxy] = await db
+    .insert(platformAccountProxies)
+    .values({
+      platformAccountId,
+      url: input.url,
+      encryptedAuth: input.encryptedAuth,
+      keyVersion: input.keyVersion,
+    })
+    .onConflictDoUpdate({
+      target: platformAccountProxies.platformAccountId,
+      set: {
+        url: input.url,
+        encryptedAuth: input.encryptedAuth,
+        keyVersion: input.keyVersion,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  return proxy;
+}
+
+export async function findPageByLabel(db: Database, label: string) {
+  const page = await db.query.platformAccounts.findFirst({
+    where: eq(platformAccounts.label, label),
+  });
+
+  if (!page) {
+    return null;
+  }
+
+  const credentials = await db.query.platformAccountCredentials.findFirst({
+    where: eq(platformAccountCredentials.platformAccountId, page.id),
+  });
+  const proxy = await db.query.platformAccountProxies.findFirst({
+    where: eq(platformAccountProxies.platformAccountId, page.id),
+  });
+
+  return { page, credentials, proxy };
+}
+
+export async function listFanslyPages(db: Database) {
+  return db.query.platformAccounts.findMany({
+    where: eq(platformAccounts.platform, "fansly"),
+  });
+}
+
+export async function updatePageMetadata(
+  db: Database,
+  platformAccountId: number,
+  input: {
+    platformAccountIdValue: string;
+    username: string | null;
+    displayName: string | null;
+    followerCount: number;
+    subscriberCount: number;
+    earningsBalanceMills: bigint;
+    metadata: Record<string, unknown>;
+    syncType: "light" | "followers";
+  },
+) {
+  const now = new Date();
+  const patch: {
+    platformAccountId: string;
+    username: string | null;
+    displayName: string | null;
+    followerCount: number;
+    subscriberCount: number;
+    earningsBalanceMills: bigint;
+    metadata: Record<string, unknown>;
+    lastVerifiedAt: Date;
+    updatedAt: Date;
+    lastLightSyncAt?: Date;
+    lastFollowerSyncAt?: Date;
+  } = {
+    platformAccountId: input.platformAccountIdValue,
+    username: input.username,
+    displayName: input.displayName,
+    followerCount: input.followerCount,
+    subscriberCount: input.subscriberCount,
+    earningsBalanceMills: input.earningsBalanceMills,
+    metadata: input.metadata,
+    lastVerifiedAt: now,
+    updatedAt: now,
+  };
+
+  if (input.syncType === "light") {
+    patch.lastLightSyncAt = now;
+  } else {
+    patch.lastFollowerSyncAt = now;
+  }
+
+  const [updated] = await db
+    .update(platformAccounts)
+    .set(patch)
+    .where(eq(platformAccounts.id, platformAccountId))
+    .returning();
+
+  return updated;
+}
