@@ -1,6 +1,6 @@
 import type { TransactionState, TransactionType } from "@fansly-connect/shared";
 
-export const FANSLY_MAPPER_VERSION = "fansly-phase1-v2";
+export const FANSLY_MAPPER_VERSION = "fansly-phase1-v3";
 
 export function mapFanslyTransactionType(rawType: number): TransactionType {
   if ([15000, 15001, 6515].includes(rawType)) {
@@ -11,8 +11,12 @@ export function mapFanslyTransactionType(rawType: number): TransactionType {
     return "tip";
   }
 
-  if ([2010, 2016, 2110, 2116, 32001, 32101].includes(rawType)) {
+  if ([2010, 2016, 2110, 2116].includes(rawType)) {
     return "message_purchase";
+  }
+
+  if ([32001, 32101].includes(rawType)) {
+    return "post_purchase";
   }
 
   if ([45001, 45101].includes(rawType)) {

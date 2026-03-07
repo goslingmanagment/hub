@@ -1,9 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { beforeAll, afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createFanslyPage,
+  createModel,
   dailyFollowers,
   dailyRevenue,
   dailySubscribers,
@@ -26,14 +28,25 @@ import type {
 } from "@fansly-connect/fansly";
 
 import {
+  PageSyncLockedError,
+  listFans,
   listFollowers,
+  listModels,
+  listPages,
+  listStatus,
   revenueBreakdownForPage,
   runAllSync,
+  runFollowerSync,
   runLightSync,
 } from "../apps/runtime/src/services/sync.ts";
 import { startTestDatabase, seedFanslyPage } from "./helpers/db.ts";
 
+type StartedTestDatabase = NonNullable<Awaited<ReturnType<typeof startTestDatabase>>>;
+const testEncryptionKey = Buffer.alloc(32, 7);
+
 class FakeFanslyAdapter {
+  readonly transactionAfterHistory: Array<Date | null> = [];
+
   constructor(
     private readonly fixture: {
       accountMe: FanslyAccountMeResponse;
@@ -43,30 +56,59 @@ class FakeFanslyAdapter {
     },
     private readonly options?: {
       failTransactionPage?: number;
+      holdAccountMe?: {
+        onEntered: () => void;
+        release: Promise<void>;
+      };
     },
   ) {}
 
+  setTransactions(transactions: FanslyEarningsTransaction[]) {
+    this.fixture.transactions = transactions;
+  }
+
+  setFollowers(followers: FanslyFollower[]) {
+    this.fixture.followers = followers;
+  }
+
+  clearTransactionAfterHistory() {
+    this.transactionAfterHistory.length = 0;
+  }
+
   async getAccountMe() {
-    return this.fixture.accountMe;
+    this.options?.holdAccountMe?.onEntered();
+    await this.options?.holdAccountMe?.release;
+    return {
+      parsed: this.fixture.accountMe,
+      raw: this.fixture.accountMe,
+    };
   }
 
   async verifySession() {
-    return this.fixture.accountMe;
+    return {
+      parsed: this.fixture.accountMe,
+      raw: this.fixture.accountMe,
+    };
   }
 
-  async getAccountsByIds(_: unknown, ids: string[]) {
-    return ids.map((id) => ({
+  async getAccountsByIdsPage(_: unknown, ids: string[]) {
+    const parsed = ids.map((id) => ({
       id,
       username: `fan_${id.slice(-4)}`,
       displayName: `Fan ${id.slice(-4)}`,
       createdAt: 1770000000000,
     })) satisfies FanslyAccount[];
+    return {
+      parsed,
+      raw: parsed,
+    };
   }
 
   async getTransactionsPage(
     _: unknown,
-    params: { offset?: number; limit?: number },
+    params: { after?: Date | null; offset?: number; limit?: number },
   ) {
+    this.transactionAfterHistory.push(params.after ?? null);
     const limit = params.limit ?? 100;
     const offset = params.offset ?? 0;
     const pageIndex = Math.floor(offset / limit) + 1;
@@ -75,12 +117,19 @@ class FakeFanslyAdapter {
       throw new Error(`transactions page ${pageIndex} failed`);
     }
 
-    const items = this.fixture.transactions.slice(offset, offset + limit);
+    const filtered = params.after
+      ? this.fixture.transactions.filter((item) => item.createdAt >= params.after!.getTime())
+      : this.fixture.transactions;
+    const items = filtered.slice(offset, offset + limit);
     return {
-      total: this.fixture.transactions.length,
+      total: filtered.length,
       items,
       offset,
       done: items.length < limit,
+      raw: {
+        total: filtered.length,
+        data: items,
+      },
     };
   }
 
@@ -96,6 +145,14 @@ class FakeFanslyAdapter {
       items,
       offset,
       done: items.length < limit,
+      raw: {
+        stats: {
+          totalActive: this.fixture.subscribers.length,
+          totalExpired: 0,
+          total: this.fixture.subscribers.length,
+        },
+        subscriptions: items,
+      },
     };
   }
 
@@ -119,8 +176,22 @@ class FakeFanslyAdapter {
       offset,
       done: items.length < limit,
       accounts,
+      raw: {
+        followers: items,
+        aggregationData: {
+          accounts,
+        },
+      },
     };
   }
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 function duplicateTransactions(seed: FanslyEarningsTransaction[], count: number) {
@@ -158,9 +229,48 @@ function withPayoutReversal(seed: FanslyEarningsTransaction[]) {
   ] satisfies FanslyEarningsTransaction[];
 }
 
+function buildTransaction(
+  base: FanslyEarningsTransaction,
+  overrides: Partial<FanslyEarningsTransaction>,
+): FanslyEarningsTransaction {
+  return {
+    ...base,
+    ...overrides,
+    transactionId: overrides.transactionId ?? base.transactionId,
+    correlationId: overrides.correlationId ?? base.correlationId,
+  };
+}
+
+function createTestApp(
+  testDb: StartedTestDatabase,
+  adapter: FakeFanslyAdapter,
+  overrides?: {
+    logger?: StartedTestDatabase["logger"];
+    transactionLookbackDays?: number;
+    transactionRescanCapDays?: number;
+  },
+) {
+  return {
+    db: testDb.db,
+    pool: testDb.pool,
+    logger: overrides?.logger ?? testDb.logger,
+    config: {
+      databaseUrl: "",
+      encryptionKey: testEncryptionKey,
+      encryptionKeyVersion: 1,
+      logLevel: "silent",
+      fanslyBaseUrl: "https://example.invalid",
+      followerPageDelayMs: 0,
+      transactionLookbackDays: overrides?.transactionLookbackDays ?? 7,
+      transactionRescanCapDays: overrides?.transactionRescanCapDays ?? 30,
+    },
+    adapter,
+    async close() {},
+  };
+}
+
 describe("sync integration", () => {
   let testDb: Awaited<ReturnType<typeof startTestDatabase>> | null = null;
-  const encryptionKey = Buffer.alloc(32, 7);
   const expectedRevenueTotal = 238392n;
 
   beforeAll(async () => {
@@ -211,28 +321,13 @@ describe("sync integration", () => {
       await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
     ).data.response.followers as FanslyFollower[];
 
-    const { page } = await seedFanslyPage(testDb.db, encryptionKey);
-    const app = {
-      db: testDb.db,
-      pool: testDb.pool,
-      logger: testDb.logger,
-      config: {
-        databaseUrl: "",
-        encryptionKey,
-        encryptionKeyVersion: 1,
-        logLevel: "silent",
-        fanslyBaseUrl: "https://example.invalid",
-        followerPageDelayMs: 0,
-        transactionLookbackDays: 7,
-      },
-      adapter: new FakeFanslyAdapter({
-        accountMe: accountMeFixture,
-        transactions: transactionsFixture,
-        subscribers: subscribersFixture,
-        followers: followersFixture,
-      }),
-      async close() {},
-    };
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, new FakeFanslyAdapter({
+      accountMe: accountMeFixture,
+      transactions: transactionsFixture,
+      subscribers: subscribersFixture,
+      followers: followersFixture,
+    }));
 
     await runAllSync(app, page.label);
     await runAllSync(app, page.label);
@@ -282,28 +377,13 @@ describe("sync integration", () => {
       await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
     ).data.response.followers as FanslyFollower[];
 
-    const { page } = await seedFanslyPage(testDb.db, encryptionKey);
-    const app = {
-      db: testDb.db,
-      pool: testDb.pool,
-      logger: testDb.logger,
-      config: {
-        databaseUrl: "",
-        encryptionKey,
-        encryptionKeyVersion: 1,
-        logLevel: "silent",
-        fanslyBaseUrl: "https://example.invalid",
-        followerPageDelayMs: 0,
-        transactionLookbackDays: 7,
-      },
-      adapter: new FakeFanslyAdapter({
-        accountMe: accountMeFixture,
-        transactions: transactionsFixture,
-        subscribers: subscribersFixture,
-        followers: followersFixture,
-      }),
-      async close() {},
-    };
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, new FakeFanslyAdapter({
+      accountMe: accountMeFixture,
+      transactions: transactionsFixture,
+      subscribers: subscribersFixture,
+      followers: followersFixture,
+    }));
 
     await runAllSync(app, page.label);
 
@@ -315,6 +395,205 @@ describe("sync integration", () => {
       const current = new Date(rows[index]!.followed_at as string | Date).getTime();
       expect(previous).toBeGreaterThanOrEqual(current);
     }
+  });
+
+  it("advances the follower checkpoint across second and third runs", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const followersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
+    ).data.response.followers as FanslyFollower[];
+
+    const fixture = {
+      accountMe: {
+        ...accountMeFixture,
+        account: {
+          ...accountMeFixture.account,
+          followCount: followersFixture.length,
+        },
+      },
+      transactions: [] as FanslyEarningsTransaction[],
+      subscribers: [] as FanslySubscriber[],
+      followers: [...followersFixture],
+    };
+
+    const adapter = new FakeFanslyAdapter(fixture);
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, adapter);
+
+    const firstRun = await runFollowerSync(app, page.label);
+    const firstCheckpoint = await getCheckpoint(testDb.db, page.id, "followers");
+
+    const newFollower: FanslyFollower = {
+      id: (BigInt(followersFixture[0]!.id) + 1000n).toString(),
+      followerId: (BigInt(followersFixture[0]!.followerId) + 1000n).toString(),
+    };
+    adapter.setFollowers([newFollower, ...fixture.followers]);
+    fixture.accountMe = {
+      ...fixture.accountMe,
+      account: {
+        ...fixture.accountMe.account,
+        followCount: fixture.followers.length,
+      },
+    };
+
+    const secondRun = await runFollowerSync(app, page.label);
+    const secondCheckpoint = await getCheckpoint(testDb.db, page.id, "followers");
+    const thirdRun = await runFollowerSync(app, page.label);
+    const thirdCheckpoint = await getCheckpoint(testDb.db, page.id, "followers");
+    const followCount = await testDb.pool.query(
+      `select count(*)::int as count from page_follows where platform_account_id = ${page.id}`,
+    );
+
+    expect(firstRun.delta).toBe(followersFixture.length);
+    expect(firstCheckpoint?.cursorText).toBe(followersFixture[0]!.id);
+    expect(secondRun.delta).toBe(1);
+    expect(secondCheckpoint?.cursorText).toBe(newFollower.id);
+    expect(thirdRun.delta).toBe(0);
+    expect(thirdCheckpoint?.cursorText).toBe(newFollower.id);
+    expect(followCount.rows[0]?.count).toBe(followersFixture.length + 1);
+  });
+
+  it("lists operator read models for models, pages, status, and top fans", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const transactionsFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/earnings_transactions.json"), "utf8"),
+    ).data.response.data as FanslyEarningsTransaction[];
+    const subscribersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/subscribers.json"), "utf8"),
+    ).data.response.subscriptions as FanslySubscriber[];
+    const followersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
+    ).data.response.followers as FanslyFollower[];
+
+    const { model, page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const secondModel = await createModel(testDb.db, {
+      slug: "nova",
+      name: "Nova",
+    });
+    const secondPage = await createFanslyPage(testDb.db, {
+      modelId: secondModel.id,
+      label: "nova-main",
+    });
+    const secondLightSyncAt = new Date("2026-03-08T08:00:00.000Z");
+    const secondFollowerSyncAt = new Date("2026-03-08T09:00:00.000Z");
+    await testDb.pool.query(
+      `
+        update platform_accounts
+        set username = $1,
+            follower_count = $2,
+            subscriber_count = $3,
+            last_light_sync_at = $4,
+            last_follower_sync_at = $5
+        where id = $6
+      `,
+      ["nova_verified", 12, 3, secondLightSyncAt, secondFollowerSyncAt, secondPage.id],
+    );
+
+    const app = createTestApp(testDb, new FakeFanslyAdapter({
+      accountMe: accountMeFixture,
+      transactions: transactionsFixture,
+      subscribers: subscribersFixture,
+      followers: followersFixture,
+    }));
+
+    await runAllSync(app, page.label);
+
+    const models = await listModels(app);
+    const pages = await listPages(app);
+    const status = await listStatus(app, { limit: 5 });
+    const filteredStatus = await listStatus(app, { pageLabel: page.label, limit: 1 });
+    const fans = await listFans(app, page.label, 5);
+
+    expect(models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ slug: model.slug, name: model.name, page_count: 1 }),
+      expect.objectContaining({ slug: "nova", name: "Nova", page_count: 1 }),
+    ]));
+    expect(pages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: page.label, model: model.slug }),
+      expect.objectContaining({
+        label: "nova-main",
+        model: "nova",
+        username: "nova_verified",
+        follower_count: 12,
+        subscriber_count: 3,
+      }),
+    ]));
+    const listedSecondPage = pages.find((row) => row.label === "nova-main");
+    expect(listedSecondPage).toBeDefined();
+    expect(new Date(listedSecondPage!.last_light_sync_at as string | Date).toISOString()).toBe(
+      secondLightSyncAt.toISOString(),
+    );
+    expect(new Date(listedSecondPage!.last_follower_sync_at as string | Date).toISOString()).toBe(
+      secondFollowerSyncAt.toISOString(),
+    );
+    expect(status).toHaveLength(2);
+    expect(status.map((row) => row.pageLabel)).toEqual([page.label, page.label]);
+    expect(status.map((row) => row.stream)).toEqual(["followers", "light"]);
+    expect(filteredStatus).toHaveLength(1);
+    expect(filteredStatus[0]?.pageLabel).toBe(page.label);
+    expect(fans.length).toBeGreaterThan(0);
+    expect(typeof fans[0]?.total_creator_net_mills).toBe("bigint");
+    for (let index = 1; index < fans.length; index += 1) {
+      expect((fans[index - 1]!.total_creator_net_mills as bigint) ?? 0n).toBeGreaterThanOrEqual(
+        (fans[index]!.total_creator_net_mills as bigint) ?? 0n,
+      );
+    }
+  });
+
+  it("rejects overlapping syncs for the same page", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const entered = deferred();
+    const release = deferred();
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(
+      testDb,
+      new FakeFanslyAdapter(
+        {
+          accountMe: accountMeFixture,
+          transactions: [],
+          subscribers: [],
+          followers: [],
+        },
+        {
+          holdAccountMe: {
+            onEntered: entered.resolve,
+            release: release.promise,
+          },
+        },
+      ),
+    );
+
+    const firstRun = runLightSync(app, page.label);
+    await entered.promise;
+
+    await expect(runLightSync(app, page.label)).rejects.toBeInstanceOf(PageSyncLockedError);
+
+    release.resolve();
+    await firstRun;
+
+    const runCount = await testDb.pool.query("select count(*)::int as count from sync_runs");
+    expect(runCount.rows[0]?.count).toBe(1);
   });
 
   it("stores payout reversals for audit but excludes them from revenue", async (context) => {
@@ -338,28 +617,13 @@ describe("sync integration", () => {
       await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
     ).data.response.followers as FanslyFollower[];
 
-    const { page } = await seedFanslyPage(testDb.db, encryptionKey);
-    const app = {
-      db: testDb.db,
-      pool: testDb.pool,
-      logger: testDb.logger,
-      config: {
-        databaseUrl: "",
-        encryptionKey,
-        encryptionKeyVersion: 1,
-        logLevel: "silent",
-        fanslyBaseUrl: "https://example.invalid",
-        followerPageDelayMs: 0,
-        transactionLookbackDays: 7,
-      },
-      adapter: new FakeFanslyAdapter({
-        accountMe: accountMeFixture,
-        transactions: transactionsFixture,
-        subscribers: subscribersFixture,
-        followers: followersFixture,
-      }),
-      async close() {},
-    };
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, new FakeFanslyAdapter({
+      accountMe: accountMeFixture,
+      transactions: transactionsFixture,
+      subscribers: subscribersFixture,
+      followers: followersFixture,
+    }));
 
     await runAllSync(app, page.label);
 
@@ -409,28 +673,13 @@ describe("sync integration", () => {
       await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
     ).data.response.followers as FanslyFollower[];
 
-    const { page } = await seedFanslyPage(testDb.db, encryptionKey);
-    const app = {
-      db: testDb.db,
-      pool: testDb.pool,
-      logger: testDb.logger,
-      config: {
-        databaseUrl: "",
-        encryptionKey,
-        encryptionKeyVersion: 1,
-        logLevel: "silent",
-        fanslyBaseUrl: "https://example.invalid",
-        followerPageDelayMs: 0,
-        transactionLookbackDays: 7,
-      },
-      adapter: new FakeFanslyAdapter({
-        accountMe: accountMeFixture,
-        transactions: transactionsFixture,
-        subscribers: subscribersFixture,
-        followers: followersFixture,
-      }),
-      async close() {},
-    };
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, new FakeFanslyAdapter({
+      accountMe: accountMeFixture,
+      transactions: transactionsFixture,
+      subscribers: subscribersFixture,
+      followers: followersFixture,
+    }));
 
     await runAllSync(app, page.label);
 
@@ -477,6 +726,170 @@ describe("sync integration", () => {
     expect(subscriberRows.rows[0]?.total).toBe(subscribersFixture.length);
   });
 
+  it("revisits pending transactions older than the lookback when they are still within the cap", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const seedTransactions = JSON.parse(
+      await readFile(path.resolve("reference/responses/earnings_transactions.json"), "utf8"),
+    ).data.response.data as FanslyEarningsTransaction[];
+
+    const baseTransaction = seedTransactions[0]!;
+    const now = Date.now();
+    const newestAt = now - 1 * 24 * 60 * 60 * 1000;
+    const oldPendingAt = now - 20 * 24 * 60 * 60 * 1000;
+    const initialTransactions = [
+      buildTransaction(baseTransaction, {
+        transactionId: "tx-recent-posted",
+        correlationId: "corr-recent-posted",
+        createdAt: newestAt,
+        updatedAt: newestAt,
+        status: 2,
+        type: 15001,
+      }),
+      buildTransaction(baseTransaction, {
+        transactionId: "tx-old-pending",
+        correlationId: "corr-old-pending",
+        createdAt: oldPendingAt,
+        updatedAt: oldPendingAt,
+        status: 1,
+        type: 7101,
+      }),
+    ];
+
+    const adapter = new FakeFanslyAdapter({
+      accountMe: accountMeFixture,
+      transactions: initialTransactions,
+      subscribers: [],
+      followers: [],
+    });
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, adapter, {
+      transactionLookbackDays: 7,
+      transactionRescanCapDays: 30,
+    });
+
+    await runLightSync(app, page.label);
+
+    adapter.setTransactions([
+      buildTransaction(initialTransactions[0]!, {
+        status: 2,
+        updatedAt: now,
+      }),
+      buildTransaction(initialTransactions[1]!, {
+        status: 2,
+        updatedAt: now,
+      }),
+    ]);
+    adapter.clearTransactionAfterHistory();
+
+    await runLightSync(app, page.label);
+
+    const revisitedAfter = adapter.transactionAfterHistory[0];
+    const pendingRow = await testDb.pool.query(`
+      select transaction_state
+      from transactions
+      where platform_account_id = ${page.id}
+        and transaction_id = 'tx-old-pending'
+    `);
+
+    expect(revisitedAfter?.toISOString()).toBe(new Date(oldPendingAt).toISOString());
+    expect(pendingRow.rows[0]?.transaction_state).toBe("posted");
+  });
+
+  it("clamps pending-aware rescans at the configured cap and warns once", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const seedTransactions = JSON.parse(
+      await readFile(path.resolve("reference/responses/earnings_transactions.json"), "utf8"),
+    ).data.response.data as FanslyEarningsTransaction[];
+
+    const baseTransaction = seedTransactions[0]!;
+    const now = Date.now();
+    const newestAt = now - 1 * 24 * 60 * 60 * 1000;
+    const veryOldPendingAt = now - 40 * 24 * 60 * 60 * 1000;
+    const initialTransactions = [
+      buildTransaction(baseTransaction, {
+        transactionId: "tx-cap-recent",
+        correlationId: "corr-cap-recent",
+        createdAt: newestAt,
+        updatedAt: newestAt,
+        status: 2,
+      }),
+      buildTransaction(baseTransaction, {
+        transactionId: "tx-cap-old-pending",
+        correlationId: "corr-cap-old-pending",
+        createdAt: veryOldPendingAt,
+        updatedAt: veryOldPendingAt,
+        status: 1,
+      }),
+    ];
+
+    const adapter = new FakeFanslyAdapter({
+      accountMe: accountMeFixture,
+      transactions: initialTransactions,
+      subscribers: [],
+      followers: [],
+    });
+    const warnSpy = vi.spyOn(testDb.logger, "warn").mockImplementation(() => undefined);
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, adapter, {
+      transactionLookbackDays: 7,
+      transactionRescanCapDays: 30,
+    });
+
+    try {
+      await runLightSync(app, page.label);
+
+      adapter.setTransactions([
+        buildTransaction(initialTransactions[0]!, {
+          status: 2,
+          updatedAt: now,
+        }),
+        buildTransaction(initialTransactions[1]!, {
+          status: 2,
+          updatedAt: now,
+        }),
+      ]);
+      adapter.clearTransactionAfterHistory();
+
+      const beforeSecondRun = Date.now();
+      await runLightSync(app, page.label);
+      const afterSecondRun = Date.now();
+
+      const requestedAfter = adapter.transactionAfterHistory[0];
+      const pendingRow = await testDb.pool.query(`
+        select transaction_state
+        from transactions
+        where platform_account_id = ${page.id}
+          and transaction_id = 'tx-cap-old-pending'
+      `);
+
+      expect(requestedAfter).not.toBeNull();
+      expect(requestedAfter!.getTime()).toBeGreaterThanOrEqual(
+        beforeSecondRun - 30 * 24 * 60 * 60 * 1000,
+      );
+      expect(requestedAfter!.getTime()).toBeLessThanOrEqual(
+        afterSecondRun - 30 * 24 * 60 * 60 * 1000,
+      );
+      expect(pendingRow.rows[0]?.transaction_state).toBe("pending");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("does not advance the transaction checkpoint on partial failure", async (context) => {
     if (!testDb) {
       context.skip();
@@ -493,21 +906,10 @@ describe("sync integration", () => {
       await readFile(path.resolve("reference/responses/subscribers.json"), "utf8"),
     ).data.response.subscriptions as FanslySubscriber[];
 
-    const { page } = await seedFanslyPage(testDb.db, encryptionKey);
-    const app = {
-      db: testDb.db,
-      pool: testDb.pool,
-      logger: testDb.logger,
-      config: {
-        databaseUrl: "",
-        encryptionKey,
-        encryptionKeyVersion: 1,
-        logLevel: "silent",
-        fanslyBaseUrl: "https://example.invalid",
-        followerPageDelayMs: 0,
-        transactionLookbackDays: 7,
-      },
-      adapter: new FakeFanslyAdapter(
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(
+      testDb,
+      new FakeFanslyAdapter(
         {
           accountMe: accountMeFixture,
           transactions: duplicateTransactions(seedTransactions, 150),
@@ -516,8 +918,7 @@ describe("sync integration", () => {
         },
         { failTransactionPage: 2 },
       ),
-      async close() {},
-    };
+    );
 
     const result = await runLightSync(app, page.label);
     const checkpoint = await getCheckpoint(testDb.db, page.id, "transactions");

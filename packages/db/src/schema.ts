@@ -210,7 +210,9 @@ export const fanPages = pgTable(
     platformAccountId: bigint("platform_account_id", { mode: "number" })
       .references(() => platformAccounts.id, { onDelete: "cascade" })
       .notNull(),
-    totalSpentMills: bigint("total_spent_mills", { mode: "bigint" }).default(0n).notNull(),
+    totalCreatorNetMills: bigint("total_creator_net_mills", { mode: "bigint" })
+      .default(0n)
+      .notNull(),
     currency: text("currency").default("USD").notNull(),
     isFollower: boolean("is_follower").default(false).notNull(),
     followerSince: timestamp("follower_since", { withTimezone: true }),

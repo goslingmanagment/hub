@@ -1,7 +1,7 @@
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { rawPayloads, syncCheckpoints, syncRuns } from "../schema.ts";
+import { platformAccounts, rawPayloads, syncCheckpoints, syncRuns } from "../schema.ts";
 
 export async function startSyncRun(
   db: Database,
@@ -131,4 +131,37 @@ export async function insertRawPayload(
 
 export async function deleteExpiredRawPayloads(db: Database, now = new Date()) {
   return db.delete(rawPayloads).where(lt(rawPayloads.retainUntil, now));
+}
+
+export async function listRecentSyncRuns(
+  db: Database,
+  input?: {
+    limit?: number;
+    platformAccountId?: number;
+  },
+) {
+  const clauses = [
+    sql`true`,
+  ];
+
+  if (input?.platformAccountId !== undefined) {
+    clauses.push(sql`${syncRuns.platformAccountId} = ${input.platformAccountId}`);
+  }
+
+  return db
+    .select({
+      runId: syncRuns.id,
+      pageLabel: platformAccounts.label,
+      stream: syncRuns.stream,
+      trigger: syncRuns.trigger,
+      status: syncRuns.status,
+      startedAt: syncRuns.startedAt,
+      finishedAt: syncRuns.finishedAt,
+      errorSummary: syncRuns.errorSummary,
+    })
+    .from(syncRuns)
+    .innerJoin(platformAccounts, eq(platformAccounts.id, syncRuns.platformAccountId))
+    .where(and(...clauses))
+    .orderBy(sql`${syncRuns.startedAt} desc`, sql`${syncRuns.id} desc`)
+    .limit(input?.limit ?? 20);
 }

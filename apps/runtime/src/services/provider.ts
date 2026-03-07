@@ -1,0 +1,66 @@
+export interface ProviderResponse<TParsed, TRaw = unknown> {
+  parsed: TParsed;
+  raw: TRaw;
+}
+
+export interface ProviderPageResponse<TItem, TRaw = unknown> {
+  total?: number;
+  items: TItem[];
+  offset: number;
+  done: boolean;
+  raw: TRaw;
+}
+
+export interface ProviderFollowersPageResponse<TAccount, TFollower, TRaw = unknown>
+  extends ProviderPageResponse<TFollower, TRaw> {
+  accounts: TAccount[];
+}
+
+export interface ProviderTransactionsPageParams {
+  after?: Date | null;
+  before?: Date | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ProviderSubscribersPageParams {
+  offset?: number;
+  limit?: number;
+  after?: Date | null;
+  before?: Date | null;
+  status?: string;
+}
+
+export interface ProviderFollowersPageParams {
+  offset?: number;
+  limit?: number;
+  after?: string | null;
+  before?: string | null;
+  minDelayMs?: number;
+}
+
+export interface ProviderAdapter<
+  TContext,
+  TAccountMe,
+  TAccount,
+  TTransaction,
+  TSubscriber,
+  TFollower,
+> {
+  getAccountMe(context: TContext): Promise<ProviderResponse<TAccountMe>>;
+  verifySession(context: TContext): Promise<ProviderResponse<TAccountMe>>;
+  getAccountsByIdsPage(context: TContext, ids: string[]): Promise<ProviderResponse<TAccount[]>>;
+  getTransactionsPage(
+    context: TContext,
+    params: ProviderTransactionsPageParams,
+  ): Promise<ProviderPageResponse<TTransaction>>;
+  getSubscribersPage(
+    context: TContext,
+    params: ProviderSubscribersPageParams,
+  ): Promise<ProviderPageResponse<TSubscriber>>;
+  getFollowersPage(
+    context: TContext,
+    accountId: string,
+    params: ProviderFollowersPageParams,
+  ): Promise<ProviderFollowersPageResponse<TAccount, TFollower>>;
+}

@@ -65,12 +65,12 @@ export async function upsertFanPage(
     subscriberSince?: Date | null;
     subscriptionExpiresAt?: Date | null;
     autoRenew?: boolean | null;
-    totalSpentMills?: bigint;
+    totalCreatorNetMills?: bigint;
     lastTransactionAt?: Date | null;
   },
 ) {
   const patch = {
-    totalSpentMills: input.totalSpentMills ?? 0n,
+    totalCreatorNetMills: input.totalCreatorNetMills ?? 0n,
     isFollower: input.isFollower ?? false,
     followerSince: input.followerSince ?? null,
     isSubscriber: input.isSubscriber ?? false,
@@ -85,8 +85,8 @@ export async function upsertFanPage(
     lastSeenAt: patch.lastSeenAt,
   };
 
-  if (input.totalSpentMills !== undefined) {
-    updateSet.totalSpentMills = input.totalSpentMills;
+  if (input.totalCreatorNetMills !== undefined) {
+    updateSet.totalCreatorNetMills = input.totalCreatorNetMills;
   }
   if (input.isFollower !== undefined) {
     updateSet.isFollower = input.isFollower;
@@ -247,12 +247,12 @@ export async function upsertPageSubscription(
 export async function recalculateFanPageSpend(db: Database, platformAccountId: number) {
   await db.execute(sql`
     update fan_pages fp
-    set total_spent_mills = coalesce(tx.total_spent_mills, 0),
+    set total_creator_net_mills = coalesce(tx.total_creator_net_mills, 0),
         last_transaction_at = tx.last_transaction_at,
         last_seen_at = now()
     from (
       select fan_id,
-             sum(net_amount_mills) as total_spent_mills,
+             sum(net_amount_mills) as total_creator_net_mills,
              max(occurred_at) as last_transaction_at
       from transactions
       where platform_account_id = ${platformAccountId}
@@ -272,12 +272,35 @@ export async function getFanSpendByIdentifier(
   return db.execute(sql`
     select f.platform_user_id,
            f.username,
-           fp.total_spent_mills
+           fp.total_creator_net_mills
     from fan_pages fp
     join fans f on f.id = fp.fan_id
     where fp.platform_account_id = ${platformAccountId}
       and (f.platform_user_id = ${identifier} or f.username = ${identifier})
     limit 1
+  `);
+}
+
+export async function listTopFansForPage(
+  db: Database,
+  platformAccountId: number,
+  limit = 20,
+) {
+  return db.execute(sql`
+    select f.platform_user_id,
+           f.username,
+           f.display_name,
+           fp.total_creator_net_mills,
+           fp.is_subscriber,
+           fp.is_follower,
+           fp.last_transaction_at
+    from fan_pages fp
+    join fans f on f.id = fp.fan_id
+    where fp.platform_account_id = ${platformAccountId}
+    order by fp.total_creator_net_mills desc,
+             fp.last_transaction_at desc nulls last,
+             f.id asc
+    limit ${limit}
   `);
 }
 

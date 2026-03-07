@@ -106,7 +106,7 @@ pnpm cli page verify --page lora-main
 10. Run a full sync:
 
 ```bash
-pnpm cli sync --account lora-main
+pnpm cli sync --page lora-main
 ```
 
 Example output:
@@ -146,6 +146,7 @@ Configuration is loaded from environment variables and validated at startup.
 | `FANSLY_BASE_URL` | No | Fansly API base URL. Defaults to `https://apiv3.fansly.com/api/v1`. |
 | `FOLLOWER_PAGE_DELAY_MS` | No | Delay between follower pages. Defaults to `5000`. |
 | `TRANSACTION_LOOKBACK_DAYS` | No | Backfill window applied to transaction checkpoint resyncs. Defaults to `7`. |
+| `TRANSACTION_RESCAN_CAP_DAYS` | No | Maximum age of pending-aware transaction rescans before the start cursor is clamped. Defaults to `30`. |
 
 ## CLI Reference
 
@@ -157,9 +158,17 @@ Create a local model record that pages attach to.
 pnpm cli model add --slug lora --name "Lora"
 ```
 
+### `model list`
+
+List configured models with their page counts.
+
+```bash
+pnpm cli model list
+```
+
 ### `page add fansly`
 
-Register a Fansly page, encrypt its session bundle, and optionally store proxy settings.
+Register a Fansly page only after a live Fansly auth check succeeds, then encrypt its session bundle and optionally store proxy settings.
 
 ```bash
 pnpm cli page add fansly \
@@ -188,19 +197,36 @@ Validate the stored session against Fansly and refresh the page metadata snapsho
 pnpm cli page verify --page lora-main
 ```
 
+### `page list`
+
+List tracked pages with current snapshot counts and last sync timestamps.
+
+```bash
+pnpm cli page list
+```
+
 ### `sync`
 
 Run sync jobs manually. `all` runs the same light and follower sync services used by the worker.
 
 ```bash
-pnpm cli sync --account lora-main --scope all
+pnpm cli sync --page lora-main --scope all
 ```
 
 Other useful scopes:
 
 ```bash
-pnpm cli sync --account lora-main --scope light
-pnpm cli sync --account lora-main --scope followers
+pnpm cli sync --page lora-main --scope light
+pnpm cli sync --page lora-main --scope followers
+```
+
+### `status`
+
+List recent sync runs across pages, optionally filtered to a single page.
+
+```bash
+pnpm cli status --limit 20
+pnpm cli status --page lora-main --limit 10
 ```
 
 ### `revenue`
@@ -239,10 +265,18 @@ pnpm cli subscribers --page lora-main
 
 ### `fan-spend`
 
-Show total spend for a fan on a page using a platform user id or username.
+Show total creator net from a fan on a page using a platform user id or username.
 
 ```bash
 pnpm cli fan-spend --page lora-main --fan somefan123
+```
+
+### `fans`
+
+Rank fans on a page by creator net.
+
+```bash
+pnpm cli fans --page lora-main --limit 20
 ```
 
 ## Worker Behavior
@@ -268,7 +302,7 @@ If you add a new page while the worker is already running, restart the worker so
 - Sync jobs are idempotent and safe to re-run.
 - Fansly session bundles and proxy credentials are encrypted at rest with application-layer AES-256-GCM.
 - Raw debugging payloads are stored in JSONB and cleaned up after their 180-day retention window.
-- The canonical transaction enum includes `post_purchase`, but the Fansly adapter does not populate it in Phase 1. Fansly media sales map to `message_purchase`.
+- Fansly story and bundle sale types (`32001`, `32101`) map to `post_purchase`; the bundle-oriented `2016` and `2116` types remain on `message_purchase` until they are reclassified with raw payload evidence.
 
 ## Testing And Verification
 

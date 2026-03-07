@@ -245,3 +245,22 @@ export async function getRevenueBreakdown(
     .where(and(...clauses))
     .groupBy(transactions.canonicalType);
 }
+
+export async function getOldestPendingTransactionAt(
+  db: Database,
+  platformAccountId: number,
+) {
+  const result = await db.execute(sql`
+    select min(occurred_at) as oldest_pending_at
+    from transactions
+    where platform_account_id = ${platformAccountId}
+      and transaction_state = 'pending'::transaction_state
+  `);
+
+  const value = result.rows[0]?.oldest_pending_at;
+  if (!value) {
+    return null;
+  }
+
+  return value instanceof Date ? value : new Date(value as string);
+}

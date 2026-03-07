@@ -9,7 +9,6 @@ import type {
   FanslyAccount,
   FanslyAccountMeResponse,
   FanslyFollowersPage,
-  FanslyPaginatedResponse,
   FanslyRequestContext,
   FanslySubscribersPage,
   FanslyTransactionsPage,
@@ -30,6 +29,11 @@ type ApiEnvelope<T> = {
   };
 };
 
+type RequestResult<T> = {
+  parsed: T;
+  raw: T;
+};
+
 export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
 
@@ -41,19 +45,15 @@ export class FanslyAdapter {
     });
   }
 
-  async getAccountsByIds(context: FanslyRequestContext, ids: string[]) {
-    const accounts: FanslyAccount[] = [];
-
-    for (let index = 0; index < ids.length; index += 100) {
-      const chunk = ids.slice(index, index + 100);
-      const response = await this.request<FanslyAccount[]>(context, "/account", {
-        query: { ids: chunk.join(",") },
-        category: "account",
-      });
-      accounts.push(...response);
+  async getAccountsByIdsPage(context: FanslyRequestContext, ids: string[]) {
+    if (ids.length > 100) {
+      throw new Error("Fansly account lookup supports at most 100 ids per request");
     }
 
-    return accounts;
+    return this.request<FanslyAccount[]>(context, "/account", {
+      query: { ids: ids.join(",") },
+      category: "account",
+    });
   }
 
   async getTransactionsPage(
@@ -81,11 +81,12 @@ export class FanslyAdapter {
 
     const limit = params.limit ?? 100;
     return {
-      total: response.total,
-      items: response.data,
+      total: response.parsed.total,
+      items: response.parsed.data,
       offset: params.offset ?? 0,
-      done: response.data.length < limit,
-    } satisfies FanslyPaginatedResponse<FanslyTransactionsPage["data"][number]>;
+      done: response.parsed.data.length < limit,
+      raw: response.raw,
+    };
   }
 
   async getSubscribersPage(
@@ -111,11 +112,12 @@ export class FanslyAdapter {
 
     const limit = params.limit ?? 100;
     return {
-      total: response.stats.total,
-      items: response.subscriptions,
+      total: response.parsed.stats.total,
+      items: response.parsed.subscriptions,
       offset: params.offset ?? 0,
-      done: response.subscriptions.length < limit,
-    } satisfies FanslyPaginatedResponse<FanslySubscribersPage["subscriptions"][number]>;
+      done: response.parsed.subscriptions.length < limit,
+      raw: response.raw,
+    };
   }
 
   async getFollowersPage(
@@ -146,11 +148,12 @@ export class FanslyAdapter {
 
     const limit = params.limit ?? 100;
     return {
-      items: response.followers,
-      total: response.followers.length,
+      items: response.parsed.followers,
+      total: response.parsed.followers.length,
       offset: params.offset ?? 0,
-      done: response.followers.length < limit,
-      accounts: response.aggregationData?.accounts ?? [],
+      done: response.parsed.followers.length < limit,
+      accounts: response.parsed.aggregationData?.accounts ?? [],
+      raw: response.raw,
     };
   }
 
@@ -167,7 +170,7 @@ export class FanslyAdapter {
       minDelayMs?: number;
       retries?: number;
     },
-  ): Promise<T> {
+  ): Promise<RequestResult<T>> {
     const query = new URLSearchParams({ "ngsw-bypass": "true" });
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) {
@@ -225,7 +228,10 @@ export class FanslyAdapter {
         );
       }
 
-      return envelope.response;
+      return {
+        parsed: envelope.response,
+        raw: envelope.response,
+      };
     }
 
     throw new FanslyApiError("Fansly request exhausted retries");

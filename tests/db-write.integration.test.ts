@@ -13,11 +13,45 @@ import {
   upsertPageSubscription,
   upsertTransaction,
 } from "@fansly-connect/db";
+import type { FanslyAccountMeResponse } from "@fansly-connect/fansly";
 
+import { onboardFanslyPage } from "../apps/runtime/src/services/page-onboarding.ts";
 import { startTestDatabase } from "./helpers/db.ts";
 
 describe("db write safety", () => {
   let testDb: Awaited<ReturnType<typeof startTestDatabase>> | null = null;
+  const encryptionKey = Buffer.alloc(32, 7);
+
+  function createOnboardingApp(
+    verifySession: () => Promise<FanslyAccountMeResponse>,
+  ) {
+    if (!testDb) {
+      throw new Error("Test database is not available");
+    }
+
+    return {
+      db: testDb.db,
+      config: {
+        databaseUrl: "",
+        encryptionKey,
+        encryptionKeyVersion: 1,
+        logLevel: "silent",
+        fanslyBaseUrl: "https://example.invalid",
+        followerPageDelayMs: 0,
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        async verifySession() {
+          const parsed = await verifySession();
+          return {
+            parsed,
+            raw: parsed,
+          };
+        },
+      },
+    };
+  }
 
   beforeAll(async () => {
     try {
@@ -72,6 +106,137 @@ describe("db write safety", () => {
       where slug = 'lora'
     `);
     expect(modelRows.rows[0]?.count).toBe(1);
+  });
+
+  it("verifies Fansly auth before persisting a page and stores metadata immediately", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+
+    const app = createOnboardingApp(async () => ({
+      account: {
+        id: "acct-123",
+        username: "lora_verified",
+        displayName: "Lora Verified",
+        createdAt: 1_772_157_317_000,
+        followCount: 42,
+        subscriberCount: 7,
+        earningsWallet: { id: "wallet-1", balance: 123_45 },
+        walls: [{ id: "wall-1" }],
+        subscriptionTiers: [{ id: "tier-1" }],
+      },
+    }));
+
+    const session = {
+      authorization: "token",
+      fanslyClientId: "client-id",
+      fanslyClientCheck: "client-check",
+      fanslySessionId: "session-id",
+    };
+
+    const { page } = await onboardFanslyPage(app, {
+      modelSlug: "lora",
+      label: "lora-main",
+      session,
+      proxy: {
+        url: "http://proxy.example",
+        username: "proxy-user",
+        password: "proxy-pass",
+      },
+    });
+
+    const pageRows = await testDb.pool.query(`
+      select label,
+             platform_account_id,
+             username,
+             display_name,
+             follower_count,
+             subscriber_count,
+             earnings_balance_mills,
+             last_verified_at is not null as has_last_verified_at,
+             last_light_sync_at is not null as has_last_light_sync_at
+      from platform_accounts
+      where id = ${page.id}
+    `);
+    const credentialRows = await testDb.pool.query(`
+      select count(*)::int as count, max(key_version)::int as key_version
+      from platform_account_credentials
+      where platform_account_id = ${page.id}
+    `);
+    const proxyRows = await testDb.pool.query(`
+      select count(*)::int as count,
+             max(url) as url,
+             bool_or(encrypted_auth is not null) as has_encrypted_auth
+      from platform_account_proxies
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(pageRows.rows[0]).toMatchObject({
+      label: "lora-main",
+      platform_account_id: "acct-123",
+      username: "lora_verified",
+      display_name: "Lora Verified",
+      follower_count: 42,
+      subscriber_count: 7,
+      earnings_balance_mills: 12345n,
+      has_last_verified_at: true,
+      has_last_light_sync_at: true,
+    });
+    expect(credentialRows.rows[0]?.count).toBe(1);
+    expect(credentialRows.rows[0]?.key_version).toBe(1);
+    expect(proxyRows.rows[0]?.count).toBe(1);
+    expect(proxyRows.rows[0]?.url).toBe("http://proxy.example");
+    expect(proxyRows.rows[0]?.has_encrypted_auth).toBe(true);
+  });
+
+  it("leaves no persisted rows behind when Fansly auth verification fails during onboarding", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+
+    const app = createOnboardingApp(async () => {
+      throw new Error("invalid auth");
+    });
+
+    await expect(
+      onboardFanslyPage(app, {
+        modelSlug: "lora",
+        label: "lora-main",
+        session: {
+          authorization: "token",
+        },
+        proxy: {
+          url: "http://proxy.example",
+          username: "proxy-user",
+          password: "proxy-pass",
+        },
+      }),
+    ).rejects.toThrow("invalid auth");
+
+    const counts = await testDb.pool.query(`
+      select
+        (select count(*)::int from platform_accounts) as platform_accounts_count,
+        (select count(*)::int from platform_account_credentials) as credentials_count,
+        (select count(*)::int from platform_account_proxies) as proxies_count
+    `);
+
+    expect(counts.rows[0]).toMatchObject({
+      platform_accounts_count: 0,
+      credentials_count: 0,
+      proxies_count: 0,
+    });
   });
 
   it("lists active followers newest first with platform id fallback", async (context) => {
@@ -251,7 +416,7 @@ describe("db write safety", () => {
       platformAccountId: page.id,
       isFollower: true,
       followerSince: new Date("2026-03-02T00:00:00.000Z"),
-      totalSpentMills: 1200n,
+      totalCreatorNetMills: 1200n,
     });
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
@@ -264,7 +429,7 @@ describe("db write safety", () => {
       select count(*)::int as count,
              bool_or(is_follower) as is_follower,
              bool_or(is_subscriber) as is_subscriber,
-             max(total_spent_mills)::bigint as total_spent_mills
+             max(total_creator_net_mills)::bigint as total_creator_net_mills
       from fan_pages
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
@@ -272,7 +437,7 @@ describe("db write safety", () => {
     expect(fanPageRows.rows[0]?.count).toBe(1);
     expect(fanPageRows.rows[0]?.is_follower).toBe(true);
     expect(fanPageRows.rows[0]?.is_subscriber).toBe(true);
-    expect(BigInt(fanPageRows.rows[0]?.total_spent_mills ?? 0)).toBe(1200n);
+    expect(BigInt(fanPageRows.rows[0]?.total_creator_net_mills ?? 0)).toBe(1200n);
 
     await upsertPageFollow(testDb.db, {
       platformAccountId: page.id,

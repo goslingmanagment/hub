@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import type { FanslySessionBundle, ProxyConfig } from "@fansly-connect/shared";
 
@@ -144,6 +144,34 @@ export async function listFanslyPages(db: Database) {
   return db.query.platformAccounts.findMany({
     where: eq(platformAccounts.platform, "fansly"),
   });
+}
+
+export async function listModelsWithPageCounts(db: Database) {
+  return db.execute(sql`
+    select m.slug,
+           m.name,
+           count(pa.id)::int as page_count
+    from models m
+    left join platform_accounts pa on pa.model_id = m.id
+    group by m.id, m.slug, m.name
+    order by m.slug asc
+  `);
+}
+
+export async function listPageSummaries(db: Database) {
+  return db.execute(sql`
+    select pa.platform,
+           m.slug as model,
+           pa.label,
+           pa.username,
+           pa.follower_count,
+           pa.subscriber_count,
+           pa.last_light_sync_at,
+           pa.last_follower_sync_at
+    from platform_accounts pa
+    join models m on m.id = pa.model_id
+    order by m.slug asc, pa.label asc
+  `);
 }
 
 export async function updatePageMetadata(

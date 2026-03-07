@@ -1,15 +1,25 @@
 import { createDb, createPool } from "@fansly-connect/db";
 import { FanslyAdapter } from "@fansly-connect/fansly";
+import type {
+  FanslyAccount,
+  FanslyAccountMeResponse,
+  FanslyEarningsTransaction,
+  FanslyFollower,
+  FanslyRequestContext,
+  FanslySubscriber,
+} from "@fansly-connect/fansly";
 import { createLogger, loadConfig } from "@fansly-connect/shared";
 
-export interface AdapterLike {
-  getAccountMe: FanslyAdapter["getAccountMe"];
-  getAccountsByIds: FanslyAdapter["getAccountsByIds"];
-  getTransactionsPage: FanslyAdapter["getTransactionsPage"];
-  getSubscribersPage: FanslyAdapter["getSubscribersPage"];
-  getFollowersPage: FanslyAdapter["getFollowersPage"];
-  verifySession: FanslyAdapter["verifySession"];
-}
+import type { ProviderAdapter } from "./services/provider.ts";
+
+export type AdapterLike = ProviderAdapter<
+  FanslyRequestContext,
+  FanslyAccountMeResponse,
+  FanslyAccount,
+  FanslyEarningsTransaction,
+  FanslySubscriber,
+  FanslyFollower
+>;
 
 export interface AppContext {
   config: ReturnType<typeof loadConfig>;
