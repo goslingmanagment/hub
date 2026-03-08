@@ -5,8 +5,8 @@
 ```
 Phase 1: Fansly Connect
   └─► Phase 2: API + Auth
-       ├─► Phase 4: OnlyFans Connect
-       │    └─► Phase 3: Dashboard ──────────────┐
+       ├─► Phase 3: OnlyFans Connect
+       │    └─► Phase 4: Dashboard ──────────────┐
        │         └─► Phase 8: Team Management ───►│─► Phase 9: Chatter Payroll ─► Phase 11: Advanced Analytics
        │                                          │
        └─► Phase 5: Telegram Notifications        │
@@ -14,10 +14,10 @@ Phase 1: Fansly Connect
 Phase 8: Team Management ─────────────────────────► Phase 10: Internal TODO
 
 Phase 6: Backups + Ops  (must complete before production deploy)
-Phase 7: ChatMuse Backend  (depends on Phases 2 + 3; intentionally scheduled after Phases 4-6 by owner decision)
+Phase 7: ChatMuse Backend  (depends on Phases 2 + 4; intentionally scheduled after Phases 3-6 by owner decision)
 
-Phase 4 (OF Connect) now precedes Phase 3 (Dashboard) so the dashboard ships with both platforms from day one.
-Phase 5 runs after Phase 2 and can ship independently of Phases 4, 6, and 7.
+Phase 3 (OF Connect) precedes Phase 4 (Dashboard) so the dashboard ships with both platforms from day one.
+Phase 5 runs after Phase 2 and can ship independently of Phases 3, 6, and 7.
 ```
 
 ---
@@ -74,7 +74,29 @@ The hub exposes a secure API that the dashboard and ChatMuse extension can consu
 
 ---
 
-## Phase 3: Dashboard
+## Phase 3: OnlyFans Connect
+
+The agency connects OnlyFans pages via OnlyMonster and sees unified data across both platforms.
+
+**Features:**
+- OnlyMonster platform adapter for OnlyFans pages
+- CLI onboarding for OnlyFans pages mirrors Phase 1: attach an OF page to an existing model, configure adapter credentials, and trigger sync manually when needed
+- Hourly transaction sync: tips, subscriptions, message payments, post purchases, live stream revenue
+- Hourly chargeback sync
+- Map OnlyMonster transaction types into the same unified taxonomy defined in Phase 1
+- Sync chatter performance metrics from OnlyMonster every 6 hours: messages sent, chat sales, reply time averages, work time, break time
+- Sync OnlyMonster tracking-link data daily
+- No subscriber/follower sync in v1: OnlyMonster does not expose subscriber/follower endpoints, so subscriber/follower features remain Fansly-only until that changes
+- Create fan records from OnlyFans transactions; compute fan spending from synced data
+- CLI verification: see combined revenue across Fansly + OnlyFans for a single model
+
+**Depends on:** Phase 2
+
+**Milestone:** Run a CLI command and see total revenue for a model across both Fansly and OnlyFans pages, with transactions classified under the same types.
+
+---
+
+## Phase 4: Dashboard
 
 The agency opens a browser and sees live revenue, subscribers, fans, and trends across all pages and models — Fansly and OnlyFans combined from launch.
 
@@ -102,31 +124,9 @@ The agency opens a browser and sees live revenue, subscribers, fans, and trends 
 - Login screen
 - Desktop-only layout
 
-**Depends on:** Phase 2 + Phase 4
+**Depends on:** Phase 2 + Phase 3
 
 **Milestone:** Open the dashboard, see today's revenue by page matching the platform — Fansly and OnlyFans combined. Drill into a model, see transactions from both platforms. Open a fan profile, see spending and notes.
-
----
-
-## Phase 4: OnlyFans Connect
-
-The agency connects OnlyFans pages via OnlyMonster and sees unified data across both platforms.
-
-**Features:**
-- OnlyMonster platform adapter for OnlyFans pages
-- CLI onboarding for OnlyFans pages mirrors Phase 1: attach an OF page to an existing model, configure adapter credentials, and trigger sync manually when needed
-- Hourly transaction sync: tips, subscriptions, message payments, post purchases, live stream revenue
-- Hourly chargeback sync
-- Map OnlyMonster transaction types into the same unified taxonomy defined in Phase 1
-- Sync chatter performance metrics from OnlyMonster every 6 hours: messages sent, chat sales, reply time averages, work time, break time
-- Sync OnlyMonster tracking-link data daily
-- No subscriber/follower sync in v1: OnlyMonster does not expose subscriber/follower endpoints, so subscriber/follower features remain Fansly-only until that changes
-- Create fan records from OnlyFans transactions; compute fan spending from synced data
-- CLI verification: see combined revenue across Fansly + OnlyFans for a single model
-
-**Depends on:** Phase 2 (blocks Phase 3 — dashboard ships with both platforms)
-
-**Milestone:** Run a CLI command and see total revenue for a model across both Fansly and OnlyFans pages, with transactions classified under the same types.
 
 ---
 
@@ -140,7 +140,7 @@ The owner receives a daily revenue summary and immediate alerts for sync and con
 - Sync failure alerts: expired platform tokens, proxy failures, partial sync errors
 - Token and proxy health checks: periodic verification that all page connections are alive; failures become alerts
 - Incident pattern: recurring failures produce one open alert (not repeated spam), resolved when the issue clears
-- Telegram is the delivery layer for DB-backed incidents; dashboard alert viewing already exists in Phase 3
+- Telegram is the delivery layer for DB-backed incidents; dashboard alert viewing already exists in Phase 4
 - Owner-only; configurable chat ID
 
 **Depends on:** Phase 2
@@ -168,7 +168,7 @@ The system is production-ready with automated backups, restore verification, and
 ## Phase 7: ChatMuse Backend
 
 Chatters using the ChatMuse extension get live fan context, AI-assisted replies with streaming output, and all usage is tracked and rate-limited through the hub.
-This phase is intentionally scheduled after Phases 4-6 by owner decision, even though its hard dependencies are only the API and dashboard.
+This phase is intentionally scheduled after Phases 3-6 by owner decision, even though its hard dependencies are only the API and dashboard.
 
 **Features:**
 - AI proxy with streaming responses — the extension sends requests through the hub, not directly to the AI provider
@@ -180,7 +180,7 @@ This phase is intentionally scheduled after Phases 4-6 by owner decision, even t
 - Prompt caching: identical prompts return cached responses to reduce cost
 - Model personality management: update a model's voice/persona in one place, applied to all chatters on that page
 
-**Depends on:** Phase 2 + Phase 3
+**Depends on:** Phase 2 + Phase 4
 
 **Milestone:** A chatter opens a Fansly DM in the extension, sees the fan's spending and notes. Uses AI-assisted reply with streamed output. The owner sees the chatter's request count and cost in the dashboard.
 
@@ -194,10 +194,10 @@ The agency manages staff, page assignments, and work schedules in one place.
 - Staff profiles: chatters, content managers, team leads
 - Assign staff to specific pages
 - Schedule table: who works when, which days, what hours, days off
-- Chatter performance metrics display (OnlyMonster data collected in Phase 4)
+- Chatter performance metrics display (OnlyMonster data collected in Phase 3)
 - Dashboard access management for team leads
 
-**Depends on:** Phase 3 + Phase 4
+**Depends on:** Phase 4 + Phase 3
 
 **Milestone:** Add a chatter, assign them to two pages, set their weekly schedule. See their OnlyMonster performance metrics on the dashboard.
 
@@ -216,7 +216,7 @@ The agency tracks chatter earnings, calculates payouts as a percentage of chat s
 - Payout overview table for optimizing payments
 - Manual revenue entry for Fansly chatters (no automated chatter-level sales data on Fansly)
 
-**Depends on:** Phase 4 + Phase 8
+**Depends on:** Phase 3 + Phase 8
 
 **Milestone:** A Fansly chatter submits a shift report and an OnlyFans chatter has sales imported automatically. The owner opens the payout table and sees both payout amounts calculated from the configured per-chatter percentages.
 
