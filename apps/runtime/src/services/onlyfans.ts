@@ -12,11 +12,11 @@ export function buildOnlyFansMetadata(account: OnlyMonsterAccount) {
     platform: account.platform,
     avatarUrl: account.avatar,
     email: account.email,
-    organisationId: account.organisationId,
-    subscribePriceMills: account.subscribePrice === null
+    organisationId: account.organisation_id,
+    subscribePriceMills: account.subscribe_price === null
       ? null
-      : millsToNumber(dollarsToMills(account.subscribePrice)),
-    subscriptionExpirationDate: account.subscriptionExpirationDate,
+      : millsToNumber(dollarsToMills(account.subscribe_price)),
+    subscriptionExpirationDate: account.subscription_expiration_date,
   };
 }
 
