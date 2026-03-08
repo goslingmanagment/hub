@@ -7,15 +7,15 @@ export interface OnlyFansRequestContext {
 
 export interface OnlyMonsterAccount {
   id: number;
-  platformAccountId: string;
+  platform_account_id: string;
   platform: "onlyfans";
   name: string;
   email: string | null;
   avatar: string;
   username: string;
-  organisationId: string;
-  subscribePrice: number | null;
-  subscriptionExpirationDate: string | null;
+  organisation_id: string;
+  subscribe_price: number | null;
+  subscription_expiration_date: string | null;
 }
 
 export interface OnlyMonsterTransaction {
@@ -37,8 +37,8 @@ export interface OnlyMonsterChargeback {
   };
   type: string;
   status: string;
-  chargebackTimestamp: string;
-  transactionTimestamp: string;
+  chargeback_timestamp: string;
+  transaction_timestamp: string;
 }
 
 export interface OnlyMonsterAccountsResponse {

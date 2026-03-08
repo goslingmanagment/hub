@@ -115,7 +115,7 @@ async function runLightSyncUnlocked(
         stats.transactions = await syncOnlyFansTransactions(app, {
           pageLabel: pageContext.page.label,
           platformAccountId: pageContext.page.id,
-          platformAccountIdValue: account.parsed.account.platformAccountId,
+          platformAccountIdValue: account.parsed.account.platform_account_id,
           requestContext: { auth: pageContext.auth, proxy: pageContext.proxy },
           syncRunId: run.id,
         });

@@ -311,15 +311,15 @@ describe("db write safety", () => {
 
     const account: OnlyMonsterAccount = {
       id: 42,
-      platformAccountId: "of-acct-42",
+      platform_account_id: "of-acct-42",
       platform: "onlyfans",
       name: "Lora OF",
       email: "lora@example.com",
       avatar: "https://example.com/lora.png",
       username: "lora_of",
-      organisationId: "org-1",
-      subscribePrice: 12.5,
-      subscriptionExpirationDate: "2026-04-01T00:00:00.000Z",
+      organisation_id: "org-1",
+      subscribe_price: 12.5,
+      subscription_expiration_date: "2026-04-01T00:00:00.000Z",
     };
 
     const app = createOnlyFansOnboardingApp({
@@ -408,15 +408,15 @@ describe("db write safety", () => {
 
     const duplicate: OnlyMonsterAccount = {
       id: 42,
-      platformAccountId: "of-acct-42",
+      platform_account_id: "of-acct-42",
       platform: "onlyfans",
       name: "Lora OF",
       email: null,
       avatar: "https://example.com/lora.png",
       username: "lora_of",
-      organisationId: "org-1",
-      subscribePrice: null,
-      subscriptionExpirationDate: null,
+      organisation_id: "org-1",
+      subscribe_price: null,
+      subscription_expiration_date: null,
     };
 
     const app = createOnlyFansOnboardingApp({
@@ -425,7 +425,7 @@ describe("db write safety", () => {
         {
           ...duplicate,
           id: 43,
-          platformAccountId: "of-acct-43",
+          platform_account_id: "of-acct-43",
         },
       ],
     });
@@ -457,15 +457,15 @@ describe("db write safety", () => {
 
     const account: OnlyMonsterAccount = {
       id: 42,
-      platformAccountId: "of-acct-42",
+      platform_account_id: "of-acct-42",
       platform: "onlyfans",
       name: "Lora OF",
       email: null,
       avatar: "https://example.com/lora.png",
       username: "lora_of",
-      organisationId: "org-1",
-      subscribePrice: null,
-      subscriptionExpirationDate: null,
+      organisation_id: "org-1",
+      subscribe_price: null,
+      subscription_expiration_date: null,
     };
 
     const app = createOnlyFansOnboardingApp({

@@ -67,7 +67,7 @@ export async function refreshPageMetadata(
   );
 
   await updatePageMetadata(app.db, pageContext.page.id, {
-    platformAccountIdValue: account.parsed.account.platformAccountId,
+    platformAccountIdValue: account.parsed.account.platform_account_id,
     username: account.parsed.account.username,
     displayName: account.parsed.account.name,
     followerCount: 0,

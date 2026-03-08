@@ -308,7 +308,7 @@ export function buildProgram() {
         } else {
           const verified = await refreshPageMetadata(app, context, "light");
           console.log(
-            `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.platformAccountId})`,
+            `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.platform_account_id})`,
           );
         }
       } finally {
