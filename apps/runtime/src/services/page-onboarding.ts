@@ -176,7 +176,7 @@ export async function onboardOnlyFansPage(
     await storeProxyIfPresent(app, dbTx, created.id, proxy);
 
     await updatePageMetadata(dbTx, created.id, {
-      platformAccountIdValue: verified.platform_account_id,
+      platformAccountIdValue: verified.platformAccountId,
       username: verified.username,
       displayName: verified.name,
       followerCount: 0,

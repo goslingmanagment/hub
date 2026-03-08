@@ -1075,15 +1075,15 @@ describe("sync integration", () => {
     const onlyFansAdapter = new FakeOnlyFansAdapter({
       account: {
         id: 42,
-        platform_account_id: "of-acct-42",
+        platformAccountId: "of-acct-42",
         platform: "onlyfans",
         name: "Lora OF",
         email: null,
         avatar: "https://example.com/lora.png",
         username: "lora_of",
-        organisation_id: "org-1",
-        subscribe_price: 12.5,
-        subscription_expiration_date: null,
+        organisationId: "org-1",
+        subscribePrice: 12.5,
+        subscriptionExpirationDate: null,
       },
       transactions: [
         {
@@ -1110,8 +1110,8 @@ describe("sync integration", () => {
           fan: { id: "fan-of-1" },
           type: "Tip from",
           status: "undo",
-          chargeback_timestamp: "2026-03-07T12:00:00.000Z",
-          transaction_timestamp: "2026-03-05T12:00:00.000Z",
+          chargebackTimestamp: "2026-03-07T12:00:00.000Z",
+          transactionTimestamp: "2026-03-05T12:00:00.000Z",
         },
       ],
     });

@@ -196,7 +196,7 @@ export async function syncOnlyFansTransactions(
     for (const item of page.parsed.items) {
       const amountMills = -dollarsToMills(item.amount);
       const fanId = fanMap.get(item.fan.id) ?? null;
-      const occurredAt = new Date(item.chargeback_timestamp);
+      const occurredAt = new Date(item.chargebackTimestamp);
 
       await upsertTransaction(app.db, {
         platformAccountId: input.platformAccountId,
@@ -211,7 +211,7 @@ export async function syncOnlyFansTransactions(
         destinationAmountMills: amountMills,
         netAmountMills: amountMills,
         occurredAt,
-        sourceUpdatedAt: new Date(item.transaction_timestamp),
+        sourceUpdatedAt: new Date(item.transactionTimestamp),
       });
 
       if (fanId) {
