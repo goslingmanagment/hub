@@ -4,6 +4,7 @@ import {
   formatUsdFromMills,
   millsToDecimalString,
   parsePeriod,
+  resolveComparisonPeriodBounds,
   resolvePeriodBounds,
 } from "@fansly-connect/shared";
 
@@ -18,11 +19,14 @@ describe("money helpers", () => {
     const now = new Date("2026-03-07T10:00:00.000Z");
     const sevenDay = resolvePeriodBounds("7d", now);
     const thirtyDay = resolvePeriodBounds("30d", now);
+    const comparison = resolveComparisonPeriodBounds("7d", now);
 
     expect(sevenDay.from?.toISOString()).toBe("2026-02-28T21:00:00.000Z");
     expect(sevenDay.to?.toISOString()).toBe("2026-03-07T21:00:00.000Z");
     expect(thirtyDay.from?.toISOString()).toBe("2026-02-05T21:00:00.000Z");
     expect(thirtyDay.to?.toISOString()).toBe("2026-03-07T21:00:00.000Z");
+    expect(comparison?.from?.toISOString()).toBe("2026-02-21T21:00:00.000Z");
+    expect(comparison?.to?.toISOString()).toBe("2026-02-28T21:00:00.000Z");
   });
 
   it("rejects unsupported periods with the canonical option list", () => {

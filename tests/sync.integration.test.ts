@@ -259,6 +259,9 @@ function createTestApp(
       encryptionKey: testEncryptionKey,
       encryptionKeyVersion: 1,
       logLevel: "silent",
+      apiHost: "0.0.0.0",
+      apiPort: 3000,
+      sessionTtlDays: 30,
       fanslyBaseUrl: "https://example.invalid",
       followerPageDelayMs: 0,
       transactionLookbackDays: overrides?.transactionLookbackDays ?? 7,
@@ -294,10 +297,12 @@ describe("sync integration", () => {
       return;
     }
     await testDb.pool.query(`
-      truncate daily_revenue, daily_followers, daily_subscribers, transactions,
-               page_subscriptions, page_follows, fan_pages, fans, raw_payloads,
-               sync_checkpoints, sync_runs, platform_account_proxies,
-               platform_account_credentials, platform_accounts, models
+      truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
+               auth_sessions, user_page_assignments, users, daily_revenue,
+               daily_followers, daily_subscribers, transactions, page_subscriptions,
+               page_follows, fan_pages, fans, raw_payloads, sync_checkpoints,
+               sync_runs, platform_account_proxies, platform_account_credentials,
+               platform_accounts, models
       restart identity cascade
     `);
   });

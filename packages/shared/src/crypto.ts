@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 export interface EncryptedEnvelope {
   alg: "aes-256-gcm";
@@ -46,4 +46,12 @@ export function decryptJson<T>(payload: EncryptedEnvelope | string, key: Buffer)
   ]);
 
   return JSON.parse(plaintext.toString("utf8")) as T;
+}
+
+export function sha256Hex(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+export function randomToken(bytes = 32) {
+  return randomBytes(bytes).toString("base64url");
 }

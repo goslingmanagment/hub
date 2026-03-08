@@ -1,5 +1,6 @@
 import { and, eq, gte, lt, ne, sql } from "drizzle-orm";
 
+import { toBusinessDate } from "@fansly-connect/shared";
 import type { Database } from "../client.ts";
 import { dailyFollowers, dailyRevenue, dailySubscribers, transactions } from "../schema.ts";
 
@@ -225,25 +226,25 @@ export async function getRevenueBreakdown(
   to: Date | null,
 ) {
   const clauses = [
-    eq(transactions.platformAccountId, platformAccountId),
-    ne(transactions.canonicalType, "payout_reversal"),
+    eq(dailyRevenue.platformAccountId, platformAccountId),
+    ne(dailyRevenue.canonicalType, "payout_reversal"),
   ];
 
   if (from) {
-    clauses.push(gte(transactions.occurredAt, from));
+    clauses.push(gte(dailyRevenue.businessDate, toBusinessDate(from)));
   }
   if (to) {
-    clauses.push(lt(transactions.occurredAt, to));
+    clauses.push(lt(dailyRevenue.businessDate, toBusinessDate(to)));
   }
 
   return db
     .select({
-      canonicalType: transactions.canonicalType,
-      total: sql<bigint>`coalesce(sum(${transactions.netAmountMills}), 0)`,
+      canonicalType: dailyRevenue.canonicalType,
+      total: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)`,
     })
-    .from(transactions)
+    .from(dailyRevenue)
     .where(and(...clauses))
-    .groupBy(transactions.canonicalType);
+    .groupBy(dailyRevenue.canonicalType);
 }
 
 export async function getOldestPendingTransactionAt(

@@ -12,6 +12,7 @@ import {
   timestamp,
   unique,
 } from "drizzle-orm/pg-core";
+import { fanFlagTypes, userRoles } from "@fansly-connect/shared";
 
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
 export const syncRunStatusEnum = pgEnum("sync_run_status", [
@@ -43,12 +44,23 @@ export const transactionStateEnum = pgEnum("transaction_state", [
   "posted",
   "unknown",
 ]);
+export const userRoleEnum = pgEnum("user_role", userRoles);
+export const fanFlagEnum = pgEnum("fan_flag", fanFlagTypes);
 
 export const models = pgTable("models", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   slug: text("slug").notNull().unique(),
   name: text("name").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const users = pgTable("users", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  username: text("username").notNull().unique(),
+  role: userRoleEnum("role").notNull(),
+  passwordHash: text("password_hash"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const platformAccounts = pgTable(
@@ -395,5 +407,149 @@ export const dailySubscribers = pgTable(
       table.platformAccountId,
       table.businessDate,
     ),
+  }),
+);
+
+export const userPageAssignments = pgTable(
+  "user_page_assignments",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    uniq: unique("user_page_assignments_user_page_uniq").on(table.userId, table.platformAccountId),
+    pageIdx: index("user_page_assignments_page_idx").on(table.platformAccountId),
+  }),
+);
+
+export const authSessions = pgTable(
+  "auth_sessions",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    tokenDigest: text("token_digest").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedReason: text("revoked_reason"),
+  },
+  (table) => ({
+    userIdx: index("auth_sessions_user_idx").on(table.userId),
+    expiryIdx: index("auth_sessions_expiry_idx").on(table.expiresAt),
+  }),
+);
+
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    keyPrefix: text("key_prefix").notNull().unique(),
+    tokenDigest: text("token_digest").notNull().unique(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedReason: text("revoked_reason"),
+  },
+  (table) => ({
+    userIdx: index("api_keys_user_idx").on(table.userId),
+  }),
+);
+
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    actorUserId: bigint("actor_user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    targetUserId: bigint("target_user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    platformAccountId: bigint("platform_account_id", { mode: "number" }).references(
+      () => platformAccounts.id,
+      { onDelete: "set null" },
+    ),
+    source: text("source").notNull(),
+    eventType: text("event_type").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    actorIdx: index("audit_events_actor_idx").on(table.actorUserId, table.createdAt),
+    targetIdx: index("audit_events_target_idx").on(table.targetUserId, table.createdAt),
+    pageIdx: index("audit_events_page_idx").on(table.platformAccountId, table.createdAt),
+  }),
+);
+
+export const fanNotes = pgTable(
+  "fan_notes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    authorUserId: bigint("author_user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    fanPageIdx: index("fan_notes_fan_page_idx").on(table.fanId, table.platformAccountId, table.createdAt),
+  }),
+);
+
+export const fanSummaries = pgTable(
+  "fan_summaries",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    authorUserId: bigint("author_user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    fanPageIdx: index("fan_summaries_fan_page_idx").on(table.fanId, table.platformAccountId, table.createdAt),
+  }),
+);
+
+export const fanFlags = pgTable(
+  "fan_flags",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    flag: fanFlagEnum("flag").notNull(),
+    createdByUserId: bigint("created_by_user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    uniq: unique("fan_flags_fan_flag_uniq").on(table.fanId, table.flag),
+    fanIdx: index("fan_flags_fan_idx").on(table.fanId, table.createdAt),
   }),
 );

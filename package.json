@@ -4,7 +4,9 @@
   "type": "module",
   "packageManager": "pnpm@10.30.3",
   "scripts": {
+    "api": "node --import tsx/esm apps/runtime/src/api.ts",
     "cli": "node --import tsx/esm apps/runtime/src/cli.ts",
+    "contracts:generate": "node --import tsx/esm packages/contracts/src/generate.ts",
     "worker": "node --import tsx/esm apps/runtime/src/worker.ts",
     "db:generate": "drizzle-kit generate --config=packages/db/drizzle.config.ts",
     "db:migrate": "node --import tsx/esm packages/db/src/migrate.ts",
@@ -20,5 +22,15 @@
     "tsx": "^4.20.0",
     "typescript": "^5.8.2",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/swagger": "^9.7.0",
+    "@fastify/swagger-ui": "^5.2.5",
+    "argon2": "^0.44.0",
+    "fastify": "^5.8.2",
+    "fastify-type-provider-zod": "^6.1.0",
+    "openapi-typescript": "^7.13.0",
+    "zod-to-json-schema": "^3.25.1"
   }
 }

@@ -1,0 +1,12 @@
+{
+  "name": "@fansly-connect/contracts",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fansly-connect/shared": "workspace:*",
+    "zod": "^4.1.5"
+  }
+}

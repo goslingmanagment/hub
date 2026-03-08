@@ -11,10 +11,22 @@ import {
   parsePeriod,
   toMills,
   type TransactionType,
+  type UserRole,
 } from "@fansly-connect/shared";
 
 import { createAppContext } from "./bootstrap.ts";
 import { onboardFanslyPage } from "./services/page-onboarding.ts";
+import {
+  assignPageToUser,
+  createUserAccount,
+  issueChatterApiKey,
+  listApiKeysForUsers,
+  listUsersDetailed,
+  revokeUserApiKeys,
+  setUserPassword,
+  unassignPageFromUser,
+} from "./services/auth.ts";
+import { getPageRevenueReport } from "./services/reporting.ts";
 import {
   fanSpendForPage,
   listFans,
@@ -23,7 +35,6 @@ import {
   listPages,
   listStatus,
   listSubscribers,
-  revenueBreakdownForPage,
   runAllSync,
   runFollowerSync,
   runLightSync,
@@ -69,6 +80,13 @@ function printRows(headers: string[], rows: Array<unknown[]>) {
   }
 }
 
+function auditContext() {
+  return {
+    source: "cli",
+    actorUserId: null,
+  };
+}
+
 export function buildProgram() {
   const program = new Command();
 
@@ -110,6 +128,8 @@ export function buildProgram() {
 
   const page = program.command("page");
   const pageAdd = page.command("add");
+  const user = program.command("user");
+  const apiKey = program.command("apikey");
 
   pageAdd
     .command("fansly")
@@ -323,17 +343,15 @@ export function buildProgram() {
         : undefined;
       const app = await createAppContext();
       try {
-        const breakdown = await revenueBreakdownForPage(
-          app,
-          options.page,
+        const breakdown = await getPageRevenueReport(app, options.page, {
           period,
           custom,
-        );
+        });
 
         const totals = new Map(
-          breakdown.rows.map((row) => [row.canonicalType, toMills(row.total)]),
+          breakdown.breakdown.map((row) => [row.canonicalType, toMills(row.netAmountMills)]),
         );
-        const overall = Array.from(totals.values()).reduce((sum, value) => sum + value, 0n);
+        const overall = toMills(breakdown.totalNetMills);
 
         console.log(`Page: ${options.page}`);
         console.log(`${period} net revenue: ${formatUsdFromMills(overall)}`);
@@ -415,6 +433,178 @@ export function buildProgram() {
           `${result.username ?? result.platform_user_id}: creator net ${
             formatUsdFromMills(result.total_creator_net_mills as bigint)
           }`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  user
+    .command("add")
+    .requiredOption("--username <username>")
+    .requiredOption("--role <role>")
+    .option("--password <password>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const user = await createUserAccount(app, {
+          username: options.username,
+          role: options.role as UserRole,
+          password: options.password,
+        }, auditContext());
+
+        console.log(
+          `Created user ${user?.username ?? options.username} (${user?.role ?? options.role})`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  user
+    .command("list")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const users = await listUsersDetailed(app);
+        printRows(
+          ["username", "role", "assigned_pages"],
+          users.map((user) => [
+            user.username,
+            user.role,
+            user.assignedPages.map((page) => page.label).join(","),
+          ]),
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  user
+    .command("set-password")
+    .requiredOption("--username <username>")
+    .requiredOption("--password <password>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        await setUserPassword(app, {
+          username: options.username,
+          password: options.password,
+        }, auditContext());
+        console.log(`Updated password for ${options.username}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  user
+    .command("assign-page")
+    .requiredOption("--username <username>")
+    .requiredOption("--page <label>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        await assignPageToUser(app, {
+          username: options.username,
+          pageLabel: options.page,
+        }, auditContext());
+        console.log(`Assigned ${options.username} to ${options.page}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  user
+    .command("unassign-page")
+    .requiredOption("--username <username>")
+    .requiredOption("--page <label>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        await unassignPageFromUser(app, {
+          username: options.username,
+          pageLabel: options.page,
+        }, auditContext());
+        console.log(`Unassigned ${options.username} from ${options.page}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  apiKey
+    .command("create")
+    .requiredOption("--username <username>")
+    .option(
+      "--page <label>",
+      "also assign the user to this page before rotating the single API key",
+    )
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await issueChatterApiKey(app, {
+          username: options.username,
+          pageLabel: options.page,
+        }, auditContext());
+        console.log(result.key);
+      } finally {
+        await app.close();
+      }
+    });
+
+  apiKey
+    .command("revoke")
+    .requiredOption("--username <username>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const revoked = await revokeUserApiKeys(app, {
+          username: options.username,
+        }, auditContext());
+        console.log(`Revoked ${revoked.length} API key(s) for ${options.username}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  apiKey
+    .command("list")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const rows = await listApiKeysForUsers(app);
+        printRows(
+          ["username", "role", "key_prefix", "created_at", "last_used_at", "revoked_at"],
+          rows.map((row) => [
+            row.username,
+            row.role,
+            row.keyPrefix,
+            row.createdAt,
+            row.lastUsedAt,
+            row.revokedAt,
+          ]),
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  apiKey
+    .command("show")
+    .requiredOption("--username <username>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const rows = await listApiKeysForUsers(app, [options.username]);
+        printRows(
+          ["username", "role", "key_prefix", "created_at", "last_used_at", "revoked_at"],
+          rows.map((row) => [
+            row.username,
+            row.role,
+            row.keyPrefix,
+            row.createdAt,
+            row.lastUsedAt,
+            row.revokedAt,
+          ]),
         );
       } finally {
         await app.close();

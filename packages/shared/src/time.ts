@@ -1,5 +1,6 @@
 export const MOSCOW_TIME_ZONE = "Europe/Moscow";
 export const PERIOD_OPTIONS = ["today", "7d", "30d", "all", "custom"] as const;
+const BUSINESS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 interface DateParts {
   year: number;
@@ -15,6 +16,11 @@ export type Period = (typeof PERIOD_OPTIONS)[number];
 export interface PeriodBounds {
   from: Date | null;
   to: Date | null;
+}
+
+export interface BusinessDateRange {
+  from: string | null;
+  toExclusive: string | null;
 }
 
 export function isPeriod(value: string): value is Period {
@@ -115,6 +121,28 @@ export function toBusinessDate(date: Date, timeZone = MOSCOW_TIME_ZONE): string 
   return `${parts.year}-${month}-${day}`;
 }
 
+export function isValidBusinessDateString(value: string): boolean {
+  if (!BUSINESS_DATE_PATTERN.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+}
+
+export function parseBusinessDate(value: string) {
+  if (!isValidBusinessDateString(value)) {
+    throw new Error(`Invalid business date "${value}"`);
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+  return { year, month, day };
+}
+
 export function resolvePeriodBounds(
   period: Period,
   now = new Date(),
@@ -142,8 +170,11 @@ export function resolvePeriodBounds(
     throw new Error("Custom period requires from/to dates");
   }
 
-  const [fromYear, fromMonth, fromDay] = custom.from.split("-").map(Number);
-  const [toYear, toMonth, toDay] = custom.to.split("-").map(Number);
+  const { year: fromYear, month: fromMonth, day: fromDay } = parseBusinessDate(custom.from);
+  const { year: toYear, month: toMonth, day: toDay } = parseBusinessDate(custom.to);
+  if (custom.from > custom.to) {
+    throw new Error(`Custom period requires from <= to, received ${custom.from} > ${custom.to}`);
+  }
   const from = zonedDateTimeToUtc(
     { year: fromYear, month: fromMonth, day: fromDay },
     MOSCOW_TIME_ZONE,
@@ -157,4 +188,36 @@ export function resolvePeriodBounds(
   );
 
   return { from, to };
+}
+
+export function resolveComparisonPeriodBounds(
+  period: Period,
+  now = new Date(),
+  custom?: { from: string; to: string },
+): PeriodBounds | null {
+  const current = resolvePeriodBounds(period, now, custom);
+
+  if (period === "all" || !current.from || !current.to) {
+    return null;
+  }
+
+  const durationMs = current.to.getTime() - current.from.getTime();
+
+  return {
+    from: new Date(current.from.getTime() - durationMs),
+    to: new Date(current.from.getTime()),
+  };
+}
+
+export function resolveBusinessDateRange(
+  period: Period,
+  now = new Date(),
+  custom?: { from: string; to: string },
+): BusinessDateRange {
+  const bounds = resolvePeriodBounds(period, now, custom);
+
+  return {
+    from: bounds.from ? toBusinessDate(bounds.from) : null,
+    toExclusive: bounds.to ? toBusinessDate(bounds.to) : null,
+  };
 }

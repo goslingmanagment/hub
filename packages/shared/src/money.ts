@@ -34,6 +34,10 @@ export function formatUsdFromMills(value: MoneyLike): string {
   }).format(centsRounded);
 }
 
+export function millsToNumber(value: MoneyLike): number {
+  return Number(toMills(value));
+}
+
 export function sumMills(values: Iterable<MoneyLike>): bigint {
   let total = 0n;
   for (const value of values) {
