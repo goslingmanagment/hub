@@ -3,7 +3,7 @@
 Source: https://docs.onlymonster.ai/basics/openapi
 Auth: `x-om-auth-token` header
 Platform: only `onlyfans` supported
-Base URL: not documented (likely `https://api.onlymonster.ai`)
+Base URL: `https://omapi.onlymonster.ai`
 
 ---
 
@@ -186,12 +186,26 @@ These limitations are inherent to the OnlyMonster API, not a Hub design choice.
 
 ## Transaction type mapping to unified taxonomy
 
-| OnlyMonster type | Hub taxonomy |
-|-----------------|--------------|
-| `tip` | `tip` |
-| `message payment` | `message_purchase` |
-| `recurring subscription` | `subscription` |
-| `post purchase` | `post_purchase` |
-| `live stream` | `stream_tip` |
-| `unknown` | `other` |
-| (chargebacks endpoint) | `chargeback` |
+**IMPORTANT:** OnlyMonster types are capitalized/human-readable strings, not lowercase slugs. Confirmed from live API data:
+
+| OnlyMonster type (exact string) | Hub taxonomy | Notes |
+|--------------------------------|--------------|-------|
+| `Tip from` | `tip` | |
+| `Payment for message` | `message_purchase` | |
+| `Subscription` | `subscription` | First-time subscription |
+| `Recurring subscription` | `subscription` | Renewal |
+| `Post purchase` | `post_purchase` | Not yet seen in live data |
+| `Live stream` | `stream_tip` | Not yet seen in live data |
+| (anything else) | `other` | Fallback |
+| (chargebacks endpoint) | `chargeback` | Separate endpoint, type field refers to original txn type |
+
+### Transaction statuses (live data)
+- Transactions: `loading` (= "posted" in our taxonomy — confirmed all real txns have this status)
+- Chargebacks: `undo`
+- Documented but not seen: `done`, `pending return`
+
+### API response envelopes (confirmed from live + OpenAPI spec)
+- `GET /accounts` → `{"accounts": [...], "nextCursor": "..."}`
+- `GET /accounts/{id}` → `{"account": {...}}`
+- Statistics endpoints (transactions, chargebacks, tracking-links, trial-links) → `{"items": [...], "cursor": "..."}`
+- Metrics → `{"items": [...]}`  (offset-based, no cursor)
