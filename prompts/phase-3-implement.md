@@ -8,8 +8,10 @@ Add OnlyFans support via the OnlyMonster API so that Fansly and OnlyFans revenue
 
 - **Roadmap (Phase 3 section):** `docs/roadmap.md`
 - **Decisions log:** `docs/decisions.md` — especially #15 (BIGINT mills), #11/#12 (platform adapter boundary), #45 (transaction taxonomy), and the Phase Sequencing Change at the bottom
-- **OnlyMonster API spec:** `reference/onlymonster_api_spec.md` — endpoints, fields, pagination, type mapping table (with REAL type strings from live data), and the "What OnlyMonster DOES NOT provide" section
-- **OnlyMonster OpenAPI JSON:** `reference/onlymonster_openapi.json` — official OpenAPI 3.0 spec from `https://omapi.onlymonster.ai/docs/json`
+- **OnlyMonster API spec:** `reference/onlymonster_api_spec.md` — our notes with real type strings from live data, quirks, and the "What OnlyMonster DOES NOT provide" section
+- **OnlyMonster OpenAPI JSON:** `reference/onlymonster_openapi.json` — official spec
+- **OnlyMonster docs (live):** https://docs.onlymonster.ai/basics/openapi — human-readable API docs
+- **OnlyMonster OpenAPI (live):** https://omapi.onlymonster.ai/docs/json — machine-readable OpenAPI 3.0
 - **Existing Fansly adapter:** `packages/fansly/src/adapter.ts` — reference for adapter pattern, error handling, proxy support
 - **Shared types:** `packages/shared/src/types.ts` — Platform, TransactionType, TransactionState enums
 - **DB schema:** `packages/db/src/schema.ts` — current tables, enums, relationships
