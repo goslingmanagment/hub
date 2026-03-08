@@ -12,3 +12,4 @@ dist
 tmp
 .sessions/
 drafts/
+.om-token

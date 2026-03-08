@@ -166,12 +166,12 @@ Firefox extension. AI assistant for chatters on Fansly. Working MVP already exis
 
 ## Roadmap
 
-Phases can run in parallel where no dependency exists.
+Phases are sequential where noted; parallel execution where no dependency exists.
 
 1. **Fansly Connect** — schema, platform adapter, transaction sync (hourly), follower sync (12h delta), CLI for manual ops
 2. **API + Auth** — Fastify server, dashboard auth (cookie sessions), ChatMuse auth (API keys), data endpoints *(depends on 1)*
-3. **Dashboard** — React SPA: revenue overview, per-model/per-page drill-down, fan profiles, expiring subs *(depends on 2)*
-4. **OnlyFans Connect** — OnlyMonster adapter, chatter metrics sync, unified transaction taxonomy *(depends on 1)*
+3. **OnlyFans Connect** — OnlyMonster adapter, chatter metrics sync, unified transaction taxonomy *(depends on 2)*
+4. **Dashboard** — React SPA: revenue overview, per-model/per-page drill-down, fan profiles, expiring subs *(depends on 2 + 3; ships with both platforms from day one)*
 5. **Telegram Notifications** — daily revenue report, alerts (dead tokens, sync failures), incident pattern *(depends on 2)*
 6. **Backups + Ops** — nightly pg_dump off-VPS, health checks, sync monitoring *(before production deploy)*
 7. **ChatMuse Backend** — AI proxy with SSE streaming, fan context injection, rate limiting, cost ledger, prompt management *(depends on 2+3)*

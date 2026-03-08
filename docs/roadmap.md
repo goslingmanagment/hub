@@ -4,20 +4,19 @@
 
 ```
 Phase 1: Fansly Connect
-  ├─► Phase 2: API + Auth
-  │    ├─► Phase 3: Dashboard ───────────────┐
-  │    └─► Phase 5: Telegram Notifications   │
-  │                                           │
-  └─► Phase 4: OnlyFans Connect               │
-       └─► Phase 8: Team Management ─► Phase 9: Chatter Payroll ─► Phase 11: Advanced Analytics
-                                                  ▲
-Phase 3: Dashboard ───────────────────────────────┘
+  └─► Phase 2: API + Auth
+       ├─► Phase 4: OnlyFans Connect
+       │    └─► Phase 3: Dashboard ──────────────┐
+       │         └─► Phase 8: Team Management ───►│─► Phase 9: Chatter Payroll ─► Phase 11: Advanced Analytics
+       │                                          │
+       └─► Phase 5: Telegram Notifications        │
+                                                   │
 Phase 8: Team Management ─────────────────────────► Phase 10: Internal TODO
 
 Phase 6: Backups + Ops  (must complete before production deploy)
 Phase 7: ChatMuse Backend  (depends on Phases 2 + 3; intentionally scheduled after Phases 4-6 by owner decision)
 
-Phase 4 runs in parallel with Phases 2-3.
+Phase 4 (OF Connect) now precedes Phase 3 (Dashboard) so the dashboard ships with both platforms from day one.
 Phase 5 runs after Phase 2 and can ship independently of Phases 4, 6, and 7.
 ```
 
@@ -77,10 +76,10 @@ The hub exposes a secure API that the dashboard and ChatMuse extension can consu
 
 ## Phase 3: Dashboard
 
-The agency opens a browser and sees live revenue, subscribers, fans, and trends across all pages and models.
+The agency opens a browser and sees live revenue, subscribers, fans, and trends across all pages and models — Fansly and OnlyFans combined from launch.
 
 **Features:**
-- Agency-wide overview on the main screen: total revenue, page-by-page breakdown, model-by-model summary
+- Agency-wide overview on the main screen: total revenue, page-by-page breakdown, model-by-model summary (both platforms)
 - Revenue display: today, 7 days, 30 days, all-time, custom date range
 - Revenue breakdown by transaction type (subscriptions, tips, messages, posts, streams, chargebacks, refunds)
 - Period comparison: growth or decline vs. the previous equivalent period
@@ -103,9 +102,9 @@ The agency opens a browser and sees live revenue, subscribers, fans, and trends 
 - Login screen
 - Desktop-only layout
 
-**Depends on:** Phase 2
+**Depends on:** Phase 2 + Phase 4
 
-**Milestone:** Open the dashboard, see today's revenue by page matching the platform. Drill into a model, see transactions. Open a fan profile, see spending and notes.
+**Milestone:** Open the dashboard, see today's revenue by page matching the platform — Fansly and OnlyFans combined. Drill into a model, see transactions from both platforms. Open a fan profile, see spending and notes.
 
 ---
 
@@ -125,7 +124,7 @@ The agency connects OnlyFans pages via OnlyMonster and sees unified data across 
 - Create fan records from OnlyFans transactions; compute fan spending from synced data
 - CLI verification: see combined revenue across Fansly + OnlyFans for a single model
 
-**Depends on:** Phase 1 (does not block any other phase)
+**Depends on:** Phase 2 (blocks Phase 3 — dashboard ships with both platforms)
 
 **Milestone:** Run a CLI command and see total revenue for a model across both Fansly and OnlyFans pages, with transactions classified under the same types.
 
