@@ -23,11 +23,13 @@ export function createTestAppContext(
       apiPort: 3000,
       sessionTtlDays: overrides?.sessionTtlDays ?? 30,
       fanslyBaseUrl: "https://example.invalid",
+      onlyMonsterBaseUrl: "https://example.invalid",
       followerPageDelayMs: 0,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
     },
     adapter: {} as AppContext["adapter"],
+    onlyFansAdapter: {} as AppContext["onlyFansAdapter"],
     async close() {},
   } satisfies AppContext;
 }

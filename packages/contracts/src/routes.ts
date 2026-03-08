@@ -186,7 +186,7 @@ export const transactionFanSchema = z.object({
 
 export const transactionItemSchema = z.object({
   transactionId: z.string(),
-  rawType: z.number().int(),
+  rawType: z.union([z.number().int(), z.string()]),
   canonicalType: transactionTypeEnum,
   transactionState: transactionStateEnum,
   amountMills: mills,

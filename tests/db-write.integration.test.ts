@@ -14,8 +14,9 @@ import {
   upsertTransaction,
 } from "@fansly-connect/db";
 import type { FanslyAccountMeResponse } from "@fansly-connect/fansly";
+import type { OnlyMonsterAccount } from "@fansly-connect/onlyfans";
 
-import { onboardFanslyPage } from "../apps/runtime/src/services/page-onboarding.ts";
+import { onboardFanslyPage, onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboarding.ts";
 import { startTestDatabase } from "./helpers/db.ts";
 
 describe("db write safety", () => {
@@ -40,6 +41,7 @@ describe("db write safety", () => {
         apiPort: 3000,
         sessionTtlDays: 30,
         fanslyBaseUrl: "https://example.invalid",
+        onlyMonsterBaseUrl: "https://example.invalid",
         followerPageDelayMs: 0,
         transactionLookbackDays: 7,
         transactionRescanCapDays: 30,
@@ -50,6 +52,58 @@ describe("db write safety", () => {
           return {
             parsed,
             raw: parsed,
+          };
+        },
+      },
+      onlyFansAdapter: {} as never,
+    };
+  }
+
+  function createOnlyFansOnboardingApp(input: {
+    accounts: OnlyMonsterAccount[];
+    getAccount?: (accountId: number) => Promise<OnlyMonsterAccount>;
+  }) {
+    if (!testDb) {
+      throw new Error("Test database is not available");
+    }
+
+    return {
+      db: testDb.db,
+      config: {
+        databaseUrl: "",
+        encryptionKey,
+        encryptionKeyVersion: 1,
+        logLevel: "silent",
+        apiHost: "0.0.0.0",
+        apiPort: 3000,
+        sessionTtlDays: 30,
+        fanslyBaseUrl: "https://example.invalid",
+        onlyMonsterBaseUrl: "https://example.invalid",
+        followerPageDelayMs: 0,
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      onlyFansAdapter: {
+        async listAccountsPage() {
+          return {
+            parsed: {
+              accounts: input.accounts,
+            },
+            raw: {
+              accounts: input.accounts,
+            },
+          };
+        },
+        async getAccount(_: unknown, accountId: number) {
+          const account = input.getAccount
+            ? await input.getAccount(accountId)
+            : input.accounts.find((candidate) => candidate.id === accountId);
+          if (!account) {
+            throw new Error(`missing account ${accountId}`);
+          }
+          return {
+            parsed: { account },
+            raw: { account },
           };
         },
       },
@@ -241,6 +295,206 @@ describe("db write safety", () => {
       platform_accounts_count: 0,
       credentials_count: 0,
       proxies_count: 0,
+    });
+  });
+
+  it("verifies OnlyMonster account access before persisting an OnlyFans page", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+
+    const account: OnlyMonsterAccount = {
+      id: 42,
+      platformAccountId: "of-acct-42",
+      platform: "onlyfans",
+      name: "Lora OF",
+      email: "lora@example.com",
+      avatar: "https://example.com/lora.png",
+      username: "lora_of",
+      organisationId: "org-1",
+      subscribePrice: 12.5,
+      subscriptionExpirationDate: "2026-04-01T00:00:00.000Z",
+    };
+
+    const app = createOnlyFansOnboardingApp({
+      accounts: [account],
+    });
+
+    const { page } = await onboardOnlyFansPage(app, {
+      modelSlug: "lora",
+      label: "lora-of",
+      auth: {
+        token: "om-token",
+      },
+      username: "lora_of",
+      proxy: {
+        url: "http://proxy.example",
+      },
+    });
+
+    const pageRows = await testDb.pool.query(`
+      select platform,
+             label,
+             platform_account_id,
+             username,
+             display_name,
+             follower_count,
+             subscriber_count,
+             earnings_balance_mills,
+             metadata::text as metadata
+      from platform_accounts
+      where id = ${page.id}
+    `);
+
+    expect(pageRows.rows[0]).toMatchObject({
+      platform: "onlyfans",
+      label: "lora-of",
+      platform_account_id: "of-acct-42",
+      username: "lora_of",
+      display_name: "Lora OF",
+      follower_count: 0,
+      subscriber_count: 0,
+      earnings_balance_mills: 0n,
+    });
+    expect(JSON.parse(pageRows.rows[0]?.metadata ?? "{}")).toMatchObject({
+      onlyMonsterAccountId: 42,
+      subscribePriceMills: 12500,
+    });
+  });
+
+  it("fails cleanly when the OnlyFans username is not accessible for the token", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+
+    const app = createOnlyFansOnboardingApp({
+      accounts: [],
+    });
+
+    await expect(
+      onboardOnlyFansPage(app, {
+        modelSlug: "lora",
+        label: "lora-of",
+        auth: {
+          token: "om-token",
+        },
+        username: "missing",
+      }),
+    ).rejects.toThrow('OnlyMonster account "missing" was not found for this token');
+  });
+
+  it("fails cleanly when the OnlyFans username resolves to multiple accounts", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+
+    const duplicate: OnlyMonsterAccount = {
+      id: 42,
+      platformAccountId: "of-acct-42",
+      platform: "onlyfans",
+      name: "Lora OF",
+      email: null,
+      avatar: "https://example.com/lora.png",
+      username: "lora_of",
+      organisationId: "org-1",
+      subscribePrice: null,
+      subscriptionExpirationDate: null,
+    };
+
+    const app = createOnlyFansOnboardingApp({
+      accounts: [
+        duplicate,
+        {
+          ...duplicate,
+          id: 43,
+          platformAccountId: "of-acct-43",
+        },
+      ],
+    });
+
+    await expect(
+      onboardOnlyFansPage(app, {
+        modelSlug: "lora",
+        label: "lora-of",
+        auth: {
+          token: "om-token",
+        },
+        username: "lora_of",
+      }),
+    ).rejects.toThrow(
+      'OnlyMonster username "lora_of" matched multiple accounts; use a unique username',
+    );
+  });
+
+  it("leaves no persisted rows behind when OnlyFans account verification fails during onboarding", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+
+    const account: OnlyMonsterAccount = {
+      id: 42,
+      platformAccountId: "of-acct-42",
+      platform: "onlyfans",
+      name: "Lora OF",
+      email: null,
+      avatar: "https://example.com/lora.png",
+      username: "lora_of",
+      organisationId: "org-1",
+      subscribePrice: null,
+      subscriptionExpirationDate: null,
+    };
+
+    const app = createOnlyFansOnboardingApp({
+      accounts: [account],
+      async getAccount() {
+        throw new Error("invalid om auth");
+      },
+    });
+
+    await expect(
+      onboardOnlyFansPage(app, {
+        modelSlug: "lora",
+        label: "lora-of",
+        auth: {
+          token: "om-token",
+        },
+        username: "lora_of",
+      }),
+    ).rejects.toThrow("invalid om auth");
+
+    const counts = await testDb.pool.query(`
+      select
+        (select count(*)::int from platform_accounts) as platform_accounts_count,
+        (select count(*)::int from platform_account_credentials) as credentials_count
+    `);
+
+    expect(counts.rows[0]).toMatchObject({
+      platform_accounts_count: 0,
+      credentials_count: 0,
     });
   });
 

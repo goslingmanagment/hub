@@ -1,9 +1,16 @@
 import { readFile } from "node:fs/promises";
 
-import { decryptJson, encryptJson, type FanslySessionBundle, type ProxyConfig } from "@fansly-connect/shared";
+import {
+  decryptJson,
+  encryptJson,
+  type FanslySessionBundle,
+  type OnlyMonsterTokenBundle,
+  type ProxyConfig,
+  type StoredPlatformCredentialBundle,
+} from "@fansly-connect/shared";
 import {
   findPageByLabel,
-  storeFanslySession,
+  storePlatformCredentials,
   storeProxyConfig,
 } from "@fansly-connect/db";
 
@@ -39,27 +46,58 @@ function normalizeSessionBundle(input: Record<string, unknown>): FanslySessionBu
   };
 }
 
-export async function loadSessionBundleFromFile(filePath: string) {
+function normalizeOnlyMonsterTokenBundle(input: Record<string, unknown>): OnlyMonsterTokenBundle {
+  const token = input.token ?? input.authToken ?? input["x-om-auth-token"];
+  if (typeof token !== "string") {
+    throw new Error("Token file must include token");
+  }
+
+  return { token };
+}
+
+function asRecord(value: unknown) {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("Credentials payload must be an object");
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function isStoredPlatformCredentialBundle(value: unknown): value is StoredPlatformCredentialBundle {
+  if (typeof value !== "object" || value === null || !("platform" in value)) {
+    return false;
+  }
+
+  return value.platform === "fansly" || value.platform === "onlyfans";
+}
+
+export async function loadFanslySessionBundleFromFile(filePath: string) {
   const raw = JSON.parse(await readFile(filePath, "utf8")) as Record<string, unknown>;
   return normalizeSessionBundle(raw);
 }
 
-export async function saveEncryptedSession(
+export const loadSessionBundleFromFile = loadFanslySessionBundleFromFile;
+
+export async function loadOnlyMonsterTokenBundleFromFile(filePath: string) {
+  const raw = JSON.parse(await readFile(filePath, "utf8")) as Record<string, unknown>;
+  return normalizeOnlyMonsterTokenBundle(raw);
+}
+
+export async function saveEncryptedCredentials(
   app: AppContext,
   platformAccountId: number,
-  session: FanslySessionBundle,
+  credentials: StoredPlatformCredentialBundle,
 ) {
   const encrypted = encryptJson(
-    session,
+    credentials,
     app.config.encryptionKey,
     app.config.encryptionKeyVersion,
   );
-  await storeFanslySession(
-    app.db,
+  await storePlatformCredentials(app.db, {
     platformAccountId,
-    JSON.stringify(encrypted),
-    app.config.encryptionKeyVersion,
-  );
+    encryptedSession: JSON.stringify(encrypted),
+    keyVersion: app.config.encryptionKeyVersion,
+  });
 }
 
 export async function saveProxy(
@@ -95,10 +133,10 @@ export async function resolvePageContext(app: AppContext, label: string) {
   }
 
   if (!stored.credentials) {
-    throw new Error(`Page "${label}" has no stored Fansly session bundle`);
+    throw new Error(`Page "${label}" has no stored platform credentials`);
   }
 
-  const session = decryptJson<FanslySessionBundle>(
+  const decrypted = decryptJson<StoredPlatformCredentialBundle | Record<string, unknown>>(
     stored.credentials.encryptedSession,
     app.config.encryptionKey,
   );
@@ -119,9 +157,39 @@ export async function resolvePageContext(app: AppContext, label: string) {
     };
   }
 
+  if (stored.page.platform === "fansly") {
+    const session = isStoredPlatformCredentialBundle(decrypted)
+      ? decrypted.platform === "fansly"
+        ? decrypted.session
+        : (() => {
+          throw new Error(`Page "${label}" has OnlyFans credentials stored for a Fansly page`);
+        })()
+      : normalizeSessionBundle(asRecord(decrypted));
+
+    return {
+      page: stored.page,
+      platform: "fansly" as const,
+      session,
+      proxy,
+    };
+  }
+
+  const auth = isStoredPlatformCredentialBundle(decrypted)
+    ? decrypted.platform === "onlyfans"
+      ? decrypted.auth
+      : (() => {
+        throw new Error(`Page "${label}" has Fansly credentials stored for an OnlyFans page`);
+      })()
+    : normalizeOnlyMonsterTokenBundle(asRecord(decrypted));
+
   return {
     page: stored.page,
-    session,
+    platform: "onlyfans" as const,
+    auth,
     proxy,
   };
 }
+
+export type ResolvedPageContext = Awaited<ReturnType<typeof resolvePageContext>>;
+export type ResolvedFanslyPageContext = Extract<ResolvedPageContext, { platform: "fansly" }>;
+export type ResolvedOnlyFansPageContext = Extract<ResolvedPageContext, { platform: "onlyfans" }>;

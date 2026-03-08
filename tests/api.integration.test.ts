@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  createOnlyFansPage,
   createFanslyPage,
   createModel,
   rebuildFollowerRollups,
@@ -23,7 +24,7 @@ import {
   setUserPassword,
   unassignPageFromUser,
 } from "../apps/runtime/src/services/auth.ts";
-import { getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
+import { getModelRevenueReport, getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
 import { startTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
@@ -158,6 +159,7 @@ async function seedPhase2Fixture(testDb: NonNullable<Awaited<ReturnType<typeof s
   await rebuildSubscriberRollups(testDb.db, lanaPage.id);
 
   return {
+    lanaModel,
     lanaPage,
     lilyPage,
   };
@@ -582,6 +584,97 @@ describe("api integration", () => {
       breakdown: expected.breakdown,
     });
     expect(response.json().breakdown.some((row: { canonicalType: string }) => row.canonicalType === "payout_reversal")).toBe(false);
+  });
+
+  it("combines Fansly and OnlyFans revenue in model reports", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const onlyFansPage = await createOnlyFansPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-of",
+    });
+    await updatePageMetadata(testDb.db, onlyFansPage.id, {
+      platformAccountIdValue: "of-acct-42",
+      username: "lana_of",
+      displayName: "Lana OF",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {
+        onlyMonsterAccountId: 42,
+      },
+      syncType: "light",
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      transactionId: "of-tip-1",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "loading",
+      amountMills: 12000n,
+      destinationAmountMills: 12000n,
+      netAmountMills: 12000n,
+      occurredAt: new Date("2026-03-05T15:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      transactionId: "of-cb-1",
+      rawType: "Tip from",
+      canonicalType: "chargeback",
+      transactionState: "posted",
+      rawStatus: "undo",
+      amountMills: -2000n,
+      destinationAmountMills: -2000n,
+      netAmountMills: -2000n,
+      occurredAt: new Date("2026-03-06T15:00:00.000Z"),
+    });
+    await rebuildRevenueRollups(testDb.db, onlyFansPage.id);
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/models/lana-model/revenue?period=custom&from=2026-03-01&to=2026-03-31",
+      headers: {
+        cookie,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const expected = await getModelRevenueReport(createTestAppContext(testDb), "lana-model", {
+      period: "custom",
+      custom: {
+        from: "2026-03-01",
+        to: "2026-03-31",
+      },
+    });
+
+    expect(response.json()).toMatchObject({
+      totalNetMills: expected.totalNetMills,
+      breakdown: expected.breakdown,
+      pages: expect.arrayContaining([
+        expect.objectContaining({
+          pageLabel: "lana",
+          totalNetMills: 7000,
+        }),
+        expect.objectContaining({
+          pageLabel: "lana-of",
+          totalNetMills: 10000,
+        }),
+      ]),
+    });
   });
 
   it("lists payout reversals in the transaction ledger", async (context) => {

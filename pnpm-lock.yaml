@@ -66,6 +66,9 @@ importers:
       '@fansly-connect/fansly':
         specifier: workspace:*
         version: link:../../packages/fansly
+      '@fansly-connect/onlyfans':
+        specifier: workspace:*
+        version: link:../../packages/onlyfans
       '@fansly-connect/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -125,6 +128,15 @@ importers:
         version: 8.20.0
 
   packages/fansly:
+    dependencies:
+      '@fansly-connect/shared':
+        specifier: workspace:*
+        version: link:../shared
+      undici:
+        specifier: ^7.16.0
+        version: 7.22.0
+
+  packages/onlyfans:
     dependencies:
       '@fansly-connect/shared':
         specifier: workspace:*

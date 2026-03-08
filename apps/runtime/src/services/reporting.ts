@@ -71,6 +71,17 @@ function serializeTimestamp(value: Date | string | null | undefined) {
   return new Date(value).toISOString();
 }
 
+function serializeRawType(
+  platform: "fansly" | "onlyfans",
+  rawType: string,
+) {
+  if (platform === "fansly" && /^-?\d+$/.test(rawType)) {
+    return Number.parseInt(rawType, 10);
+  }
+
+  return rawType;
+}
+
 function serializePage(row: {
   id: number;
   label: string;
@@ -345,7 +356,7 @@ export async function getPageTransactionsReport(
     page: serializePage(page),
     items: rows.items.map((row) => ({
       transactionId: row.transactionId,
-      rawType: row.rawType,
+      rawType: serializeRawType(page.platform, row.rawType),
       canonicalType: row.canonicalType,
       transactionState: row.transactionState,
       amountMills: millsToNumber(row.amountMills),

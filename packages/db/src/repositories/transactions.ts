@@ -12,7 +12,7 @@ export interface UpsertTransactionInput {
   accountId?: string | null;
   correlationId?: string | null;
   correlationAccountId?: string | null;
-  rawType: number;
+  rawType: string | number;
   canonicalType:
     | "subscription"
     | "tip"
@@ -25,7 +25,7 @@ export interface UpsertTransactionInput {
     | "other";
   transactionState: "pending" | "posted" | "unknown";
   destination?: number | null;
-  rawStatus: number;
+  rawStatus: string | number;
   amountMills: bigint;
   destinationAmountMills: bigint;
   netAmountMills: bigint;
@@ -44,11 +44,11 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     accountId: input.accountId ?? null,
     correlationId: input.correlationId ?? null,
     correlationAccountId: input.correlationAccountId ?? null,
-    rawType: input.rawType,
+    rawType: String(input.rawType),
     canonicalType: input.canonicalType,
     transactionState: input.transactionState,
     destination: input.destination ?? null,
-    rawStatus: input.rawStatus,
+    rawStatus: String(input.rawStatus),
     amountMills: input.amountMills,
     destinationAmountMills: input.destinationAmountMills,
     netAmountMills: input.netAmountMills,

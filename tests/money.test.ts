@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  dollarsToMills,
   formatUsdFromMills,
   millsToDecimalString,
   parsePeriod,
@@ -13,6 +14,12 @@ describe("money helpers", () => {
     expect(millsToDecimalString(1234500n)).toBe("1234.500");
     expect(formatUsdFromMills(1234500n)).toBe("$1,234.50");
     expect(formatUsdFromMills(-5600n)).toBe("-$5.60");
+  });
+
+  it("converts OnlyMonster dollar amounts into mills", () => {
+    expect(dollarsToMills(12.345)).toBe(12345n);
+    expect(dollarsToMills("8.5")).toBe(8500n);
+    expect(dollarsToMills(-1.25)).toBe(-1250n);
   });
 
   it("builds Moscow trailing windows that include today", () => {

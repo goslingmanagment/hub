@@ -45,3 +45,20 @@ export function sumMills(values: Iterable<MoneyLike>): bigint {
   }
   return total;
 }
+
+export function dollarsToMills(value: number | string): bigint {
+  const normalized = typeof value === "number"
+    ? value.toFixed(3)
+    : value.trim();
+
+  const match = normalized.match(/^(-)?(\d+)(?:\.(\d+))?$/);
+  if (!match) {
+    throw new Error(`Invalid dollar amount "${value}"`);
+  }
+
+  const sign = match[1] ? -1n : 1n;
+  const whole = BigInt(match[2] ?? "0");
+  const fraction = (match[3] ?? "").padEnd(3, "0").slice(0, 3);
+
+  return sign * ((whole * 1000n) + BigInt(fraction));
+}

@@ -18,6 +18,7 @@ async function main() {
       apiPort: 3000,
       sessionTtlDays: 30,
       fanslyBaseUrl: "https://apiv3.fansly.com/api/v1",
+      onlyMonsterBaseUrl: "https://omapi.onlymonster.ai",
       followerPageDelayMs: 5000,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
@@ -26,6 +27,7 @@ async function main() {
     pool: {} as never,
     db: {} as never,
     adapter: {} as never,
+    onlyFansAdapter: {} as never,
     async close() {},
   });
 

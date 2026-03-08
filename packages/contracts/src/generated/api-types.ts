@@ -723,7 +723,7 @@ export interface paths {
                             };
                             items: {
                                 transactionId: string;
-                                rawType: number;
+                                rawType: number | string;
                                 /** @enum {string} */
                                 canonicalType: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
                                 /** @enum {string} */

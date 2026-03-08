@@ -13,11 +13,12 @@ import { FANSLY_MAPPER_VERSION } from "@fansly-connect/fansly";
 import { fanslyFollowIdToDate } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { insertFailedSyncPayload, refreshPageMetadata, retentionDate, type ResolvedPageContext } from "./shared.ts";
+import type { ResolvedFanslyPageContext } from "../page-context.ts";
+import { insertFailedSyncPayload, refreshPageMetadata, retentionDate } from "./shared.ts";
 
 export async function runFollowerSyncUnlocked(
   app: AppContext,
-  pageContext: ResolvedPageContext,
+  pageContext: ResolvedFanslyPageContext,
   trigger = "cli",
 ) {
   const run = await startSyncRun(app.db, {
@@ -149,6 +150,7 @@ export async function runFollowerSyncUnlocked(
       syncRunId: run.id,
       endpoint: "followers",
       message,
+      platform: "fansly",
     });
     await finishSyncRun(app.db, run.id, {
       status: "failed",

@@ -6,6 +6,7 @@
     "@fansly-connect/contracts": "workspace:*",
     "@fansly-connect/db": "workspace:*",
     "@fansly-connect/fansly": "workspace:*",
+    "@fansly-connect/onlyfans": "workspace:*",
     "@fansly-connect/shared": "workspace:*",
     "@fastify/cookie": "^11.0.2",
     "@fastify/swagger": "^9.7.0",

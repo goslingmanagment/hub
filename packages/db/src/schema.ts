@@ -315,11 +315,11 @@ export const transactions = pgTable(
     accountId: text("account_id"),
     correlationId: text("correlation_id"),
     correlationAccountId: text("correlation_account_id"),
-    rawType: integer("raw_type").notNull(),
+    rawType: text("raw_type").notNull(),
     canonicalType: transactionTypeEnum("canonical_type").notNull(),
     transactionState: transactionStateEnum("transaction_state").notNull(),
     destination: integer("destination"),
-    rawStatus: integer("raw_status").notNull(),
+    rawStatus: text("raw_status").notNull(),
     amountMills: bigint("amount_mills", { mode: "bigint" }).notNull(),
     destinationAmountMills: bigint("destination_amount_mills", {
       mode: "bigint",

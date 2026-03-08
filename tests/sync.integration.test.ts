@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createOnlyFansPage,
   createFanslyPage,
   createModel,
   dailyFollowers,
@@ -16,8 +17,10 @@ import {
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
+  storePlatformCredentials,
   syncRuns,
   transactions,
+  updatePageMetadata,
 } from "@fansly-connect/db";
 import type {
   FanslyAccount,
@@ -26,6 +29,12 @@ import type {
   FanslyEarningsTransaction,
   FanslyFollower,
 } from "@fansly-connect/fansly";
+import type {
+  OnlyMonsterAccount,
+  OnlyMonsterChargeback,
+  OnlyMonsterTransaction,
+} from "@fansly-connect/onlyfans";
+import { encryptJson } from "@fansly-connect/shared";
 
 import {
   PageSyncLockedError,
@@ -39,6 +48,7 @@ import {
   runFollowerSync,
   runLightSync,
 } from "../apps/runtime/src/services/sync.ts";
+import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { startTestDatabase, seedFanslyPage } from "./helpers/db.ts";
 
 type StartedTestDatabase = NonNullable<Awaited<ReturnType<typeof startTestDatabase>>>;
@@ -186,6 +196,71 @@ class FakeFanslyAdapter {
   }
 }
 
+class FakeOnlyFansAdapter {
+  constructor(
+    private readonly fixture: {
+      account: OnlyMonsterAccount;
+      transactions: OnlyMonsterTransaction[];
+      chargebacks: OnlyMonsterChargeback[];
+    },
+  ) {}
+
+  async getAccount() {
+    return {
+      parsed: {
+        account: this.fixture.account,
+      },
+      raw: {
+        account: this.fixture.account,
+      },
+    };
+  }
+
+  async getTransactionsPage(
+    _: unknown,
+    __: string,
+    params: { cursor?: string | null; limit?: number },
+  ) {
+    const limit = params.limit ?? 100;
+    const offset = params.cursor ? Number.parseInt(params.cursor, 10) : 0;
+    const items = this.fixture.transactions.slice(offset, offset + limit);
+    const nextOffset = offset + items.length;
+
+    return {
+      parsed: {
+        items,
+        cursor: nextOffset < this.fixture.transactions.length ? String(nextOffset) : undefined,
+      },
+      raw: {
+        items,
+        cursor: nextOffset < this.fixture.transactions.length ? String(nextOffset) : undefined,
+      },
+    };
+  }
+
+  async getChargebacksPage(
+    _: unknown,
+    __: string,
+    params: { cursor?: string | null; limit?: number },
+  ) {
+    const limit = params.limit ?? 100;
+    const offset = params.cursor ? Number.parseInt(params.cursor, 10) : 0;
+    const items = this.fixture.chargebacks.slice(offset, offset + limit);
+    const nextOffset = offset + items.length;
+
+    return {
+      parsed: {
+        items,
+        cursor: nextOffset < this.fixture.chargebacks.length ? String(nextOffset) : undefined,
+      },
+      raw: {
+        items,
+        cursor: nextOffset < this.fixture.chargebacks.length ? String(nextOffset) : undefined,
+      },
+    };
+  }
+}
+
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((res) => {
@@ -248,6 +323,7 @@ function createTestApp(
     logger?: StartedTestDatabase["logger"];
     transactionLookbackDays?: number;
     transactionRescanCapDays?: number;
+    onlyFansAdapter?: AppContext["onlyFansAdapter"];
   },
 ) {
   return {
@@ -263,11 +339,13 @@ function createTestApp(
       apiPort: 3000,
       sessionTtlDays: 30,
       fanslyBaseUrl: "https://example.invalid",
+      onlyMonsterBaseUrl: "https://example.invalid",
       followerPageDelayMs: 0,
       transactionLookbackDays: overrides?.transactionLookbackDays ?? 7,
       transactionRescanCapDays: overrides?.transactionRescanCapDays ?? 30,
     },
     adapter,
+    onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as never),
     async close() {},
   };
 }
@@ -635,7 +713,7 @@ describe("sync integration", () => {
     const payoutRows = await testDb.pool.query(`
       select raw_type, canonical_type, net_amount_mills
       from transactions
-      where raw_type = 16013
+      where raw_type = '16013'
     `);
     const payoutRollupRows = await testDb.pool.query(`
       select count(*)::int as count
@@ -650,7 +728,7 @@ describe("sync integration", () => {
 
     expect(payoutRows.rowCount).toBe(1);
     expect(payoutRows.rows[0]).toMatchObject({
-      raw_type: 16013,
+      raw_type: "16013",
       canonical_type: "payout_reversal",
     });
     expect(BigInt(payoutRows.rows[0]?.net_amount_mills ?? 0)).toBe(331000n);
@@ -937,5 +1015,178 @@ describe("sync integration", () => {
     expect(checkpoint).toBeNull();
     expect(rollupCount.rows[0]?.count).toBe(0);
     expect(runRow.rows[0]?.status).toBe("partial");
+  });
+
+  it("syncs OnlyFans revenue and chargebacks without follower work", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+    const page = await createOnlyFansPage(testDb.db, {
+      modelId: model.id,
+      label: "lora-of",
+    });
+
+    await storePlatformCredentials(testDb.db, {
+      platformAccountId: page.id,
+      encryptedSession: JSON.stringify(encryptJson({
+        platform: "onlyfans",
+        auth: {
+          token: "om-token",
+        },
+      }, testEncryptionKey, 1)),
+      keyVersion: 1,
+    });
+    await updatePageMetadata(testDb.db, page.id, {
+      platformAccountIdValue: "of-acct-42",
+      username: "lora_of",
+      displayName: "Lora OF",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {
+        onlyMonsterAccountId: 42,
+      },
+      syncType: "light",
+    });
+
+    const unusedFanslyAdapter = new FakeFanslyAdapter({
+      accountMe: {
+        account: {
+          id: "unused",
+          username: "unused",
+          displayName: null,
+          createdAt: 0,
+          followCount: 0,
+          subscriberCount: 0,
+          earningsWallet: null,
+        },
+      },
+      transactions: [],
+      subscribers: [],
+      followers: [],
+    });
+
+    const onlyFansAdapter = new FakeOnlyFansAdapter({
+      account: {
+        id: 42,
+        platformAccountId: "of-acct-42",
+        platform: "onlyfans",
+        name: "Lora OF",
+        email: null,
+        avatar: "https://example.com/lora.png",
+        username: "lora_of",
+        organisationId: "org-1",
+        subscribePrice: 12.5,
+        subscriptionExpirationDate: null,
+      },
+      transactions: [
+        {
+          id: "of-tx-1",
+          amount: 12.5,
+          fan: { id: "fan-of-1" },
+          type: "Tip from",
+          status: "loading",
+          timestamp: "2026-03-05T12:00:00.000Z",
+        },
+        {
+          id: "of-tx-2",
+          amount: 5,
+          fan: { id: "fan-of-2" },
+          type: "Subscription",
+          status: "done",
+          timestamp: "2026-03-06T12:00:00.000Z",
+        },
+      ],
+      chargebacks: [
+        {
+          id: "of-cb-1",
+          amount: 2.5,
+          fan: { id: "fan-of-1" },
+          type: "Tip from",
+          status: "undo",
+          chargebackTimestamp: "2026-03-07T12:00:00.000Z",
+          transactionTimestamp: "2026-03-05T12:00:00.000Z",
+        },
+      ],
+    });
+
+    const app = createTestApp(testDb, unusedFanslyAdapter, {
+      onlyFansAdapter: onlyFansAdapter as unknown as AppContext["onlyFansAdapter"],
+    });
+
+    const first = await runAllSync(app, page.label);
+    const second = await runLightSync(app, page.label);
+    const checkpoint = await getCheckpoint(testDb.db, page.id, "transactions");
+    const txRows = await testDb.pool.query(`
+      select transaction_id, raw_type, canonical_type, net_amount_mills
+      from transactions
+      where platform_account_id = ${page.id}
+      order by transaction_id asc
+    `);
+    const fanRows = await testDb.pool.query(`
+      select platform, platform_user_id, username
+      from fans
+      where platform = 'onlyfans'
+      order by platform_user_id asc
+    `);
+    const revenue = await revenueBreakdownForPage(app, page.label, "all");
+
+    expect(first.followers).toBeNull();
+    expect(second.status).toBe("success");
+    expect(txRows.rows).toEqual([
+      {
+        transaction_id: "of-cb-1",
+        raw_type: "Tip from",
+        canonical_type: "chargeback",
+        net_amount_mills: -2500n,
+      },
+      {
+        transaction_id: "of-tx-1",
+        raw_type: "Tip from",
+        canonical_type: "tip",
+        net_amount_mills: 12500n,
+      },
+      {
+        transaction_id: "of-tx-2",
+        raw_type: "Subscription",
+        canonical_type: "subscription",
+        net_amount_mills: 5000n,
+      },
+    ]);
+    expect(fanRows.rows).toEqual([
+      {
+        platform: "onlyfans",
+        platform_user_id: "fan-of-1",
+        username: null,
+      },
+      {
+        platform: "onlyfans",
+        platform_user_id: "fan-of-2",
+        username: null,
+      },
+    ]);
+    expect(revenue.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          canonicalType: "tip",
+          total: "12500",
+        }),
+        expect.objectContaining({
+          canonicalType: "subscription",
+          total: "5000",
+        }),
+        expect.objectContaining({
+          canonicalType: "chargeback",
+          total: "-2500",
+        }),
+      ]),
+    );
+    expect(checkpoint?.cursorTimestamp?.toISOString()).toBe("2026-03-07T12:00:00.000Z");
   });
 });

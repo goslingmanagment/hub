@@ -4,7 +4,6 @@ import { Command } from "commander";
 
 import {
   createModel,
-  updatePageMetadata,
 } from "@fansly-connect/db";
 import {
   formatUsdFromMills,
@@ -15,7 +14,7 @@ import {
 } from "@fansly-connect/shared";
 
 import { createAppContext } from "./bootstrap.ts";
-import { onboardFanslyPage } from "./services/page-onboarding.ts";
+import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import {
   assignPageToUser,
   createUserAccount,
@@ -26,7 +25,9 @@ import {
   setUserPassword,
   unassignPageFromUser,
 } from "./services/auth.ts";
-import { getPageRevenueReport } from "./services/reporting.ts";
+import { getModelRevenueReport, getPageRevenueReport } from "./services/reporting.ts";
+import { loadFanslySessionBundleFromFile, loadOnlyMonsterTokenBundleFromFile } from "./services/page-context.ts";
+import { refreshPageMetadata } from "./services/sync/shared.ts";
 import {
   fanSpendForPage,
   listFans,
@@ -39,7 +40,7 @@ import {
   runFollowerSync,
   runLightSync,
 } from "./services/sync.ts";
-import { loadSessionBundleFromFile, resolvePageContext } from "./services/page-context.ts";
+import { resolvePageContext } from "./services/page-context.ts";
 
 function requireCustomPeriod(from?: string, to?: string) {
   if (!from || !to) {
@@ -87,6 +88,33 @@ function auditContext() {
   };
 }
 
+const revenueLabels: Record<TransactionType, string> = {
+  subscription: "Subscriptions",
+  tip: "Tips",
+  message_purchase: "Messages",
+  post_purchase: "Posts",
+  stream_tip: "Streams",
+  chargeback: "Chargebacks",
+  refund: "Refunds",
+  payout_reversal: "Payout reversals",
+  other: "Other",
+};
+
+function printRevenueTotals(
+  totals: Map<TransactionType, bigint>,
+  overall: bigint,
+  period: string,
+) {
+  console.log(`${period} net revenue: ${formatUsdFromMills(overall)}`);
+  for (const [type, label] of Object.entries(revenueLabels) as Array<[TransactionType, string]>) {
+    const total = totals.get(type) ?? 0n;
+    if (total === 0n) {
+      continue;
+    }
+    console.log(`  ${label}: ${formatUsdFromMills(total)}`);
+  }
+}
+
 export function buildProgram() {
   const program = new Command();
 
@@ -126,6 +154,40 @@ export function buildProgram() {
       }
     });
 
+  model
+    .command("revenue")
+    .requiredOption("--slug <slug>")
+    .requiredOption("--period <period>")
+    .option("--from <from>")
+    .option("--to <to>")
+    .action(async (options) => {
+      const period = parsePeriod(options.period);
+      const custom = period === "custom"
+        ? requireCustomPeriod(options.from, options.to)
+        : undefined;
+      const app = await createAppContext();
+      try {
+        const revenue = await getModelRevenueReport(app, options.slug, {
+          period,
+          custom,
+        });
+        const totals = new Map(
+          revenue.breakdown.map((row) => [row.canonicalType, toMills(row.netAmountMills)]),
+        );
+        const overall = toMills(revenue.totalNetMills);
+
+        console.log(`Model: ${revenue.model.name} (${revenue.model.slug})`);
+        printRevenueTotals(totals, overall, period);
+        for (const page of revenue.pages) {
+          console.log(
+            `  ${page.pageLabel}: ${formatUsdFromMills(toMills(page.totalNetMills))}`,
+          );
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
   const page = program.command("page");
   const pageAdd = page.command("add");
   const user = program.command("user");
@@ -142,7 +204,7 @@ export function buildProgram() {
     .action(async (options) => {
       const app = await createAppContext();
       try {
-        const session = await loadSessionBundleFromFile(options.sessionFile);
+        const session = await loadFanslySessionBundleFromFile(options.sessionFile);
         const proxy = options.proxyUrl
           ? {
             url: options.proxyUrl,
@@ -158,6 +220,41 @@ export function buildProgram() {
         });
 
         console.log(`Created Fansly page ${created.label} (${created.id})`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  pageAdd
+    .command("onlyfans")
+    .requiredOption("--model <slug>")
+    .requiredOption("--label <label>")
+    .requiredOption("--token-file <file>")
+    .requiredOption("--username <username>")
+    .option("--proxy-url <url>")
+    .option("--proxy-username <username>")
+    .option("--proxy-password <password>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const auth = await loadOnlyMonsterTokenBundleFromFile(options.tokenFile);
+        const proxy = options.proxyUrl
+          ? {
+            url: options.proxyUrl,
+            username: options.proxyUsername ?? null,
+            password: options.proxyPassword ?? null,
+          }
+          : null;
+
+        const { page: created } = await onboardOnlyFansPage(app, {
+          modelSlug: options.model,
+          label: options.label,
+          auth,
+          username: options.username,
+          proxy,
+        });
+
+        console.log(`Created OnlyFans page ${created.label} (${created.id})`);
       } finally {
         await app.close();
       }
@@ -203,24 +300,17 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         const context = await resolvePageContext(app, options.page);
-        const verified = await app.adapter.verifySession({
-          session: context.session,
-          proxy: context.proxy,
-        });
-        await updatePageMetadata(app.db, context.page.id, {
-          platformAccountIdValue: verified.parsed.account.id,
-          username: verified.parsed.account.username,
-          displayName: verified.parsed.account.displayName,
-          followerCount: verified.parsed.account.followCount,
-          subscriberCount: verified.parsed.account.subscriberCount,
-          earningsBalanceMills: toMills(verified.parsed.account.earningsWallet?.balance ?? 0),
-          metadata: {
-            walls: verified.parsed.account.walls ?? [],
-            subscriptionTiers: verified.parsed.account.subscriptionTiers ?? [],
-          },
-          syncType: "light",
-        });
-        console.log(`Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.id})`);
+        if (context.platform === "fansly") {
+          const verified = await refreshPageMetadata(app, context, "light");
+          console.log(
+            `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.id})`,
+          );
+        } else {
+          const verified = await refreshPageMetadata(app, context, "light");
+          console.log(
+            `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.platformAccountId})`,
+          );
+        }
       } finally {
         await app.close();
       }
@@ -235,8 +325,22 @@ export function buildProgram() {
       try {
         if (options.scope === "light") {
           const result = await runLightSync(app, options.page);
-          console.log(`Synced ${(result.stats.transactions as { processed?: number } | undefined)?.processed ?? 0} transactions`);
-          console.log(`Synced ${(result.stats.subscribers as { processed?: number } | undefined)?.processed ?? 0} subscribers`);
+          const txStats = result.stats.transactions as
+            | {
+              processed?: number;
+              processedTransactions?: number;
+              processedChargebacks?: number;
+            }
+            | undefined;
+          if (txStats?.processedTransactions !== undefined) {
+            console.log(`Synced ${txStats.processedTransactions} transactions`);
+            console.log(`Synced ${txStats.processedChargebacks ?? 0} chargebacks`);
+          } else {
+            console.log(`Synced ${txStats?.processed ?? 0} transactions`);
+            console.log(
+              `Synced ${(result.stats.subscribers as { processed?: number } | undefined)?.processed ?? 0} subscribers`,
+            );
+          }
           return;
         }
 
@@ -247,12 +351,26 @@ export function buildProgram() {
         }
 
         const result = await runAllSync(app, options.page);
-        const txCount =
-          (result.light.stats.transactions as { processed?: number } | undefined)?.processed ?? 0;
-        console.log(`✓ Synced ${txCount} transactions`);
-        console.log(
-          `✓ Synced ${result.followers.processed} followers (delta: +${result.followers.delta})`,
-        );
+        const txStats = result.light.stats.transactions as
+          | {
+            processed?: number;
+            processedTransactions?: number;
+            processedChargebacks?: number;
+          }
+          | undefined;
+        if (txStats?.processedTransactions !== undefined) {
+          console.log(`✓ Synced ${txStats.processedTransactions} transactions`);
+          console.log(`✓ Synced ${txStats.processedChargebacks ?? 0} chargebacks`);
+        } else {
+          console.log(`✓ Synced ${txStats?.processed ?? 0} transactions`);
+        }
+        if (result.followers) {
+          console.log(
+            `✓ Synced ${result.followers.processed} followers (delta: +${result.followers.delta})`,
+          );
+        } else {
+          console.log("✓ Skipped follower sync (unsupported for OnlyFans pages)");
+        }
         console.log("✓ Built daily rollups");
       } finally {
         await app.close();
@@ -354,28 +472,7 @@ export function buildProgram() {
         const overall = toMills(breakdown.totalNetMills);
 
         console.log(`Page: ${options.page}`);
-        console.log(`${period} net revenue: ${formatUsdFromMills(overall)}`);
-        const labels: Record<TransactionType, string> = {
-          subscription: "Subscriptions",
-          tip: "Tips",
-          message_purchase: "Messages",
-          post_purchase: "Posts",
-          stream_tip: "Streams",
-          chargeback: "Chargebacks",
-          refund: "Refunds",
-          payout_reversal: "Payout reversals",
-          other: "Other",
-        };
-
-        for (const [type, label] of Object.entries(labels) as Array<
-          [TransactionType, string]
-        >) {
-          const total = totals.get(type) ?? 0n;
-          if (total === 0n) {
-            continue;
-          }
-          console.log(`  ${label}: ${formatUsdFromMills(total)}`);
-        }
+        printRevenueTotals(totals, overall, period);
       } finally {
         await app.close();
       }

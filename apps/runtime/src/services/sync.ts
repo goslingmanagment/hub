@@ -15,17 +15,18 @@ import {
   startSyncRun,
 } from "@fansly-connect/db";
 import { FANSLY_MAPPER_VERSION } from "@fansly-connect/fansly";
+import { ONLYMONSTER_MAPPER_VERSION } from "@fansly-connect/onlyfans";
 import { resolvePeriodBounds } from "@fansly-connect/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { resolvePageContext } from "./page-context.ts";
+import { resolvePageContext, type ResolvedPageContext } from "./page-context.ts";
 import { runFollowerSyncUnlocked } from "./sync/followers.ts";
 import { PageSyncLockedError, withPageSyncLock } from "./sync/locking.ts";
+import { syncOnlyFansTransactions } from "./sync/onlyfans-transactions.ts";
 import {
   insertFailedSyncPayload,
   refreshPageMetadata,
   retentionDate,
-  type ResolvedPageContext,
 } from "./sync/shared.ts";
 import { syncSubscribers } from "./sync/subscribers.ts";
 import { syncTransactions } from "./sync/transactions.ts";
@@ -61,40 +62,67 @@ async function runLightSyncUnlocked(
   const stats: Record<string, unknown> = {};
 
   try {
-    const accountMe = await refreshPageMetadata(app, pageContext, "light");
-    await insertRawPayload(app.db, {
-      platformAccountId: pageContext.page.id,
-      syncRunId: run.id,
-      endpoint: "account_me",
-      requestParams: {},
-      responsePayload: accountMe.raw,
-      mapperVersion: FANSLY_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    });
-
-    try {
-      stats.transactions = await syncTransactions(app, {
-        pageLabel: pageContext.page.label,
+    if (pageContext.platform === "fansly") {
+      const accountMe = await refreshPageMetadata(app, pageContext, "light");
+      await insertRawPayload(app.db, {
         platformAccountId: pageContext.page.id,
-        requestContext: { session: pageContext.session, proxy: pageContext.proxy },
         syncRunId: run.id,
+        endpoint: "account_me",
+        requestParams: {},
+        responsePayload: accountMe.raw,
+        mapperVersion: FANSLY_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push(`transactions: ${message}`);
-    }
 
-    try {
-      stats.subscribers = await syncSubscribers(app, {
-        pageLabel: pageContext.page.label,
+      try {
+        stats.transactions = await syncTransactions(app, {
+          pageLabel: pageContext.page.label,
+          platformAccountId: pageContext.page.id,
+          requestContext: { session: pageContext.session, proxy: pageContext.proxy },
+          syncRunId: run.id,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`transactions: ${message}`);
+      }
+
+      try {
+        stats.subscribers = await syncSubscribers(app, {
+          pageLabel: pageContext.page.label,
+          platformAccountId: pageContext.page.id,
+          requestContext: { session: pageContext.session, proxy: pageContext.proxy },
+          syncRunId: run.id,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`subscribers: ${message}`);
+      }
+    } else {
+      const account = await refreshPageMetadata(app, pageContext, "light");
+      await insertRawPayload(app.db, {
         platformAccountId: pageContext.page.id,
-        requestContext: { session: pageContext.session, proxy: pageContext.proxy },
         syncRunId: run.id,
+        endpoint: "onlymonster_account",
+        requestParams: {},
+        responsePayload: account.raw,
+        mapperVersion: ONLYMONSTER_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push(`subscribers: ${message}`);
+
+      try {
+        stats.transactions = await syncOnlyFansTransactions(app, {
+          pageLabel: pageContext.page.label,
+          platformAccountId: pageContext.page.id,
+          platformAccountIdValue: account.parsed.account.platformAccountId,
+          requestContext: { auth: pageContext.auth, proxy: pageContext.proxy },
+          syncRunId: run.id,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`transactions: ${message}`);
+      }
     }
 
     await finishSyncRun(app.db, run.id, {
@@ -116,6 +144,7 @@ async function runLightSyncUnlocked(
       syncRunId: run.id,
       endpoint: "light_sync",
       message,
+      platform: pageContext.platform,
     });
     await finishSyncRun(app.db, run.id, {
       status: "failed",
@@ -146,13 +175,26 @@ export async function runFollowerSync(
   return withResolvedPageLock(
     app,
     label,
-    (pageContext) => runFollowerSyncUnlocked(app, pageContext, trigger),
+    (pageContext) => {
+      if (pageContext.platform === "onlyfans") {
+        throw new Error("Follower sync is not supported for OnlyFans pages");
+      }
+
+      return runFollowerSyncUnlocked(app, pageContext, trigger);
+    },
   );
 }
 
 export async function runAllSync(app: AppContext, label: string, trigger = "cli") {
   return withResolvedPageLock(app, label, async (pageContext) => {
     const light = await runLightSyncUnlocked(app, pageContext, trigger);
+    if (pageContext.platform === "onlyfans") {
+      return {
+        light,
+        followers: null,
+      };
+    }
+
     const followers = await runFollowerSyncUnlocked(app, pageContext, trigger);
 
     return {

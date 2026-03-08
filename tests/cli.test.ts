@@ -56,4 +56,25 @@ describe("CLI parsing", () => {
     expect(help).toContain("--page <label>");
     expect(help).toContain("also assign the user to this page");
   });
+
+  it("documents page add onlyfans and model revenue", () => {
+    const helpProgram = buildProgram();
+    const pageCommand = helpProgram.commands.find((command) => command.name() === "page");
+    expect(pageCommand).toBeDefined();
+    const addCommand = pageCommand?.commands.find((command) => command.name() === "add");
+    expect(addCommand).toBeDefined();
+    const onlyFansCommand = addCommand?.commands.find((command) => command.name() === "onlyfans");
+    expect(onlyFansCommand).toBeDefined();
+    const onlyFansHelp = onlyFansCommand?.helpInformation();
+    expect(onlyFansHelp).toContain("--token-file <file>");
+    expect(onlyFansHelp).toContain("--username <username>");
+
+    const modelCommand = helpProgram.commands.find((command) => command.name() === "model");
+    expect(modelCommand).toBeDefined();
+    const revenueCommand = modelCommand?.commands.find((command) => command.name() === "revenue");
+    expect(revenueCommand).toBeDefined();
+    const revenueHelp = revenueCommand?.helpInformation();
+    expect(revenueHelp).toContain("--slug <slug>");
+    expect(revenueHelp).toContain("--period <period>");
+  });
 });

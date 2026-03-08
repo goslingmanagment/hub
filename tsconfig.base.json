@@ -11,7 +11,8 @@
       "@fansly-connect/contracts": ["packages/contracts/src/index.ts"],
       "@fansly-connect/shared": ["packages/shared/src/index.ts"],
       "@fansly-connect/db": ["packages/db/src/index.ts"],
-      "@fansly-connect/fansly": ["packages/fansly/src/index.ts"]
+      "@fansly-connect/fansly": ["packages/fansly/src/index.ts"],
+      "@fansly-connect/onlyfans": ["packages/onlyfans/src/index.ts"]
     },
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,

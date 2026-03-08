@@ -32,6 +32,20 @@ export interface FanslySessionBundle {
   fanslySessionId?: string;
 }
 
+export interface OnlyMonsterTokenBundle {
+  token: string;
+}
+
+export type StoredPlatformCredentialBundle =
+  | {
+    platform: "fansly";
+    session: FanslySessionBundle;
+  }
+  | {
+    platform: "onlyfans";
+    auth: OnlyMonsterTokenBundle;
+  };
+
 export interface ProxyConfig {
   url: string;
   username?: string | null;

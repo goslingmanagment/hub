@@ -1,13 +1,14 @@
 # Fansly Connect
 
-CLI-first Fansly-to-PostgreSQL sync pipeline for Phase 1.
+CLI-first page-to-PostgreSQL sync pipeline for the current Fansly + OnlyFans milestone.
 
-This repo syncs Fansly page metadata, transactions, subscribers, and followers into PostgreSQL, then rebuilds daily rollups for reporting. It does not include an API server, dashboard, or web UI.
+This repo syncs Fansly page metadata, transactions, subscribers, and followers, plus OnlyFans revenue data via OnlyMonster, into PostgreSQL, then rebuilds daily rollups for reporting. It does not include a dashboard UI.
 
 ## What's Included
 
-- Drizzle ORM schema and SQL migrations for Phase 1 storage
+- Drizzle ORM schema and SQL migrations for the current storage model
 - Fansly adapter with auth headers, pagination, retries, proxy support, and request pacing
+- OnlyFans adapter backed by OnlyMonster for page lookup, transactions, and chargebacks
 - `pg-boss` worker for scheduled sync jobs
 - CLI for setup, sync, and verification workflows
 - Docker Compose for local PostgreSQL 16
@@ -18,6 +19,7 @@ This repo syncs Fansly page metadata, transactions, subscribers, and followers i
 apps/runtime     CLI and worker entrypoints
 packages/db      Drizzle schema, migrations, repositories
 packages/fansly  Fansly adapter and response mapping
+packages/onlyfans OnlyMonster-backed OnlyFans adapter and response mapping
 packages/shared  config, logging, money, crypto, time helpers
 docs/            PRD, decisions, roadmap
 reference/       Fansly OpenAPI spec and real response fixtures
@@ -39,7 +41,8 @@ reference/       Fansly OpenAPI spec and real response fixtures
 - Node.js
 - `pnpm`
 - Docker for the bundled local PostgreSQL setup, or an existing PostgreSQL instance
-- A valid Fansly session bundle for each page you want to sync
+- A valid Fansly session bundle for each Fansly page you want to sync
+- A valid OnlyMonster token for each OnlyFans page you want to sync
 - A 32-byte base64 encryption key for credentials stored at rest
 
 ## Quickstart
@@ -97,6 +100,22 @@ pnpm cli page add fansly \
   --session-file ./secrets/lora-main.session.json
 ```
 
+For OnlyFans via OnlyMonster, use a token file:
+
+```json
+{
+  "token": "YOUR_ONLYMONSTER_TOKEN"
+}
+```
+
+```bash
+pnpm cli page add onlyfans \
+  --model lora \
+  --label lora-of \
+  --username lora_onlyfans \
+  --token-file ./secrets/lora-of.token.json
+```
+
 9. Verify the stored session:
 
 ```bash
@@ -144,6 +163,7 @@ Configuration is loaded from environment variables and validated at startup.
 | `APP_ENCRYPTION_KEY_VERSION` | No | Integer version stored with encrypted records. Defaults to `1`. |
 | `LOG_LEVEL` | No | Logger level. Defaults to `info`. |
 | `FANSLY_BASE_URL` | No | Fansly API base URL. Defaults to `https://apiv3.fansly.com/api/v1`. |
+| `ONLYMONSTER_BASE_URL` | No | OnlyMonster API base URL. Defaults to `https://omapi.onlymonster.ai`. |
 | `FOLLOWER_PAGE_DELAY_MS` | No | Delay between follower pages. Defaults to `5000`. |
 | `TRANSACTION_LOOKBACK_DAYS` | No | Backfill window applied to transaction checkpoint resyncs. Defaults to `7`. |
 | `TRANSACTION_RESCAN_CAP_DAYS` | No | Maximum age of pending-aware transaction rescans before the start cursor is clamped. Defaults to `30`. |
@@ -164,6 +184,14 @@ List configured models with their page counts.
 
 ```bash
 pnpm cli model list
+```
+
+### `model revenue`
+
+Show combined net revenue for all pages attached to one model.
+
+```bash
+pnpm cli model revenue --slug lora --period 7d
 ```
 
 ### `page add fansly`
@@ -189,9 +217,31 @@ Supported flags:
 - `--proxy-username <username>`
 - `--proxy-password <password>`
 
+### `page add onlyfans`
+
+Register an OnlyFans page by resolving the page username through OnlyMonster, then encrypt the token and store the matched account metadata.
+
+```bash
+pnpm cli page add onlyfans \
+  --model lora \
+  --label lora-of \
+  --username lora_onlyfans \
+  --token-file ./secrets/lora-of.token.json
+```
+
+Supported flags:
+
+- `--model <slug>`
+- `--label <label>`
+- `--username <username>`
+- `--token-file <file>`
+- `--proxy-url <url>`
+- `--proxy-username <username>`
+- `--proxy-password <password>`
+
 ### `page verify`
 
-Validate the stored session against Fansly and refresh the page metadata snapshot.
+Validate the stored Fansly session or OnlyMonster account access and refresh the page metadata snapshot.
 
 ```bash
 pnpm cli page verify --page lora-main
@@ -207,7 +257,7 @@ pnpm cli page list
 
 ### `sync`
 
-Run sync jobs manually. `all` runs the same light and follower sync services used by the worker.
+Run sync jobs manually. For Fansly, `all` runs the same light and follower sync services used by the worker. For OnlyFans, `all` runs revenue sync only and skips followers.
 
 ```bash
 pnpm cli sync --page lora-main --scope all
@@ -220,6 +270,11 @@ pnpm cli sync --page lora-main --scope light
 pnpm cli sync --page lora-main --scope followers
 ```
 
+OnlyFans limitations:
+
+- `--scope followers` is unsupported and returns an error
+- `--scope all` runs the light revenue sync and prints a follower-sync skip message
+
 ### `status`
 
 List recent sync runs across pages, optionally filtered to a single page.
@@ -231,7 +286,7 @@ pnpm cli status --page lora-main --limit 10
 
 ### `revenue`
 
-Show net revenue by canonical transaction bucket for a reporting period.
+Show page-scoped net revenue by canonical transaction bucket for a reporting period.
 
 ```bash
 pnpm cli revenue --page lora-main --period 7d
@@ -295,14 +350,18 @@ The worker schedules jobs for Fansly pages that already exist in the database wh
 
 If you add a new page while the worker is already running, restart the worker so that page gets scheduled.
 
+OnlyFans scheduling is intentionally deferred in this milestone. Use `pnpm cli sync --page <label>` manually for OF pages.
+
 ## Data Notes
 
 - Money is stored as `BIGINT` mills. Conversion to formatted USD happens at the CLI edge.
+- OnlyMonster amounts are treated as dollars and converted to mills at ingest.
 - Fan identity is canonicalized as `(platform, platform_user_id)` to support future multi-platform ingestion.
 - Sync jobs are idempotent and safe to re-run.
-- Fansly session bundles and proxy credentials are encrypted at rest with application-layer AES-256-GCM.
+- Fansly session bundles, OnlyMonster tokens, and proxy credentials are encrypted at rest with application-layer AES-256-GCM.
 - Raw debugging payloads are stored in JSONB and cleaned up after their 180-day retention window.
 - Fansly story and bundle sale types (`32001`, `32101`) map to `post_purchase`; the bundle-oriented `2016` and `2116` types remain on `message_purchase` until they are reclassified with raw payload evidence.
+- OnlyFans pages do not have subscriber/follower list sync in this milestone because OnlyMonster does not expose those endpoints.
 
 ## Testing And Verification
 
@@ -322,11 +381,11 @@ Integration coverage uses Testcontainers. If no working container runtime is ava
 
 ## Current Scope
 
-- Phase 1 only
-- Fansly adapter only
+- Fansly sync plus the OnlyFans revenue milestone via OnlyMonster
+- OnlyFans onboarding, manual sync, and model/page revenue reporting
+- Fansly-only worker scheduling, follower sync, and subscriber sync
 - Revenue rollups are derived from canonical transactions stored in PostgreSQL, not from direct platform exports
-- No API server
-- No dashboard or web UI
+- Dashboard UI still out of scope
 
 ## Additional Docs
 
@@ -334,4 +393,5 @@ Integration coverage uses Testcontainers. If no working container runtime is ava
 - [Technical decisions](docs/decisions.md)
 - [Roadmap](docs/roadmap.md)
 - [Fansly API spec](reference/fansly_api_spec.md)
+- [OnlyMonster notes](reference/onlymonster_api_spec.md)
 - [OpenAPI reference](reference/openapi.yaml)

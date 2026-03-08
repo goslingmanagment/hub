@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 
-import type { FanslySessionBundle, ProxyConfig } from "@fansly-connect/shared";
+import type { Platform, ProxyConfig } from "@fansly-connect/shared";
 
 import type { Database } from "../client.ts";
 import {
@@ -54,11 +54,40 @@ export async function createFanslyPage(
     label: string;
   },
 ) {
+  return createPlatformPage(db, {
+    modelId: input.modelId,
+    platform: "fansly",
+    label: input.label,
+  });
+}
+
+export async function createOnlyFansPage(
+  db: Database,
+  input: {
+    modelId: number;
+    label: string;
+  },
+) {
+  return createPlatformPage(db, {
+    modelId: input.modelId,
+    platform: "onlyfans",
+    label: input.label,
+  });
+}
+
+export async function createPlatformPage(
+  db: Database,
+  input: {
+    modelId: number;
+    platform: Platform;
+    label: string;
+  },
+) {
   const [created] = await db
     .insert(platformAccounts)
     .values({
       modelId: input.modelId,
-      platform: "fansly",
+      platform: input.platform,
       label: input.label,
     })
     .returning();
@@ -72,18 +101,33 @@ export async function storeFanslySession(
   encryptedSession: string,
   keyVersion: number,
 ) {
+  return storePlatformCredentials(db, {
+    platformAccountId,
+    encryptedSession,
+    keyVersion,
+  });
+}
+
+export async function storePlatformCredentials(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    encryptedSession: string;
+    keyVersion: number;
+  },
+) {
   const [credential] = await db
     .insert(platformAccountCredentials)
     .values({
-      platformAccountId,
-      encryptedSession,
-      keyVersion,
+      platformAccountId: input.platformAccountId,
+      encryptedSession: input.encryptedSession,
+      keyVersion: input.keyVersion,
     })
     .onConflictDoUpdate({
       target: platformAccountCredentials.platformAccountId,
       set: {
-        encryptedSession,
-        keyVersion,
+        encryptedSession: input.encryptedSession,
+        keyVersion: input.keyVersion,
         updatedAt: new Date(),
       },
     })
@@ -141,8 +185,12 @@ export async function findPageByLabel(db: Database, label: string) {
 }
 
 export async function listFanslyPages(db: Database) {
+  return listPagesByPlatform(db, "fansly");
+}
+
+export async function listPagesByPlatform(db: Database, platform: Platform) {
   return db.query.platformAccounts.findMany({
-    where: eq(platformAccounts.platform, "fansly"),
+    where: eq(platformAccounts.platform, platform),
   });
 }
 

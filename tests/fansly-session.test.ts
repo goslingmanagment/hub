@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import { FanslyAdapter } from "@fansly-connect/fansly";
 
-import { loadSessionBundleFromFile } from "../apps/runtime/src/services/page-context.ts";
+import {
+  loadOnlyMonsterTokenBundleFromFile,
+  loadSessionBundleFromFile,
+} from "../apps/runtime/src/services/page-context.ts";
 
 async function withSessionFile(
   body: Record<string, unknown>,
@@ -98,5 +101,15 @@ describe("Fansly adapter headers", () => {
     expect(headers["fansly-client-ts"]).toEqual(expect.any(String));
     expect(headers).not.toHaveProperty("fansly-client-id");
     expect(headers).not.toHaveProperty("fansly-client-check");
+  });
+});
+
+describe("OnlyMonster token files", () => {
+  it("accepts token-file aliases", async () => {
+    await withSessionFile({ "x-om-auth-token": "om-token" }, async (filePath) => {
+      await expect(loadOnlyMonsterTokenBundleFromFile(filePath)).resolves.toEqual({
+        token: "om-token",
+      });
+    });
   });
 });

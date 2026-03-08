@@ -1,5 +1,6 @@
 import { createDb, createPool } from "@fansly-connect/db";
 import { FanslyAdapter } from "@fansly-connect/fansly";
+import { OnlyFansAdapter } from "@fansly-connect/onlyfans";
 import type {
   FanslyAccount,
   FanslyAccountMeResponse,
@@ -27,6 +28,7 @@ export interface AppContext {
   pool: ReturnType<typeof createPool>;
   db: ReturnType<typeof createDb>;
   adapter: AdapterLike;
+  onlyFansAdapter: OnlyFansAdapter;
   close(): Promise<void>;
 }
 
@@ -39,6 +41,10 @@ export async function createAppContext(): Promise<AppContext> {
     baseUrl: config.fanslyBaseUrl,
     defaultDelayMs: 1000,
   });
+  const onlyFansAdapter = new OnlyFansAdapter({
+    baseUrl: config.onlyMonsterBaseUrl,
+    defaultDelayMs: 1000,
+  });
 
   return {
     config,
@@ -46,6 +52,7 @@ export async function createAppContext(): Promise<AppContext> {
     pool,
     db,
     adapter,
+    onlyFansAdapter,
     async close() {
       await pool.end();
     },
