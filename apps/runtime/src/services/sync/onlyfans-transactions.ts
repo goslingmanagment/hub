@@ -1,4 +1,5 @@
 import {
+  deleteTransactionsMissingFromWindow,
   getCheckpoint,
   getOldestPendingTransactionAt,
   insertRawPayload,
@@ -53,6 +54,7 @@ export async function syncOnlyFansTransactions(
     platformAccountId: number;
     platformAccountIdValue: string;
     commissionRate: number;
+    rescanStart?: Date | null;
     requestContext: {
       auth: {
         token: string;
@@ -78,14 +80,21 @@ export async function syncOnlyFansTransactions(
     ? (oldestPendingAt < lookbackStart ? oldestPendingAt : lookbackStart)
     : (lookbackStart ?? oldestPendingAt);
   const rescanCapStart = new Date(Date.now() - app.config.transactionRescanCapDays * DAY_MS);
-  const start = earliestRescanStart && earliestRescanStart < rescanCapStart
-    ? rescanCapStart
-    : (earliestRescanStart ?? rescanCapStart);
+  const start = input.rescanStart ?? (
+    earliestRescanStart && earliestRescanStart < rescanCapStart
+      ? rescanCapStart
+      : (earliestRescanStart ?? rescanCapStart)
+  );
   const end = new Date();
+
+  if (start >= end) {
+    throw new Error(`OnlyFans transaction rescan start must be before ${end.toISOString()}`);
+  }
 
   let newestSeenAt: Date | null = checkpoint?.cursorTimestamp ?? null;
   let processedTransactions = 0;
   let processedChargebacks = 0;
+  const sourceTransactionIds = new Set<string>();
 
   let transactionCursor: string | null = null;
   do {
@@ -127,6 +136,7 @@ export async function syncOnlyFansTransactions(
       const netAmountMills = calculateNetMillsFromGross(amountMills, input.commissionRate);
       const fanId = fanMap.get(item.fan.id) ?? null;
       const occurredAt = new Date(item.timestamp);
+      sourceTransactionIds.add(item.id);
 
       await upsertTransaction(app.db, {
         platformAccountId: input.platformAccountId,
@@ -200,6 +210,7 @@ export async function syncOnlyFansTransactions(
       const netAmountMills = calculateNetMillsFromGross(amountMills, input.commissionRate);
       const fanId = fanMap.get(item.fan.id) ?? null;
       const occurredAt = new Date(item.chargeback_timestamp);
+      sourceTransactionIds.add(item.id);
 
       await upsertTransaction(app.db, {
         platformAccountId: input.platformAccountId,
@@ -234,6 +245,12 @@ export async function syncOnlyFansTransactions(
     chargebackCursor = page.parsed.cursor ?? null;
   } while (chargebackCursor);
 
+  await deleteTransactionsMissingFromWindow(app.db, {
+    platformAccountId: input.platformAccountId,
+    from: start,
+    to: end,
+    keepTransactionIds: Array.from(sourceTransactionIds),
+  });
   await recalculateFanPageSpend(app.db, input.platformAccountId);
   await rebuildRevenueRollups(app.db, input.platformAccountId);
 

@@ -198,13 +198,41 @@ class FakeFanslyAdapter {
 }
 
 class FakeOnlyFansAdapter {
+  readonly transactionRequestHistory: Array<{
+    start: Date;
+    end: Date;
+    cursor: string | null;
+  }> = [];
+
+  readonly chargebackRequestHistory: Array<{
+    start: Date;
+    end: Date;
+    cursor: string | null;
+  }> = [];
+
   constructor(
     private readonly fixture: {
       account: OnlyMonsterAccount;
       transactions: OnlyMonsterTransaction[];
       chargebacks: OnlyMonsterChargeback[];
     },
+    private readonly options?: {
+      filterByWindow?: boolean;
+    },
   ) {}
+
+  setTransactions(transactions: OnlyMonsterTransaction[]) {
+    this.fixture.transactions = transactions;
+  }
+
+  setChargebacks(chargebacks: OnlyMonsterChargeback[]) {
+    this.fixture.chargebacks = chargebacks;
+  }
+
+  clearRequestHistory() {
+    this.transactionRequestHistory.length = 0;
+    this.chargebackRequestHistory.length = 0;
+  }
 
   async getAccount() {
     return {
@@ -220,21 +248,32 @@ class FakeOnlyFansAdapter {
   async getTransactionsPage(
     _: unknown,
     __: string,
-    params: { cursor?: string | null; limit?: number },
+    params: { start: Date; end: Date; cursor?: string | null; limit?: number },
   ) {
+    this.transactionRequestHistory.push({
+      start: params.start,
+      end: params.end,
+      cursor: params.cursor ?? null,
+    });
     const limit = params.limit ?? 100;
     const offset = params.cursor ? Number.parseInt(params.cursor, 10) : 0;
-    const items = this.fixture.transactions.slice(offset, offset + limit);
+    const filtered = this.options?.filterByWindow
+      ? this.fixture.transactions.filter((item) => {
+        const occurredAt = Date.parse(item.timestamp);
+        return occurredAt >= params.start.getTime() && occurredAt < params.end.getTime();
+      })
+      : this.fixture.transactions;
+    const items = filtered.slice(offset, offset + limit);
     const nextOffset = offset + items.length;
 
     return {
       parsed: {
         items,
-        cursor: nextOffset < this.fixture.transactions.length ? String(nextOffset) : undefined,
+        cursor: nextOffset < filtered.length ? String(nextOffset) : undefined,
       },
       raw: {
         items,
-        cursor: nextOffset < this.fixture.transactions.length ? String(nextOffset) : undefined,
+        cursor: nextOffset < filtered.length ? String(nextOffset) : undefined,
       },
     };
   }
@@ -242,21 +281,32 @@ class FakeOnlyFansAdapter {
   async getChargebacksPage(
     _: unknown,
     __: string,
-    params: { cursor?: string | null; limit?: number },
+    params: { start: Date; end: Date; cursor?: string | null; limit?: number },
   ) {
+    this.chargebackRequestHistory.push({
+      start: params.start,
+      end: params.end,
+      cursor: params.cursor ?? null,
+    });
     const limit = params.limit ?? 100;
     const offset = params.cursor ? Number.parseInt(params.cursor, 10) : 0;
-    const items = this.fixture.chargebacks.slice(offset, offset + limit);
+    const filtered = this.options?.filterByWindow
+      ? this.fixture.chargebacks.filter((item) => {
+        const occurredAt = Date.parse(item.chargeback_timestamp);
+        return occurredAt >= params.start.getTime() && occurredAt < params.end.getTime();
+      })
+      : this.fixture.chargebacks;
+    const items = filtered.slice(offset, offset + limit);
     const nextOffset = offset + items.length;
 
     return {
       parsed: {
         items,
-        cursor: nextOffset < this.fixture.chargebacks.length ? String(nextOffset) : undefined,
+        cursor: nextOffset < filtered.length ? String(nextOffset) : undefined,
       },
       raw: {
         items,
-        cursor: nextOffset < this.fixture.chargebacks.length ? String(nextOffset) : undefined,
+        cursor: nextOffset < filtered.length ? String(nextOffset) : undefined,
       },
     };
   }
@@ -349,6 +399,61 @@ function createTestApp(
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as never),
     async close() {},
   };
+}
+
+async function seedOnlyFansPage(testDb: StartedTestDatabase, label: string) {
+  const model = await createModel(testDb.db, {
+    slug: `${label}-model`,
+    name: `${label} Model`,
+  });
+  const page = await createOnlyFansPage(testDb.db, {
+    modelId: model.id,
+    label,
+  });
+
+  await storePlatformCredentials(testDb.db, {
+    platformAccountId: page.id,
+    encryptedSession: JSON.stringify(encryptJson({
+      platform: "onlyfans",
+      auth: {
+        token: "om-token",
+      },
+    }, testEncryptionKey, 1)),
+    keyVersion: 1,
+  });
+  await updatePageMetadata(testDb.db, page.id, {
+    platformAccountIdValue: `of-${label}`,
+    username: label,
+    displayName: label,
+    followerCount: 0,
+    subscriberCount: 0,
+    earningsBalanceMills: 0n,
+    metadata: {
+      onlyMonsterAccountId: 42,
+    },
+    syncType: "light",
+  });
+
+  return { model, page };
+}
+
+function createUnusedFanslyAdapter() {
+  return new FakeFanslyAdapter({
+    accountMe: {
+      account: {
+        id: "unused",
+        username: "unused",
+        displayName: null,
+        createdAt: 0,
+        followCount: 0,
+        subscriberCount: 0,
+        earningsWallet: null,
+      },
+    },
+    transactions: [],
+    subscribers: [],
+    followers: [],
+  });
 }
 
 describe("sync integration", () => {
@@ -1018,188 +1123,344 @@ describe("sync integration", () => {
     expect(runRow.rows[0]?.status).toBe("partial");
   });
 
+  it("requires a manual OnlyFans rescan start to recover late historical transactions outside the lookback", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
+
+    try {
+      const { page } = await seedOnlyFansPage(testDb, "late-of");
+      const onlyFansAdapter = new FakeOnlyFansAdapter({
+        account: {
+          id: 42,
+          platform_account_id: "of-late-of",
+          platform: "onlyfans",
+          name: "late-of",
+          email: null,
+          avatar: "https://example.com/late-of.png",
+          username: "late-of",
+          organisation_id: "org-1",
+          subscribe_price: 12.5,
+          subscription_expiration_date: null,
+        },
+        transactions: [
+          {
+            id: "recent-tx",
+            amount: 12.5,
+            fan: { id: "fan-of-1" },
+            type: "Tip from",
+            status: "done",
+            timestamp: "2026-03-08T19:04:49.000Z",
+          },
+        ],
+        chargebacks: [],
+      }, {
+        filterByWindow: true,
+      });
+
+      const app = createTestApp(testDb, createUnusedFanslyAdapter(), {
+        onlyFansAdapter: onlyFansAdapter as unknown as AppContext["onlyFansAdapter"],
+      });
+
+      await runLightSync(app, page.label);
+
+      onlyFansAdapter.setTransactions([
+        {
+          id: "late-tx",
+          amount: 35,
+          fan: { id: "fan-of-2" },
+          type: "Payment for message",
+          status: "done",
+          timestamp: "2026-02-07T00:10:15.000Z",
+        },
+        {
+          id: "recent-tx",
+          amount: 12.5,
+          fan: { id: "fan-of-1" },
+          type: "Tip from",
+          status: "done",
+          timestamp: "2026-03-08T19:04:49.000Z",
+        },
+      ]);
+      onlyFansAdapter.clearRequestHistory();
+
+      await runLightSync(app, page.label);
+
+      const afterOrdinaryRerun = await testDb.pool.query(`
+        select transaction_id
+        from transactions
+        where platform_account_id = ${page.id}
+        order by transaction_id asc
+      `);
+
+      expect(onlyFansAdapter.transactionRequestHistory[0]?.start.toISOString()).toBe("2026-03-01T19:04:49.000Z");
+      expect(afterOrdinaryRerun.rows).toEqual([
+        {
+          transaction_id: "recent-tx",
+        },
+      ]);
+
+      onlyFansAdapter.clearRequestHistory();
+
+      await runLightSync(app, page.label, {
+        onlyFansTransactionStart: new Date("2026-02-07T00:00:00.000Z"),
+      });
+
+      const afterManualBackfill = await testDb.pool.query(`
+        select transaction_id
+        from transactions
+        where platform_account_id = ${page.id}
+        order by transaction_id asc
+      `);
+
+      expect(onlyFansAdapter.transactionRequestHistory[0]?.start.toISOString()).toBe("2026-02-07T00:00:00.000Z");
+      expect(afterManualBackfill.rows).toEqual([
+        {
+          transaction_id: "late-tx",
+        },
+        {
+          transaction_id: "recent-tx",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconciles delayed OnlyFans chargebacks by removing stale positives inside the rescan window", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
+
+    try {
+      const { page } = await seedOnlyFansPage(testDb, "chargeback-of");
+      const onlyFansAdapter = new FakeOnlyFansAdapter({
+        account: {
+          id: 42,
+          platform_account_id: "of-chargeback-of",
+          platform: "onlyfans",
+          name: "chargeback-of",
+          email: null,
+          avatar: "https://example.com/chargeback-of.png",
+          username: "chargeback-of",
+          organisation_id: "org-1",
+          subscribe_price: 12.5,
+          subscription_expiration_date: null,
+        },
+        transactions: [
+          {
+            id: "vip-subscription",
+            amount: 4.99,
+            fan: { id: "fan-of-1" },
+            type: "Subscription",
+            status: "done",
+            timestamp: "2026-03-07T09:01:45.000Z",
+          },
+        ],
+        chargebacks: [],
+      }, {
+        filterByWindow: true,
+      });
+
+      const app = createTestApp(testDb, createUnusedFanslyAdapter(), {
+        onlyFansAdapter: onlyFansAdapter as unknown as AppContext["onlyFansAdapter"],
+      });
+
+      await runLightSync(app, page.label);
+
+      onlyFansAdapter.setTransactions([]);
+      onlyFansAdapter.setChargebacks([
+        {
+          id: "vip-chargeback",
+          amount: 4.99,
+          fan: { id: "fan-of-1" },
+          type: "Subscription",
+          status: "undo",
+          chargeback_timestamp: "2026-03-08T04:06:31.000Z",
+          transaction_timestamp: "2026-03-07T09:01:45.000Z",
+        },
+      ]);
+      onlyFansAdapter.clearRequestHistory();
+
+      await runLightSync(app, page.label);
+
+      const txRows = await testDb.pool.query(`
+        select transaction_id,
+               canonical_type,
+               amount_mills,
+               net_amount_mills
+        from transactions
+        where platform_account_id = ${page.id}
+        order by transaction_id asc
+      `);
+      const checkpoint = await getCheckpoint(testDb.db, page.id, "transactions");
+
+      expect(onlyFansAdapter.transactionRequestHistory[0]?.start.toISOString()).toBe("2026-02-28T09:01:45.000Z");
+      expect(txRows.rows).toEqual([
+        {
+          transaction_id: "vip-chargeback",
+          canonical_type: "chargeback",
+          amount_mills: -4990n,
+          net_amount_mills: -3992n,
+        },
+      ]);
+      expect(checkpoint?.cursorTimestamp?.toISOString()).toBe("2026-03-08T04:06:31.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("syncs OnlyFans revenue and chargebacks without follower work", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
-    const model = await createModel(testDb.db, {
-      slug: "lora",
-      name: "Lora",
-    });
-    const page = await createOnlyFansPage(testDb.db, {
-      modelId: model.id,
-      label: "lora-of",
-    });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
 
-    await storePlatformCredentials(testDb.db, {
-      platformAccountId: page.id,
-      encryptedSession: JSON.stringify(encryptJson({
-        platform: "onlyfans",
-        auth: {
-          token: "om-token",
-        },
-      }, testEncryptionKey, 1)),
-      keyVersion: 1,
-    });
-    await updatePageMetadata(testDb.db, page.id, {
-      platformAccountIdValue: "of-acct-42",
-      username: "lora_of",
-      displayName: "Lora OF",
-      followerCount: 0,
-      subscriberCount: 0,
-      earningsBalanceMills: 0n,
-      metadata: {
-        onlyMonsterAccountId: 42,
-      },
-      syncType: "light",
-    });
-
-    const unusedFanslyAdapter = new FakeFanslyAdapter({
-      accountMe: {
+    try {
+      const { page } = await seedOnlyFansPage(testDb, "lora-of");
+      const onlyFansAdapter = new FakeOnlyFansAdapter({
         account: {
-          id: "unused",
-          username: "unused",
-          displayName: null,
-          createdAt: 0,
-          followCount: 0,
-          subscriberCount: 0,
-          earningsWallet: null,
+          id: 42,
+          platform_account_id: "of-lora-of",
+          platform: "onlyfans",
+          name: "Lora OF",
+          email: null,
+          avatar: "https://example.com/lora.png",
+          username: "lora_of",
+          organisation_id: "org-1",
+          subscribe_price: 12.5,
+          subscription_expiration_date: null,
         },
-      },
-      transactions: [],
-      subscribers: [],
-      followers: [],
-    });
+        transactions: [
+          {
+            id: "of-tx-1",
+            amount: 12.5,
+            fan: { id: "fan-of-1" },
+            type: "Tip from",
+            status: "loading",
+            timestamp: "2026-03-05T12:00:00.000Z",
+          },
+          {
+            id: "of-tx-2",
+            amount: 5,
+            fan: { id: "fan-of-2" },
+            type: "Subscription",
+            status: "done",
+            timestamp: "2026-03-06T12:00:00.000Z",
+          },
+        ],
+        chargebacks: [
+          {
+            id: "of-cb-1",
+            amount: 2.5,
+            fan: { id: "fan-of-1" },
+            type: "Tip from",
+            status: "undo",
+            chargeback_timestamp: "2026-03-07T12:00:00.000Z",
+            transaction_timestamp: "2026-03-05T12:00:00.000Z",
+          },
+        ],
+      }, {
+        filterByWindow: true,
+      });
 
-    const onlyFansAdapter = new FakeOnlyFansAdapter({
-      account: {
-        id: 42,
-        platform_account_id: "of-acct-42",
-        platform: "onlyfans",
-        name: "Lora OF",
-        email: null,
-        avatar: "https://example.com/lora.png",
-        username: "lora_of",
-        organisation_id: "org-1",
-        subscribe_price: 12.5,
-        subscription_expiration_date: null,
-      },
-      transactions: [
+      const app = createTestApp(testDb, createUnusedFanslyAdapter(), {
+        onlyFansAdapter: onlyFansAdapter as unknown as AppContext["onlyFansAdapter"],
+      });
+
+      const first = await runAllSync(app, page.label);
+      const second = await runLightSync(app, page.label);
+      const checkpoint = await getCheckpoint(testDb.db, page.id, "transactions");
+      const txRows = await testDb.pool.query(`
+        select transaction_id,
+               raw_type,
+               canonical_type,
+               amount_mills,
+               destination_amount_mills,
+               net_amount_mills
+        from transactions
+        where platform_account_id = ${page.id}
+        order by transaction_id asc
+      `);
+      const fanRows = await testDb.pool.query(`
+        select platform, platform_user_id, username
+        from fans
+        where platform = 'onlyfans'
+        order by platform_user_id asc
+      `);
+      const revenue = await revenueBreakdownForPage(app, page.label, "all");
+
+      expect(first.followers).toBeNull();
+      expect(second.status).toBe("success");
+      expect(txRows.rows).toEqual([
         {
-          id: "of-tx-1",
-          amount: 12.5,
-          fan: { id: "fan-of-1" },
-          type: "Tip from",
-          status: "loading",
-          timestamp: "2026-03-05T12:00:00.000Z",
+          transaction_id: "of-cb-1",
+          raw_type: "Tip from",
+          canonical_type: "chargeback",
+          amount_mills: -2500n,
+          destination_amount_mills: -2500n,
+          net_amount_mills: -2000n,
         },
         {
-          id: "of-tx-2",
-          amount: 5,
-          fan: { id: "fan-of-2" },
-          type: "Subscription",
-          status: "done",
-          timestamp: "2026-03-06T12:00:00.000Z",
+          transaction_id: "of-tx-1",
+          raw_type: "Tip from",
+          canonical_type: "tip",
+          amount_mills: 12500n,
+          destination_amount_mills: 12500n,
+          net_amount_mills: 10000n,
         },
-      ],
-      chargebacks: [
         {
-          id: "of-cb-1",
-          amount: 2.5,
-          fan: { id: "fan-of-1" },
-          type: "Tip from",
-          status: "undo",
-          chargeback_timestamp: "2026-03-07T12:00:00.000Z",
-          transaction_timestamp: "2026-03-05T12:00:00.000Z",
+          transaction_id: "of-tx-2",
+          raw_type: "Subscription",
+          canonical_type: "subscription",
+          amount_mills: 5000n,
+          destination_amount_mills: 5000n,
+          net_amount_mills: 4000n,
         },
-      ],
-    });
-
-    const app = createTestApp(testDb, unusedFanslyAdapter, {
-      onlyFansAdapter: onlyFansAdapter as unknown as AppContext["onlyFansAdapter"],
-    });
-
-    const first = await runAllSync(app, page.label);
-    const second = await runLightSync(app, page.label);
-    const checkpoint = await getCheckpoint(testDb.db, page.id, "transactions");
-    const txRows = await testDb.pool.query(`
-      select transaction_id,
-             raw_type,
-             canonical_type,
-             amount_mills,
-             destination_amount_mills,
-             net_amount_mills
-      from transactions
-      where platform_account_id = ${page.id}
-      order by transaction_id asc
-    `);
-    const fanRows = await testDb.pool.query(`
-      select platform, platform_user_id, username
-      from fans
-      where platform = 'onlyfans'
-      order by platform_user_id asc
-    `);
-    const revenue = await revenueBreakdownForPage(app, page.label, "all");
-
-    expect(first.followers).toBeNull();
-    expect(second.status).toBe("success");
-    expect(txRows.rows).toEqual([
-      {
-        transaction_id: "of-cb-1",
-        raw_type: "Tip from",
-        canonical_type: "chargeback",
-        amount_mills: -2500n,
-        destination_amount_mills: -2500n,
-        net_amount_mills: -2000n,
-      },
-      {
-        transaction_id: "of-tx-1",
-        raw_type: "Tip from",
-        canonical_type: "tip",
-        amount_mills: 12500n,
-        destination_amount_mills: 12500n,
-        net_amount_mills: 10000n,
-      },
-      {
-        transaction_id: "of-tx-2",
-        raw_type: "Subscription",
-        canonical_type: "subscription",
-        amount_mills: 5000n,
-        destination_amount_mills: 5000n,
-        net_amount_mills: 4000n,
-      },
-    ]);
-    expect(fanRows.rows).toEqual([
-      {
-        platform: "onlyfans",
-        platform_user_id: "fan-of-1",
-        username: null,
-      },
-      {
-        platform: "onlyfans",
-        platform_user_id: "fan-of-2",
-        username: null,
-      },
-    ]);
-    expect(revenue.rows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          canonicalType: "tip",
-          total: "10000",
-        }),
-        expect.objectContaining({
-          canonicalType: "subscription",
-          total: "4000",
-        }),
-        expect.objectContaining({
-          canonicalType: "chargeback",
-          total: "-2000",
-        }),
-      ]),
-    );
-    expect(checkpoint?.cursorTimestamp?.toISOString()).toBe("2026-03-07T12:00:00.000Z");
+      ]);
+      expect(fanRows.rows).toEqual([
+        {
+          platform: "onlyfans",
+          platform_user_id: "fan-of-1",
+          username: null,
+        },
+        {
+          platform: "onlyfans",
+          platform_user_id: "fan-of-2",
+          username: null,
+        },
+      ]);
+      expect(revenue.rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            canonicalType: "tip",
+            total: "10000",
+          }),
+          expect.objectContaining({
+            canonicalType: "subscription",
+            total: "4000",
+          }),
+          expect.objectContaining({
+            canonicalType: "chargeback",
+            total: "-2000",
+          }),
+        ]),
+      );
+      expect(checkpoint?.cursorTimestamp?.toISOString()).toBe("2026-03-07T12:00:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("backfills existing OnlyFans net revenue when the commission migration runs", async (context) => {

@@ -677,6 +677,134 @@ describe("api integration", () => {
     });
   });
 
+  it("uses UTC day boundaries for OnlyFans 30d revenue and rollups", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "utc-boundary-model",
+      name: "UTC Boundary Model",
+    });
+    const onlyFansPage = await createOnlyFansPage(testDb.db, {
+      modelId: model.id,
+      label: "utc-boundary-of",
+    });
+
+    await updatePageMetadata(testDb.db, onlyFansPage.id, {
+      platformAccountIdValue: "of-boundary-1",
+      username: "utc_boundary",
+      displayName: "UTC Boundary",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {
+        onlyMonsterAccountId: 404,
+      },
+      syncType: "light",
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      transactionId: "before-window",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      amountMills: 500n,
+      destinationAmountMills: 500n,
+      netAmountMills: 500n,
+      occurredAt: new Date("2026-02-06T23:59:59.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      transactionId: "utc-0010",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      amountMills: 1000n,
+      destinationAmountMills: 1000n,
+      netAmountMills: 1000n,
+      occurredAt: new Date("2026-02-07T00:10:15.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      transactionId: "utc-2059",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      amountMills: 2000n,
+      destinationAmountMills: 2000n,
+      netAmountMills: 2000n,
+      occurredAt: new Date("2026-02-07T20:59:59.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      transactionId: "utc-2100",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      amountMills: 3000n,
+      destinationAmountMills: 3000n,
+      netAmountMills: 3000n,
+      occurredAt: new Date("2026-02-07T21:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      transactionId: "after-window",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      amountMills: 4000n,
+      destinationAmountMills: 4000n,
+      netAmountMills: 4000n,
+      occurredAt: new Date("2026-03-10T00:00:00.000Z"),
+    });
+
+    await rebuildRevenueRollups(testDb.db, onlyFansPage.id);
+
+    const report = await getPageRevenueReport(createTestAppContext(testDb), onlyFansPage.label, {
+      period: "30d",
+      now: new Date("2026-03-09T12:00:00.000Z"),
+    });
+    const rollupRows = await testDb.pool.query(`
+      select business_date::text as business_date,
+             net_amount_mills
+      from daily_revenue
+      where platform_account_id = ${onlyFansPage.id}
+      order by business_date asc
+    `);
+
+    expect(report.from).toBe("2026-02-07T00:00:00.000Z");
+    expect(report.to).toBe("2026-03-10T00:00:00.000Z");
+    expect(report.totalNetMills).toBe(6000);
+    expect(report.breakdown).toEqual([
+      {
+        canonicalType: "tip",
+        netAmountMills: 6000,
+      },
+    ]);
+    expect(rollupRows.rows).toEqual([
+      {
+        business_date: "2026-02-06",
+        net_amount_mills: 500n,
+      },
+      {
+        business_date: "2026-02-07",
+        net_amount_mills: 6000n,
+      },
+      {
+        business_date: "2026-03-10",
+        net_amount_mills: 4000n,
+      },
+    ]);
+  });
+
   it("lists payout reversals in the transaction ledger", async (context) => {
     if (!testDb || !server) {
       context.skip();

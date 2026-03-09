@@ -8,6 +8,8 @@ import {
   parsePeriod,
   resolveComparisonPeriodBounds,
   resolvePeriodBounds,
+  resolveRevenueComparisonPeriodBoundsForPlatform,
+  resolveRevenuePeriodBoundsForPlatform,
 } from "@fansly-connect/shared";
 
 describe("money helpers", () => {
@@ -41,6 +43,17 @@ describe("money helpers", () => {
     expect(thirtyDay.to?.toISOString()).toBe("2026-03-07T21:00:00.000Z");
     expect(comparison?.from?.toISOString()).toBe("2026-02-21T21:00:00.000Z");
     expect(comparison?.to?.toISOString()).toBe("2026-02-28T21:00:00.000Z");
+  });
+
+  it("builds OnlyFans revenue windows on UTC calendar days", () => {
+    const now = new Date("2026-03-09T12:00:00.000Z");
+    const thirtyDay = resolveRevenuePeriodBoundsForPlatform("onlyfans", "30d", now);
+    const comparison = resolveRevenueComparisonPeriodBoundsForPlatform("onlyfans", "30d", now);
+
+    expect(thirtyDay.from?.toISOString()).toBe("2026-02-07T00:00:00.000Z");
+    expect(thirtyDay.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(comparison?.from?.toISOString()).toBe("2026-01-07T00:00:00.000Z");
+    expect(comparison?.to?.toISOString()).toBe("2026-02-07T00:00:00.000Z");
   });
 
   it("rejects unsupported periods with the canonical option list", () => {

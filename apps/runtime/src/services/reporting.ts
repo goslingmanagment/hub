@@ -41,10 +41,12 @@ import {
 import {
   millsToNumber,
   resolveBusinessDateRange,
-  resolveComparisonPeriodBounds,
-  resolvePeriodBounds,
+  resolveRevenueComparisonPeriodBoundsForPlatform,
+  resolveRevenuePeriodBoundsForPlatform,
   sumMills,
+  type PeriodBounds,
   type Period,
+  type Platform,
 } from "@fansly-connect/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -62,6 +64,9 @@ type RevenueBreakdownRow = {
   canonicalType: RevenueWindowBase["breakdown"][number]["canonicalType"];
   total: bigint;
 };
+
+type PageSummary = Awaited<ReturnType<typeof findPageSummaryByLabel>>;
+type PageSummaryRow = NonNullable<PageSummary>;
 
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
@@ -112,7 +117,7 @@ function serializePage(row: {
 
 function serializeRevenueWindow(
   input: PeriodInput,
-  bounds: ReturnType<typeof resolvePeriodBounds>,
+  bounds: PeriodBounds,
   rows: RevenueBreakdownRow[],
 ): RevenueWindowBase {
   const totalNetMills = sumMills(rows.map((row) => row.total));
@@ -132,7 +137,7 @@ function serializeRevenueWindow(
 function addComparison(
   base: RevenueWindowBase,
   currentTotal: bigint,
-  bounds: ReturnType<typeof resolveComparisonPeriodBounds>,
+  bounds: PeriodBounds | null,
   rows: RevenueBreakdownRow[],
 ): RevenueWindow {
   if (!bounds) {
@@ -156,6 +161,154 @@ function addComparison(
         ? null
         : (Number(delta) / Number(previousTotal)) * 100,
     },
+  };
+}
+
+function combinePeriodBounds(bounds: PeriodBounds[]): PeriodBounds {
+  const withFrom = bounds
+    .map((bounds) => bounds.from)
+    .filter((value): value is Date => Boolean(value));
+  const withTo = bounds
+    .map((bounds) => bounds.to)
+    .filter((value): value is Date => Boolean(value));
+
+  return {
+    from: withFrom.length > 0
+      ? new Date(Math.min(...withFrom.map((value) => value.getTime())))
+      : null,
+    to: withTo.length > 0
+      ? new Date(Math.max(...withTo.map((value) => value.getTime())))
+      : null,
+  };
+}
+
+function groupPageIdsByPlatform(
+  pages: Array<Pick<PageSummaryRow, "id" | "platform">>,
+) {
+  const grouped = new Map<Platform, number[]>();
+
+  for (const page of pages) {
+    const current = grouped.get(page.platform) ?? [];
+    current.push(page.id);
+    grouped.set(page.platform, current);
+  }
+
+  return grouped;
+}
+
+function mergeRevenueBreakdownRows(rows: RevenueBreakdownRow[][]): RevenueBreakdownRow[] {
+  const totals = new Map<RevenueBreakdownRow["canonicalType"], bigint>();
+
+  for (const group of rows) {
+    for (const row of group) {
+      totals.set(row.canonicalType, (totals.get(row.canonicalType) ?? 0n) + row.total);
+    }
+  }
+
+  return Array.from(totals.entries())
+    .map(([canonicalType, total]) => ({ canonicalType, total }))
+    .sort((left, right) => left.canonicalType.localeCompare(right.canonicalType));
+}
+
+function mergePageRevenueTotals(rows: Awaited<ReturnType<typeof getRevenuePageTotals>>[]) {
+  const totals = new Map<number, Awaited<ReturnType<typeof getRevenuePageTotals>>[number]>();
+
+  for (const group of rows) {
+    for (const row of group) {
+      const existing = totals.get(row.pageId);
+      if (!existing) {
+        totals.set(row.pageId, row);
+        continue;
+      }
+
+      totals.set(row.pageId, {
+        ...row,
+        totalNetMills: existing.totalNetMills + row.totalNetMills,
+      });
+    }
+  }
+
+  return Array.from(totals.values());
+}
+
+async function getRevenuePageTotalsByPlatform(
+  app: AppContext,
+  groupedPageIds: Map<Platform, number[]>,
+  input: PeriodInput & { modelSlug?: string },
+) {
+  const now = input.now ?? new Date();
+  const groups = Array.from(groupedPageIds.entries());
+
+  return mergePageRevenueTotals(
+    await Promise.all(groups.map(([platform, pageIds]) => getRevenuePageTotals(app.db, {
+      pageIds,
+      period: resolveRevenuePeriodBoundsForPlatform(platform, input.period, now, input.custom),
+      modelSlug: input.modelSlug,
+    }))),
+  );
+}
+
+async function getRevenueBreakdownForGroups(
+  app: AppContext,
+  groupedPageIds: Map<Platform, number[]>,
+  input: PeriodInput,
+) {
+  const now = input.now ?? new Date();
+  const groups = Array.from(groupedPageIds.entries());
+  const bounds = groups.map(([platform]) => (
+    resolveRevenuePeriodBoundsForPlatform(platform, input.period, now, input.custom)
+  ));
+
+  return {
+    bounds: combinePeriodBounds(bounds),
+    rows: mergeRevenueBreakdownRows(
+      await Promise.all(groups.map(([platform, pageIds]) => getRevenueBreakdownForScope(app.db, {
+        pageIds,
+        period: resolveRevenuePeriodBoundsForPlatform(platform, input.period, now, input.custom),
+      }))),
+    ),
+  };
+}
+
+async function getRevenueComparisonForGroups(
+  app: AppContext,
+  groupedPageIds: Map<Platform, number[]>,
+  input: PeriodInput,
+) {
+  const now = input.now ?? new Date();
+  const groups = Array.from(groupedPageIds.entries());
+  const bounds = groups.map(([platform]) => (
+    resolveRevenueComparisonPeriodBoundsForPlatform(platform, input.period, now, input.custom)
+  )).filter((value): value is PeriodBounds => value !== null);
+
+  if (bounds.length === 0) {
+    return {
+      bounds: null,
+      rows: [] as RevenueBreakdownRow[],
+    };
+  }
+
+  return {
+    bounds: combinePeriodBounds(bounds),
+    rows: mergeRevenueBreakdownRows(
+      await Promise.all(groups.map(async ([platform, pageIds]) => {
+        const period = resolveRevenueComparisonPeriodBoundsForPlatform(
+          platform,
+          input.period,
+          now,
+          input.custom,
+        );
+
+        if (!period) {
+          return [];
+        }
+
+        return getRevenueBreakdownForScope(app.db, {
+          pageIds,
+          period,
+        });
+      })),
+    ),
   };
 }
 
@@ -192,12 +345,19 @@ export async function getPageRevenueReport(
   input: PeriodInput,
 ): Promise<PageRevenueResponse> {
   const page = await getPageSummary(app, pageLabel);
-  const bounds = resolvePeriodBounds(input.period, input.now ?? new Date(), input.custom);
+  const now = input.now ?? new Date();
+  const bounds = resolveRevenuePeriodBoundsForPlatform(
+    page.platform,
+    input.period,
+    now,
+    input.custom,
+  );
   const currentRows = await getRevenueBreakdown(app.db, page.id, bounds.from, bounds.to);
   const currentTotal = sumMills(currentRows.map((row) => row.total));
-  const comparisonBounds = resolveComparisonPeriodBounds(
+  const comparisonBounds = resolveRevenueComparisonPeriodBoundsForPlatform(
+    page.platform,
     input.period,
-    input.now ?? new Date(),
+    now,
     input.custom,
   );
   const comparisonRows = comparisonBounds
@@ -219,30 +379,15 @@ export async function getOverviewRevenueReport(
   app: AppContext,
   input: PeriodInput & { pageIds?: number[] },
 ): Promise<OverviewRevenueResponse> {
-  const bounds = resolvePeriodBounds(input.period, input.now ?? new Date(), input.custom);
   const pageRows = await listVisiblePages(app.db, input.pageIds);
   const modelRows = await listVisibleModels(app.db, input.pageIds);
-  const totals = await getRevenuePageTotals(app.db, {
-    pageIds: input.pageIds,
-    period: bounds,
-  });
+  const groupedPageIds = groupPageIdsByPlatform(pageRows);
+  const totals = await getRevenuePageTotalsByPlatform(app, groupedPageIds, input);
   const totalsByPageId = new Map(totals.map((row) => [row.pageId, row.totalNetMills]));
-  const currentRows = await getRevenueBreakdownForScope(app.db, {
-    pageIds: input.pageIds,
-    period: bounds,
-  });
+  const current = await getRevenueBreakdownForGroups(app, groupedPageIds, input);
+  const currentRows = current.rows;
   const currentTotal = sumMills(currentRows.map((row) => row.total));
-  const comparisonBounds = resolveComparisonPeriodBounds(
-    input.period,
-    input.now ?? new Date(),
-    input.custom,
-  );
-  const comparisonRows = comparisonBounds
-    ? await getRevenueBreakdownForScope(app.db, {
-      pageIds: input.pageIds,
-      period: comparisonBounds,
-    })
-    : [];
+  const comparison = await getRevenueComparisonForGroups(app, groupedPageIds, input);
 
   const pages = pageRows.map((page) => ({
     pageId: page.id,
@@ -262,10 +407,10 @@ export async function getOverviewRevenueReport(
 
   return {
     ...addComparison(
-      serializeRevenueWindow(input, bounds, currentRows),
+      serializeRevenueWindow(input, current.bounds, currentRows),
       currentTotal,
-      comparisonBounds,
-      comparisonRows,
+      comparison.bounds,
+      comparison.rows,
     ),
     models: modelRows.map((model) => ({
       modelId: model.id,
@@ -288,39 +433,25 @@ export async function getModelRevenueReport(
     throw new NotFoundError(`Model "${modelSlug}" not found`);
   }
 
-  const bounds = resolvePeriodBounds(input.period, input.now ?? new Date(), input.custom);
   const pageRows = (await listVisiblePages(app.db, input.pageIds))
     .filter((page) => page.modelSlug === modelSlug);
-  const modelPageIds = pageRows.map((page) => page.id);
-  const totals = await getRevenuePageTotals(app.db, {
-    pageIds: modelPageIds,
-    period: bounds,
+  const groupedPageIds = groupPageIdsByPlatform(pageRows);
+  const totals = await getRevenuePageTotalsByPlatform(app, groupedPageIds, {
+    ...input,
     modelSlug,
   });
   const totalsByPageId = new Map(totals.map((row) => [row.pageId, row.totalNetMills]));
-  const currentRows = await getRevenueBreakdownForScope(app.db, {
-    pageIds: modelPageIds,
-    period: bounds,
-  });
+  const current = await getRevenueBreakdownForGroups(app, groupedPageIds, input);
+  const currentRows = current.rows;
   const currentTotal = sumMills(currentRows.map((row) => row.total));
-  const comparisonBounds = resolveComparisonPeriodBounds(
-    input.period,
-    input.now ?? new Date(),
-    input.custom,
-  );
-  const comparisonRows = comparisonBounds
-    ? await getRevenueBreakdownForScope(app.db, {
-      pageIds: modelPageIds,
-      period: comparisonBounds,
-    })
-    : [];
+  const comparison = await getRevenueComparisonForGroups(app, groupedPageIds, input);
 
   return {
     ...addComparison(
-      serializeRevenueWindow(input, bounds, currentRows),
+      serializeRevenueWindow(input, current.bounds, currentRows),
       currentTotal,
-      comparisonBounds,
-      comparisonRows,
+      comparison.bounds,
+      comparison.rows,
     ),
     model: {
       id: model.id,

@@ -1,4 +1,7 @@
+import type { Platform } from "./types.ts";
+
 export const MOSCOW_TIME_ZONE = "Europe/Moscow";
+export const UTC_TIME_ZONE = "UTC";
 export const PERIOD_OPTIONS = ["today", "7d", "30d", "all", "custom"] as const;
 const BUSINESS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -22,6 +25,21 @@ export interface BusinessDateRange {
   from: string | null;
   toExclusive: string | null;
 }
+
+interface TrailingPeriodOffsets {
+  "7d": number;
+  "30d": number;
+}
+
+const DEFAULT_TRAILING_PERIOD_OFFSETS: TrailingPeriodOffsets = {
+  "7d": 6,
+  "30d": 29,
+};
+
+const ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS: TrailingPeriodOffsets = {
+  "7d": 7,
+  "30d": 30,
+};
 
 export function isPeriod(value: string): value is Period {
   return (PERIOD_OPTIONS as readonly string[]).includes(value);
@@ -143,12 +161,43 @@ export function parseBusinessDate(value: string) {
   return { year, month, day };
 }
 
-export function resolvePeriodBounds(
-  period: Period,
-  now = new Date(),
-  custom?: { from: string; to: string },
+export function resolveBusinessTimeZone(platform: Platform): string {
+  return platform === "onlyfans" ? UTC_TIME_ZONE : MOSCOW_TIME_ZONE;
+}
+
+function resolveCustomPeriodBounds(
+  custom: { from: string; to: string },
+  timeZone: string,
 ): PeriodBounds {
-  const todayStart = startOfBusinessDay(now);
+  const { year: fromYear, month: fromMonth, day: fromDay } = parseBusinessDate(custom.from);
+  const { year: toYear, month: toMonth, day: toDay } = parseBusinessDate(custom.to);
+  if (custom.from > custom.to) {
+    throw new Error(`Custom period requires from <= to, received ${custom.from} > ${custom.to}`);
+  }
+
+  const from = zonedDateTimeToUtc(
+    { year: fromYear, month: fromMonth, day: fromDay },
+    timeZone,
+  );
+  const to = addUtcDays(
+    zonedDateTimeToUtc(
+      { year: toYear, month: toMonth, day: toDay },
+      timeZone,
+    ),
+    1,
+  );
+
+  return { from, to };
+}
+
+function resolvePeriodBoundsWithOffsets(
+  period: Period,
+  now: Date,
+  custom: { from: string; to: string } | undefined,
+  timeZone: string,
+  trailingOffsets: TrailingPeriodOffsets,
+): PeriodBounds {
+  const todayStart = startOfBusinessDay(now, timeZone);
 
   if (period === "all") {
     return { from: null, to: null };
@@ -159,43 +208,85 @@ export function resolvePeriodBounds(
   }
 
   if (period === "7d") {
-    return { from: addUtcDays(todayStart, -6), to: addUtcDays(todayStart, 1) };
+    return {
+      from: addUtcDays(todayStart, -trailingOffsets["7d"]),
+      to: addUtcDays(todayStart, 1),
+    };
   }
 
   if (period === "30d") {
-    return { from: addUtcDays(todayStart, -29), to: addUtcDays(todayStart, 1) };
+    return {
+      from: addUtcDays(todayStart, -trailingOffsets["30d"]),
+      to: addUtcDays(todayStart, 1),
+    };
   }
 
   if (!custom) {
     throw new Error("Custom period requires from/to dates");
   }
 
-  const { year: fromYear, month: fromMonth, day: fromDay } = parseBusinessDate(custom.from);
-  const { year: toYear, month: toMonth, day: toDay } = parseBusinessDate(custom.to);
-  if (custom.from > custom.to) {
-    throw new Error(`Custom period requires from <= to, received ${custom.from} > ${custom.to}`);
-  }
-  const from = zonedDateTimeToUtc(
-    { year: fromYear, month: fromMonth, day: fromDay },
-    MOSCOW_TIME_ZONE,
-  );
-  const to = addUtcDays(
-    zonedDateTimeToUtc(
-      { year: toYear, month: toMonth, day: toDay },
-      MOSCOW_TIME_ZONE,
-    ),
-    1,
-  );
+  return resolveCustomPeriodBounds(custom, timeZone);
+}
 
-  return { from, to };
+export function resolvePeriodBounds(
+  period: Period,
+  now = new Date(),
+  custom?: { from: string; to: string },
+  timeZone = MOSCOW_TIME_ZONE,
+): PeriodBounds {
+  return resolvePeriodBoundsWithOffsets(
+    period,
+    now,
+    custom,
+    timeZone,
+    DEFAULT_TRAILING_PERIOD_OFFSETS,
+  );
+}
+
+export function resolveRevenuePeriodBoundsForPlatform(
+  platform: Platform,
+  period: Period,
+  now = new Date(),
+  custom?: { from: string; to: string },
+): PeriodBounds {
+  return resolvePeriodBoundsWithOffsets(
+    period,
+    now,
+    custom,
+    resolveBusinessTimeZone(platform),
+    platform === "onlyfans"
+      ? ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS
+      : DEFAULT_TRAILING_PERIOD_OFFSETS,
+  );
 }
 
 export function resolveComparisonPeriodBounds(
   period: Period,
   now = new Date(),
   custom?: { from: string; to: string },
+  timeZone = MOSCOW_TIME_ZONE,
 ): PeriodBounds | null {
-  const current = resolvePeriodBounds(period, now, custom);
+  const current = resolvePeriodBounds(period, now, custom, timeZone);
+
+  if (period === "all" || !current.from || !current.to) {
+    return null;
+  }
+
+  const durationMs = current.to.getTime() - current.from.getTime();
+
+  return {
+    from: new Date(current.from.getTime() - durationMs),
+    to: new Date(current.from.getTime()),
+  };
+}
+
+export function resolveRevenueComparisonPeriodBoundsForPlatform(
+  platform: Platform,
+  period: Period,
+  now = new Date(),
+  custom?: { from: string; to: string },
+): PeriodBounds | null {
+  const current = resolveRevenuePeriodBoundsForPlatform(platform, period, now, custom);
 
   if (period === "all" || !current.from || !current.to) {
     return null;
@@ -213,11 +304,12 @@ export function resolveBusinessDateRange(
   period: Period,
   now = new Date(),
   custom?: { from: string; to: string },
+  timeZone = MOSCOW_TIME_ZONE,
 ): BusinessDateRange {
-  const bounds = resolvePeriodBounds(period, now, custom);
+  const bounds = resolvePeriodBounds(period, now, custom, timeZone);
 
   return {
-    from: bounds.from ? toBusinessDate(bounds.from) : null,
-    toExclusive: bounds.to ? toBusinessDate(bounds.to) : null,
+    from: bounds.from ? toBusinessDate(bounds.from, timeZone) : null,
+    toExclusive: bounds.to ? toBusinessDate(bounds.to, timeZone) : null,
   };
 }

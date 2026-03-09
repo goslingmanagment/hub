@@ -16,7 +16,7 @@ import {
 } from "@fansly-connect/db";
 import { FANSLY_MAPPER_VERSION } from "@fansly-connect/fansly";
 import { ONLYMONSTER_MAPPER_VERSION } from "@fansly-connect/onlyfans";
-import { resolvePeriodBounds } from "@fansly-connect/shared";
+import { resolveRevenuePeriodBoundsForPlatform } from "@fansly-connect/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext, type ResolvedPageContext } from "./page-context.ts";
@@ -50,8 +50,12 @@ async function withResolvedPageLock<T>(
 async function runLightSyncUnlocked(
   app: AppContext,
   pageContext: ResolvedPageContext,
-  trigger = "cli",
+  input?: {
+    trigger?: string;
+    onlyFansTransactionStart?: Date | null;
+  },
 ) {
+  const trigger = input?.trigger ?? "cli";
   const run = await startSyncRun(app.db, {
     platformAccountId: pageContext.page.id,
     stream: "light",
@@ -76,6 +80,10 @@ async function runLightSyncUnlocked(
       });
 
       try {
+        if (input?.onlyFansTransactionStart) {
+          throw new Error("Manual transaction rescans are only supported for OnlyFans pages");
+        }
+
         stats.transactions = await syncTransactions(app, {
           pageLabel: pageContext.page.label,
           platformAccountId: pageContext.page.id,
@@ -117,6 +125,7 @@ async function runLightSyncUnlocked(
           platformAccountId: pageContext.page.id,
           platformAccountIdValue: account.parsed.account.platform_account_id,
           commissionRate: pageContext.page.commissionRate,
+          rescanStart: input?.onlyFansTransactionStart ?? null,
           requestContext: { auth: pageContext.auth, proxy: pageContext.proxy },
           syncRunId: run.id,
         });
@@ -159,12 +168,15 @@ async function runLightSyncUnlocked(
 export async function runLightSync(
   app: AppContext,
   label: string,
-  trigger = "cli",
+  input?: {
+    trigger?: string;
+    onlyFansTransactionStart?: Date | null;
+  },
 ) {
   return withResolvedPageLock(
     app,
     label,
-    (pageContext) => runLightSyncUnlocked(app, pageContext, trigger),
+    (pageContext) => runLightSyncUnlocked(app, pageContext, input),
   );
 }
 
@@ -186,9 +198,16 @@ export async function runFollowerSync(
   );
 }
 
-export async function runAllSync(app: AppContext, label: string, trigger = "cli") {
+export async function runAllSync(
+  app: AppContext,
+  label: string,
+  input?: {
+    trigger?: string;
+    onlyFansTransactionStart?: Date | null;
+  },
+) {
   return withResolvedPageLock(app, label, async (pageContext) => {
-    const light = await runLightSyncUnlocked(app, pageContext, trigger);
+    const light = await runLightSyncUnlocked(app, pageContext, input);
     if (pageContext.platform === "onlyfans") {
       return {
         light,
@@ -196,7 +215,11 @@ export async function runAllSync(app: AppContext, label: string, trigger = "cli"
       };
     }
 
-    const followers = await runFollowerSyncUnlocked(app, pageContext, trigger);
+    const followers = await runFollowerSyncUnlocked(
+      app,
+      pageContext,
+      input?.trigger ?? "cli",
+    );
 
     return {
       light,
@@ -281,7 +304,12 @@ export async function revenueBreakdownForPage(
     throw new Error(`Page not found for label "${label}"`);
   }
 
-  const bounds = resolvePeriodBounds(period, new Date(), custom);
+  const bounds = resolveRevenuePeriodBoundsForPlatform(
+    page.page.platform,
+    period,
+    new Date(),
+    custom,
+  );
   const rows = await getRevenueBreakdown(app.db, page.page.id, bounds.from, bounds.to);
 
   return {
@@ -343,7 +371,7 @@ export async function scheduleExistingPages(app: AppContext, boss: {
       await runWorkerSync(app, {
         label,
         stream: "light",
-        run: () => runLightSync(app, label, "worker"),
+        run: () => runLightSync(app, label, { trigger: "worker" }),
       });
     });
     await boss.work(followerQueue, async (job: { data?: { label: string } }) => {

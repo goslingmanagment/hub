@@ -58,6 +58,14 @@ function parsePositiveInt(value: string) {
   return parsed;
 }
 
+function parseDateOption(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Expected an ISO date or timestamp, received "${value}"`);
+  }
+  return parsed;
+}
+
 function formatCell(value: unknown) {
   if (value === null || value === undefined) {
     return "";
@@ -320,11 +328,18 @@ export function buildProgram() {
     .command("sync")
     .requiredOption("--page <label>")
     .option("--scope <scope>", "light|followers|all", "all")
+    .option("--transactions-start <iso>", "OnlyFans-only manual rescan start", parseDateOption)
     .action(async (options) => {
       const app = await createAppContext();
       try {
+        if (options.scope === "followers" && options.transactionsStart) {
+          throw new Error("--transactions-start is only supported with light or all sync scopes");
+        }
+
         if (options.scope === "light") {
-          const result = await runLightSync(app, options.page);
+          const result = await runLightSync(app, options.page, {
+            onlyFansTransactionStart: options.transactionsStart ?? null,
+          });
           const txStats = result.stats.transactions as
             | {
               processed?: number;
@@ -350,7 +365,9 @@ export function buildProgram() {
           return;
         }
 
-        const result = await runAllSync(app, options.page);
+        const result = await runAllSync(app, options.page, {
+          onlyFansTransactionStart: options.transactionsStart ?? null,
+        });
         const txStats = result.light.stats.transactions as
           | {
             processed?: number;

@@ -1,8 +1,14 @@
-import { and, eq, gte, lt, ne, sql } from "drizzle-orm";
+import { and, eq, gte, lt, ne, notInArray, sql } from "drizzle-orm";
 
 import { toBusinessDate } from "@fansly-connect/shared";
 import type { Database } from "../client.ts";
-import { dailyFollowers, dailyRevenue, dailySubscribers, transactions } from "../schema.ts";
+import {
+  dailyFollowers,
+  dailyRevenue,
+  dailySubscribers,
+  platformAccounts,
+  transactions,
+} from "../schema.ts";
 
 export interface UpsertTransactionInput {
   platformAccountId: number;
@@ -97,13 +103,22 @@ export async function rebuildRevenueRollups(
         updated_at
       )
       select t.platform_account_id,
-             ((t.occurred_at at time zone 'Europe/Moscow')::date) as business_date,
+             (
+               timezone(
+                 case
+                   when pa.platform = 'onlyfans'::platform then 'UTC'
+                   else 'Europe/Moscow'
+                 end,
+                 t.occurred_at
+               )::date
+             ) as business_date,
              t.canonical_type,
              t.transaction_state,
              count(*)::int,
              coalesce(sum(t.net_amount_mills), 0)::bigint,
              now()
       from transactions t
+      join platform_accounts pa on pa.id = t.platform_account_id
       where t.platform_account_id = ${platformAccountId}
         and t.canonical_type <> 'payout_reversal'::transaction_type
         ${fromClause}
@@ -245,6 +260,28 @@ export async function getRevenueBreakdown(
     .from(dailyRevenue)
     .where(and(...clauses))
     .groupBy(dailyRevenue.canonicalType);
+}
+
+export async function deleteTransactionsMissingFromWindow(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    from: Date;
+    to: Date;
+    keepTransactionIds: string[];
+  },
+) {
+  const clauses = [
+    eq(transactions.platformAccountId, input.platformAccountId),
+    gte(transactions.occurredAt, input.from),
+    lt(transactions.occurredAt, input.to),
+  ];
+
+  if (input.keepTransactionIds.length > 0) {
+    clauses.push(notInArray(transactions.transactionId, input.keepTransactionIds));
+  }
+
+  await db.delete(transactions).where(and(...clauses));
 }
 
 export async function getOldestPendingTransactionAt(
