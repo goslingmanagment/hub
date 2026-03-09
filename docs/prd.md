@@ -55,6 +55,8 @@ The agency's core. A hub where different modules and applications plug in. A sin
 
 ## 4. Fans
 
+**Product note (2026-03-10):** Keep `fan` as a backend/API/CRM entity, but do not treat a standalone dashboard `Fans` section as mandatory in v1. Default dashboard navigation should prioritize revenue, transactions, subscribers, followers, and expiring subscriptions. A top-level `Fans` screen should appear only if it delivers distinct CRM value such as top spenders, notes/flags workflow, or cross-page fan context.
+
 ### Identification
 - **Fan = one entity per platform** (by platform user ID — Fansly user ID / OF user ID)
 - Fan ID = platform user ID (not internal UUID) — so ChatMuse can match a fan from DM directly
@@ -98,6 +100,7 @@ The agency's core. A hub where different modules and applications plug in. A sin
 - Last sync time, status
 - Agency-wide overview on the main screen
 - Drill-down: overview → model → page → specific transactions
+- Do not add a standalone `Fans` nav item by default. Keep fan-facing UI behind concrete CRM workflows only: top spenders, recent buyers, notes/flags, cross-page fan context
 
 ---
 
@@ -171,7 +174,7 @@ Phases are sequential where noted; parallel execution where no dependency exists
 1. **Fansly Connect** — schema, platform adapter, transaction sync (hourly), follower sync (12h delta), CLI for manual ops
 2. **API + Auth** — Fastify server, dashboard auth (cookie sessions), ChatMuse auth (API keys), data endpoints *(depends on 1)*
 3. **OnlyFans Connect** — OnlyMonster adapter, chatter metrics sync, unified transaction taxonomy *(depends on 2)*
-4. **Dashboard** — React SPA: revenue overview, per-model/per-page drill-down, fan profiles, expiring subs *(depends on 2 + 3; ships with both platforms from day one)*
+4. **Dashboard** — React SPA: revenue overview, per-model/per-page drill-down, subscribers/followers, expiring subs. Fan profiles are optional and should ship only together with a clear CRM workflow, not as a default top-level section *(depends on 2 + 3; ships with both platforms from day one)*
 5. **Telegram Notifications** — daily revenue report, alerts (dead tokens, sync failures), incident pattern *(depends on 2)*
 6. **Backups + Ops** — nightly pg_dump off-VPS, health checks, sync monitoring *(before production deploy)*
 7. **ChatMuse Backend** — AI proxy with SSE streaming, fan context injection, rate limiting, cost ledger, prompt management *(depends on 2+3)*
