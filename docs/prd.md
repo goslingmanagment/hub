@@ -31,7 +31,7 @@ The agency's core. A hub where different modules and applications plug in. A sin
 - **Breakdown by transaction type**: unified classification across platforms (tip, subscription, message, post purchase, stream, chargeback, refund, etc. — exact mapping decided by engineers)
 - See all transactions on each account, filter by type
 - Period comparison — see growth or decline vs previous period
-- **Revenue = net** (after platform commission). Chargebacks deducted from revenue but also shown separately. Pending transactions counted but shown with status
+- **Revenue = net** (after platform commission). Revenue, adjustments (chargebacks/refunds), and unclassified shown as separate metrics. Net earnings = revenue + adjustments + unclassified (reconciliation total). See Decision #46 for classification details
 - **Timezone**: UTC in database, displayed in Moscow time
 - Data updates automatically:
   - Light requests (recent transactions) — every hour

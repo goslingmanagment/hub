@@ -48,6 +48,7 @@
 | 43 | Audit Trail | Append-only audit log for sensitive admin actions |
 | 44 | Fansly Auth Headers | Only `authorization` header is required; `fansly-client-id`, `fansly-client-check`, `fansly-session-id` are optional — include when available, omit when not |
 | 45 | Payout Reversal (16013) | Fansly raw_type 16013 maps to `payout_reversal` — store in transactions for audit, but exclude from net revenue calculations and `daily_revenue` rollups |
+| 46 | Revenue Classification | Shared classification metadata in `types.ts` with 4 reporting buckets (revenue, adjustment, unclassified, excluded) + `affectsFanLtv` flag; no DB schema change; query/service/API/CLI layers consume classification; `netEarningsMills = revenue + adjustments + unclassified`; `totalNetMills` kept as deprecated alias |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -324,3 +325,61 @@ Legend for the matrix:
 **New order:** Phase 1 → Phase 2 → Phase 4 → Phase 3 → Phase 5+
 
 **Impact:** Phase 3 now depends on Phase 2 + Phase 4. PRD numbering swapped (Phase 3 = OF Connect, Phase 4 = Dashboard in PRD; roadmap keeps original names with updated deps).
+
+## Revenue Classification Split (2026-03-09)
+
+**Decision #46:** Replace the single `totalNetMills` revenue model with explicit Revenue / Adjustments / Unclassified / Net Earnings, driven by shared classification metadata.
+
+### Reporting Buckets (in `packages/shared/src/types.ts`)
+
+| Bucket | Canonical Types | Description |
+|--------|----------------|-------------|
+| `revenue` | subscription, tip, message_purchase, post_purchase, stream_tip | Clean business revenue |
+| `adjustment` | chargeback, refund | Post-sale corrections |
+| `unclassified` | other | Ambiguous types pending audit |
+| `excluded` | payout_reversal | Platform-internal, not income |
+
+Each type also carries `affectsFanLtv: boolean` — fan LTV uses different rules than revenue reporting.
+
+### Fan LTV Rules (separate from revenue)
+
+- revenue types: affect LTV ✅
+- chargeback, refund: reduce LTV ✅
+- other (fan-linked): temporarily affects LTV ✅ (until audit)
+- payout_reversal: does NOT affect LTV ❌
+
+Fan LTV uses an **exclude-list** (only `payout_reversal` excluded), not a whitelist. This preserves current LTV values until `other` is audited.
+
+### Revenue Metrics
+
+- `revenueMills` — sum where bucket = revenue
+- `adjustmentMills` — sum where bucket = adjustment
+- `unclassifiedMills` — sum where bucket = unclassified
+- `netEarningsMills` = revenueMills + adjustmentMills + unclassifiedMills (reconciliation total, must match ledger)
+
+`totalNetMills` remains as a deprecated alias of `netEarningsMills` for rollout safety.
+
+### API Contract Shape
+
+```
+summary: { revenueMills, adjustmentMills, unclassifiedMills, netEarningsMills }
+breakdown: [{ canonicalType, bucket, netAmountMills }]
+comparison: { summary, delta }
+```
+
+### What Does NOT Change
+
+- No gross revenue model — system stays on `net_amount_mills`
+- No DB schema migration — `canonical_type` is source data, classification is product logic
+- No moving OF chargebacks to original sale date — chargeback stays on chargeback timestamp
+- No hiding `payout_reversal` from `/transactions` — ledger stays auditable
+- No change to pending vs posted semantics (deferred)
+- `daily_revenue` schema unchanged — materialization logic uses shared classifier instead of hardcoded special cases
+
+### Follow-up (not blocking)
+
+- Audit `other` bucket: Fansly raw types 18001, 18002, 24101 (referral, leaderboard) may be real revenue
+- After audit: remap to proper canonical types or adjust classification
+- Consider `classifiedNetEarningsMills` (revenue + adjustments only) as optional derived metric
+
+**Rationale:** Current code treats everything except `payout_reversal` as "revenue", mixing chargebacks into revenue metrics. This must be fixed before Phase 4 (Dashboard) to avoid shipping incorrect financial data. The shared classification approach avoids DB migration and keeps the change in query/service/API/CLI layers only.
