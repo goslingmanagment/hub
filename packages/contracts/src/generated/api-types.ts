@@ -375,21 +375,28 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            revenueMills: number;
+                            adjustmentMills: number;
+                            unclassifiedMills: number;
+                            netEarningsMills: number;
+                            totalNetMills: number;
                             /** @enum {string} */
                             period: "today" | "7d" | "30d" | "all" | "custom";
                             from: string | null;
                             to: string | null;
                             /** @enum {string} */
                             currency: "USD";
-                            totalNetMills: number;
                             breakdown: {
                                 /** @enum {string} */
                                 canonicalType: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
+                                /** @enum {string} */
+                                bucket: "revenue" | "adjustment" | "unclassified" | "excluded";
                                 netAmountMills: number;
                             }[];
                             comparison: {
                                 from: string;
                                 to: string;
+                                netEarningsMills: number;
                                 totalNetMills: number;
                                 deltaNetMills: number;
                                 deltaPct: number | null;
@@ -399,6 +406,7 @@ export interface paths {
                                 modelSlug: string;
                                 modelName: string;
                                 pageCount: number;
+                                netEarningsMills: number;
                                 totalNetMills: number;
                             }[];
                             pages: {
@@ -406,6 +414,7 @@ export interface paths {
                                 pageLabel: string;
                                 modelSlug: string;
                                 modelName: string;
+                                netEarningsMills: number;
                                 totalNetMills: number;
                             }[];
                         };
@@ -477,21 +486,28 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            revenueMills: number;
+                            adjustmentMills: number;
+                            unclassifiedMills: number;
+                            netEarningsMills: number;
+                            totalNetMills: number;
                             /** @enum {string} */
                             period: "today" | "7d" | "30d" | "all" | "custom";
                             from: string | null;
                             to: string | null;
                             /** @enum {string} */
                             currency: "USD";
-                            totalNetMills: number;
                             breakdown: {
                                 /** @enum {string} */
                                 canonicalType: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
+                                /** @enum {string} */
+                                bucket: "revenue" | "adjustment" | "unclassified" | "excluded";
                                 netAmountMills: number;
                             }[];
                             comparison: {
                                 from: string;
                                 to: string;
+                                netEarningsMills: number;
                                 totalNetMills: number;
                                 deltaNetMills: number;
                                 deltaPct: number | null;
@@ -507,6 +523,7 @@ export interface paths {
                                 pageLabel: string;
                                 modelSlug: string;
                                 modelName: string;
+                                netEarningsMills: number;
                                 totalNetMills: number;
                             }[];
                         };
@@ -591,21 +608,28 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            revenueMills: number;
+                            adjustmentMills: number;
+                            unclassifiedMills: number;
+                            netEarningsMills: number;
+                            totalNetMills: number;
                             /** @enum {string} */
                             period: "today" | "7d" | "30d" | "all" | "custom";
                             from: string | null;
                             to: string | null;
                             /** @enum {string} */
                             currency: "USD";
-                            totalNetMills: number;
                             breakdown: {
                                 /** @enum {string} */
                                 canonicalType: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
+                                /** @enum {string} */
+                                bucket: "revenue" | "adjustment" | "unclassified" | "excluded";
                                 netAmountMills: number;
                             }[];
                             comparison: {
                                 from: string;
                                 to: string;
+                                netEarningsMills: number;
                                 totalNetMills: number;
                                 deltaNetMills: number;
                                 deltaPct: number | null;

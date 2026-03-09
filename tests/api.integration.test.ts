@@ -546,11 +546,39 @@ describe("api integration", () => {
     expect(forbidden.statusCode).toBe(403);
   });
 
-  it("matches page revenue service output and excludes payout reversals", async (context) => {
-    if (!testDb || !server) {
+  it("matches page revenue service output with explicit revenue buckets", async (context) => {
+    if (!testDb || !server || !fixture) {
       context.skip();
       return;
     }
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: null,
+      transactionId: "tx-chargeback",
+      rawType: 99901,
+      canonicalType: "chargeback",
+      transactionState: "posted",
+      rawStatus: 2,
+      amountMills: -1000n,
+      destinationAmountMills: -1000n,
+      netAmountMills: -1000n,
+      occurredAt: new Date("2026-03-08T12:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: null,
+      transactionId: "tx-other",
+      rawType: 18001,
+      canonicalType: "other",
+      transactionState: "posted",
+      rawStatus: 2,
+      amountMills: 300n,
+      destinationAmountMills: 300n,
+      netAmountMills: 300n,
+      occurredAt: new Date("2026-03-09T12:00:00.000Z"),
+    });
+    await rebuildRevenueRollups(testDb.db, fixture.lanaPage.id);
 
     const login = await server.inject({
       method: "POST",
@@ -580,9 +608,30 @@ describe("api integration", () => {
     });
 
     expect(response.json()).toMatchObject({
+      revenueMills: expected.revenueMills,
+      adjustmentMills: expected.adjustmentMills,
+      unclassifiedMills: expected.unclassifiedMills,
+      netEarningsMills: expected.netEarningsMills,
       totalNetMills: expected.totalNetMills,
       breakdown: expected.breakdown,
     });
+    expect(response.json().revenueMills).toBe(7000);
+    expect(response.json().adjustmentMills).toBe(-1000);
+    expect(response.json().unclassifiedMills).toBe(300);
+    expect(response.json().netEarningsMills).toBe(6300);
+    expect(response.json().totalNetMills).toBe(response.json().netEarningsMills);
+    expect(response.json().breakdown).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        canonicalType: "chargeback",
+        bucket: "adjustment",
+        netAmountMills: -1000,
+      }),
+      expect.objectContaining({
+        canonicalType: "other",
+        bucket: "unclassified",
+        netAmountMills: 300,
+      }),
+    ]));
     expect(response.json().breakdown.some((row: { canonicalType: string }) => row.canonicalType === "payout_reversal")).toBe(false);
   });
 
@@ -662,15 +711,21 @@ describe("api integration", () => {
     });
 
     expect(response.json()).toMatchObject({
+      revenueMills: expected.revenueMills,
+      adjustmentMills: expected.adjustmentMills,
+      unclassifiedMills: expected.unclassifiedMills,
+      netEarningsMills: expected.netEarningsMills,
       totalNetMills: expected.totalNetMills,
       breakdown: expected.breakdown,
       pages: expect.arrayContaining([
         expect.objectContaining({
           pageLabel: "lana",
+          netEarningsMills: 7000,
           totalNetMills: 7000,
         }),
         expect.objectContaining({
           pageLabel: "lana-of",
+          netEarningsMills: 10000,
           totalNetMills: 10000,
         }),
       ]),
@@ -782,10 +837,16 @@ describe("api integration", () => {
 
     expect(report.from).toBe("2026-02-07T00:00:00.000Z");
     expect(report.to).toBe("2026-03-10T00:00:00.000Z");
+    expect(report.revenueMills).toBe(6000);
+    expect(report.adjustmentMills).toBe(0);
+    expect(report.unclassifiedMills).toBe(0);
+    expect(report.netEarningsMills).toBe(6000);
     expect(report.totalNetMills).toBe(6000);
+    expect(report.totalNetMills).toBe(report.netEarningsMills);
     expect(report.breakdown).toEqual([
       {
         canonicalType: "tip",
+        bucket: "revenue",
         netAmountMills: 6000,
       },
     ]);

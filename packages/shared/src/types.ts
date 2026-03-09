@@ -15,6 +15,88 @@ export const transactionTypes = [
 
 export type TransactionType = (typeof transactionTypes)[number];
 
+export const transactionReportingBuckets = [
+  "revenue",
+  "adjustment",
+  "unclassified",
+  "excluded",
+] as const;
+
+export type TransactionReportingBucket = (typeof transactionReportingBuckets)[number];
+
+export interface TransactionClassificationMetadata {
+  bucket: TransactionReportingBucket;
+  affectsFanLtv: boolean;
+}
+
+export const transactionClassificationByType = {
+  subscription: {
+    bucket: "revenue",
+    affectsFanLtv: true,
+  },
+  tip: {
+    bucket: "revenue",
+    affectsFanLtv: true,
+  },
+  message_purchase: {
+    bucket: "revenue",
+    affectsFanLtv: true,
+  },
+  post_purchase: {
+    bucket: "revenue",
+    affectsFanLtv: true,
+  },
+  stream_tip: {
+    bucket: "revenue",
+    affectsFanLtv: true,
+  },
+  chargeback: {
+    bucket: "adjustment",
+    affectsFanLtv: true,
+  },
+  refund: {
+    bucket: "adjustment",
+    affectsFanLtv: true,
+  },
+  other: {
+    bucket: "unclassified",
+    affectsFanLtv: true,
+  },
+  payout_reversal: {
+    bucket: "excluded",
+    affectsFanLtv: false,
+  },
+} as const satisfies Record<TransactionType, TransactionClassificationMetadata>;
+
+function filterTransactionTypes(
+  predicate: (transactionType: TransactionType) => boolean,
+): TransactionType[] {
+  return transactionTypes.filter(predicate);
+}
+
+export function getTransactionClassification(
+  transactionType: TransactionType,
+): TransactionClassificationMetadata {
+  return transactionClassificationByType[transactionType];
+}
+
+export const reportableTransactionTypes = filterTransactionTypes(
+  (transactionType) => getTransactionClassification(transactionType).bucket !== "excluded",
+);
+
+export const fanLtvTransactionTypes = filterTransactionTypes(
+  (transactionType) => getTransactionClassification(transactionType).affectsFanLtv,
+);
+
+export const transactionTypesByReportingBucket = Object.fromEntries(
+  transactionReportingBuckets.map((bucket) => [
+    bucket,
+    filterTransactionTypes(
+      (transactionType) => getTransactionClassification(transactionType).bucket === bucket,
+    ),
+  ]),
+) as Record<TransactionReportingBucket, TransactionType[]>;
+
 export const transactionStates = ["pending", "posted", "unknown"] as const;
 
 export type TransactionState = (typeof transactionStates)[number];

@@ -1,6 +1,11 @@
-import { and, eq, gte, lt, ne, notInArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 
-import { toBusinessDate } from "@fansly-connect/shared";
+import {
+  getTransactionClassification,
+  reportableTransactionTypes,
+  toBusinessDate,
+  type TransactionType,
+} from "@fansly-connect/shared";
 import type { Database } from "../client.ts";
 import {
   dailyFollowers,
@@ -9,6 +14,13 @@ import {
   platformAccounts,
   transactions,
 } from "../schema.ts";
+
+function transactionTypeListSql(transactionTypes: TransactionType[]) {
+  return sql.join(
+    transactionTypes.map((transactionType) => sql`${transactionType}::transaction_type`),
+    sql`, `,
+  );
+}
 
 export interface UpsertTransactionInput {
   platformAccountId: number;
@@ -19,16 +31,7 @@ export interface UpsertTransactionInput {
   correlationId?: string | null;
   correlationAccountId?: string | null;
   rawType: string | number;
-  canonicalType:
-    | "subscription"
-    | "tip"
-    | "message_purchase"
-    | "post_purchase"
-    | "stream_tip"
-    | "chargeback"
-    | "refund"
-    | "payout_reversal"
-    | "other";
+  canonicalType: TransactionType;
   transactionState: "pending" | "posted" | "unknown";
   destination?: number | null;
   rawStatus: string | number;
@@ -89,6 +92,7 @@ export async function rebuildRevenueRollups(
   const fromClause = from
     ? sql`and t.occurred_at >= ${from}`
     : sql``;
+  const reportableTransactionTypeSql = transactionTypeListSql(reportableTransactionTypes);
 
   await db.transaction(async (tx) => {
     await tx.delete(dailyRevenue).where(eq(dailyRevenue.platformAccountId, platformAccountId));
@@ -120,7 +124,7 @@ export async function rebuildRevenueRollups(
       from transactions t
       join platform_accounts pa on pa.id = t.platform_account_id
       where t.platform_account_id = ${platformAccountId}
-        and t.canonical_type <> 'payout_reversal'::transaction_type
+        and t.canonical_type in (${reportableTransactionTypeSql})
         ${fromClause}
       group by 1, 2, 3, 4
       on conflict (
@@ -242,7 +246,10 @@ export async function getRevenueBreakdown(
 ) {
   const clauses = [
     eq(dailyRevenue.platformAccountId, platformAccountId),
-    ne(dailyRevenue.canonicalType, "payout_reversal"),
+    inArray(
+      dailyRevenue.canonicalType,
+      reportableTransactionTypes as Array<typeof dailyRevenue.$inferSelect.canonicalType>,
+    ),
   ];
 
   if (from) {
@@ -252,14 +259,19 @@ export async function getRevenueBreakdown(
     clauses.push(lt(dailyRevenue.businessDate, toBusinessDate(to)));
   }
 
-  return db
+  const rows = await db
     .select({
       canonicalType: dailyRevenue.canonicalType,
-      total: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)`,
+      netAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)`,
     })
     .from(dailyRevenue)
     .where(and(...clauses))
     .groupBy(dailyRevenue.canonicalType);
+
+  return rows.map((row) => ({
+    ...row,
+    bucket: getTransactionClassification(row.canonicalType).bucket,
+  }));
 }
 
 export async function deleteTransactionsMissingFromWindow(

@@ -1539,15 +1539,18 @@ describe("sync integration", () => {
         expect.arrayContaining([
           expect.objectContaining({
             canonicalType: "tip",
-            total: "10000",
+            bucket: "revenue",
+            netAmountMills: "10000",
           }),
           expect.objectContaining({
             canonicalType: "subscription",
-            total: "4000",
+            bucket: "revenue",
+            netAmountMills: "4000",
           }),
           expect.objectContaining({
             canonicalType: "chargeback",
-            total: "-2000",
+            bucket: "adjustment",
+            netAmountMills: "-2000",
           }),
         ]),
       );

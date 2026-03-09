@@ -687,6 +687,31 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "revenueMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "adjustmentMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "unclassifiedMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "netEarningsMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "totalNetMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
                     "period": {
                       "type": "string",
                       "enum": [
@@ -723,11 +748,6 @@
                         "USD"
                       ]
                     },
-                    "totalNetMills": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
                     "breakdown": {
                       "type": "array",
                       "items": {
@@ -747,6 +767,15 @@
                               "other"
                             ]
                           },
+                          "bucket": {
+                            "type": "string",
+                            "enum": [
+                              "revenue",
+                              "adjustment",
+                              "unclassified",
+                              "excluded"
+                            ]
+                          },
                           "netAmountMills": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -755,6 +784,7 @@
                         },
                         "required": [
                           "canonicalType",
+                          "bucket",
                           "netAmountMills"
                         ],
                         "additionalProperties": false
@@ -770,6 +800,11 @@
                             },
                             "to": {
                               "type": "string"
+                            },
+                            "netEarningsMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
                             },
                             "totalNetMills": {
                               "type": "integer",
@@ -795,6 +830,7 @@
                           "required": [
                             "from",
                             "to",
+                            "netEarningsMills",
                             "totalNetMills",
                             "deltaNetMills",
                             "deltaPct"
@@ -827,6 +863,11 @@
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
                           },
+                          "netEarningsMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
                           "totalNetMills": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -838,6 +879,7 @@
                           "modelSlug",
                           "modelName",
                           "pageCount",
+                          "netEarningsMills",
                           "totalNetMills"
                         ],
                         "additionalProperties": false
@@ -862,6 +904,11 @@
                           "modelName": {
                             "type": "string"
                           },
+                          "netEarningsMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
                           "totalNetMills": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -873,6 +920,7 @@
                           "pageLabel",
                           "modelSlug",
                           "modelName",
+                          "netEarningsMills",
                           "totalNetMills"
                         ],
                         "additionalProperties": false
@@ -880,11 +928,15 @@
                     }
                   },
                   "required": [
+                    "revenueMills",
+                    "adjustmentMills",
+                    "unclassifiedMills",
+                    "netEarningsMills",
+                    "totalNetMills",
                     "period",
                     "from",
                     "to",
                     "currency",
-                    "totalNetMills",
                     "breakdown",
                     "comparison",
                     "models",
@@ -1015,6 +1067,31 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "revenueMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "adjustmentMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "unclassifiedMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "netEarningsMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "totalNetMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
                     "period": {
                       "type": "string",
                       "enum": [
@@ -1051,11 +1128,6 @@
                         "USD"
                       ]
                     },
-                    "totalNetMills": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
                     "breakdown": {
                       "type": "array",
                       "items": {
@@ -1075,6 +1147,15 @@
                               "other"
                             ]
                           },
+                          "bucket": {
+                            "type": "string",
+                            "enum": [
+                              "revenue",
+                              "adjustment",
+                              "unclassified",
+                              "excluded"
+                            ]
+                          },
                           "netAmountMills": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -1083,6 +1164,7 @@
                         },
                         "required": [
                           "canonicalType",
+                          "bucket",
                           "netAmountMills"
                         ],
                         "additionalProperties": false
@@ -1098,6 +1180,11 @@
                             },
                             "to": {
                               "type": "string"
+                            },
+                            "netEarningsMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
                             },
                             "totalNetMills": {
                               "type": "integer",
@@ -1123,6 +1210,7 @@
                           "required": [
                             "from",
                             "to",
+                            "netEarningsMills",
                             "totalNetMills",
                             "deltaNetMills",
                             "deltaPct"
@@ -1181,6 +1269,11 @@
                           "modelName": {
                             "type": "string"
                           },
+                          "netEarningsMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
                           "totalNetMills": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -1192,6 +1285,7 @@
                           "pageLabel",
                           "modelSlug",
                           "modelName",
+                          "netEarningsMills",
                           "totalNetMills"
                         ],
                         "additionalProperties": false
@@ -1199,11 +1293,15 @@
                     }
                   },
                   "required": [
+                    "revenueMills",
+                    "adjustmentMills",
+                    "unclassifiedMills",
+                    "netEarningsMills",
+                    "totalNetMills",
                     "period",
                     "from",
                     "to",
                     "currency",
-                    "totalNetMills",
                     "breakdown",
                     "comparison",
                     "model",
@@ -1366,6 +1464,31 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "revenueMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "adjustmentMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "unclassifiedMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "netEarningsMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "totalNetMills": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
                     "period": {
                       "type": "string",
                       "enum": [
@@ -1402,11 +1525,6 @@
                         "USD"
                       ]
                     },
-                    "totalNetMills": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
                     "breakdown": {
                       "type": "array",
                       "items": {
@@ -1426,6 +1544,15 @@
                               "other"
                             ]
                           },
+                          "bucket": {
+                            "type": "string",
+                            "enum": [
+                              "revenue",
+                              "adjustment",
+                              "unclassified",
+                              "excluded"
+                            ]
+                          },
                           "netAmountMills": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -1434,6 +1561,7 @@
                         },
                         "required": [
                           "canonicalType",
+                          "bucket",
                           "netAmountMills"
                         ],
                         "additionalProperties": false
@@ -1449,6 +1577,11 @@
                             },
                             "to": {
                               "type": "string"
+                            },
+                            "netEarningsMills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
                             },
                             "totalNetMills": {
                               "type": "integer",
@@ -1474,6 +1607,7 @@
                           "required": [
                             "from",
                             "to",
+                            "netEarningsMills",
                             "totalNetMills",
                             "deltaNetMills",
                             "deltaPct"
@@ -1577,11 +1711,15 @@
                     }
                   },
                   "required": [
+                    "revenueMills",
+                    "adjustmentMills",
+                    "unclassifiedMills",
+                    "netEarningsMills",
+                    "totalNetMills",
                     "period",
                     "from",
                     "to",
                     "currency",
-                    "totalNetMills",
                     "breakdown",
                     "comparison",
                     "page"

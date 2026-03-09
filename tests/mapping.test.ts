@@ -5,6 +5,10 @@ import {
   mapFanslyTransactionType,
 } from "@fansly-connect/fansly";
 import {
+  getTransactionClassification,
+  transactionTypesByReportingBucket,
+} from "@fansly-connect/shared";
+import {
   mapOnlyMonsterTransactionState,
   mapOnlyMonsterTransactionType,
 } from "../packages/onlyfans/src/index.ts";
@@ -52,5 +56,42 @@ describe("Fansly transaction mapping", () => {
     expect(mapOnlyMonsterTransactionState("undo")).toBe("posted");
     expect(mapOnlyMonsterTransactionState("pending return")).toBe("pending");
     expect(mapOnlyMonsterTransactionState("mystery")).toBe("unknown");
+  });
+
+  it("classifies canonical transaction types for reporting and fan LTV", () => {
+    expect(transactionTypesByReportingBucket.revenue).toEqual([
+      "subscription",
+      "tip",
+      "message_purchase",
+      "post_purchase",
+      "stream_tip",
+    ]);
+    expect(transactionTypesByReportingBucket.adjustment).toEqual([
+      "chargeback",
+      "refund",
+    ]);
+    expect(transactionTypesByReportingBucket.unclassified).toEqual([
+      "other",
+    ]);
+    expect(transactionTypesByReportingBucket.excluded).toEqual([
+      "payout_reversal",
+    ]);
+
+    expect(getTransactionClassification("chargeback")).toEqual({
+      bucket: "adjustment",
+      affectsFanLtv: true,
+    });
+    expect(getTransactionClassification("refund")).toEqual({
+      bucket: "adjustment",
+      affectsFanLtv: true,
+    });
+    expect(getTransactionClassification("other")).toEqual({
+      bucket: "unclassified",
+      affectsFanLtv: true,
+    });
+    expect(getTransactionClassification("payout_reversal")).toEqual({
+      bucket: "excluded",
+      affectsFanLtv: false,
+    });
   });
 });

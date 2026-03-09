@@ -1,7 +1,15 @@
 import { and, eq, notInArray, sql } from "drizzle-orm";
 
+import { fanLtvTransactionTypes, type TransactionType } from "@fansly-connect/shared";
 import type { Database } from "../client.ts";
 import { fanPages, fans, pageFollows, pageSubscriptions, transactions } from "../schema.ts";
+
+function transactionTypeListSql(transactionTypes: TransactionType[]) {
+  return sql.join(
+    transactionTypes.map((transactionType) => sql`${transactionType}::transaction_type`),
+    sql`, `,
+  );
+}
 
 export interface UpsertFanInput {
   platform: "fansly" | "onlyfans";
@@ -245,6 +253,8 @@ export async function upsertPageSubscription(
 }
 
 export async function recalculateFanPageSpend(db: Database, platformAccountId: number) {
+  const fanLtvTransactionTypeSql = transactionTypeListSql(fanLtvTransactionTypes);
+
   await db.execute(sql`
     update fan_pages fp
     set total_creator_net_mills = coalesce(tx.total_creator_net_mills, 0),
@@ -257,6 +267,7 @@ export async function recalculateFanPageSpend(db: Database, platformAccountId: n
       from transactions
       where platform_account_id = ${platformAccountId}
         and fan_id is not null
+        and canonical_type in (${fanLtvTransactionTypeSql})
       group by fan_id
     ) tx
     where fp.platform_account_id = ${platformAccountId}

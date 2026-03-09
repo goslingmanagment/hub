@@ -110,10 +110,19 @@ const revenueLabels: Record<TransactionType, string> = {
 
 function printRevenueTotals(
   totals: Map<TransactionType, bigint>,
-  overall: bigint,
+  summary: {
+    revenueMills: number;
+    adjustmentMills: number;
+    unclassifiedMills: number;
+    netEarningsMills: number;
+  },
   period: string,
 ) {
-  console.log(`${period} net revenue: ${formatUsdFromMills(overall)}`);
+  console.log(`${period} revenue summary:`);
+  console.log(`  Revenue: ${formatUsdFromMills(toMills(summary.revenueMills))}`);
+  console.log(`  Adjustments: ${formatUsdFromMills(toMills(summary.adjustmentMills))}`);
+  console.log(`  Unclassified: ${formatUsdFromMills(toMills(summary.unclassifiedMills))}`);
+  console.log(`  Net earnings: ${formatUsdFromMills(toMills(summary.netEarningsMills))}`);
   for (const [type, label] of Object.entries(revenueLabels) as Array<[TransactionType, string]>) {
     const total = totals.get(type) ?? 0n;
     if (total === 0n) {
@@ -182,13 +191,17 @@ export function buildProgram() {
         const totals = new Map(
           revenue.breakdown.map((row) => [row.canonicalType, toMills(row.netAmountMills)]),
         );
-        const overall = toMills(revenue.totalNetMills);
 
         console.log(`Model: ${revenue.model.name} (${revenue.model.slug})`);
-        printRevenueTotals(totals, overall, period);
+        printRevenueTotals(totals, {
+          revenueMills: revenue.revenueMills,
+          adjustmentMills: revenue.adjustmentMills,
+          unclassifiedMills: revenue.unclassifiedMills,
+          netEarningsMills: revenue.netEarningsMills,
+        }, period);
         for (const page of revenue.pages) {
           console.log(
-            `  ${page.pageLabel}: ${formatUsdFromMills(toMills(page.totalNetMills))}`,
+            `  ${page.pageLabel}: ${formatUsdFromMills(toMills(page.netEarningsMills))}`,
           );
         }
       } finally {
@@ -486,10 +499,14 @@ export function buildProgram() {
         const totals = new Map(
           breakdown.breakdown.map((row) => [row.canonicalType, toMills(row.netAmountMills)]),
         );
-        const overall = toMills(breakdown.totalNetMills);
 
         console.log(`Page: ${options.page}`);
-        printRevenueTotals(totals, overall, period);
+        printRevenueTotals(totals, {
+          revenueMills: breakdown.revenueMills,
+          adjustmentMills: breakdown.adjustmentMills,
+          unclassifiedMills: breakdown.unclassifiedMills,
+          netEarningsMills: breakdown.netEarningsMills,
+        }, period);
       } finally {
         await app.close();
       }

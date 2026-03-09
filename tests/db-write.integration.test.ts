@@ -5,6 +5,7 @@ import {
   createFanslyPage,
   createModel,
   getFollowersForPage,
+  recalculateFanPageSpend,
   storeFanslySession,
   storeProxyConfig,
   upsertCheckpoint,
@@ -841,5 +842,119 @@ describe("db write safety", () => {
     expect(transactionRows.rows[0]?.raw_type).toBe(16013);
     expect(transactionRows.rows[0]?.canonical_type).toBe("payout_reversal");
     expect(BigInt(transactionRows.rows[0]?.net_amount_mills ?? 0)).toBe(331000n);
+  });
+
+  it("recalculates fan spend using fan-LTV transaction rules", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "ltv-model",
+      name: "LTV Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "ltv-page",
+    });
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "ltv-fan-1",
+      username: "ltvfan",
+    }]);
+
+    await upsertFanPage(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+      totalCreatorNetMills: 0n,
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      transactionId: "ltv-subscription",
+      rawType: 15001,
+      canonicalType: "subscription",
+      transactionState: "posted",
+      rawStatus: 2,
+      amountMills: 5000n,
+      destinationAmountMills: 5000n,
+      netAmountMills: 5000n,
+      occurredAt: new Date("2026-03-05T00:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      transactionId: "ltv-chargeback",
+      rawType: 99901,
+      canonicalType: "chargeback",
+      transactionState: "posted",
+      rawStatus: 2,
+      amountMills: -800n,
+      destinationAmountMills: -800n,
+      netAmountMills: -800n,
+      occurredAt: new Date("2026-03-06T00:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      transactionId: "ltv-refund",
+      rawType: 99902,
+      canonicalType: "refund",
+      transactionState: "posted",
+      rawStatus: 2,
+      amountMills: -200n,
+      destinationAmountMills: -200n,
+      netAmountMills: -200n,
+      occurredAt: new Date("2026-03-07T00:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      transactionId: "ltv-other",
+      rawType: 18001,
+      canonicalType: "other",
+      transactionState: "posted",
+      rawStatus: 2,
+      amountMills: 300n,
+      destinationAmountMills: 300n,
+      netAmountMills: 300n,
+      occurredAt: new Date("2026-03-08T00:00:00.000Z"),
+    });
+
+    await recalculateFanPageSpend(testDb.db, page.id);
+
+    const spendBeforePayoutReversal = await testDb.pool.query(`
+      select total_creator_net_mills
+      from fan_pages
+      where fan_id = ${fan.id}
+        and platform_account_id = ${page.id}
+    `);
+    expect(BigInt(spendBeforePayoutReversal.rows[0]?.total_creator_net_mills ?? 0)).toBe(4300n);
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      transactionId: "ltv-payout-reversal",
+      rawType: 16013,
+      canonicalType: "payout_reversal",
+      transactionState: "posted",
+      rawStatus: 2,
+      amountMills: 2000n,
+      destinationAmountMills: 2000n,
+      netAmountMills: 2000n,
+      occurredAt: new Date("2026-03-09T00:00:00.000Z"),
+    });
+
+    await recalculateFanPageSpend(testDb.db, page.id);
+
+    const spendAfterPayoutReversal = await testDb.pool.query(`
+      select total_creator_net_mills
+      from fan_pages
+      where fan_id = ${fan.id}
+        and platform_account_id = ${page.id}
+    `);
+    expect(BigInt(spendAfterPayoutReversal.rows[0]?.total_creator_net_mills ?? 0)).toBe(4300n);
   });
 });

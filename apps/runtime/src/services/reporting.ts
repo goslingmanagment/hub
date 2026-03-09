@@ -43,7 +43,7 @@ import {
   resolveBusinessDateRange,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
-  sumMills,
+  toMills,
   type PeriodBounds,
   type Period,
   type Platform,
@@ -62,7 +62,14 @@ type RevenueWindowBase = Omit<PageRevenueResponse, "page" | "comparison">;
 type RevenueWindow = RevenueWindowBase & Pick<PageRevenueResponse, "comparison">;
 type RevenueBreakdownRow = {
   canonicalType: RevenueWindowBase["breakdown"][number]["canonicalType"];
-  total: bigint;
+  bucket: RevenueWindowBase["breakdown"][number]["bucket"];
+  netAmountMills: bigint;
+};
+type RevenueSummaryMills = {
+  revenueMills: bigint;
+  adjustmentMills: bigint;
+  unclassifiedMills: bigint;
+  netEarningsMills: bigint;
 };
 
 type PageSummary = Awaited<ReturnType<typeof findPageSummaryByLabel>>;
@@ -120,23 +127,62 @@ function serializeRevenueWindow(
   bounds: PeriodBounds,
   rows: RevenueBreakdownRow[],
 ): RevenueWindowBase {
-  const totalNetMills = sumMills(rows.map((row) => row.total));
+  const summary = summarizeRevenueRows(rows);
   return {
     period: input.period,
     from: bounds.from?.toISOString() ?? null,
     to: bounds.to?.toISOString() ?? null,
     currency: "USD" as const,
-    totalNetMills: millsToNumber(totalNetMills),
+    ...serializeRevenueSummary(summary),
     breakdown: rows.map((row) => ({
       canonicalType: row.canonicalType,
-      netAmountMills: millsToNumber(row.total),
+      bucket: row.bucket,
+      netAmountMills: millsToNumber(row.netAmountMills),
     })),
+  };
+}
+
+function summarizeRevenueRows(rows: RevenueBreakdownRow[]): RevenueSummaryMills {
+  const summary: RevenueSummaryMills = {
+    revenueMills: 0n,
+    adjustmentMills: 0n,
+    unclassifiedMills: 0n,
+    netEarningsMills: 0n,
+  };
+
+  for (const row of rows) {
+    const netAmountMills = toMills(row.netAmountMills);
+
+    if (row.bucket === "revenue") {
+      summary.revenueMills += netAmountMills;
+    } else if (row.bucket === "adjustment") {
+      summary.adjustmentMills += netAmountMills;
+    } else if (row.bucket === "unclassified") {
+      summary.unclassifiedMills += netAmountMills;
+    }
+  }
+
+  summary.netEarningsMills =
+    summary.revenueMills + summary.adjustmentMills + summary.unclassifiedMills;
+
+  return summary;
+}
+
+function serializeRevenueSummary(summary: RevenueSummaryMills) {
+  const netEarningsMills = millsToNumber(summary.netEarningsMills);
+
+  return {
+    revenueMills: millsToNumber(summary.revenueMills),
+    adjustmentMills: millsToNumber(summary.adjustmentMills),
+    unclassifiedMills: millsToNumber(summary.unclassifiedMills),
+    netEarningsMills,
+    totalNetMills: netEarningsMills,
   };
 }
 
 function addComparison(
   base: RevenueWindowBase,
-  currentTotal: bigint,
+  currentNetEarnings: bigint,
   bounds: PeriodBounds | null,
   rows: RevenueBreakdownRow[],
 ): RevenueWindow {
@@ -147,19 +193,21 @@ function addComparison(
     };
   }
 
-  const previousTotal = sumMills(rows.map((row) => row.total));
-  const delta = currentTotal - previousTotal;
+  const previousSummary = summarizeRevenueRows(rows);
+  const previousNetEarnings = previousSummary.netEarningsMills;
+  const delta = currentNetEarnings - previousNetEarnings;
 
   return {
     ...base,
     comparison: {
       from: bounds.from!.toISOString(),
       to: bounds.to!.toISOString(),
-      totalNetMills: millsToNumber(previousTotal),
+      netEarningsMills: millsToNumber(previousNetEarnings),
+      totalNetMills: millsToNumber(previousNetEarnings),
       deltaNetMills: millsToNumber(delta),
-      deltaPct: previousTotal === 0n
+      deltaPct: previousNetEarnings === 0n
         ? null
-        : (Number(delta) / Number(previousTotal)) * 100,
+        : (Number(delta) / Number(previousNetEarnings)) * 100,
     },
   };
 }
@@ -197,16 +245,24 @@ function groupPageIdsByPlatform(
 }
 
 function mergeRevenueBreakdownRows(rows: RevenueBreakdownRow[][]): RevenueBreakdownRow[] {
-  const totals = new Map<RevenueBreakdownRow["canonicalType"], bigint>();
+  const totals = new Map<RevenueBreakdownRow["canonicalType"], RevenueBreakdownRow>();
 
   for (const group of rows) {
     for (const row of group) {
-      totals.set(row.canonicalType, (totals.get(row.canonicalType) ?? 0n) + row.total);
+      const existing = totals.get(row.canonicalType);
+      if (!existing) {
+        totals.set(row.canonicalType, { ...row });
+        continue;
+      }
+
+      totals.set(row.canonicalType, {
+        ...existing,
+        netAmountMills: toMills(existing.netAmountMills) + toMills(row.netAmountMills),
+      });
     }
   }
 
-  return Array.from(totals.entries())
-    .map(([canonicalType, total]) => ({ canonicalType, total }))
+  return Array.from(totals.values())
     .sort((left, right) => left.canonicalType.localeCompare(right.canonicalType));
 }
 
@@ -223,7 +279,7 @@ function mergePageRevenueTotals(rows: Awaited<ReturnType<typeof getRevenuePageTo
 
       totals.set(row.pageId, {
         ...row,
-        totalNetMills: existing.totalNetMills + row.totalNetMills,
+        netEarningsMills: toMills(existing.netEarningsMills) + toMills(row.netEarningsMills),
       });
     }
   }
@@ -353,7 +409,7 @@ export async function getPageRevenueReport(
     input.custom,
   );
   const currentRows = await getRevenueBreakdown(app.db, page.id, bounds.from, bounds.to);
-  const currentTotal = sumMills(currentRows.map((row) => row.total));
+  const currentTotal = summarizeRevenueRows(currentRows).netEarningsMills;
   const comparisonBounds = resolveRevenueComparisonPeriodBoundsForPlatform(
     page.platform,
     input.period,
@@ -383,10 +439,10 @@ export async function getOverviewRevenueReport(
   const modelRows = await listVisibleModels(app.db, input.pageIds);
   const groupedPageIds = groupPageIdsByPlatform(pageRows);
   const totals = await getRevenuePageTotalsByPlatform(app, groupedPageIds, input);
-  const totalsByPageId = new Map(totals.map((row) => [row.pageId, row.totalNetMills]));
+  const totalsByPageId = new Map(totals.map((row) => [row.pageId, row.netEarningsMills]));
   const current = await getRevenueBreakdownForGroups(app, groupedPageIds, input);
   const currentRows = current.rows;
-  const currentTotal = sumMills(currentRows.map((row) => row.total));
+  const currentTotal = summarizeRevenueRows(currentRows).netEarningsMills;
   const comparison = await getRevenueComparisonForGroups(app, groupedPageIds, input);
 
   const pages = pageRows.map((page) => ({
@@ -394,6 +450,7 @@ export async function getOverviewRevenueReport(
     pageLabel: page.label,
     modelSlug: page.modelSlug,
     modelName: page.modelName,
+    netEarningsMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
     totalNetMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
   }));
 
@@ -401,7 +458,7 @@ export async function getOverviewRevenueReport(
   for (const page of pages) {
     totalsByModelSlug.set(
       page.modelSlug,
-      (totalsByModelSlug.get(page.modelSlug) ?? 0n) + BigInt(page.totalNetMills),
+      (totalsByModelSlug.get(page.modelSlug) ?? 0n) + BigInt(page.netEarningsMills),
     );
   }
 
@@ -417,6 +474,7 @@ export async function getOverviewRevenueReport(
       modelSlug: model.slug,
       modelName: model.name,
       pageCount: model.pageCount,
+      netEarningsMills: millsToNumber(totalsByModelSlug.get(model.slug) ?? 0n),
       totalNetMills: millsToNumber(totalsByModelSlug.get(model.slug) ?? 0n),
     })),
     pages,
@@ -440,10 +498,10 @@ export async function getModelRevenueReport(
     ...input,
     modelSlug,
   });
-  const totalsByPageId = new Map(totals.map((row) => [row.pageId, row.totalNetMills]));
+  const totalsByPageId = new Map(totals.map((row) => [row.pageId, row.netEarningsMills]));
   const current = await getRevenueBreakdownForGroups(app, groupedPageIds, input);
   const currentRows = current.rows;
-  const currentTotal = sumMills(currentRows.map((row) => row.total));
+  const currentTotal = summarizeRevenueRows(currentRows).netEarningsMills;
   const comparison = await getRevenueComparisonForGroups(app, groupedPageIds, input);
 
   return {
@@ -464,6 +522,7 @@ export async function getModelRevenueReport(
       pageLabel: page.label,
       modelSlug: page.modelSlug,
       modelName: page.modelName,
+      netEarningsMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
       totalNetMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
     })),
   };

@@ -1,6 +1,11 @@
-import { and, asc, desc, eq, gte, ilike, inArray, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
 
-import { toBusinessDate, type PeriodBounds } from "@fansly-connect/shared";
+import {
+  getTransactionClassification,
+  reportableTransactionTypes,
+  toBusinessDate,
+  type PeriodBounds,
+} from "@fansly-connect/shared";
 import type { Database } from "../client.ts";
 import {
   dailyRevenue,
@@ -122,13 +127,18 @@ function buildTransactionScopeClauses(
     period?: PeriodBounds;
     canonicalType?: string;
     transactionState?: string;
-    excludePayoutReversal?: boolean;
+    excludeExcludedTypes?: boolean;
   },
 ) {
   const clauses = [];
 
-  if (input.excludePayoutReversal) {
-    clauses.push(ne(transactions.canonicalType, "payout_reversal"));
+  if (input.excludeExcludedTypes) {
+    clauses.push(
+      inArray(
+        transactions.canonicalType,
+        reportableTransactionTypes as Array<typeof transactions.$inferSelect.canonicalType>,
+      ),
+    );
   }
 
   if (input.pageIds !== undefined) {
@@ -161,7 +171,12 @@ function buildRevenueRollupClauses(
     toBusinessDate?: string | null;
   },
 ) {
-  const clauses = [ne(dailyRevenue.canonicalType, "payout_reversal")];
+  const clauses = [
+    inArray(
+      dailyRevenue.canonicalType,
+      reportableTransactionTypes as Array<typeof dailyRevenue.$inferSelect.canonicalType>,
+    ),
+  ];
 
   if (input.pageIds !== undefined) {
     if (input.pageIds.length === 0) {
@@ -208,7 +223,7 @@ export async function getRevenuePageTotals(
     modelId: models.id,
     modelSlug: models.slug,
     modelName: models.name,
-    totalNetMills: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)::bigint`,
+    netEarningsMills: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)::bigint`,
   }).from(dailyRevenue)
     .innerJoin(platformAccounts, eq(platformAccounts.id, dailyRevenue.platformAccountId))
     .innerJoin(models, eq(models.id, platformAccounts.modelId))
@@ -234,13 +249,18 @@ export async function getRevenueBreakdownForScope(
     return [];
   }
 
-  return db.select({
+  const rows = await db.select({
     canonicalType: dailyRevenue.canonicalType,
-    total: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)::bigint`,
+    netAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)::bigint`,
   }).from(dailyRevenue)
     .where(and(...clauses))
     .groupBy(dailyRevenue.canonicalType)
     .orderBy(dailyRevenue.canonicalType);
+
+  return rows.map((row) => ({
+    ...row,
+    bucket: getTransactionClassification(row.canonicalType).bucket,
+  }));
 }
 
 export async function listTransactionsForPage(
@@ -257,7 +277,7 @@ export async function listTransactionsForPage(
     pageIds: [input.pageId],
     canonicalType: input.canonicalType,
     transactionState: input.transactionState,
-    excludePayoutReversal: false,
+    excludeExcludedTypes: false,
   });
 
   if (!clauses) {

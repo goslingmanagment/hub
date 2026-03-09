@@ -3,6 +3,7 @@ import {
   fanFlagTypes,
   isValidBusinessDateString,
   platforms,
+  transactionReportingBuckets,
   transactionStates,
   transactionTypes,
   userRoles,
@@ -18,6 +19,7 @@ const businessDate = z.string()
 const periodEnum = z.enum(PERIOD_OPTIONS);
 const nonCustomPeriodEnum = z.enum(["today", "7d", "30d", "all"]);
 const platformEnum = z.enum(platforms);
+const transactionReportingBucketEnum = z.enum(transactionReportingBuckets);
 const transactionTypeEnum = z.enum(transactionTypes);
 const transactionStateEnum = z.enum(transactionStates);
 const userRoleEnum = z.enum(userRoles);
@@ -125,25 +127,34 @@ export const modelListItemSchema = z.object({
   pageCount: z.number().int(),
 });
 
+const revenueSummarySchema = z.object({
+  revenueMills: mills,
+  adjustmentMills: mills,
+  unclassifiedMills: mills,
+  netEarningsMills: mills,
+  totalNetMills: mills,
+});
+
 export const revenueBreakdownItemSchema = z.object({
   canonicalType: transactionTypeEnum,
+  bucket: transactionReportingBucketEnum,
   netAmountMills: mills,
 });
 
 export const revenueComparisonSchema = z.object({
   from: isoTimestamp,
   to: isoTimestamp,
+  netEarningsMills: mills,
   totalNetMills: mills,
   deltaNetMills: mills,
   deltaPct: z.number().nullable(),
 });
 
-export const revenueWindowSchema = z.object({
+export const revenueWindowSchema = revenueSummarySchema.extend({
   period: periodEnum,
   from: isoTimestamp.nullable(),
   to: isoTimestamp.nullable(),
   currency: z.literal("USD"),
-  totalNetMills: mills,
   breakdown: z.array(revenueBreakdownItemSchema),
   comparison: revenueComparisonSchema.nullable(),
 });
@@ -153,6 +164,7 @@ export const pageRevenueItemSchema = z.object({
   pageLabel: z.string(),
   modelSlug: z.string(),
   modelName: z.string(),
+  netEarningsMills: mills,
   totalNetMills: mills,
 });
 
@@ -161,6 +173,7 @@ export const modelRevenueItemSchema = z.object({
   modelSlug: z.string(),
   modelName: z.string(),
   pageCount: z.number().int(),
+  netEarningsMills: mills,
   totalNetMills: mills,
 });
 
