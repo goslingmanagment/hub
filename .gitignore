@@ -13,3 +13,9 @@ tmp
 .sessions/
 drafts/
 .om-token
+
+# Generated/local documentation artifacts
+docs/.DS_Store
+docs/code-review-*.md
+docs/user-guide*.md
+docs/user-guide*.html
