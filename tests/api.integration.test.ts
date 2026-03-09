@@ -4,6 +4,7 @@ import {
   createOnlyFansPage,
   createFanslyPage,
   createModel,
+  recalculateFanPageSpend,
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
@@ -864,6 +865,136 @@ describe("api integration", () => {
         net_amount_mills: 4000n,
       },
     ]);
+  });
+
+  it("uses occurred_at instead of transactions.created_at in revenue and page transaction reporting", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const createdAtPage = await createFanslyPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "created-at-check",
+    });
+    await updatePageMetadata(testDb.db, createdAtPage.id, {
+      platformAccountIdValue: "acct-created-at-check",
+      username: "created_at_check",
+      displayName: "Created At Check",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-created-at",
+      username: "created-at-fan",
+      displayName: "Created At Fan",
+    }]);
+    await upsertFanPage(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: createdAtPage.id,
+      totalCreatorNetMills: 0n,
+      isFollower: false,
+      isSubscriber: false,
+      lastTransactionAt: null,
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: createdAtPage.id,
+      fanId: fan.id,
+      transactionId: "tx-newer-occurred",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      amountMills: 2000n,
+      destinationAmountMills: 2000n,
+      netAmountMills: 2000n,
+      occurredAt: new Date("2026-03-05T12:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: createdAtPage.id,
+      fanId: fan.id,
+      transactionId: "tx-older-occurred",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      amountMills: 1000n,
+      destinationAmountMills: 1000n,
+      netAmountMills: 1000n,
+      occurredAt: new Date("2026-01-15T12:00:00.000Z"),
+    });
+
+    await testDb.pool.query(
+      `
+        update transactions
+        set created_at = $1
+        where platform_account_id = $2
+      `,
+      [new Date("2026-04-01T00:00:00.000Z"), createdAtPage.id],
+    );
+
+    await rebuildRevenueRollups(testDb.db, createdAtPage.id);
+    await recalculateFanPageSpend(testDb.db, createdAtPage.id);
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const revenue = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/created-at-check/revenue?period=custom&from=2026-03-01&to=2026-03-31",
+      headers: {
+        cookie,
+      },
+    });
+    expect(revenue.statusCode).toBe(200);
+    expect(revenue.json().totalNetMills).toBe(2000);
+    expect(revenue.json().breakdown).toEqual([
+      {
+        bucket: "revenue",
+        canonicalType: "tip",
+        netAmountMills: 2000,
+      },
+    ]);
+
+    const transactions = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/created-at-check/transactions?limit=10&offset=0",
+      headers: {
+        cookie,
+      },
+    });
+    expect(transactions.statusCode).toBe(200);
+    expect(transactions.json().items.map((row: { transactionId: string }) => row.transactionId)).toEqual([
+      "tx-newer-occurred",
+      "tx-older-occurred",
+    ]);
+
+    const fans = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/created-at-check/fans?limit=10&offset=0",
+      headers: {
+        cookie,
+      },
+    });
+    expect(fans.statusCode).toBe(200);
+    expect(fans.json().items[0]).toMatchObject({
+      platformUserId: "fan-created-at",
+      totalCreatorNetMills: 3000,
+      lastTransactionAt: "2026-03-05T12:00:00.000Z",
+    });
   });
 
   it("lists payout reversals in the transaction ledger", async (context) => {
