@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  createOnlyFansPage,
   createFanslyPage,
   createModel,
   getFollowersForPage,
@@ -165,6 +166,44 @@ describe("db write safety", () => {
       where slug = 'lora'
     `);
     expect(modelRows.rows[0]?.count).toBe(1);
+  });
+
+  it("applies platform commission defaults when creating pages", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+    const fanslyPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "lora-fansly",
+    });
+    const onlyFansPage = await createOnlyFansPage(testDb.db, {
+      modelId: model.id,
+      label: "lora-onlyfans",
+    });
+
+    const rows = await testDb.pool.query(`
+      select label, commission_rate::float8 as commission_rate
+      from platform_accounts
+      where id in (${fanslyPage.id}, ${onlyFansPage.id})
+      order by label asc
+    `);
+
+    expect(rows.rows).toEqual([
+      {
+        label: "lora-fansly",
+        commission_rate: 0,
+      },
+      {
+        label: "lora-onlyfans",
+        commission_rate: 0.2,
+      },
+    ]);
   });
 
   it("verifies Fansly auth before persisting a page and stores metadata immediately", async (context) => {

@@ -10,6 +10,10 @@ import {
   platformAccounts,
 } from "../schema.ts";
 
+function defaultCommissionRateForPlatform(platform: Platform) {
+  return platform === "onlyfans" ? 0.2 : 0;
+}
+
 function hasErrorCode(error: unknown, code: string) {
   let current: unknown = error;
 
@@ -88,6 +92,7 @@ export async function createPlatformPage(
     .values({
       modelId: input.modelId,
       platform: input.platform,
+      commissionRate: defaultCommissionRateForPlatform(input.platform),
       label: input.label,
     })
     .returning();

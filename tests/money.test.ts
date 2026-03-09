@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  calculateNetMillsFromGross,
   dollarsToMills,
   formatUsdFromMills,
   millsToDecimalString,
@@ -20,6 +21,12 @@ describe("money helpers", () => {
     expect(dollarsToMills(12.345)).toBe(12345n);
     expect(dollarsToMills("8.5")).toBe(8500n);
     expect(dollarsToMills(-1.25)).toBe(-1250n);
+  });
+
+  it("applies commission rates to gross mill amounts", () => {
+    expect(calculateNetMillsFromGross(12500n, 0)).toBe(12500n);
+    expect(calculateNetMillsFromGross(12500n, 0.2)).toBe(10000n);
+    expect(calculateNetMillsFromGross(-2500n, 0.2)).toBe(-2000n);
   });
 
   it("builds Moscow trailing windows that include today", () => {

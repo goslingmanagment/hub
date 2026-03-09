@@ -28,7 +28,10 @@ async function waitForDatabaseReady(pool: ReturnType<typeof createPool>) {
   });
 }
 
-export async function startTestDatabase() {
+export async function startTestDatabase(input?: {
+  from?: string;
+  through?: string;
+}) {
   const container = await new GenericContainer("postgres:16")
     .withEnvironment({
       POSTGRES_DB: "testdb",
@@ -43,22 +46,7 @@ export async function startTestDatabase() {
     await waitForDatabaseReady(pool);
 
     const db = createDb(pool);
-    const migrationsDir = path.resolve("packages/db/migrations");
-    const files = (await readdir(migrationsDir))
-      .filter((file) => file.endsWith(".sql"))
-      .sort();
-
-    for (const file of files) {
-      const migration = await readFile(path.join(migrationsDir, file), "utf8");
-      await pool.query("begin");
-      try {
-        await pool.query(migration);
-        await pool.query("commit");
-      } catch (error) {
-        await pool.query("rollback");
-        throw error;
-      }
-    }
+    await applyTestMigrations(pool, input);
 
     return {
       container,
@@ -74,6 +62,43 @@ export async function startTestDatabase() {
     await pool.end().catch(() => undefined);
     await container.stop().catch(() => undefined);
     throw error;
+  }
+}
+
+export async function applyTestMigrations(
+  pool: ReturnType<typeof createPool>,
+  input?: {
+    from?: string;
+    through?: string;
+  },
+) {
+  const migrationsDir = path.resolve("packages/db/migrations");
+  const files = (await readdir(migrationsDir))
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+
+  if (input?.from && !files.includes(input.from)) {
+    throw new Error(`Migration "${input.from}" was not found`);
+  }
+  if (input?.through && !files.includes(input.through)) {
+    throw new Error(`Migration "${input.through}" was not found`);
+  }
+
+  const selected = files.filter((file) => (
+    (input?.from ? file >= input.from : true) &&
+    (input?.through ? file <= input.through : true)
+  ));
+
+  for (const file of selected) {
+    const migration = await readFile(path.join(migrationsDir, file), "utf8");
+    await pool.query("begin");
+    try {
+      await pool.query(migration);
+      await pool.query("commit");
+    } catch (error) {
+      await pool.query("rollback");
+      throw error;
+    }
   }
 }
 

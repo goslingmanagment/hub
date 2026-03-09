@@ -16,7 +16,7 @@ import {
   type OnlyMonsterChargeback,
   type OnlyMonsterTransaction,
 } from "@fansly-connect/onlyfans";
-import { dollarsToMills } from "@fansly-connect/shared";
+import { calculateNetMillsFromGross, dollarsToMills } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { DAY_MS, retentionDate } from "./shared.ts";
@@ -52,6 +52,7 @@ export async function syncOnlyFansTransactions(
     pageLabel: string;
     platformAccountId: number;
     platformAccountIdValue: string;
+    commissionRate: number;
     requestContext: {
       auth: {
         token: string;
@@ -123,6 +124,7 @@ export async function syncOnlyFansTransactions(
 
     for (const item of page.parsed.items) {
       const amountMills = dollarsToMills(item.amount);
+      const netAmountMills = calculateNetMillsFromGross(amountMills, input.commissionRate);
       const fanId = fanMap.get(item.fan.id) ?? null;
       const occurredAt = new Date(item.timestamp);
 
@@ -137,7 +139,7 @@ export async function syncOnlyFansTransactions(
         rawStatus: item.status,
         amountMills,
         destinationAmountMills: amountMills,
-        netAmountMills: amountMills,
+        netAmountMills,
         occurredAt,
       });
 
@@ -195,6 +197,7 @@ export async function syncOnlyFansTransactions(
 
     for (const item of page.parsed.items) {
       const amountMills = -dollarsToMills(item.amount);
+      const netAmountMills = calculateNetMillsFromGross(amountMills, input.commissionRate);
       const fanId = fanMap.get(item.fan.id) ?? null;
       const occurredAt = new Date(item.chargeback_timestamp);
 
@@ -209,7 +212,7 @@ export async function syncOnlyFansTransactions(
         rawStatus: item.status,
         amountMills,
         destinationAmountMills: amountMills,
-        netAmountMills: amountMills,
+        netAmountMills,
         occurredAt,
         sourceUpdatedAt: new Date(item.transaction_timestamp),
       });

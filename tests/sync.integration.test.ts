@@ -21,6 +21,7 @@ import {
   syncRuns,
   transactions,
   updatePageMetadata,
+  upsertTransaction,
 } from "@fansly-connect/db";
 import type {
   FanslyAccount,
@@ -49,7 +50,7 @@ import {
   runLightSync,
 } from "../apps/runtime/src/services/sync.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { startTestDatabase, seedFanslyPage } from "./helpers/db.ts";
+import { applyTestMigrations, startTestDatabase, seedFanslyPage } from "./helpers/db.ts";
 
 type StartedTestDatabase = NonNullable<Awaited<ReturnType<typeof startTestDatabase>>>;
 const testEncryptionKey = Buffer.alloc(32, 7);
@@ -1124,7 +1125,12 @@ describe("sync integration", () => {
     const second = await runLightSync(app, page.label);
     const checkpoint = await getCheckpoint(testDb.db, page.id, "transactions");
     const txRows = await testDb.pool.query(`
-      select transaction_id, raw_type, canonical_type, net_amount_mills
+      select transaction_id,
+             raw_type,
+             canonical_type,
+             amount_mills,
+             destination_amount_mills,
+             net_amount_mills
       from transactions
       where platform_account_id = ${page.id}
       order by transaction_id asc
@@ -1144,19 +1150,25 @@ describe("sync integration", () => {
         transaction_id: "of-cb-1",
         raw_type: "Tip from",
         canonical_type: "chargeback",
-        net_amount_mills: -2500n,
+        amount_mills: -2500n,
+        destination_amount_mills: -2500n,
+        net_amount_mills: -2000n,
       },
       {
         transaction_id: "of-tx-1",
         raw_type: "Tip from",
         canonical_type: "tip",
-        net_amount_mills: 12500n,
+        amount_mills: 12500n,
+        destination_amount_mills: 12500n,
+        net_amount_mills: 10000n,
       },
       {
         transaction_id: "of-tx-2",
         raw_type: "Subscription",
         canonical_type: "subscription",
-        net_amount_mills: 5000n,
+        amount_mills: 5000n,
+        destination_amount_mills: 5000n,
+        net_amount_mills: 4000n,
       },
     ]);
     expect(fanRows.rows).toEqual([
@@ -1175,18 +1187,154 @@ describe("sync integration", () => {
       expect.arrayContaining([
         expect.objectContaining({
           canonicalType: "tip",
-          total: "12500",
+          total: "10000",
         }),
         expect.objectContaining({
           canonicalType: "subscription",
-          total: "5000",
+          total: "4000",
         }),
         expect.objectContaining({
           canonicalType: "chargeback",
-          total: "-2500",
+          total: "-2000",
         }),
       ]),
     );
     expect(checkpoint?.cursorTimestamp?.toISOString()).toBe("2026-03-07T12:00:00.000Z");
+  });
+
+  it("backfills existing OnlyFans net revenue when the commission migration runs", async (context) => {
+    let legacyDb: StartedTestDatabase | null = null;
+
+    try {
+      legacyDb = await startTestDatabase({
+        through: "0006_onlymonster_raw_transaction_fields.sql",
+      });
+    } catch (error) {
+      context.skip();
+      return;
+    }
+
+    try {
+      const model = await createModel(legacyDb.db, {
+        slug: "legacy-lora",
+        name: "Legacy Lora",
+      });
+      const insertedPage = await legacyDb.pool.query(`
+        insert into platform_accounts (model_id, platform, label)
+        values (${model.id}, 'onlyfans', 'legacy-of')
+        returning id
+      `);
+      const pageId = Number(insertedPage.rows[0]?.id ?? 0);
+
+      expect(pageId).toBeGreaterThan(0);
+
+      await upsertTransaction(legacyDb.db, {
+        platformAccountId: pageId,
+        transactionId: "legacy-tip",
+        rawType: "Tip from",
+        canonicalType: "tip",
+        transactionState: "posted",
+        rawStatus: "done",
+        amountMills: 12500n,
+        destinationAmountMills: 12500n,
+        netAmountMills: 12500n,
+        occurredAt: new Date("2026-03-05T12:00:00.000Z"),
+      });
+      await upsertTransaction(legacyDb.db, {
+        platformAccountId: pageId,
+        transactionId: "legacy-chargeback",
+        rawType: "Tip from",
+        canonicalType: "chargeback",
+        transactionState: "posted",
+        rawStatus: "undo",
+        amountMills: -2500n,
+        destinationAmountMills: -2500n,
+        netAmountMills: -2500n,
+        occurredAt: new Date("2026-03-06T12:00:00.000Z"),
+      });
+      await rebuildRevenueRollups(legacyDb.db, pageId);
+
+      const beforeRows = await legacyDb.pool.query(`
+        select transaction_id, net_amount_mills
+        from transactions
+        where platform_account_id = ${pageId}
+        order by transaction_id asc
+      `);
+      const beforeRevenueRows = await legacyDb.pool.query(`
+        select canonical_type, net_amount_mills
+        from daily_revenue
+        where platform_account_id = ${pageId}
+        order by canonical_type asc
+      `);
+
+      expect(beforeRows.rows).toEqual([
+        {
+          transaction_id: "legacy-chargeback",
+          net_amount_mills: -2500n,
+        },
+        {
+          transaction_id: "legacy-tip",
+          net_amount_mills: 12500n,
+        },
+      ]);
+      expect(beforeRevenueRows.rows).toEqual([
+        {
+          canonical_type: "tip",
+          net_amount_mills: 12500n,
+        },
+        {
+          canonical_type: "chargeback",
+          net_amount_mills: -2500n,
+        },
+      ]);
+
+      await applyTestMigrations(legacyDb.pool, {
+        from: "0007_onlyfans_commission_rate.sql",
+      });
+
+      const pageRows = await legacyDb.pool.query(`
+        select commission_rate::float8 as commission_rate
+        from platform_accounts
+        where id = ${pageId}
+      `);
+      const afterRows = await legacyDb.pool.query(`
+        select transaction_id, net_amount_mills
+        from transactions
+        where platform_account_id = ${pageId}
+        order by transaction_id asc
+      `);
+      const afterRevenueRows = await legacyDb.pool.query(`
+        select canonical_type, net_amount_mills
+        from daily_revenue
+        where platform_account_id = ${pageId}
+        order by canonical_type asc
+      `);
+
+      expect(pageRows.rows[0]?.commission_rate).toBe(0.2);
+      expect(afterRows.rows).toEqual([
+        {
+          transaction_id: "legacy-chargeback",
+          net_amount_mills: -2000n,
+        },
+        {
+          transaction_id: "legacy-tip",
+          net_amount_mills: 10000n,
+        },
+      ]);
+      expect(afterRevenueRows.rows).toEqual([
+        {
+          canonical_type: "tip",
+          net_amount_mills: 10000n,
+        },
+        {
+          canonical_type: "chargeback",
+          net_amount_mills: -2000n,
+        },
+      ]);
+    } finally {
+      if (legacyDb) {
+        await legacyDb.stop();
+      }
+    }
   });
 });

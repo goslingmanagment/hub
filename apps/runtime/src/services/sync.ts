@@ -116,6 +116,7 @@ async function runLightSyncUnlocked(
           pageLabel: pageContext.page.label,
           platformAccountId: pageContext.page.id,
           platformAccountIdValue: account.parsed.account.platform_account_id,
+          commissionRate: pageContext.page.commissionRate,
           requestContext: { auth: pageContext.auth, proxy: pageContext.proxy },
           syncRunId: run.id,
         });

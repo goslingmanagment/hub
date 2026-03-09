@@ -6,6 +6,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
   text,
@@ -71,6 +72,11 @@ export const platformAccounts = pgTable(
       .references(() => models.id, { onDelete: "cascade" })
       .notNull(),
     platform: platformEnum("platform").notNull(),
+    commissionRate: numeric("commission_rate", {
+      precision: 5,
+      scale: 4,
+      mode: "number",
+    }).default(0).notNull(),
     label: text("label").notNull().unique(),
     platformAccountId: text("platform_account_id"),
     username: text("username"),
