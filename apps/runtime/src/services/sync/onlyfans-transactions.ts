@@ -17,7 +17,12 @@ import {
   type OnlyMonsterChargeback,
   type OnlyMonsterTransaction,
 } from "@fansly-connect/onlyfans";
-import { calculateNetMillsFromGross, dollarsToMills } from "@fansly-connect/shared";
+import {
+  calculateNetMillsFromGross,
+  dollarsToMills,
+  startOfBusinessDay,
+  UTC_TIME_ZONE,
+} from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { DAY_MS, retentionDate } from "./shared.ts";
@@ -79,7 +84,10 @@ export async function syncOnlyFansTransactions(
   const earliestRescanStart = lookbackStart && oldestPendingAt
     ? (oldestPendingAt < lookbackStart ? oldestPendingAt : lookbackStart)
     : (lookbackStart ?? oldestPendingAt);
-  const rescanCapStart = new Date(Date.now() - app.config.transactionRescanCapDays * DAY_MS);
+  const rescanCapStart = startOfBusinessDay(
+    new Date(Date.now() - app.config.transactionRescanCapDays * DAY_MS),
+    UTC_TIME_ZONE,
+  );
   const start = input.rescanStart ?? (
     earliestRescanStart && earliestRescanStart < rescanCapStart
       ? rescanCapStart

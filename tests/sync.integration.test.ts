@@ -1231,6 +1231,100 @@ describe("sync integration", () => {
     }
   });
 
+  it("floors the initial OnlyFans rescan cap to the start of the UTC day", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-09T11:19:02.676Z"));
+
+    try {
+      const { page } = await seedOnlyFansPage(testDb, "initial-window-of");
+      const onlyFansAdapter = new FakeOnlyFansAdapter({
+        account: {
+          id: 42,
+          platform_account_id: "of-initial-window-of",
+          platform: "onlyfans",
+          name: "initial-window-of",
+          email: null,
+          avatar: "https://example.com/initial-window-of.png",
+          username: "initial-window-of",
+          organisation_id: "org-1",
+          subscribe_price: 12.5,
+          subscription_expiration_date: null,
+        },
+        transactions: [
+          {
+            id: "too-old-tx",
+            amount: 10,
+            fan: { id: "fan-of-0" },
+            type: "Tip from",
+            status: "done",
+            timestamp: "2026-02-06T23:59:59.000Z",
+          },
+          {
+            id: "cap-day-early-tx",
+            amount: 15,
+            fan: { id: "fan-of-1" },
+            type: "Payment for message",
+            status: "done",
+            timestamp: "2026-02-07T00:10:15.000Z",
+          },
+          {
+            id: "cap-day-late-tx",
+            amount: 20,
+            fan: { id: "fan-of-2" },
+            type: "Tip from",
+            status: "done",
+            timestamp: "2026-02-07T13:15:05.000Z",
+          },
+          {
+            id: "recent-tx",
+            amount: 25,
+            fan: { id: "fan-of-3" },
+            type: "Subscription",
+            status: "done",
+            timestamp: "2026-03-08T19:04:49.000Z",
+          },
+        ],
+        chargebacks: [],
+      }, {
+        filterByWindow: true,
+      });
+
+      const app = createTestApp(testDb, createUnusedFanslyAdapter(), {
+        onlyFansAdapter: onlyFansAdapter as unknown as AppContext["onlyFansAdapter"],
+      });
+
+      await runLightSync(app, page.label);
+
+      const rows = await testDb.pool.query(`
+        select transaction_id
+        from transactions
+        where platform_account_id = ${page.id}
+        order by transaction_id asc
+      `);
+
+      expect(onlyFansAdapter.transactionRequestHistory[0]?.start.toISOString()).toBe("2026-02-07T00:00:00.000Z");
+      expect(onlyFansAdapter.chargebackRequestHistory[0]?.start.toISOString()).toBe("2026-02-07T00:00:00.000Z");
+      expect(rows.rows).toEqual([
+        {
+          transaction_id: "cap-day-early-tx",
+        },
+        {
+          transaction_id: "cap-day-late-tx",
+        },
+        {
+          transaction_id: "recent-tx",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reconciles delayed OnlyFans chargebacks by removing stale positives inside the rescan window", async (context) => {
     if (!testDb) {
       context.skip();
