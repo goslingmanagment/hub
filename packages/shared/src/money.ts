@@ -94,7 +94,11 @@ export function calculateNetMillsFromGross(
 ) {
   const gross = toMills(grossMills);
   const commissionRateScaled = commissionRateToScaledInt(commissionRate);
-  const retainedRateScaled = COMMISSION_RATE_SCALE - commissionRateScaled;
+  if (commissionRateScaled === 0n) {
+    return gross;
+  }
 
-  return roundDiv(gross * retainedRateScaled, COMMISSION_RATE_SCALE);
+  // OnlyFans rounds the platform fee to whole cents before subtracting it.
+  const commissionFeeCents = roundDiv(gross * commissionRateScaled, COMMISSION_RATE_SCALE * 10n);
+  return gross - (commissionFeeCents * 10n);
 }

@@ -25,9 +25,11 @@ describe("money helpers", () => {
     expect(dollarsToMills(-1.25)).toBe(-1250n);
   });
 
-  it("applies commission rates to gross mill amounts", () => {
+  it("matches OnlyFans cent-rounded commission math", () => {
     expect(calculateNetMillsFromGross(12500n, 0)).toBe(12500n);
     expect(calculateNetMillsFromGross(12500n, 0.2)).toBe(10000n);
+    expect(calculateNetMillsFromGross(4990n, 0.2)).toBe(3990n);
+    expect(calculateNetMillsFromGross(-4990n, 0.2)).toBe(-3990n);
     expect(calculateNetMillsFromGross(-2500n, 0.2)).toBe(-2000n);
   });
 

@@ -1403,7 +1403,7 @@ describe("sync integration", () => {
           transaction_id: "vip-chargeback",
           canonical_type: "chargeback",
           amount_mills: -4990n,
-          net_amount_mills: -3992n,
+          net_amount_mills: -3990n,
         },
       ]);
       expect(checkpoint?.cursorTimestamp?.toISOString()).toBe("2026-03-08T04:06:31.000Z");
@@ -1687,6 +1687,132 @@ describe("sync integration", () => {
         {
           canonical_type: "chargeback",
           net_amount_mills: -2000n,
+        },
+      ]);
+    } finally {
+      if (legacyDb) {
+        await legacyDb.stop();
+      }
+    }
+  });
+
+  it("backfills existing OnlyFans net revenue when the cent-rounding migration runs", async (context) => {
+    let legacyDb: StartedTestDatabase | null = null;
+
+    try {
+      legacyDb = await startTestDatabase({
+        through: "0008_onlyfans_utc_business_dates.sql",
+      });
+    } catch (error) {
+      context.skip();
+      return;
+    }
+
+    try {
+      const model = await createModel(legacyDb.db, {
+        slug: "legacy-of-cent-rounding",
+        name: "Legacy OF Cent Rounding",
+      });
+      const page = await createOnlyFansPage(legacyDb.db, {
+        modelId: model.id,
+        label: "legacy-of-cent-rounding",
+      });
+
+      await upsertTransaction(legacyDb.db, {
+        platformAccountId: page.id,
+        transactionId: "legacy-subscription",
+        rawType: "Subscription",
+        canonicalType: "subscription",
+        transactionState: "posted",
+        rawStatus: "done",
+        amountMills: 4990n,
+        destinationAmountMills: 4990n,
+        netAmountMills: 3992n,
+        occurredAt: new Date("2026-03-05T12:00:00.000Z"),
+      });
+      await upsertTransaction(legacyDb.db, {
+        platformAccountId: page.id,
+        transactionId: "legacy-chargeback",
+        rawType: "Subscription",
+        canonicalType: "chargeback",
+        transactionState: "posted",
+        rawStatus: "undo",
+        amountMills: -4990n,
+        destinationAmountMills: -4990n,
+        netAmountMills: -3992n,
+        occurredAt: new Date("2026-03-06T12:00:00.000Z"),
+      });
+      await rebuildRevenueRollups(legacyDb.db, page.id);
+
+      const beforeRows = await legacyDb.pool.query(`
+        select transaction_id, net_amount_mills
+        from transactions
+        where platform_account_id = ${page.id}
+        order by transaction_id asc
+      `);
+      const beforeRevenueRows = await legacyDb.pool.query(`
+        select canonical_type, net_amount_mills
+        from daily_revenue
+        where platform_account_id = ${page.id}
+        order by canonical_type asc
+      `);
+
+      expect(beforeRows.rows).toEqual([
+        {
+          transaction_id: "legacy-chargeback",
+          net_amount_mills: -3992n,
+        },
+        {
+          transaction_id: "legacy-subscription",
+          net_amount_mills: 3992n,
+        },
+      ]);
+      expect(beforeRevenueRows.rows).toEqual([
+        {
+          canonical_type: "subscription",
+          net_amount_mills: 3992n,
+        },
+        {
+          canonical_type: "chargeback",
+          net_amount_mills: -3992n,
+        },
+      ]);
+
+      await applyTestMigrations(legacyDb.pool, {
+        from: "0009_onlyfans_net_amount_cent_rounding.sql",
+      });
+
+      const afterRows = await legacyDb.pool.query(`
+        select transaction_id, net_amount_mills
+        from transactions
+        where platform_account_id = ${page.id}
+        order by transaction_id asc
+      `);
+      const afterRevenueRows = await legacyDb.pool.query(`
+        select canonical_type, net_amount_mills
+        from daily_revenue
+        where platform_account_id = ${page.id}
+        order by canonical_type asc
+      `);
+
+      expect(afterRows.rows).toEqual([
+        {
+          transaction_id: "legacy-chargeback",
+          net_amount_mills: -3990n,
+        },
+        {
+          transaction_id: "legacy-subscription",
+          net_amount_mills: 3990n,
+        },
+      ]);
+      expect(afterRevenueRows.rows).toEqual([
+        {
+          canonical_type: "subscription",
+          net_amount_mills: 3990n,
+        },
+        {
+          canonical_type: "chargeback",
+          net_amount_mills: -3990n,
         },
       ]);
     } finally {
