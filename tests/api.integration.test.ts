@@ -991,6 +991,174 @@ describe("api integration", () => {
     ]);
   });
 
+  it("uses UTC day boundaries for Fansly December 2025 revenue and spender reporting", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-001",
+      username: "buyer",
+      displayName: "Buyer One",
+    }]);
+
+    await upsertFanPage(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: fixture.lilyPage.id,
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lilyPage.id,
+      fanId: fan.id,
+      transactionId: "lily-december-main",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 350376n,
+      sourceDestinationAmountMills: 350376n,
+      creatorNetAmountMills: 350376n,
+      occurredAt: new Date("2025-12-15T12:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lilyPage.id,
+      fanId: fan.id,
+      transactionId: "lily-boundary-november",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 8000n,
+      sourceDestinationAmountMills: 8000n,
+      creatorNetAmountMills: 8000n,
+      occurredAt: new Date("2025-11-30T21:30:00.000Z"),
+    });
+
+    await rebuildRevenueRollups(testDb.db, fixture.lilyPage.id);
+    await recalculateFanPageSpend(testDb.db, fixture.lilyPage.id);
+
+    const report = await getPageRevenueReport(createTestAppContext(testDb), fixture.lilyPage.label, {
+      period: "custom",
+      custom: {
+        from: "2025-12-01",
+        to: "2025-12-31",
+      },
+    });
+    const modelReport = await getModelRevenueReport(createTestAppContext(testDb), "lily-model", {
+      period: "custom",
+      custom: {
+        from: "2025-12-01",
+        to: "2025-12-31",
+      },
+    });
+    const rollupRows = await testDb.pool.query(`
+      select business_date::text as business_date,
+             creator_net_amount_mills as net_amount_mills
+      from daily_revenue
+      where platform_account_id = ${fixture.lilyPage.id}
+        and business_date between '2025-11-30'::date and '2025-12-31'::date
+      order by business_date asc
+    `);
+
+    expect(report.from).toBe("2025-12-01T00:00:00.000Z");
+    expect(report.to).toBe("2026-01-01T00:00:00.000Z");
+    expect(report.revenueMills).toBe(350376);
+    expect(report.netEarningsMills).toBe(350376);
+    expect(report.totalNetMills).toBe(350376);
+    expect(modelReport.netEarningsMills).toBe(350376);
+    expect(modelReport.totalNetMills).toBe(350376);
+    expect(rollupRows.rows).toEqual([
+      {
+        business_date: "2025-11-30",
+        net_amount_mills: 8000n,
+      },
+      {
+        business_date: "2025-12-15",
+        net_amount_mills: 350376n,
+      },
+    ]);
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+    const spenderList = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lily1&period=custom&from=2025-12-01&to=2025-12-31&limit=10&offset=0",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+    const spenderSeries = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders/fansly/fan-001/series?scope=page&pageLabel=lily1&period=custom&from=2025-11-30&to=2025-12-01&granularity=day",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+
+    expect(spenderList.statusCode).toBe(200);
+    expect(spenderList.json()).toMatchObject({
+      period: {
+        timeZone: "UTC",
+        fromBusinessDate: "2025-12-01",
+        toBusinessDateInclusive: "2025-12-31",
+      },
+      diagnostics: {
+        totalCreatorNetAmountMills: 350376,
+        attributedCreatorNetAmountMills: 350376,
+        unattributedCreatorNetAmountMills: 0,
+      },
+      items: [
+        {
+          fan: {
+            platform: "fansly",
+            platformUserId: "fan-001",
+          },
+          metrics: {
+            window: {
+              creatorNetAmountMills: 350376,
+              grossAmountMills: 350376,
+            },
+          },
+        },
+      ],
+    });
+
+    expect(spenderSeries.statusCode).toBe(200);
+    expect(spenderSeries.json()).toMatchObject({
+      period: {
+        timeZone: "UTC",
+        fromBusinessDate: "2025-11-30",
+        toBusinessDateInclusive: "2025-12-01",
+      },
+      items: [
+        {
+          fromBusinessDate: "2025-11-30",
+          toBusinessDateInclusive: "2025-11-30",
+          metrics: {
+            creatorNetAmountMills: 8000,
+            grossAmountMills: 8000,
+          },
+        },
+        {
+          fromBusinessDate: "2025-12-01",
+          toBusinessDateInclusive: "2025-12-01",
+          metrics: {
+            creatorNetAmountMills: 0,
+            grossAmountMills: 0,
+          },
+        },
+      ],
+    });
+  });
+
   it("uses occurred_at instead of transactions.created_at in revenue and page transaction reporting", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
@@ -1367,7 +1535,7 @@ describe("api integration", () => {
       ],
       total: 1,
     });
-    expect(response.json().period.timeZone).toBe("Europe/Moscow");
+    expect(response.json().period.timeZone).toBe("UTC");
     expect(response.json().period.asOf).toBeTruthy();
     expect(response.json().items[0].fan.fanId).toBeUndefined();
   });
@@ -1543,7 +1711,7 @@ describe("api integration", () => {
     expect(response.json()).toMatchObject({
       granularity: "day",
       period: {
-        timeZone: "Europe/Moscow",
+        timeZone: "UTC",
         fromBusinessDate: "2026-03-04",
         toBusinessDateInclusive: "2026-03-07",
       },
@@ -1785,6 +1953,120 @@ describe("api integration", () => {
       cookieAuth: expect.any(Object),
       bearerAuth: expect.any(Object),
     });
+  });
+
+  it("uses UTC day boundaries for Fansly follower and subscriber daily rollups", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "utc-fansly-daily-model",
+      name: "UTC Fansly Daily",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "utc-fansly-daily",
+    });
+    await updatePageMetadata(testDb.db, page.id, {
+      platformAccountIdValue: "acct-utc-fansly-daily",
+      username: "utc_fansly_daily",
+      displayName: "UTC Fansly Daily",
+      followerCount: 1,
+      subscriberCount: 1,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "utc-fansly-daily-fan",
+      username: "utcfan",
+      displayName: "UTC Fan",
+    }]);
+
+    await upsertFanPage(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+      isFollower: true,
+      followerSince: new Date("2026-03-01T21:30:00.000Z"),
+      isSubscriber: true,
+      subscriberSince: new Date("2026-03-01T21:30:00.000Z"),
+      subscriptionExpiresAt: new Date("2026-03-05T21:30:00.000Z"),
+      autoRenew: true,
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformFollowId: "utc-fansly-follow-1",
+      followedAt: new Date("2026-03-01T21:30:00.000Z"),
+    });
+    await upsertPageSubscription(testDb.db, {
+      platformSubscriptionId: "utc-fansly-sub-1",
+      platformAccountId: page.id,
+      fanId: fan.id,
+      rawStatus: 3,
+      canonicalStatus: "active",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: true,
+      sourceCreatedAt: new Date("2026-03-01T21:30:00.000Z"),
+      endsAt: new Date("2026-03-05T21:30:00.000Z"),
+    });
+
+    await rebuildFollowerRollups(testDb.db, page.id, 1);
+    await rebuildSubscriberRollups(testDb.db, page.id);
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const followersDaily = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/utc-fansly-daily/followers/daily?period=custom&from=2026-03-01&to=2026-03-02",
+      headers: { cookie },
+    });
+    const subscribersDaily = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/utc-fansly-daily/subscribers/daily?period=custom&from=2026-03-01&to=2026-03-06",
+      headers: { cookie },
+    });
+
+    expect(followersDaily.statusCode).toBe(200);
+    expect(followersDaily.json().items).toEqual([
+      expect.objectContaining({
+        businessDate: "2026-03-01",
+        newFollowers: 1,
+      }),
+    ]);
+
+    expect(subscribersDaily.statusCode).toBe(200);
+    expect(subscribersDaily.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        businessDate: "2026-03-01",
+        newSubscribers: 1,
+        activeSubscribers: 1,
+      }),
+      expect.objectContaining({
+        businessDate: "2026-03-06",
+        newSubscribers: 0,
+        activeSubscribers: 0,
+      }),
+    ]));
+    expect(
+      subscribersDaily.json().items.some(
+        (row: { businessDate: string; newSubscribers: number }) =>
+          row.businessDate === "2026-03-02" && row.newSubscribers === 1,
+      ),
+    ).toBe(false);
   });
 
   it("paginates follower and subscriber list endpoints", async (context) => {

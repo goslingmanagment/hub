@@ -40,7 +40,7 @@ import {
 } from "@fansly-connect/db";
 import {
   millsToNumber,
-  resolveBusinessDateRange,
+  resolveBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
   toMills,
@@ -299,6 +299,7 @@ async function getRevenuePageTotalsByPlatform(
 
   return mergePageRevenueTotals(
     await Promise.all(groups.map(([platform, pageIds]) => getRevenuePageTotals(app.db, {
+      platform,
       pageIds,
       period: resolveRevenuePeriodBoundsForPlatform(platform, input.period, now, input.custom),
       modelSlug: input.modelSlug,
@@ -321,6 +322,7 @@ async function getRevenueBreakdownForGroups(
     bounds: combinePeriodBounds(bounds),
     rows: mergeRevenueBreakdownRows(
       await Promise.all(groups.map(([platform, pageIds]) => getRevenueBreakdownForScope(app.db, {
+        platform,
         pageIds,
         period: resolveRevenuePeriodBoundsForPlatform(platform, input.period, now, input.custom),
       }))),
@@ -362,6 +364,7 @@ async function getRevenueComparisonForGroups(
         }
 
         return getRevenueBreakdownForScope(app.db, {
+          platform,
           pageIds,
           period,
         });
@@ -410,7 +413,13 @@ export async function getPageRevenueReport(
     now,
     input.custom,
   );
-  const currentRows = await getRevenueBreakdown(app.db, page.id, bounds.from, bounds.to);
+  const currentRows = await getRevenueBreakdown(
+    app.db,
+    page.id,
+    page.platform,
+    bounds.from,
+    bounds.to,
+  );
   const currentTotal = summarizeRevenueRows(currentRows).netEarningsMills;
   const comparisonBounds = resolveRevenueComparisonPeriodBoundsForPlatform(
     page.platform,
@@ -419,7 +428,13 @@ export async function getPageRevenueReport(
     input.custom,
   );
   const comparisonRows = comparisonBounds
-    ? await getRevenueBreakdown(app.db, page.id, comparisonBounds.from, comparisonBounds.to)
+    ? await getRevenueBreakdown(
+      app.db,
+      page.id,
+      page.platform,
+      comparisonBounds.from,
+      comparisonBounds.to,
+    )
     : [];
 
   return {
@@ -608,7 +623,12 @@ export async function getPageSubscribersDailyReport(
   input: PeriodInput,
 ): Promise<SubscriberDailyResponse> {
   const page = await getPageSummary(app, pageLabel);
-  const range = resolveBusinessDateRange(input.period, input.now ?? new Date(), input.custom);
+  const range = resolveBusinessDateRangeForPlatform(
+    page.platform,
+    input.period,
+    input.now ?? new Date(),
+    input.custom,
+  );
   const items = await listSubscriberDailyForPage(app.db, {
     pageId: page.id,
     fromBusinessDate: range.from,
@@ -653,7 +673,12 @@ export async function getPageFollowersDailyReport(
   input: PeriodInput,
 ): Promise<FollowerDailyResponse> {
   const page = await getPageSummary(app, pageLabel);
-  const range = resolveBusinessDateRange(input.period, input.now ?? new Date(), input.custom);
+  const range = resolveBusinessDateRangeForPlatform(
+    page.platform,
+    input.period,
+    input.now ?? new Date(),
+    input.custom,
+  );
   const items = await listFollowerDailyForPage(app.db, {
     pageId: page.id,
     fromBusinessDate: range.from,

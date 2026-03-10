@@ -64,7 +64,7 @@ The hub exposes a secure API that the dashboard and ChatMuse extension can consu
 - Revenue endpoints: by model, by page, by period (today / 7d / 30d / custom / all-time), by transaction type, with period-over-period comparison
 - Subscriber and follower endpoints with filtering
 - Fan profile endpoints: spending, subscription status, notes, summaries, flags, and the list of pages that fan follows/subscribes to on that platform
-- All business periods computed in Moscow time
+- All business periods computed on UTC business dates
 - Generate OpenAPI from Zod route schemas and publish typed API clients for dashboard and extension consumers
 - Audit trail for sensitive actions: logins, key issuance/revocation, page assignment changes
 

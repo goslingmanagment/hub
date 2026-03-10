@@ -8,6 +8,7 @@ import {
   millsToDecimalString,
   parsePeriod,
   resolveComparisonPeriodBounds,
+  resolveSpenderBusinessDateRangeForPlatform,
   resolvePeriodBounds,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
@@ -64,6 +65,23 @@ describe("money helpers", () => {
     expect(thirtyDay.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
     expect(comparison?.from?.toISOString()).toBe("2026-01-07T00:00:00.000Z");
     expect(comparison?.to?.toISOString()).toBe("2026-02-07T00:00:00.000Z");
+  });
+
+  it("builds Fansly revenue and spender windows on UTC calendar days", () => {
+    const now = new Date("2026-03-09T12:00:00.000Z");
+    const thirtyDay = resolveRevenuePeriodBoundsForPlatform("fansly", "30d", now);
+    const comparison = resolveRevenueComparisonPeriodBoundsForPlatform("fansly", "30d", now);
+    const spenderRange = resolveSpenderBusinessDateRangeForPlatform("fansly", "30d", now);
+
+    expect(thirtyDay.from?.toISOString()).toBe("2026-02-08T00:00:00.000Z");
+    expect(thirtyDay.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(comparison?.from?.toISOString()).toBe("2026-01-09T00:00:00.000Z");
+    expect(comparison?.to?.toISOString()).toBe("2026-02-08T00:00:00.000Z");
+    expect(spenderRange).toMatchObject({
+      timeZone: "UTC",
+      fromBusinessDate: "2026-02-08",
+      toBusinessDateInclusive: "2026-03-09",
+    });
   });
 
   it("rejects unsupported periods with the canonical option list", () => {

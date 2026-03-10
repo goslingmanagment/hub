@@ -32,7 +32,7 @@ The agency's core. A hub where different modules and applications plug in. A sin
 - See all transactions on each account, filter by type
 - Period comparison — see growth or decline vs previous period
 - **Revenue = net** (after platform commission). Revenue, adjustments (chargebacks/refunds), and unclassified shown as separate metrics. Net earnings = revenue + adjustments + unclassified (reconciliation total). See Decision #46 for classification details
-- **Timezone**: UTC in database, displayed in Moscow time
+- **Timezone**: UTC in database; business reporting aligns to UTC business dates
 - Data updates automatically:
   - Light requests (recent transactions) — every hour
   - Heavy requests (followers, full parse) — every 12 hours

@@ -300,7 +300,7 @@ Supported periods:
 - `all`
 - `custom` with `--from YYYY-MM-DD --to YYYY-MM-DD`
 
-Revenue periods are resolved in the `Europe/Moscow` business timezone.
+Revenue periods are resolved on UTC business dates.
 
 ### `followers`
 

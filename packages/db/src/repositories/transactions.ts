@@ -129,13 +129,7 @@ export async function rebuildRevenueRollups(
       )
       select t.platform_account_id,
              (
-               timezone(
-                 case
-                   when pa.platform = 'onlyfans'::platform then 'UTC'
-                   else 'Europe/Moscow'
-                 end,
-                 t.occurred_at
-               )::date
+               timezone('UTC', t.occurred_at)::date
              ) as business_date,
              t.canonical_type,
              t.transaction_state,
@@ -179,11 +173,11 @@ export async function rebuildFollowerRollups(
         updated_at
       )
       select pf.platform_account_id,
-             ((pf.followed_at at time zone 'Europe/Moscow')::date) as business_date,
+             ((pf.followed_at at time zone 'UTC')::date) as business_date,
              count(*)::int,
              case
-               when ((pf.followed_at at time zone 'Europe/Moscow')::date) =
-                    ((now() at time zone 'Europe/Moscow')::date)
+               when ((pf.followed_at at time zone 'UTC')::date) =
+                    ((now() at time zone 'UTC')::date)
                  then ${knownTotalFollowers}::integer
                else null::integer
              end,
@@ -209,17 +203,17 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
       with date_series as (
         select generate_series(
           coalesce(
-            (select min((source_created_at at time zone 'Europe/Moscow')::date)
+            (select min((source_created_at at time zone 'UTC')::date)
              from page_subscriptions
              where platform_account_id = ${platformAccountId}),
-            (now() at time zone 'Europe/Moscow')::date
+            (now() at time zone 'UTC')::date
           ),
-          (now() at time zone 'Europe/Moscow')::date,
+          (now() at time zone 'UTC')::date,
           interval '1 day'
         )::date as business_date
       ),
       new_subscribers as (
-        select ((source_created_at at time zone 'Europe/Moscow')::date) as business_date,
+        select ((source_created_at at time zone 'UTC')::date) as business_date,
                count(*)::int as new_subscribers
         from page_subscriptions
         where platform_account_id = ${platformAccountId}
@@ -231,8 +225,8 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
         from date_series ds
         left join page_subscriptions ps
           on ps.platform_account_id = ${platformAccountId}
-         and coalesce((ps.source_created_at at time zone 'Europe/Moscow')::date, ds.business_date) <= ds.business_date
-         and coalesce((ps.ends_at at time zone 'Europe/Moscow')::date, ds.business_date) >= ds.business_date
+         and coalesce((ps.source_created_at at time zone 'UTC')::date, ds.business_date) <= ds.business_date
+         and coalesce((ps.ends_at at time zone 'UTC')::date, ds.business_date) >= ds.business_date
         group by ds.business_date
       )
       insert into daily_subscribers (
@@ -264,9 +258,11 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
 export async function getRevenueBreakdown(
   db: Database,
   platformAccountId: number,
+  platform: "fansly" | "onlyfans",
   from: Date | null,
   to: Date | null,
 ) {
+  const timeZone = resolveBusinessTimeZone(platform);
   const clauses = [
     eq(dailyRevenue.platformAccountId, platformAccountId),
     inArray(
@@ -276,10 +272,10 @@ export async function getRevenueBreakdown(
   ];
 
   if (from) {
-    clauses.push(gte(dailyRevenue.businessDate, toBusinessDate(from)));
+    clauses.push(gte(dailyRevenue.businessDate, toBusinessDate(from, timeZone)));
   }
   if (to) {
-    clauses.push(lt(dailyRevenue.businessDate, toBusinessDate(to)));
+    clauses.push(lt(dailyRevenue.businessDate, toBusinessDate(to, timeZone)));
   }
 
   const rows = await db

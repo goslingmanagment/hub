@@ -3,8 +3,10 @@ import { and, asc, desc, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-or
 import {
   getTransactionClassification,
   reportableTransactionTypes,
+  resolveBusinessTimeZone,
   toBusinessDate,
   type PeriodBounds,
+  type Platform,
 } from "@fansly-connect/shared";
 import type { Database } from "../client.ts";
 import {
@@ -200,15 +202,17 @@ function buildRevenueRollupClauses(
 export async function getRevenuePageTotals(
   db: Database,
   input: {
+    platform: Platform;
     pageIds?: number[];
     period: PeriodBounds;
     modelSlug?: string;
   },
 ) {
+  const timeZone = resolveBusinessTimeZone(input.platform);
   const clauses = buildRevenueRollupClauses({
     pageIds: input.pageIds,
-    fromBusinessDate: input.period.from ? toBusinessDate(input.period.from) : null,
-    toBusinessDate: input.period.to ? toBusinessDate(input.period.to) : null,
+    fromBusinessDate: input.period.from ? toBusinessDate(input.period.from, timeZone) : null,
+    toBusinessDate: input.period.to ? toBusinessDate(input.period.to, timeZone) : null,
   });
 
   if (!clauses) {
@@ -237,14 +241,16 @@ export async function getRevenuePageTotals(
 export async function getRevenueBreakdownForScope(
   db: Database,
   input: {
+    platform: Platform;
     pageIds?: number[];
     period: PeriodBounds;
   },
 ) {
+  const timeZone = resolveBusinessTimeZone(input.platform);
   const clauses = buildRevenueRollupClauses({
     pageIds: input.pageIds,
-    fromBusinessDate: input.period.from ? toBusinessDate(input.period.from) : null,
-    toBusinessDate: input.period.to ? toBusinessDate(input.period.to) : null,
+    fromBusinessDate: input.period.from ? toBusinessDate(input.period.from, timeZone) : null,
+    toBusinessDate: input.period.to ? toBusinessDate(input.period.to, timeZone) : null,
   });
 
   if (!clauses) {

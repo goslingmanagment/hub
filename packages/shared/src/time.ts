@@ -216,7 +216,11 @@ function daysInMonth(year: number, month: number) {
 }
 
 export function resolveBusinessTimeZone(platform: Platform): string {
-  return platform === "onlyfans" ? UTC_TIME_ZONE : MOSCOW_TIME_ZONE;
+  switch (platform) {
+    case "fansly":
+    case "onlyfans":
+      return UTC_TIME_ZONE;
+  }
 }
 
 export function businessDateToUtcStart(value: string, timeZone = MOSCOW_TIME_ZONE) {
@@ -371,6 +375,20 @@ export function resolveBusinessDateRange(
     from: bounds.from ? toBusinessDate(bounds.from, timeZone) : null,
     toExclusive: bounds.to ? toBusinessDate(bounds.to, timeZone) : null,
   };
+}
+
+export function resolveBusinessDateRangeForPlatform(
+  platform: Platform,
+  period: Period,
+  now = new Date(),
+  custom?: { from: string; to: string },
+): BusinessDateRange {
+  return resolveBusinessDateRange(
+    period,
+    now,
+    custom,
+    resolveBusinessTimeZone(platform),
+  );
 }
 
 function resolveSpenderPeriodBounds(

@@ -18,8 +18,8 @@
 | 13 | ChatMuse Auth | Scoped API keys, one per chatter account, hashed and revocable |
 | 14 | Authorization | Page-scoped RBAC for `owner`, `team_lead`, `chatter`, `content_manager` |
 | 15 | Money | Store monetary amounts as `BIGINT` mills plus `currency` and raw source amount |
-| 16 | Time Handling | Store UTC `timestamptz` in DB; use Moscow time for business reporting |
-| 17 | Reporting Period Semantics | Backend computes `Europe/Moscow` boundaries; trailing windows include today |
+| 16 | Time Handling | Store UTC `timestamptz` in DB; use UTC business dates for product analytics |
+| 17 | Reporting Period Semantics | Backend computes UTC business-date boundaries; trailing windows include today |
 | 18 | Platform Adapters | Strict adapter boundary per platform with canonical normalized DTOs |
 | 19 | Fan Identity | `(platform, platform_user_id)` plus per-page relationship rows |
 | 20 | Proxy Handling | Per-page proxy configuration in DB, applied inside adapters |
@@ -220,7 +220,7 @@
 **Rejected:** Direct Bot API calls from the failing code path risk lost notifications during outages. Bot frameworks add command and middleware machinery that v1 push notifications do not need.
 
 ## Additional Decisions
-- **Reporting period semantics:** The backend computes all business period boundaries in `Europe/Moscow`, and trailing `7d` and `30d` windows include today so dashboard, Telegram, and exports agree.
+- **Reporting period semantics:** The backend computes all business period boundaries on UTC business dates, and trailing `7d` and `30d` windows include today so dashboard, Telegram, and exports agree.
 - **No Redis in v1:** This is a deliberate choice, not an omission; use Postgres rollups, a Postgres prompt cache, and in-memory short-window limiting until a measured bottleneck says otherwise.
 - **Hub-owned AI gateway:** Route all Claude traffic through one backend gateway that records feature, chatter, page, provider response ID, token usage, cost, cache hit, and quota decisions.
 - **Raw payload retention:** Store mapping-critical upstream payloads and all failed payloads as `jsonb`, tagged with `mapper_version` and sync run ID, and retain them for 180 days.
@@ -383,5 +383,4 @@ comparison: { summary, delta }
 - Consider `classifiedNetEarningsMills` (revenue + adjustments only) as optional derived metric
 
 **Rationale:** Current code treats everything except `payout_reversal` as "revenue", mixing chargebacks into revenue metrics. This must be fixed before Phase 4 (Dashboard) to avoid shipping incorrect financial data. The shared classification approach avoids DB migration and keeps the change in query/service/API/CLI layers only.
-
 

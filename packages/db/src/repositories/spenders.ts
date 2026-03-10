@@ -48,15 +48,7 @@ export async function rebuildSpenderDailyFacts(
     )
     select t.platform_account_id,
            t.fan_id,
-           (
-             timezone(
-               case
-                 when pa.platform = 'onlyfans'::platform then 'UTC'
-                 else 'Europe/Moscow'
-               end,
-               t.occurred_at
-             )::date
-           ) as business_date,
+           (timezone('UTC', t.occurred_at)::date) as business_date,
            t.canonical_type,
            t.transaction_state,
            count(*)::int,
@@ -65,7 +57,6 @@ export async function rebuildSpenderDailyFacts(
            max(t.occurred_at),
            now()
     from transactions t
-    join platform_accounts pa on pa.id = t.platform_account_id
     where t.platform_account_id = ${platformAccountId}
       and t.fan_id is not null
       and t.canonical_type in (${spenderTransactionTypeSql})
