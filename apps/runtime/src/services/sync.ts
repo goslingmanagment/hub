@@ -87,6 +87,7 @@ async function runLightSyncUnlocked(
         stats.transactions = await syncTransactions(app, {
           pageLabel: pageContext.page.label,
           platformAccountId: pageContext.page.id,
+          commissionRate: pageContext.page.commissionRate,
           requestContext: { session: pageContext.session, proxy: pageContext.proxy },
           syncRunId: run.id,
         });

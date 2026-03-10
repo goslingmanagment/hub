@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  calculateGrossMillsFromNet,
   calculateNetMillsFromGross,
   dollarsToMills,
   formatUsdFromMills,
@@ -31,6 +32,13 @@ describe("money helpers", () => {
     expect(calculateNetMillsFromGross(4990n, 0.2)).toBe(3990n);
     expect(calculateNetMillsFromGross(-4990n, 0.2)).toBe(-3990n);
     expect(calculateNetMillsFromGross(-2500n, 0.2)).toBe(-2000n);
+  });
+
+  it("derives gross mills from net mills without float drift", () => {
+    expect(calculateGrossMillsFromNet(16000n, 0)).toBe(16000n);
+    expect(calculateGrossMillsFromNet(16000n, 0.2)).toBe(20000n);
+    expect(calculateGrossMillsFromNet(11192n, 0.2)).toBe(13990n);
+    expect(calculateGrossMillsFromNet(-16000n, 0.2)).toBe(-20000n);
   });
 
   it("builds Moscow trailing windows that include today", () => {

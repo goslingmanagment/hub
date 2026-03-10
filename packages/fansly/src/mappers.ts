@@ -1,6 +1,6 @@
 import type { TransactionState, TransactionType } from "@fansly-connect/shared";
 
-export const FANSLY_MAPPER_VERSION = "fansly-phase1-v3";
+export const FANSLY_MAPPER_VERSION = "fansly-phase1-v4";
 
 export function mapFanslyTransactionType(rawType: number): TransactionType {
   if ([15000, 15001, 6515].includes(rawType)) {

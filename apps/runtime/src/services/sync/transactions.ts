@@ -14,17 +14,34 @@ import {
   mapFanslyTransactionState,
   mapFanslyTransactionType,
 } from "@fansly-connect/fansly";
-import { toMills } from "@fansly-connect/shared";
+import { calculateGrossMillsFromNet, toMills } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { prepareHydratedFans } from "./fan-hydration.ts";
 import { DAY_MS, retentionDate } from "./shared.ts";
+
+function resolveFanslyCommissionRate(
+  destinationTax: number | null,
+  fallbackCommissionRate: number,
+) {
+  if (
+    destinationTax !== null &&
+    Number.isInteger(destinationTax) &&
+    destinationTax >= 0 &&
+    destinationTax <= 10_000
+  ) {
+    return destinationTax / 10_000;
+  }
+
+  return fallbackCommissionRate;
+}
 
 export async function syncTransactions(
   app: AppContext,
   input: {
     pageLabel: string;
     platformAccountId: number;
+    commissionRate: number;
     requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
   },
@@ -117,6 +134,17 @@ export async function syncTransactions(
       const fanId = item.correlationAccountId
         ? (fanMap.get(item.correlationAccountId) ?? null)
         : null;
+      const sourceAmountMills = toMills(item.amount);
+      const destinationAmountMills = toMills(item.destinationAmount);
+      const creatorNetAmountMills = destinationAmountMills;
+      const commissionRate = resolveFanslyCommissionRate(
+        item.destinationTax,
+        input.commissionRate,
+      );
+      // Live Fansly earnings rows currently repeat creator-net in both amount fields.
+      const grossAmountMills = sourceAmountMills === destinationAmountMills
+        ? calculateGrossMillsFromNet(creatorNetAmountMills, commissionRate)
+        : sourceAmountMills;
 
       await upsertTransaction(tx as typeof app.db, {
         platformAccountId: input.platformAccountId,
@@ -131,9 +159,9 @@ export async function syncTransactions(
         transactionState: mapFanslyTransactionState(item.status),
         destination: item.destination,
         rawStatus: item.status,
-        grossAmountMills: toMills(item.amount),
-        sourceDestinationAmountMills: toMills(item.destinationAmount),
-        creatorNetAmountMills: toMills(item.destinationAmount),
+        grossAmountMills,
+        sourceDestinationAmountMills: destinationAmountMills,
+        creatorNetAmountMills,
         rawDestinationTax: item.destinationTax,
         newBalanceMills: item.newBalance64 ? toMills(item.newBalance64) : null,
         senderId: item.senderId,

@@ -458,7 +458,8 @@ function createUnusedFanslyAdapter() {
 
 describe("sync integration", () => {
   let testDb: Awaited<ReturnType<typeof startTestDatabase>> | null = null;
-  const expectedRevenueTotal = 238392n;
+  const expectedRevenueNetTotal = 238392n;
+  const expectedRevenueGrossTotal = 297990n;
 
   beforeAll(async () => {
     try {
@@ -526,9 +527,11 @@ describe("sync integration", () => {
     const transactionCount = await testDb.pool.query("select count(*)::int from transactions");
     const followCount = await testDb.pool.query("select count(*)::int from page_follows");
     const subscriptionCount = await testDb.pool.query("select count(*)::int from page_subscriptions");
-    const revenueRows = await testDb.pool.query(
-      "select coalesce(sum(creator_net_amount_mills), 0)::bigint as total from daily_revenue",
-    );
+    const revenueRows = await testDb.pool.query(`
+      select coalesce(sum(gross_amount_mills), 0)::bigint as gross_total,
+             coalesce(sum(creator_net_amount_mills), 0)::bigint as net_total
+      from daily_revenue
+    `);
     const followerRollupRows = await testDb.pool.query(
       "select coalesce(sum(new_followers), 0)::int as total from daily_followers",
     );
@@ -539,7 +542,8 @@ describe("sync integration", () => {
     expect(transactionCount.rows[0]?.count).toBe(transactionsFixture.length);
     expect(followCount.rows[0]?.count).toBe(followersFixture.length);
     expect(subscriptionCount.rows[0]?.count).toBe(subscribersFixture.length);
-    expect(BigInt(revenueRows.rows[0]?.total ?? 0)).toBe(expectedRevenueTotal);
+    expect(BigInt(revenueRows.rows[0]?.gross_total ?? 0)).toBe(expectedRevenueGrossTotal);
+    expect(BigInt(revenueRows.rows[0]?.net_total ?? 0)).toBe(expectedRevenueNetTotal);
     expect(followerRollupRows.rows[0]?.total).toBe(followersFixture.length);
     expect(subscriberRollupRows.rows[0]?.total).toBe(subscribersFixture.length);
 
@@ -547,6 +551,59 @@ describe("sync integration", () => {
       "select distinct transaction_state from daily_revenue order by transaction_state",
     );
     expect(stateRows.rows.map((row: { transaction_state: string }) => row.transaction_state)).toEqual(["pending", "posted"]);
+  });
+
+  it("derives Fansly gross from destination tax while preserving the source net fields", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const transactionsFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/earnings_transactions.json"), "utf8"),
+    ).data.response.data as FanslyEarningsTransaction[];
+
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, new FakeFanslyAdapter({
+      accountMe: accountMeFixture,
+      transactions: transactionsFixture,
+      subscribers: [],
+      followers: [],
+    }));
+
+    await runLightSync(app, page.label);
+
+    const txRows = await testDb.pool.query(`
+      select transaction_id,
+             gross_amount_mills,
+             source_destination_amount_mills,
+             creator_net_amount_mills,
+             raw_destination_tax
+      from transactions
+      where platform_account_id = ${page.id}
+        and transaction_id in ('883584486774681600', '881649113408479232')
+      order by transaction_id asc
+    `);
+
+    expect(txRows.rows).toEqual([
+      {
+        transaction_id: "881649113408479232",
+        gross_amount_mills: 13990n,
+        source_destination_amount_mills: 11192n,
+        creator_net_amount_mills: 11192n,
+        raw_destination_tax: 2000,
+      },
+      {
+        transaction_id: "883584486774681600",
+        gross_amount_mills: 20000n,
+        source_destination_amount_mills: 16000n,
+        creator_net_amount_mills: 16000n,
+        raw_destination_tax: 2000,
+      },
+    ]);
   });
 
   it("lists synced followers most recent first", async (context) => {
@@ -829,7 +886,8 @@ describe("sync integration", () => {
       where canonical_type = 'payout_reversal'
     `);
     const totalRevenueRows = await testDb.pool.query(`
-      select coalesce(sum(creator_net_amount_mills), 0)::bigint as total
+      select coalesce(sum(gross_amount_mills), 0)::bigint as gross_total,
+             coalesce(sum(creator_net_amount_mills), 0)::bigint as net_total
       from daily_revenue
     `);
     const breakdown = await revenueBreakdownForPage(app, page.label, "all");
@@ -841,7 +899,8 @@ describe("sync integration", () => {
     });
     expect(BigInt(payoutRows.rows[0]?.net_amount_mills ?? 0)).toBe(331000n);
     expect(payoutRollupRows.rows[0]?.count).toBe(0);
-    expect(BigInt(totalRevenueRows.rows[0]?.total ?? 0)).toBe(expectedRevenueTotal);
+    expect(BigInt(totalRevenueRows.rows[0]?.gross_total ?? 0)).toBe(expectedRevenueGrossTotal);
+    expect(BigInt(totalRevenueRows.rows[0]?.net_total ?? 0)).toBe(expectedRevenueNetTotal);
     expect(breakdown.rows.some((row) => row.canonicalType === "payout_reversal")).toBe(false);
   });
 
@@ -890,7 +949,8 @@ describe("sync integration", () => {
     const revenueRows = await testDb.pool.query(`
       select count(*)::int as row_count,
              count(distinct (business_date, canonical_type, transaction_state))::int as distinct_count,
-             coalesce(sum(creator_net_amount_mills), 0)::bigint as total
+             coalesce(sum(gross_amount_mills), 0)::bigint as gross_total,
+             coalesce(sum(creator_net_amount_mills), 0)::bigint as net_total
       from daily_revenue
       where platform_account_id = ${page.id}
     `);
@@ -910,7 +970,8 @@ describe("sync integration", () => {
     `);
 
     expect(revenueRows.rows[0]?.row_count).toBe(revenueRows.rows[0]?.distinct_count);
-    expect(BigInt(revenueRows.rows[0]?.total ?? 0)).toBe(expectedRevenueTotal);
+    expect(BigInt(revenueRows.rows[0]?.gross_total ?? 0)).toBe(expectedRevenueGrossTotal);
+    expect(BigInt(revenueRows.rows[0]?.net_total ?? 0)).toBe(expectedRevenueNetTotal);
     expect(followerRows.rows[0]?.row_count).toBe(followerRows.rows[0]?.distinct_count);
     expect(followerRows.rows[0]?.total).toBe(followersFixture.length);
     expect(subscriberRows.rows[0]?.row_count).toBe(subscriberRows.rows[0]?.distinct_count);
@@ -1559,6 +1620,169 @@ describe("sync integration", () => {
       expect(checkpoint?.cursorTimestamp?.toISOString()).toBe("2026-03-07T12:00:00.000Z");
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("backfills existing Fansly gross revenue when the gross migration runs", async (context) => {
+    let legacyDb: StartedTestDatabase | null = null;
+
+    try {
+      legacyDb = await startTestDatabase({
+        through: "0010_spenders_domain_foundation.sql",
+      });
+    } catch (error) {
+      context.skip();
+      return;
+    }
+
+    try {
+      const model = await createModel(legacyDb.db, {
+        slug: "legacy-fansly-gross",
+        name: "Legacy Fansly Gross",
+      });
+      const page = await createFanslyPage(legacyDb.db, {
+        modelId: model.id,
+        label: "legacy-fansly-gross",
+      });
+      const insertedFan = await legacyDb.pool.query(`
+        insert into fans (platform, platform_user_id, username)
+        values ('fansly', 'legacy-fan', 'legacyfan')
+        returning id
+      `);
+      const fanId = Number(insertedFan.rows[0]?.id ?? 0);
+
+      await legacyDb.pool.query(`
+        insert into transactions (
+          platform_account_id,
+          fan_id,
+          transaction_id,
+          raw_type,
+          canonical_type,
+          transaction_state,
+          raw_status,
+          gross_amount_mills,
+          source_destination_amount_mills,
+          creator_net_amount_mills,
+          raw_destination_tax,
+          occurred_at
+        )
+        values
+          (${page.id}, ${fanId}, 'legacy-subscription', '15001', 'subscription', 'posted', '2', 16000, 16000, 16000, 2000, '2026-03-05T12:00:00.000Z'::timestamptz),
+          (${page.id}, null, 'legacy-payout-reversal', '16013', 'payout_reversal', 'posted', '2', 331000, 331000, 331000, 0, '2026-03-06T12:00:00.000Z'::timestamptz)
+      `);
+      await legacyDb.pool.query(`
+        insert into daily_revenue (
+          platform_account_id,
+          business_date,
+          canonical_type,
+          transaction_state,
+          transaction_count,
+          gross_amount_mills,
+          creator_net_amount_mills
+        )
+        values
+          (${page.id}, '2026-03-05'::date, 'subscription', 'posted', 1, 16000, 16000)
+      `);
+      await legacyDb.pool.query(`
+        insert into spender_daily_facts (
+          platform_account_id,
+          fan_id,
+          business_date,
+          canonical_type,
+          transaction_state,
+          transaction_count,
+          gross_amount_mills,
+          creator_net_amount_mills,
+          last_transaction_at
+        )
+        values
+          (${page.id}, ${fanId}, '2026-03-05'::date, 'subscription', 'posted', 1, 16000, 16000, '2026-03-05T12:00:00.000Z'::timestamptz)
+      `);
+      await legacyDb.pool.query(`
+        insert into spender_lifetime_page (
+          platform_account_id,
+          fan_id,
+          gross_amount_mills,
+          creator_net_amount_mills,
+          last_transaction_at
+        )
+        values
+          (${page.id}, ${fanId}, 16000, 16000, '2026-03-05T12:00:00.000Z'::timestamptz)
+      `);
+
+      await applyTestMigrations(legacyDb.pool, {
+        from: "0011_fansly_gross_backfill.sql",
+      });
+
+      const transactionRows = await legacyDb.pool.query(`
+        select transaction_id,
+               gross_amount_mills,
+               source_destination_amount_mills,
+               creator_net_amount_mills
+        from transactions
+        where platform_account_id = ${page.id}
+        order by transaction_id asc
+      `);
+      const revenueRows = await legacyDb.pool.query(`
+        select canonical_type,
+               gross_amount_mills,
+               creator_net_amount_mills
+        from daily_revenue
+        where platform_account_id = ${page.id}
+        order by canonical_type asc
+      `);
+      const spenderDailyRows = await legacyDb.pool.query(`
+        select gross_amount_mills,
+               creator_net_amount_mills
+        from spender_daily_facts
+        where platform_account_id = ${page.id}
+          and fan_id = ${fanId}
+      `);
+      const spenderLifetimeRows = await legacyDb.pool.query(`
+        select gross_amount_mills,
+               creator_net_amount_mills
+        from spender_lifetime_page
+        where platform_account_id = ${page.id}
+          and fan_id = ${fanId}
+      `);
+
+      expect(transactionRows.rows).toEqual([
+        {
+          transaction_id: "legacy-payout-reversal",
+          gross_amount_mills: 331000n,
+          source_destination_amount_mills: 331000n,
+          creator_net_amount_mills: 331000n,
+        },
+        {
+          transaction_id: "legacy-subscription",
+          gross_amount_mills: 20000n,
+          source_destination_amount_mills: 16000n,
+          creator_net_amount_mills: 16000n,
+        },
+      ]);
+      expect(revenueRows.rows).toEqual([
+        {
+          canonical_type: "subscription",
+          gross_amount_mills: 20000n,
+          creator_net_amount_mills: 16000n,
+        },
+      ]);
+      expect(spenderDailyRows.rows).toEqual([
+        {
+          gross_amount_mills: 20000n,
+          creator_net_amount_mills: 16000n,
+        },
+      ]);
+      expect(spenderLifetimeRows.rows).toEqual([
+        {
+          gross_amount_mills: 20000n,
+          creator_net_amount_mills: 16000n,
+        },
+      ]);
+    } finally {
+      if (legacyDb) {
+        await legacyDb.stop();
+      }
     }
   });
 

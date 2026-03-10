@@ -102,3 +102,21 @@ export function calculateNetMillsFromGross(
   const commissionFeeCents = roundDiv(gross * commissionRateScaled, COMMISSION_RATE_SCALE * 10n);
   return gross - (commissionFeeCents * 10n);
 }
+
+export function calculateGrossMillsFromNet(
+  netMills: MoneyLike,
+  commissionRate: number,
+) {
+  const net = toMills(netMills);
+  const commissionRateScaled = commissionRateToScaledInt(commissionRate);
+  if (commissionRateScaled === 0n) {
+    return net;
+  }
+
+  const creatorShareScaled = COMMISSION_RATE_SCALE - commissionRateScaled;
+  if (creatorShareScaled <= 0n) {
+    throw new Error(`Invalid commission rate "${commissionRate}"`);
+  }
+
+  return roundDiv(net * COMMISSION_RATE_SCALE, creatorShareScaled);
+}

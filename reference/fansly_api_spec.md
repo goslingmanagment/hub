@@ -749,6 +749,8 @@ Get earnings overview with pending balance.
 #### GET /account/wallets/earnings/accounts
 Get earnings broken down by subscriber.
 
+Observed live response fields include `totalGross` and `totalNet`. This endpoint exposes the gross/net split directly at the per-subscriber aggregate level.
+
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
 | `before` | string | No | End timestamp (ms) |
@@ -803,6 +805,8 @@ Get individual earnings transactions.
   }]
 }
 ```
+
+Observed live fixtures show `amount` and `destinationAmount` both carrying the creator-net value, while `destinationTax` carries the commission rate in basis points (for example `2000` = 20%). When a separate gross field is absent, derive gross as `net / (1 - commission_rate)`.
 
 **Pagination:** Offset-based.
 
