@@ -43,7 +43,7 @@ export async function refreshPageMetadata(
     const accountMe = await app.adapter.getAccountMe({
       session: pageContext.session,
       proxy: pageContext.proxy,
-      telemetry,
+      requestObserver: telemetry?.getRequestObserver() ?? null,
     });
 
     await updatePageMetadata(app.db, pageContext.page.id, {
@@ -67,7 +67,7 @@ export async function refreshPageMetadata(
     {
       auth: pageContext.auth,
       proxy: pageContext.proxy,
-      telemetry,
+      requestObserver: telemetry?.getRequestObserver() ?? null,
     },
     getOnlyMonsterAccountId(pageContext.page.metadata),
   );

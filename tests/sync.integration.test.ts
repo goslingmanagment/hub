@@ -325,6 +325,16 @@ function deferred() {
   return { promise, resolve };
 }
 
+function mockStdoutWrite(lines: string[]) {
+  return vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown, cb?: unknown) => {
+    lines.push(String(chunk));
+    if (typeof cb === "function") {
+      cb();
+    }
+    return true;
+  }) as typeof process.stdout.write);
+}
+
 function duplicateTransactions(seed: FanslyEarningsTransaction[], count: number) {
   return Array.from({ length: count }).map((_, index) => {
     const base = seed[index % seed.length]!;
@@ -396,6 +406,7 @@ function createTestApp(
       sessionTtlDays: 30,
       fanslyBaseUrl: "https://example.invalid",
       onlyMonsterBaseUrl: "https://example.invalid",
+      syncHttpTraceFile: null,
       followerPageDelayMs: 0,
       transactionLookbackDays: overrides?.transactionLookbackDays ?? 7,
       transactionRescanCapDays: overrides?.transactionRescanCapDays ?? 30,
@@ -889,7 +900,10 @@ describe("sync integration", () => {
       followers: [],
     }));
 
+    const stdoutLines: string[] = [];
+    const stdoutSpy = mockStdoutWrite(stdoutLines);
     const result = await runLightSync(app, page.label);
+    stdoutSpy.mockRestore();
     const attemptRows = await testDb.pool.query(`
       select operation, state, request_shape
       from sync_request_attempts
@@ -907,6 +921,16 @@ describe("sync integration", () => {
       from sync_runs
       where id = ${result.runId}
     `);
+    const traceRecords = stdoutLines
+      .flatMap((line) => line.split("\n"))
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const accountLookupTrace = traceRecords.find((record) =>
+      record.component === "sync_http" && record.operation === "account_lookup"
+    ) as Record<string, unknown> | undefined;
+    const summaryTrace = traceRecords.find((record) =>
+      record.component === "sync_http_summary"
+    ) as Record<string, unknown> | undefined;
 
     expect(result.status).toBe("success");
     expect(result.stats.health).toBe("healthy");
@@ -931,6 +955,25 @@ describe("sync integration", () => {
         "run_finished",
       ]),
     );
+    expect(accountLookupTrace).toMatchObject({
+      component: "sync_http",
+      endpointTemplate: "/account",
+      idsCount: expect.any(Number),
+    });
+    expect(accountLookupTrace?.ids).toBeUndefined();
+    expect(summaryTrace).toMatchObject({
+      component: "sync_http_summary",
+      provider: "fansly",
+      runId: result.runId,
+      pageLabel: page.label,
+      stream: "light",
+      totalAttempts: expect.any(Number),
+      totalRequestDurationMs: expect.any(Number),
+      totalSyncDurationMs: expect.any(Number),
+    });
+    const serializedTrace = JSON.stringify(traceRecords);
+    expect(serializedTrace).not.toContain("authorization");
+    expect(serializedTrace).not.toContain("fansly-session-id");
   });
 
   it("flags after_ineffective when Fansly ignores the lower-bound filter", async (context) => {

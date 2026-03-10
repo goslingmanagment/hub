@@ -41,12 +41,14 @@ export async function findOnlyFansAccountByUsername(
   username: string,
 ) {
   let cursor: string | null = null;
+  let pageIndex = 0;
   const matches: OnlyMonsterAccount[] = [];
 
   do {
     const response = await adapter.listAccountsPage(context, {
       cursor,
       limit: 100,
+      pageIndex,
     });
 
     matches.push(
@@ -54,6 +56,7 @@ export async function findOnlyFansAccountByUsername(
     );
 
     cursor = response.parsed.nextCursor ?? null;
+    pageIndex += 1;
   } while (cursor);
 
   if (matches.length === 0) {

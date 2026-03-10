@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { appendFile, mkdir } from "node:fs/promises";
+import path from "node:path";
 
 import {
   finishSyncRequestAttempt,
@@ -7,10 +8,9 @@ import {
   insertSyncRunEvent,
 } from "@fansly-connect/db";
 import type {
+  HttpRequestEvent,
+  HttpRequestObserver,
   SyncHealth,
-  SyncRequestTelemetry,
-  SyncTelemetryAttemptFinishInput,
-  SyncTelemetryAttemptStartInput,
   SyncTelemetryEventSeverity,
 } from "@fansly-connect/shared";
 
@@ -18,6 +18,18 @@ import type { AppContext } from "../../bootstrap.ts";
 
 type SyncStream = "light" | "followers" | "transactions" | "subscribers" | "cleanup";
 type SyncProvider = "fansly" | "onlyfans";
+
+type RequestTraceWriter = {
+  write(record: Record<string, unknown>): Promise<void>;
+};
+
+interface RequestTotalsSnapshot {
+  totalAttempts: number;
+  logicalRequests: number;
+  retryAttempts: number;
+  failedAttempts: number;
+  totalRequestDurationMs: number;
+}
 
 export interface SyncAnomalyRecord {
   code: string;
@@ -43,6 +55,27 @@ interface OperationSummary {
   totalDurationMs: number;
 }
 
+interface RequestSummaryRecord {
+  timestamp: string;
+  component: "sync_http_summary";
+  provider: SyncProvider;
+  runId: number;
+  pageLabel: string;
+  stream: SyncStream;
+  status: "success" | "partial" | "failed" | "skipped";
+  totalAttempts: number;
+  retryAttempts: number;
+  failedAttempts: number;
+  totalRequestDurationMs: number;
+  totalSyncDurationMs: number;
+  byOperation: Record<string, {
+    attempts: number;
+    retries: number;
+    failures: number;
+    totalDurationMs: number;
+  }>;
+}
+
 function iso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
 }
@@ -53,6 +86,181 @@ function stringifyError(error: unknown) {
 
 function normalizeSeverity(severity?: SyncTelemetryEventSeverity) {
   return severity ?? "info";
+}
+
+function normalizeDate(value: Date | string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function compactRecord(record: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== undefined && value !== null),
+  );
+}
+
+function flattenPagination(event: Pick<HttpRequestEvent, "pagination">) {
+  return compactRecord({
+    offset: event.pagination?.offset ?? undefined,
+    limit: event.pagination?.limit ?? undefined,
+    pageIndex: event.pagination?.pageIndex ?? undefined,
+    cursorPresent: event.pagination?.cursorPresent ?? undefined,
+  });
+}
+
+function attemptKey(event: Pick<HttpRequestEvent, "requestId" | "attemptNumber">) {
+  return `${event.requestId}:${event.attemptNumber}`;
+}
+
+function createStdoutWriter(): RequestTraceWriter {
+  let chain = Promise.resolve();
+
+  return {
+    write(record) {
+      const line = `${JSON.stringify(record)}\n`;
+      chain = chain.then(() => new Promise<void>((resolve, reject) => {
+        process.stdout.write(line, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      }));
+      return chain;
+    },
+  };
+}
+
+function createFileWriter(filePath: string): RequestTraceWriter {
+  let chain: Promise<void> = mkdir(path.dirname(filePath), { recursive: true }).then(() => undefined);
+
+  return {
+    write(record) {
+      const line = `${JSON.stringify(record)}\n`;
+      chain = chain.then(() => appendFile(filePath, line, "utf8"));
+      return chain.then(() => undefined);
+    },
+  };
+}
+
+class RequestSummaryCollector implements HttpRequestObserver {
+  private readonly operationSummaries = new Map<string, OperationSummary>();
+  private readonly logicalRequests = new Set<string>();
+  private requestAttempts = 0;
+  private retryAttempts = 0;
+  private failedAttempts = 0;
+  private totalRequestDurationMs = 0;
+
+  async onRequestEvent(event: HttpRequestEvent) {
+    if (event.state === "started") {
+      this.requestAttempts += 1;
+      this.logicalRequests.add(event.requestId);
+      const summary = this.operationSummaries.get(event.operation) ?? {
+        attempts: 0,
+        logicalRequests: 0,
+        successes: 0,
+        retries: 0,
+        failures: 0,
+        maxDurationMs: null,
+        totalDurationMs: 0,
+      };
+      summary.attempts += 1;
+      if (event.attemptNumber === 1) {
+        summary.logicalRequests += 1;
+      }
+      this.operationSummaries.set(event.operation, summary);
+      return;
+    }
+
+    const summary = this.operationSummaries.get(event.operation);
+    if (!summary) {
+      return;
+    }
+
+    if (event.state === "success") {
+      summary.successes += 1;
+    } else if (event.state === "retry") {
+      summary.retries += 1;
+      this.retryAttempts += 1;
+    } else if (event.state === "failed") {
+      summary.failures += 1;
+      this.failedAttempts += 1;
+    }
+
+    summary.totalDurationMs += event.durationMs;
+    summary.maxDurationMs = summary.maxDurationMs === null
+      ? event.durationMs
+      : Math.max(summary.maxDurationMs, event.durationMs);
+    this.totalRequestDurationMs += event.durationMs;
+    this.operationSummaries.set(event.operation, summary);
+  }
+
+  getRequestTotalsSnapshot(): RequestTotalsSnapshot {
+    return {
+      totalAttempts: this.requestAttempts,
+      logicalRequests: this.logicalRequests.size,
+      retryAttempts: this.retryAttempts,
+      failedAttempts: this.failedAttempts,
+      totalRequestDurationMs: this.totalRequestDurationMs,
+    };
+  }
+
+  getOperationStats() {
+    return Array.from(this.operationSummaries.entries()).map(([operation, summary]) => [
+      operation,
+      {
+        attempts: summary.attempts,
+        logicalRequests: summary.logicalRequests,
+        successes: summary.successes,
+        retries: summary.retries,
+        failures: summary.failures,
+        maxDurationMs: summary.maxDurationMs,
+        averageDurationMs: summary.attempts > 0
+          ? Math.round(summary.totalDurationMs / summary.attempts)
+          : null,
+        totalDurationMs: summary.totalDurationMs,
+      },
+    ]);
+  }
+
+  buildSummaryRecord(
+    metadata: SyncRunTelemetry["metadata"],
+    status: "success" | "partial" | "failed" | "skipped",
+    runStartedAt: Date,
+    finishedAt: Date,
+  ): RequestSummaryRecord {
+    const totals = this.getRequestTotalsSnapshot();
+    return {
+      timestamp: finishedAt.toISOString(),
+      component: "sync_http_summary",
+      provider: metadata.provider,
+      runId: metadata.runId,
+      pageLabel: metadata.pageLabel,
+      stream: metadata.stream,
+      status,
+      totalAttempts: totals.totalAttempts,
+      retryAttempts: totals.retryAttempts,
+      failedAttempts: totals.failedAttempts,
+      totalRequestDurationMs: totals.totalRequestDurationMs,
+      totalSyncDurationMs: Math.max(0, finishedAt.getTime() - runStartedAt.getTime()),
+      byOperation: Object.fromEntries(
+        Array.from(this.operationSummaries.entries()).map(([operation, summary]) => [
+          operation,
+          {
+            attempts: summary.attempts,
+            retries: summary.retries,
+            failures: summary.failures,
+            totalDurationMs: summary.totalDurationMs,
+          },
+        ]),
+      ),
+    };
+  }
 }
 
 export function summarizeCheckpoint(
@@ -75,25 +283,25 @@ export function summarizeCheckpoint(
   };
 }
 
-export class SyncRunTelemetry implements SyncRequestTelemetry {
-  private readonly operationSummaries = new Map<string, OperationSummary>();
+export class SyncRunTelemetry {
   private readonly anomalies = new Map<string, SyncAnomalyRecord>();
   private readonly notes: string[] = [];
   private readonly telemetryWarnings: string[] = [];
-  private readonly logicalRequests = new Set<string>();
+  private readonly checkpointBefore: Record<string, CheckpointSummary | null> = {};
+  private readonly checkpointAfter: Record<string, CheckpointSummary | null> = {};
+  private readonly phaseNames: string[] = [];
+  private readonly requestAttemptIds = new Map<string, number>();
+  private readonly requestSummaryCollector = new RequestSummaryCollector();
+  private readonly requestTraceWriters: RequestTraceWriter[];
+  private readonly requestObserver: HttpRequestObserver;
+  private readonly runStartedAt: Date;
 
-  private checkpointBefore: Record<string, CheckpointSummary | null> = {};
-  private checkpointAfter: Record<string, CheckpointSummary | null> = {};
   private boundary: Record<string, unknown> | null = null;
   private scan: Record<string, unknown> | null = null;
   private hydration: Record<string, unknown> | null = null;
-  private phaseNames: string[] = [];
-  private requestAttempts = 0;
-  private retryAttempts = 0;
-  private failedAttempts = 0;
 
   constructor(
-    private readonly app: Pick<AppContext, "db" | "logger">,
+    private readonly app: Pick<AppContext, "config" | "db" | "logger">,
     readonly metadata: {
       runId: number;
       platformAccountId: number;
@@ -102,86 +310,20 @@ export class SyncRunTelemetry implements SyncRequestTelemetry {
       stream: SyncStream;
       trigger: string;
     },
-  ) {}
-
-  createLogicalRequestId(operation: string) {
-    return `${operation}:${randomUUID()}`;
+    input?: {
+      runStartedAt?: Date | string | null;
+    },
+  ) {
+    this.runStartedAt = normalizeDate(input?.runStartedAt) ?? new Date();
+    this.requestTraceWriters = [
+      createStdoutWriter(),
+      ...(this.app.config.syncHttpTraceFile ? [createFileWriter(this.app.config.syncHttpTraceFile)] : []),
+    ];
+    this.requestObserver = this.createCompositeRequestObserver();
   }
 
-  async startAttempt(input: SyncTelemetryAttemptStartInput) {
-    this.requestAttempts += 1;
-    this.logicalRequests.add(input.logicalRequestId);
-    const summary = this.operationSummaries.get(input.operation) ?? {
-      attempts: 0,
-      logicalRequests: 0,
-      successes: 0,
-      retries: 0,
-      failures: 0,
-      maxDurationMs: null,
-      totalDurationMs: 0,
-    };
-    summary.attempts += 1;
-    if (input.attemptNumber === 1) {
-      summary.logicalRequests += 1;
-    }
-    this.operationSummaries.set(input.operation, summary);
-
-    return this.safeTelemetryOp(
-      "insertSyncRequestAttempt",
-      async () => {
-        const attempt = await insertSyncRequestAttempt(this.app.db, {
-          syncRunId: this.metadata.runId,
-          platformAccountId: this.metadata.platformAccountId,
-          provider: this.metadata.provider,
-          stream: this.metadata.stream,
-          operation: input.operation,
-          logicalRequestId: input.logicalRequestId,
-          attemptNumber: input.attemptNumber,
-          requestShape: input.requestShape ?? {},
-        });
-        return attempt.id;
-      },
-      null,
-    );
-  }
-
-  async finishAttempt(input: SyncTelemetryAttemptFinishInput) {
-    const summary = this.operationSummaries.get(input.operation);
-    if (summary) {
-      if (input.state === "success") {
-        summary.successes += 1;
-      } else if (input.state === "retry") {
-        summary.retries += 1;
-        this.retryAttempts += 1;
-      } else if (input.state === "failed") {
-        summary.failures += 1;
-        this.failedAttempts += 1;
-      }
-      if (typeof input.durationMs === "number") {
-        summary.totalDurationMs += input.durationMs;
-        summary.maxDurationMs = summary.maxDurationMs === null
-          ? input.durationMs
-          : Math.max(summary.maxDurationMs, input.durationMs);
-      }
-      this.operationSummaries.set(input.operation, summary);
-    }
-
-    if (!input.attemptId) {
-      return;
-    }
-
-    await this.safeTelemetryOp(
-      "finishSyncRequestAttempt",
-      () => finishSyncRequestAttempt(this.app.db, input.attemptId!, {
-        state: input.state,
-        failureKind: input.failureKind ?? null,
-        httpStatus: input.httpStatus ?? null,
-        retryDelayMs: input.retryDelayMs ?? null,
-        durationMs: input.durationMs ?? null,
-        responseShape: input.responseShape ?? {},
-        errorMessage: input.errorMessage ?? null,
-      }),
-    );
+  getRequestObserver() {
+    return this.requestObserver;
   }
 
   async recordRunStarted() {
@@ -284,7 +426,15 @@ export class SyncRunTelemetry implements SyncRequestTelemetry {
     extraStats?: Record<string, unknown>,
   ) {
     this.applyAutomaticAnomalies(status);
-    const stats = this.buildStats(status, errorSummary ?? null, extraStats);
+    const finishedAt = new Date();
+    const requestSummary = this.requestSummaryCollector.buildSummaryRecord(
+      this.metadata,
+      status,
+      this.runStartedAt,
+      finishedAt,
+    );
+    await this.emitRequestSummary(requestSummary);
+    const stats = this.buildStats(status, errorSummary ?? null, extraStats, requestSummary);
     await this.safeTelemetryOp(
       "run_finished_event",
       () => insertSyncRunEvent(this.app.db, {
@@ -300,6 +450,7 @@ export class SyncRunTelemetry implements SyncRequestTelemetry {
           health: stats.health,
           errorSummary: errorSummary ?? null,
         },
+        emittedAt: finishedAt,
       }),
     );
     return finishSyncRun(this.app.db, this.metadata.runId, {
@@ -313,32 +464,24 @@ export class SyncRunTelemetry implements SyncRequestTelemetry {
     status: "success" | "partial" | "failed" | "skipped",
     errorSummary?: string | null,
     extraStats?: Record<string, unknown>,
+    requestSummary?: RequestSummaryRecord,
   ) {
-    const operations = Object.fromEntries(
-      Array.from(this.operationSummaries.entries()).map(([operation, summary]) => [
-        operation,
-        {
-          attempts: summary.attempts,
-          logicalRequests: summary.logicalRequests,
-          successes: summary.successes,
-          retries: summary.retries,
-          failures: summary.failures,
-          maxDurationMs: summary.maxDurationMs,
-          averageDurationMs: summary.attempts > 0
-            ? Math.round(summary.totalDurationMs / summary.attempts)
-            : null,
-        },
-      ]),
+    const requestTotals = requestSummary ?? this.requestSummaryCollector.buildSummaryRecord(
+      this.metadata,
+      status,
+      this.runStartedAt,
+      new Date(),
     );
 
     return {
       health: this.resolveHealth(status),
       requestTotals: {
-        totalAttempts: this.requestAttempts,
-        logicalRequests: this.logicalRequests.size,
-        retryAttempts: this.retryAttempts,
-        failedAttempts: this.failedAttempts,
-        byOperation: operations,
+        totalAttempts: requestTotals.totalAttempts,
+        logicalRequests: this.requestSummaryCollector.getRequestTotalsSnapshot().logicalRequests,
+        retryAttempts: requestTotals.retryAttempts,
+        failedAttempts: requestTotals.failedAttempts,
+        totalRequestDurationMs: requestTotals.totalRequestDurationMs,
+        byOperation: Object.fromEntries(this.requestSummaryCollector.getOperationStats()),
       },
       anomalies: Array.from(this.anomalies.values()),
       notes: this.notes,
@@ -365,24 +508,174 @@ export class SyncRunTelemetry implements SyncRequestTelemetry {
     } satisfies Record<string, unknown>;
   }
 
-  private applyAutomaticAnomalies(status: "success" | "partial" | "failed" | "skipped") {
-    if (status === "partial") {
-      if (!this.anomalies.has("partial_stream_failure")) {
-        this.anomalies.set("partial_stream_failure", {
-          code: "partial_stream_failure",
-          severity: "warn",
-          message: "One or more sync phases failed while others completed",
-        });
+  getRequestTotalsSnapshot() {
+    return this.requestSummaryCollector.getRequestTotalsSnapshot();
+  }
+
+  getHydrationSummary() {
+    return this.hydration;
+  }
+
+  private createCompositeRequestObserver(): HttpRequestObserver {
+    const sinks: Array<{ name: string; observer: HttpRequestObserver }> = [
+      {
+        name: "request_summary_collector",
+        observer: this.requestSummaryCollector,
+      },
+      {
+        name: "sync_request_db",
+        observer: this.createDbRequestObserver(),
+      },
+      ...this.requestTraceWriters.map((writer, index) => ({
+        name: index === 0 ? "sync_request_stdout" : `sync_request_file_${index}`,
+        observer: this.createTraceObserver(writer),
+      })),
+    ];
+
+    return {
+      onRequestEvent: async (event) => {
+        await Promise.all(sinks.map(async ({ name, observer }) => {
+          try {
+            await observer.onRequestEvent(event);
+          } catch (error) {
+            this.recordTraceWarning(name, error);
+          }
+        }));
+      },
+    };
+  }
+
+  private createDbRequestObserver(): HttpRequestObserver {
+    return {
+      onRequestEvent: async (event) => {
+        if (event.state === "started") {
+          const createdAttemptId = await this.safeTelemetryOp(
+            "insertSyncRequestAttempt",
+            async () => {
+              const attempt = await insertSyncRequestAttempt(this.app.db, {
+                syncRunId: this.metadata.runId,
+                platformAccountId: this.metadata.platformAccountId,
+                provider: this.metadata.provider,
+                stream: this.metadata.stream,
+                operation: event.operation,
+                logicalRequestId: event.requestId,
+                attemptNumber: event.attemptNumber,
+                requestShape: this.buildRequestShape(event),
+                startedAt: event.timestamp,
+              });
+              return attempt.id;
+            },
+            null,
+          );
+          if (createdAttemptId !== null) {
+            this.requestAttemptIds.set(attemptKey(event), createdAttemptId);
+          }
+          return;
+        }
+
+        const createdAttemptId = this.requestAttemptIds.get(attemptKey(event)) ?? null;
+        if (createdAttemptId === null) {
+          return;
+        }
+
+        await this.safeTelemetryOp(
+          "finishSyncRequestAttempt",
+          () => finishSyncRequestAttempt(this.app.db, createdAttemptId, {
+            state: event.state,
+            failureKind: event.state === "success" ? null : event.failureKind ?? null,
+            httpStatus: "httpStatus" in event ? event.httpStatus ?? null : null,
+            retryDelayMs: event.state === "retry" ? event.retryDelayMs : null,
+            durationMs: event.durationMs,
+            responseShape: "responseMetadata" in event ? event.responseMetadata ?? {} : {},
+            errorMessage: event.state === "success" ? null : event.errorMessage ?? null,
+            finishedAt: event.timestamp,
+          }),
+        );
+
+        this.requestAttemptIds.delete(attemptKey(event));
+      },
+    };
+  }
+
+  private createTraceObserver(writer: RequestTraceWriter): HttpRequestObserver {
+    return {
+      onRequestEvent: async (event) => {
+        await writer.write(compactRecord({
+          timestamp: event.timestamp.toISOString(),
+          component: "sync_http",
+          provider: this.metadata.provider,
+          runId: this.metadata.runId,
+          pageLabel: this.metadata.pageLabel,
+          stream: this.metadata.stream,
+          requestId: event.requestId,
+          operation: event.operation,
+          endpointTemplate: event.endpointTemplate,
+          method: event.method,
+          attemptNumber: event.attemptNumber,
+          state: event.state,
+          rateLimitWaitMs: event.rateLimitWaitMs ?? undefined,
+          httpStatus: "httpStatus" in event ? event.httpStatus ?? undefined : undefined,
+          durationMs: "durationMs" in event ? event.durationMs : undefined,
+          retryDelayMs: event.state === "retry" ? event.retryDelayMs : undefined,
+          failureKind: "failureKind" in event ? event.failureKind ?? undefined : undefined,
+          ...flattenPagination(event),
+          ...(event.requestMetadata ?? {}),
+        }));
+      },
+    };
+  }
+
+  private buildRequestShape(event: HttpRequestEvent) {
+    return compactRecord({
+      endpointTemplate: event.endpointTemplate,
+      method: event.method,
+      rateLimitWaitMs: event.rateLimitWaitMs ?? undefined,
+      ...flattenPagination(event),
+      ...(event.requestMetadata ?? {}),
+    });
+  }
+
+  private async emitRequestSummary(summary: RequestSummaryRecord) {
+    await Promise.all(this.requestTraceWriters.map(async (writer, index) => {
+      try {
+        await writer.write(summary as unknown as Record<string, unknown>);
+      } catch (error) {
+        this.recordTraceWarning(index === 0 ? "sync_request_stdout_summary" : `sync_request_file_summary_${index}`, error);
       }
+    }));
+  }
+
+  private recordTraceWarning(name: string, error: unknown) {
+    const message = `${name}: ${stringifyError(error)}`;
+    this.telemetryWarnings.push(message);
+    this.app.logger.warn(
+      {
+        runId: this.metadata.runId,
+        pageLabel: this.metadata.pageLabel,
+        stream: this.metadata.stream,
+        telemetryOperation: name,
+        err: error,
+      },
+      "Request tracing failed; continuing sync",
+    );
+  }
+
+  private applyAutomaticAnomalies(status: "success" | "partial" | "failed" | "skipped") {
+    if (status === "partial" && !this.anomalies.has("partial_stream_failure")) {
+      this.anomalies.set("partial_stream_failure", {
+        code: "partial_stream_failure",
+        severity: "warn",
+        message: "One or more sync phases failed while others completed",
+      });
     }
 
-    if (this.retryAttempts > 3 && !this.anomalies.has("high_retry_volume")) {
+    if (this.requestSummaryCollector.getRequestTotalsSnapshot().retryAttempts > 3 && !this.anomalies.has("high_retry_volume")) {
       this.anomalies.set("high_retry_volume", {
         code: "high_retry_volume",
         severity: "warn",
         message: "Run exceeded the retry volume threshold",
         details: {
-          retryAttempts: this.retryAttempts,
+          retryAttempts: this.requestSummaryCollector.getRequestTotalsSnapshot().retryAttempts,
         },
       });
     }
@@ -400,7 +693,7 @@ export class SyncRunTelemetry implements SyncRequestTelemetry {
     if (
       status === "partial" ||
       status === "skipped" ||
-      this.retryAttempts > 0 ||
+      this.requestSummaryCollector.getRequestTotalsSnapshot().retryAttempts > 0 ||
       Array.from(this.anomalies.values()).some((anomaly) => anomaly.severity === "warn")
     ) {
       return "degraded";
@@ -472,18 +765,5 @@ export class SyncRunTelemetry implements SyncRequestTelemetry {
 
       return fallback as T;
     }
-  }
-
-  getRequestTotalsSnapshot() {
-    return {
-      totalAttempts: this.requestAttempts,
-      logicalRequests: this.logicalRequests.size,
-      retryAttempts: this.retryAttempts,
-      failedAttempts: this.failedAttempts,
-    };
-  }
-
-  getHydrationSummary() {
-    return this.hydration;
   }
 }

@@ -91,6 +91,8 @@ async function createObservedRun(
     provider: pageContext.platform,
     stream,
     trigger,
+  }, {
+    runStartedAt: run.startedAt,
   });
   await telemetry.recordRunStarted();
   return { run, telemetry };
@@ -154,7 +156,7 @@ async function runLightSyncUnlocked(
           requestContext: {
             session: pageContext.session,
             proxy: pageContext.proxy,
-            telemetry,
+            requestObserver: telemetry.getRequestObserver(),
           },
           syncRunId: run.id,
           telemetry,
@@ -172,7 +174,7 @@ async function runLightSyncUnlocked(
           requestContext: {
             session: pageContext.session,
             proxy: pageContext.proxy,
-            telemetry,
+            requestObserver: telemetry.getRequestObserver(),
           },
           syncRunId: run.id,
           telemetry,
@@ -205,7 +207,7 @@ async function runLightSyncUnlocked(
           requestContext: {
             auth: pageContext.auth,
             proxy: pageContext.proxy,
-            telemetry,
+            requestObserver: telemetry.getRequestObserver(),
           },
           syncRunId: run.id,
           telemetry,

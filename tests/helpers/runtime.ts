@@ -24,6 +24,7 @@ export function createTestAppContext(
       sessionTtlDays: overrides?.sessionTtlDays ?? 30,
       fanslyBaseUrl: "https://example.invalid",
       onlyMonsterBaseUrl: "https://example.invalid",
+      syncHttpTraceFile: null,
       followerPageDelayMs: 0,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,

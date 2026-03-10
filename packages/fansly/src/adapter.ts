@@ -3,7 +3,11 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { fetch, ProxyAgent } from "undici";
 
-import type { FanslySessionBundle, ProxyConfig } from "@fansly-connect/shared";
+import {
+  executeObservedRequest,
+  type FanslySessionBundle,
+  type ProxyConfig,
+} from "@fansly-connect/shared";
 
 import { FanslyApiError } from "./errors.ts";
 import type {
@@ -64,6 +68,7 @@ export class FanslyAdapter {
   async getAccountMe(context: FanslyRequestContext) {
     return this.request<FanslyAccountMeResponse>(context, "/account/me", {
       operation: "account_me",
+      endpointTemplate: "/account/me",
       category: "account",
       requestShape: {},
       summarizeResponse: (response) => ({
@@ -81,6 +86,7 @@ export class FanslyAdapter {
 
     return this.request<FanslyAccount[]>(context, "/account", {
       operation: "account_lookup",
+      endpointTemplate: "/account",
       query: { ids: ids.join(",") },
       category: "account",
       requestShape: {
@@ -106,6 +112,7 @@ export class FanslyAdapter {
       "/account/wallets/earnings/transactions",
       {
         operation: "earnings_transactions",
+        endpointTemplate: "/account/wallets/earnings/transactions",
         query: {
           after: params.after ? String(params.after.getTime()) : undefined,
           before: params.before ? String(params.before.getTime()) : undefined,
@@ -118,6 +125,10 @@ export class FanslyAdapter {
           before: params.before ? params.before.toISOString() : null,
           limit: params.limit ?? 100,
           offset: params.offset ?? 0,
+        },
+        pagination: {
+          offset: params.offset ?? 0,
+          limit: params.limit ?? 100,
         },
         summarizeResponse: (parsed) => ({
           total: parsed.total,
@@ -149,6 +160,7 @@ export class FanslyAdapter {
   ) {
     const response = await this.request<FanslySubscribersPage>(context, "/subscribers", {
       operation: "subscribers",
+      endpointTemplate: "/subscribers",
       query: {
         offset: params.offset ? String(params.offset) : undefined,
         limit: params.limit ? String(params.limit) : undefined,
@@ -163,6 +175,10 @@ export class FanslyAdapter {
         after: params.after ? params.after.toISOString() : null,
         before: params.before ? params.before.toISOString() : null,
         status: params.status ?? "3,4",
+      },
+      pagination: {
+        offset: params.offset ?? 0,
+        limit: params.limit ?? 100,
       },
       summarizeResponse: (parsed) => ({
         total: parsed.stats.total,
@@ -198,6 +214,7 @@ export class FanslyAdapter {
       `/account/${accountId}/followersnew`,
       {
         operation: "followers",
+        endpointTemplate: "/account/:accountId/followersnew",
         query: {
           offset: params.offset ? String(params.offset) : undefined,
           limit: params.limit ? String(params.limit) : undefined,
@@ -211,6 +228,10 @@ export class FanslyAdapter {
           limit: params.limit ?? 100,
           afterPresent: Boolean(params.after),
           beforePresent: Boolean(params.before),
+        },
+        pagination: {
+          offset: params.offset ?? 0,
+          limit: params.limit ?? 100,
         },
         summarizeResponse: (parsed) => ({
           returnedItems: parsed.followers.length,
@@ -242,7 +263,14 @@ export class FanslyAdapter {
       query?: Record<string, string | undefined>;
       category: string;
       operation: string;
+      endpointTemplate: string;
       requestShape?: Record<string, unknown>;
+      pagination?: {
+        offset?: number | null;
+        limit?: number | null;
+        pageIndex?: number | null;
+        cursorPresent?: boolean | null;
+      };
       minDelayMs?: number;
       retries?: number;
       summarizeResponse?: (parsed: T) => Record<string, unknown>;
@@ -258,161 +286,123 @@ export class FanslyAdapter {
     const url = `${this.options.baseUrl}${pathname}?${query.toString()}`;
     const retries = options.retries ?? 3;
     const minDelayMs = options.minDelayMs ?? this.options.defaultDelayMs ?? 1000;
-    const logicalRequestId = `${options.operation}:${randomUUID()}`;
+    const requestId = `${options.operation}:${randomUUID()}`;
 
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-      const startedAt = Date.now();
-      const attemptId = await context.telemetry?.startAttempt({
-        logicalRequestId,
-        attemptNumber: attempt + 1,
-        operation: options.operation,
-        requestShape: options.requestShape ?? {},
-      }) ?? null;
-
-      await this.waitForRateLimit(options.category, minDelayMs);
-
-      let response: Awaited<ReturnType<typeof fetch>>;
-      try {
-        response = await fetch(url, {
+    return executeObservedRequest({
+      observer: context.requestObserver,
+      requestId,
+      operation: options.operation,
+      endpointTemplate: options.endpointTemplate,
+      method: "GET",
+      pagination: options.pagination ?? null,
+      requestMetadata: options.requestShape ?? {},
+      retries,
+      waitForRateLimit: () => this.waitForRateLimit(options.category, minDelayMs),
+      execute: async () => {
+        const response = await fetch(url, {
           method: "GET",
           headers: this.buildHeaders(context.session),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           dispatcher: context.proxy ? this.buildProxyDispatcher(context.proxy) : undefined,
         });
-      } catch (error) {
+        const text = await response.text();
+        return {
+          response,
+          text,
+          envelope: this.safeParseEnvelope<T>(text),
+        };
+      },
+      onTransportError: (error, executionContext) => {
         const failureKind = classifyTransportError(error);
-        const durationMs = Date.now() - startedAt;
-        if (attempt < retries) {
-          const retryDelayMs = 5000 * (attempt + 1);
-          await context.telemetry?.finishAttempt({
-            attemptId,
-            logicalRequestId,
-            attemptNumber: attempt + 1,
-            operation: options.operation,
-            state: "retry",
+        if (executionContext.retriesRemaining > 0) {
+          return {
+            kind: "retry",
             failureKind,
-            retryDelayMs,
-            durationMs,
+            retryDelayMs: retryDelayMs(executionContext.attemptNumber),
             errorMessage: errorMessage(error),
-          });
-          await delay(retryDelayMs);
-          continue;
+            error,
+          };
         }
 
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "failed",
+        return {
+          kind: "failed",
           failureKind,
-          durationMs,
           errorMessage: errorMessage(error),
-        });
-        throw error;
-      }
+          error,
+        };
+      },
+      onResponse: ({ response, text, envelope }, executionContext) => {
+        const envelopeMessage = envelope?.error?.message;
 
-      const text = await response.text();
-      const envelope = this.safeParseEnvelope<T>(text);
-      const durationMs = Date.now() - startedAt;
+        if (response.status === 401 || response.status === 403) {
+          return {
+            kind: "failed",
+            failureKind: "http",
+            httpStatus: response.status,
+            errorMessage: envelopeMessage ?? `Fansly authorization failed (${response.status})`,
+            error: new FanslyApiError(
+              envelopeMessage ?? `Fansly authorization failed (${response.status})`,
+              response.status,
+              envelope?.error?.code,
+              text.slice(0, 400),
+            ),
+          };
+        }
 
-      if (response.status === 401 || response.status === 403) {
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "failed",
-          failureKind: "http",
+        if ([429, 500, 502, 503, 504].includes(response.status) && executionContext.retriesRemaining > 0) {
+          const retryAfterSeconds = Number(response.headers.get("retry-after") ?? "0");
+          return {
+            kind: "retry",
+            failureKind: "http",
+            httpStatus: response.status,
+            retryDelayMs: retryAfterSeconds > 0
+              ? retryAfterSeconds * 1000
+              : retryDelayMs(executionContext.attemptNumber),
+            errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
+          };
+        }
+
+        if (!response.ok) {
+          return {
+            kind: "failed",
+            failureKind: "http",
+            httpStatus: response.status,
+            errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
+            error: new FanslyApiError(
+              envelopeMessage ?? `Fansly request failed (${response.status})`,
+              response.status,
+              envelope?.error?.code,
+              text.slice(0, 400),
+            ),
+          };
+        }
+
+        if (!envelope?.success || envelope.response === undefined) {
+          return {
+            kind: "failed",
+            failureKind: "provider",
+            httpStatus: response.status,
+            errorMessage: envelopeMessage ?? "Fansly response envelope was unsuccessful",
+            error: new FanslyApiError(
+              envelopeMessage ?? "Fansly response envelope was unsuccessful",
+              response.status,
+              envelope?.error?.code,
+              text.slice(0, 400),
+            ),
+          };
+        }
+
+        return {
+          kind: "success",
+          value: {
+            parsed: envelope.response,
+            raw: envelope.response,
+          },
           httpStatus: response.status,
-          durationMs,
-          errorMessage: envelope?.error?.message ?? `Fansly authorization failed (${response.status})`,
-        });
-        throw new FanslyApiError(
-          envelope?.error?.message ?? `Fansly authorization failed (${response.status})`,
-          response.status,
-          envelope?.error?.code,
-          text.slice(0, 400),
-        );
-      }
-
-      if ([429, 500, 502, 503, 504].includes(response.status) && attempt < retries) {
-        const retryAfterSeconds = Number(response.headers.get("retry-after") ?? "0");
-        const waitMs = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 5000 * (attempt + 1);
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "retry",
-          failureKind: "http",
-          httpStatus: response.status,
-          retryDelayMs: waitMs,
-          durationMs,
-          errorMessage: envelope?.error?.message ?? `Fansly request failed (${response.status})`,
-        });
-        await delay(waitMs);
-        continue;
-      }
-
-      if (!response.ok) {
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "failed",
-          failureKind: "http",
-          httpStatus: response.status,
-          durationMs,
-          errorMessage: envelope?.error?.message ?? `Fansly request failed (${response.status})`,
-        });
-        throw new FanslyApiError(
-          envelope?.error?.message ?? `Fansly request failed (${response.status})`,
-          response.status,
-          envelope?.error?.code,
-          text.slice(0, 400),
-        );
-      }
-
-      if (!envelope?.success || envelope.response === undefined) {
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "failed",
-          failureKind: "provider",
-          httpStatus: response.status,
-          durationMs,
-          errorMessage: envelope?.error?.message ?? "Fansly response envelope was unsuccessful",
-        });
-        throw new FanslyApiError(
-          envelope?.error?.message ?? "Fansly response envelope was unsuccessful",
-          response.status,
-          envelope?.error?.code,
-          text.slice(0, 400),
-        );
-      }
-
-      await context.telemetry?.finishAttempt({
-        attemptId,
-        logicalRequestId,
-        attemptNumber: attempt + 1,
-        operation: options.operation,
-        state: "success",
-        httpStatus: response.status,
-        durationMs,
-        responseShape: options.summarizeResponse?.(envelope.response) ?? {},
-      });
-
-      return {
-        parsed: envelope.response,
-        raw: envelope.response,
-      };
-    }
-
-    throw new FanslyApiError("Fansly request exhausted retries");
+          responseMetadata: options.summarizeResponse?.(envelope.response) ?? {},
+        };
+      },
+    });
   }
 
   private safeParseEnvelope<T>(text: string): ApiEnvelope<T> | null {
@@ -477,13 +467,16 @@ export class FanslyAdapter {
     try {
       const lastStartedAt = this.requestTimestamps.get(category);
       const now = Date.now();
+      let waitedMs = 0;
       if (lastStartedAt !== undefined) {
         const elapsed = now - lastStartedAt;
         if (elapsed < minDelayMs) {
-          await delay(minDelayMs - elapsed);
+          waitedMs = minDelayMs - elapsed;
+          await delay(waitedMs);
         }
       }
       this.requestTimestamps.set(category, Date.now());
+      return waitedMs;
     } finally {
       release();
       if (this.rateLimitChains.get(category) === chain) {
@@ -491,4 +484,8 @@ export class FanslyAdapter {
       }
     }
   }
+}
+
+function retryDelayMs(attemptNumber: number) {
+  return 5000 * attemptNumber;
 }

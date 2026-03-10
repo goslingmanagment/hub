@@ -137,37 +137,70 @@ export interface ProxyConfig {
 export const syncHealthStates = ["healthy", "degraded", "suspicious", "failed"] as const;
 export type SyncHealth = (typeof syncHealthStates)[number];
 
-export const syncTelemetryAttemptStates = ["started", "success", "retry", "failed"] as const;
-export type SyncTelemetryAttemptState = (typeof syncTelemetryAttemptStates)[number];
+export const httpRequestStates = ["started", "success", "retry", "failed"] as const;
+export type HttpRequestState = (typeof httpRequestStates)[number];
 
-export const syncTelemetryFailureKinds = ["timeout", "transport", "http", "provider"] as const;
-export type SyncTelemetryFailureKind = (typeof syncTelemetryFailureKinds)[number];
+export const httpRequestFailureKinds = ["timeout", "transport", "http", "provider"] as const;
+export type HttpRequestFailureKind = (typeof httpRequestFailureKinds)[number];
 
 export const syncTelemetryEventSeverities = ["info", "warn", "error"] as const;
 export type SyncTelemetryEventSeverity = (typeof syncTelemetryEventSeverities)[number];
 
-export interface SyncTelemetryAttemptStartInput {
-  logicalRequestId: string;
-  attemptNumber: number;
-  operation: string;
-  requestShape?: Record<string, unknown>;
+export interface HttpRequestPagination {
+  offset?: number | null;
+  limit?: number | null;
+  pageIndex?: number | null;
+  cursorPresent?: boolean | null;
 }
 
-export interface SyncTelemetryAttemptFinishInput {
-  attemptId?: number | null;
-  logicalRequestId: string;
-  attemptNumber: number;
+export interface HttpRequestEventBase {
+  requestId: string;
   operation: string;
-  state: Exclude<SyncTelemetryAttemptState, "started">;
+  endpointTemplate: string;
+  method: string;
+  attemptNumber: number;
+  timestamp: Date;
+  pagination?: HttpRequestPagination | null;
+  requestMetadata?: Record<string, unknown>;
+  rateLimitWaitMs?: number | null;
+}
+
+export interface HttpRequestStartedEvent extends HttpRequestEventBase {
+  state: "started";
+}
+
+export interface HttpRequestSuccessEvent extends HttpRequestEventBase {
+  state: "success";
+  httpStatus: number;
+  durationMs: number;
+  responseMetadata?: Record<string, unknown>;
+}
+
+export interface HttpRequestRetryEvent extends HttpRequestEventBase {
+  state: "retry";
   httpStatus?: number | null;
-  failureKind?: SyncTelemetryFailureKind | null;
-  retryDelayMs?: number | null;
-  durationMs?: number | null;
-  responseShape?: Record<string, unknown>;
+  failureKind?: HttpRequestFailureKind | null;
+  retryDelayMs: number;
+  durationMs: number;
+  responseMetadata?: Record<string, unknown>;
   errorMessage?: string | null;
 }
 
-export interface SyncRequestTelemetry {
-  startAttempt(input: SyncTelemetryAttemptStartInput): Promise<number | null>;
-  finishAttempt(input: SyncTelemetryAttemptFinishInput): Promise<void>;
+export interface HttpRequestFailedEvent extends HttpRequestEventBase {
+  state: "failed";
+  httpStatus?: number | null;
+  failureKind?: HttpRequestFailureKind | null;
+  durationMs: number;
+  responseMetadata?: Record<string, unknown>;
+  errorMessage?: string | null;
+}
+
+export type HttpRequestEvent =
+  | HttpRequestStartedEvent
+  | HttpRequestSuccessEvent
+  | HttpRequestRetryEvent
+  | HttpRequestFailedEvent;
+
+export interface HttpRequestObserver {
+  onRequestEvent(event: HttpRequestEvent): Promise<void>;
 }

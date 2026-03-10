@@ -42,7 +42,7 @@ export async function runFollowerSyncUnlocked(
     const requestContext = {
       session: pageContext.session,
       proxy: pageContext.proxy,
-      telemetry,
+      requestObserver: telemetry.getRequestObserver(),
     };
 
     let offset = 0;

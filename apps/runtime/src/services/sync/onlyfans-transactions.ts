@@ -102,6 +102,7 @@ export async function syncOnlyFansTransactions(
   const fanPlatformIds = new Set<string>();
 
   let transactionCursor: string | null = null;
+  let transactionPageIndex = 0;
   do {
     const page = await app.onlyFansAdapter.getTransactionsPage(
       input.requestContext,
@@ -111,6 +112,7 @@ export async function syncOnlyFansTransactions(
         end,
         cursor: transactionCursor,
         limit: 100,
+        pageIndex: transactionPageIndex,
       },
     );
     transactionPages += 1;
@@ -155,9 +157,11 @@ export async function syncOnlyFansTransactions(
 
     processedTransactions += page.parsed.items.length;
     transactionCursor = page.parsed.cursor ?? null;
+    transactionPageIndex += 1;
   } while (transactionCursor);
 
   let chargebackCursor: string | null = null;
+  let chargebackPageIndex = 0;
   do {
     const page = await app.onlyFansAdapter.getChargebacksPage(
       input.requestContext,
@@ -167,6 +171,7 @@ export async function syncOnlyFansTransactions(
         end,
         cursor: chargebackCursor,
         limit: 100,
+        pageIndex: chargebackPageIndex,
       },
     );
     chargebackPages += 1;
@@ -211,6 +216,7 @@ export async function syncOnlyFansTransactions(
 
     processedChargebacks += page.parsed.items.length;
     chargebackCursor = page.parsed.cursor ?? null;
+    chargebackPageIndex += 1;
   } while (chargebackCursor);
 
   let checkpointAfter = null;

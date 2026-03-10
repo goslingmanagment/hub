@@ -3,7 +3,10 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { fetch, ProxyAgent } from "undici";
 
-import type { ProxyConfig } from "@fansly-connect/shared";
+import {
+  executeObservedRequest,
+  type ProxyConfig,
+} from "@fansly-connect/shared";
 
 import { OnlyMonsterApiError } from "./errors.ts";
 import type {
@@ -57,10 +60,12 @@ export class OnlyFansAdapter {
     params?: {
       cursor?: string | null;
       limit?: number;
+      pageIndex?: number;
     },
   ) {
     return this.request<OnlyMonsterAccountsResponse>(context, "/api/v0/accounts", {
       operation: "onlymonster_accounts",
+      endpointTemplate: "/api/v0/accounts",
       category: "accounts",
       query: {
         cursor: params?.cursor ?? undefined,
@@ -69,6 +74,10 @@ export class OnlyFansAdapter {
       requestShape: {
         cursorPresent: Boolean(params?.cursor),
         limit: params?.limit ?? null,
+      },
+      pagination: {
+        pageIndex: params?.pageIndex ?? 0,
+        cursorPresent: Boolean(params?.cursor),
       },
       summarizeResponse: (parsed) => ({
         returnedItems: parsed.accounts.length,
@@ -83,6 +92,7 @@ export class OnlyFansAdapter {
       `/api/v0/accounts/${accountId}`,
       {
         operation: "onlymonster_account",
+        endpointTemplate: "/api/v0/accounts/:accountId",
         category: "accounts",
         requestShape: {},
         summarizeResponse: (parsed) => ({
@@ -101,6 +111,7 @@ export class OnlyFansAdapter {
       end: Date;
       cursor?: string | null;
       limit?: number;
+      pageIndex?: number;
     },
   ) {
     return this.request<OnlyMonsterCursorResponse<OnlyMonsterTransaction>>(
@@ -108,6 +119,7 @@ export class OnlyFansAdapter {
       `/api/v0/platforms/onlyfans/accounts/${platformAccountId}/transactions`,
       {
         operation: "onlymonster_transactions",
+        endpointTemplate: "/api/v0/platforms/onlyfans/accounts/:platformAccountId/transactions",
         category: "transactions",
         query: {
           start: params.start.toISOString(),
@@ -120,6 +132,10 @@ export class OnlyFansAdapter {
           end: params.end.toISOString(),
           cursorPresent: Boolean(params.cursor),
           limit: params.limit ?? 100,
+        },
+        pagination: {
+          pageIndex: params.pageIndex ?? 0,
+          cursorPresent: Boolean(params.cursor),
         },
         summarizeResponse: (parsed) => ({
           returnedItems: parsed.items.length,
@@ -137,6 +153,7 @@ export class OnlyFansAdapter {
       end: Date;
       cursor?: string | null;
       limit?: number;
+      pageIndex?: number;
     },
   ) {
     return this.request<OnlyMonsterCursorResponse<OnlyMonsterChargeback>>(
@@ -144,6 +161,7 @@ export class OnlyFansAdapter {
       `/api/v0/platforms/onlyfans/accounts/${platformAccountId}/chargebacks`,
       {
         operation: "onlymonster_chargebacks",
+        endpointTemplate: "/api/v0/platforms/onlyfans/accounts/:platformAccountId/chargebacks",
         category: "chargebacks",
         query: {
           start: params.start.toISOString(),
@@ -156,6 +174,10 @@ export class OnlyFansAdapter {
           end: params.end.toISOString(),
           cursorPresent: Boolean(params.cursor),
           limit: params.limit ?? 100,
+        },
+        pagination: {
+          pageIndex: params.pageIndex ?? 0,
+          cursorPresent: Boolean(params.cursor),
         },
         summarizeResponse: (parsed) => ({
           returnedItems: parsed.items.length,
@@ -170,11 +192,18 @@ export class OnlyFansAdapter {
     pathname: string,
     options: {
       operation: string;
+      endpointTemplate: string;
       category: string;
       query?: Record<string, string | undefined>;
       retries?: number;
       minDelayMs?: number;
       requestShape?: Record<string, unknown>;
+      pagination?: {
+        offset?: number | null;
+        limit?: number | null;
+        pageIndex?: number | null;
+        cursorPresent?: boolean | null;
+      };
       summarizeResponse?: (parsed: TParsed) => Record<string, unknown>;
     },
   ): Promise<RequestResult<TParsed>> {
@@ -188,22 +217,20 @@ export class OnlyFansAdapter {
     const url = `${this.options.baseUrl}${pathname}${query.size > 0 ? `?${query.toString()}` : ""}`;
     const retries = options.retries ?? 3;
     const minDelayMs = options.minDelayMs ?? this.options.defaultDelayMs ?? 1000;
-    const logicalRequestId = `${options.operation}:${randomUUID()}`;
+    const requestId = `${options.operation}:${randomUUID()}`;
 
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-      const startedAt = Date.now();
-      const attemptId = await context.telemetry?.startAttempt({
-        logicalRequestId,
-        attemptNumber: attempt + 1,
-        operation: options.operation,
-        requestShape: options.requestShape ?? {},
-      }) ?? null;
-
-      await this.waitForRateLimit(options.category, minDelayMs);
-
-      let response: Awaited<ReturnType<typeof fetch>>;
-      try {
-        response = await fetch(url, {
+    return executeObservedRequest({
+      observer: context.requestObserver,
+      requestId,
+      operation: options.operation,
+      endpointTemplate: options.endpointTemplate,
+      method: "GET",
+      pagination: options.pagination ?? null,
+      requestMetadata: options.requestShape ?? {},
+      retries,
+      waitForRateLimit: () => this.waitForRateLimit(options.category, minDelayMs),
+      execute: async () => {
+        const response = await fetch(url, {
           method: "GET",
           headers: {
             accept: "application/json",
@@ -212,136 +239,99 @@ export class OnlyFansAdapter {
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           dispatcher: context.proxy ? this.buildProxyDispatcher(context.proxy) : undefined,
         });
-      } catch (error) {
+        const text = await response.text();
+        return {
+          response,
+          text,
+        };
+      },
+      onTransportError: (error, executionContext) => {
         const failureKind = classifyTransportError(error);
-        const durationMs = Date.now() - startedAt;
-        if (attempt < retries) {
-          const retryDelayMs = 5000 * (attempt + 1);
-          await context.telemetry?.finishAttempt({
-            attemptId,
-            logicalRequestId,
-            attemptNumber: attempt + 1,
-            operation: options.operation,
-            state: "retry",
+        if (executionContext.retriesRemaining > 0) {
+          return {
+            kind: "retry",
             failureKind,
-            retryDelayMs,
-            durationMs,
+            retryDelayMs: retryDelayMs(executionContext.attemptNumber),
             errorMessage: errorMessage(error),
-          });
-          await delay(retryDelayMs);
-          continue;
+            error,
+          };
         }
 
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "failed",
-          failureKind,
-          durationMs,
-          errorMessage: errorMessage(error),
-        });
-        throw error;
-      }
-
-      const text = await response.text();
-      const durationMs = Date.now() - startedAt;
-
-      if (response.status === 401 || response.status === 403) {
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "failed",
-          failureKind: "http",
-          httpStatus: response.status,
-          durationMs,
-          errorMessage: `OnlyMonster authorization failed (${response.status})`,
-        });
-        throw new OnlyMonsterApiError(
-          `OnlyMonster authorization failed (${response.status})`,
-          response.status,
-          text.slice(0, 400),
-        );
-      }
-
-      if ([429, 500, 502, 503, 504].includes(response.status) && attempt < retries) {
-        const retryAfterSeconds = Number(response.headers.get("retry-after") ?? "0");
-        const waitMs = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 5000 * (attempt + 1);
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "retry",
-          failureKind: "http",
-          httpStatus: response.status,
-          retryDelayMs: waitMs,
-          durationMs,
-          errorMessage: `OnlyMonster request failed (${response.status})`,
-        });
-        await delay(waitMs);
-        continue;
-      }
-
-      if (!response.ok) {
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "failed",
-          failureKind: "http",
-          httpStatus: response.status,
-          durationMs,
-          errorMessage: `OnlyMonster request failed (${response.status})`,
-        });
-        throw new OnlyMonsterApiError(
-          `OnlyMonster request failed (${response.status})`,
-          response.status,
-          text.slice(0, 400),
-        );
-      }
-
-      try {
-        const parsed = JSON.parse(text) as TParsed;
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "success",
-          httpStatus: response.status,
-          durationMs,
-          responseShape: options.summarizeResponse?.(parsed) ?? {},
-        });
         return {
-          parsed,
-          raw: parsed,
+          kind: "failed",
+          failureKind,
+          errorMessage: errorMessage(error),
+          error,
         };
-      } catch (error) {
-        await context.telemetry?.finishAttempt({
-          attemptId,
-          logicalRequestId,
-          attemptNumber: attempt + 1,
-          operation: options.operation,
-          state: "failed",
-          failureKind: "provider",
-          httpStatus: response.status,
-          durationMs,
-          errorMessage: "OnlyMonster response was not valid JSON",
-        });
-        throw new OnlyMonsterApiError(
-          "OnlyMonster response was not valid JSON",
-          response.status,
-          text.slice(0, 400),
-        );
-      }
-    }
+      },
+      onResponse: ({ response, text }, executionContext) => {
+        if (response.status === 401 || response.status === 403) {
+          return {
+            kind: "failed",
+            failureKind: "http",
+            httpStatus: response.status,
+            errorMessage: `OnlyMonster authorization failed (${response.status})`,
+            error: new OnlyMonsterApiError(
+              `OnlyMonster authorization failed (${response.status})`,
+              response.status,
+              text.slice(0, 400),
+            ),
+          };
+        }
 
-    throw new OnlyMonsterApiError("OnlyMonster request exhausted retries");
+        if ([429, 500, 502, 503, 504].includes(response.status) && executionContext.retriesRemaining > 0) {
+          const retryAfterSeconds = Number(response.headers.get("retry-after") ?? "0");
+          return {
+            kind: "retry",
+            failureKind: "http",
+            httpStatus: response.status,
+            retryDelayMs: retryAfterSeconds > 0
+              ? retryAfterSeconds * 1000
+              : retryDelayMs(executionContext.attemptNumber),
+            errorMessage: `OnlyMonster request failed (${response.status})`,
+          };
+        }
+
+        if (!response.ok) {
+          return {
+            kind: "failed",
+            failureKind: "http",
+            httpStatus: response.status,
+            errorMessage: `OnlyMonster request failed (${response.status})`,
+            error: new OnlyMonsterApiError(
+              `OnlyMonster request failed (${response.status})`,
+              response.status,
+              text.slice(0, 400),
+            ),
+          };
+        }
+
+        try {
+          const parsed = JSON.parse(text) as TParsed;
+          return {
+            kind: "success",
+            value: {
+              parsed,
+              raw: parsed,
+            },
+            httpStatus: response.status,
+            responseMetadata: options.summarizeResponse?.(parsed) ?? {},
+          };
+        } catch {
+          return {
+            kind: "failed",
+            failureKind: "provider",
+            httpStatus: response.status,
+            errorMessage: "OnlyMonster response was not valid JSON",
+            error: new OnlyMonsterApiError(
+              "OnlyMonster response was not valid JSON",
+              response.status,
+              text.slice(0, 400),
+            ),
+          };
+        }
+      },
+    });
   }
 
   private buildProxyDispatcher(proxy: ProxyConfig) {
@@ -375,13 +365,16 @@ export class OnlyFansAdapter {
     try {
       const lastStartedAt = this.requestTimestamps.get(category);
       const now = Date.now();
+      let waitedMs = 0;
       if (lastStartedAt !== undefined) {
         const elapsed = now - lastStartedAt;
         if (elapsed < minDelayMs) {
-          await delay(minDelayMs - elapsed);
+          waitedMs = minDelayMs - elapsed;
+          await delay(waitedMs);
         }
       }
       this.requestTimestamps.set(category, Date.now());
+      return waitedMs;
     } finally {
       release();
       if (this.rateLimitChains.get(category) === chain) {
@@ -389,4 +382,8 @@ export class OnlyFansAdapter {
       }
     }
   }
+}
+
+function retryDelayMs(attemptNumber: number) {
+  return 5000 * attemptNumber;
 }
