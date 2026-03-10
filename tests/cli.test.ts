@@ -187,4 +187,84 @@ describe("CLI parsing", () => {
     expect(tty).toContain("Active Runs");
     expect(nonTty).toContain("event=run_started");
   });
+
+  it("renders observability views when timestamps arrive as strings", () => {
+    const run = {
+      runId: 13,
+      pageLabel: "lana",
+      platform: "fansly" as const,
+      stream: "light",
+      trigger: "cli",
+      status: "success",
+      startedAt: "2026-03-10T10:00:00.000Z",
+      finishedAt: "not-a-date",
+      errorSummary: null,
+      stats: {
+        health: "healthy",
+        requestTotals: {
+          totalAttempts: 1,
+          logicalRequests: 1,
+          retryAttempts: 0,
+          failedAttempts: 0,
+        },
+        anomalies: [],
+      },
+    };
+    const events = [{
+      id: 2,
+      runId: 13,
+      pageLabel: "lana",
+      provider: "fansly" as const,
+      stream: "light",
+      eventType: "phase_started",
+      severity: "warn" as const,
+      message: "Still running",
+      details: {},
+      emittedAt: "not-a-date",
+    }];
+    const attempts = [{
+      attemptId: 2,
+      runId: 13,
+      pageLabel: "lana",
+      provider: "fansly" as const,
+      stream: "light",
+      operation: "account_me",
+      logicalRequestId: "account_me:test",
+      attemptNumber: 1,
+      state: "started",
+      failureKind: null,
+      httpStatus: null,
+      retryDelayMs: null,
+      durationMs: null,
+      requestShape: {},
+      responseShape: {},
+      errorMessage: null,
+      startedAt: "not-a-date",
+      finishedAt: null,
+    }];
+
+    const detail = renderStatusDetail({ run, events, attempts });
+    const tty = renderWatchTty({
+      runningRuns: [
+        {
+          ...run,
+          status: "running",
+          finishedAt: null,
+          lastActivityAt: "2026-03-10T10:00:10.000Z",
+        },
+      ],
+      recentRuns: [run],
+      inflightAttempts: attempts,
+      events,
+    }, new Date("2026-03-10T10:00:20.000Z"));
+    const nonTty = renderWatchEventLine(events[0]!);
+
+    expect(detail).toContain("Started: 2026-03-10T10:00:00.000Z");
+    expect(detail).toContain("Finished: -");
+    expect(detail).toContain("Duration: -");
+    expect(detail).toContain("Request Attempts:");
+    expect(tty).toContain("Sync Watch 2026-03-10T10:00:20.000Z");
+    expect(tty).toContain("Recent Events");
+    expect(nonTty).toContain("- run=13 page=lana");
+  });
 });

@@ -10,6 +10,84 @@ import {
   syncRuns,
 } from "../schema.ts";
 
+type TimestampValue = Date | string | null | undefined;
+
+function parseTimestamp(value: TimestampValue, field: string) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Expected ${field} to be a valid timestamp`);
+  }
+
+  return parsed;
+}
+
+function requireTimestamp(value: Date | string, field: string) {
+  const parsed = parseTimestamp(value, field);
+  if (!parsed) {
+    throw new Error(`Expected ${field} to be present`);
+  }
+  return parsed;
+}
+
+function normalizeSyncRunRow<T extends {
+  startedAt: Date | string;
+  finishedAt: TimestampValue;
+}>(row: T): Omit<T, "startedAt" | "finishedAt"> & { startedAt: Date; finishedAt: Date | null } {
+  return {
+    ...row,
+    startedAt: requireTimestamp(row.startedAt, "startedAt"),
+    finishedAt: parseTimestamp(row.finishedAt, "finishedAt"),
+  };
+}
+
+function normalizeRunningSyncRunRow<T extends {
+  startedAt: Date | string;
+  finishedAt: TimestampValue;
+  lastActivityAt: TimestampValue;
+}>(
+  row: T,
+): Omit<T, "startedAt" | "finishedAt" | "lastActivityAt"> & {
+  startedAt: Date;
+  finishedAt: Date | null;
+  lastActivityAt: Date;
+} {
+  const normalized = parseTimestamp(row.lastActivityAt, "lastActivityAt");
+  if (!normalized) {
+    throw new Error("Expected lastActivityAt to be present");
+  }
+
+  return {
+    ...row,
+    startedAt: requireTimestamp(row.startedAt, "startedAt"),
+    finishedAt: parseTimestamp(row.finishedAt, "finishedAt"),
+    lastActivityAt: normalized,
+  };
+}
+
+function normalizeSyncRunEventRow<T extends {
+  emittedAt: Date | string;
+}>(row: T): Omit<T, "emittedAt"> & { emittedAt: Date } {
+  return {
+    ...row,
+    emittedAt: requireTimestamp(row.emittedAt, "emittedAt"),
+  };
+}
+
+function normalizeSyncRequestAttemptRow<T extends {
+  startedAt: Date | string;
+  finishedAt: TimestampValue;
+}>(row: T): Omit<T, "startedAt" | "finishedAt"> & { startedAt: Date; finishedAt: Date | null } {
+  return {
+    ...row,
+    startedAt: requireTimestamp(row.startedAt, "startedAt"),
+    finishedAt: parseTimestamp(row.finishedAt, "finishedAt"),
+  };
+}
+
 export async function startSyncRun(
   db: Database,
   input: {
@@ -262,11 +340,11 @@ export async function listRecentSyncRuns(
   const clauses = [sql`true`];
 
   if (input?.platformAccountId !== undefined) {
-    clauses.push(sql`${syncRuns.platformAccountId} = ${input.platformAccountId}`);
+    clauses.push(sql`sr.platform_account_id = ${input.platformAccountId}`);
   }
 
   if (input?.since) {
-    clauses.push(sql`${syncRuns.startedAt} >= ${input.since}`);
+    clauses.push(sql`sr.started_at >= ${input.since}`);
   }
 
   const result = await db.execute<{
@@ -300,7 +378,7 @@ export async function listRecentSyncRuns(
     limit ${input?.limit ?? 20}
   `);
 
-  return result.rows;
+  return result.rows.map((row) => normalizeSyncRunRow(row));
 }
 
 export async function getSyncRun(db: Database, runId: number) {
@@ -334,7 +412,7 @@ export async function getSyncRun(db: Database, runId: number) {
     limit 1
   `);
 
-  return result.rows[0] ?? null;
+  return result.rows[0] ? normalizeSyncRunRow(result.rows[0]) : null;
 }
 
 export async function listSyncRunEvents(
@@ -350,19 +428,19 @@ export async function listSyncRunEvents(
   const clauses = [sql`true`];
 
   if (input.runId !== undefined) {
-    clauses.push(sql`${syncRunEvents.syncRunId} = ${input.runId}`);
+    clauses.push(sql`e.sync_run_id = ${input.runId}`);
   }
 
   if (input.afterId !== undefined) {
-    clauses.push(sql`${syncRunEvents.id} > ${input.afterId}`);
+    clauses.push(sql`e.id > ${input.afterId}`);
   }
 
   if (input.since) {
-    clauses.push(sql`${syncRunEvents.emittedAt} >= ${input.since}`);
+    clauses.push(sql`e.emitted_at >= ${input.since}`);
   }
 
   if (input.platformAccountId !== undefined) {
-    clauses.push(sql`${syncRunEvents.platformAccountId} = ${input.platformAccountId}`);
+    clauses.push(sql`e.platform_account_id = ${input.platformAccountId}`);
   }
 
   const result = await db.execute<{
@@ -396,7 +474,7 @@ export async function listSyncRunEvents(
     limit ${input.limit ?? 200}
   `);
 
-  return result.rows;
+  return result.rows.map((row) => normalizeSyncRunEventRow(row));
 }
 
 export async function listSyncRequestAttempts(
@@ -411,15 +489,15 @@ export async function listSyncRequestAttempts(
   const clauses = [sql`true`];
 
   if (input.runId !== undefined) {
-    clauses.push(sql`${syncRequestAttempts.syncRunId} = ${input.runId}`);
+    clauses.push(sql`a.sync_run_id = ${input.runId}`);
   }
 
   if (input.platformAccountId !== undefined) {
-    clauses.push(sql`${syncRequestAttempts.platformAccountId} = ${input.platformAccountId}`);
+    clauses.push(sql`a.platform_account_id = ${input.platformAccountId}`);
   }
 
   if (input.inFlightOnly) {
-    clauses.push(sql`${syncRequestAttempts.finishedAt} is null`);
+    clauses.push(sql`a.finished_at is null`);
   }
 
   const result = await db.execute<{
@@ -469,7 +547,7 @@ export async function listSyncRequestAttempts(
     limit ${input.limit ?? 1000}
   `);
 
-  return result.rows;
+  return result.rows.map((row) => normalizeSyncRequestAttemptRow(row));
 }
 
 export async function listRunningSyncRuns(
@@ -479,10 +557,10 @@ export async function listRunningSyncRuns(
     limit?: number;
   },
 ) {
-  const clauses = [sql`${syncRuns.status} = 'running'`];
+  const clauses = [sql`sr.status = 'running'`];
 
   if (input?.platformAccountId !== undefined) {
-    clauses.push(sql`${syncRuns.platformAccountId} = ${input.platformAccountId}`);
+    clauses.push(sql`sr.platform_account_id = ${input.platformAccountId}`);
   }
 
   const result = await db.execute<{
@@ -536,5 +614,5 @@ export async function listRunningSyncRuns(
     limit ${input?.limit ?? 20}
   `);
 
-  return result.rows;
+  return result.rows.map((row) => normalizeRunningSyncRunRow(row));
 }

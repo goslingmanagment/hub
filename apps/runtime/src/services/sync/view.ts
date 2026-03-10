@@ -1,3 +1,5 @@
+type TimestampValue = Date | string | null | undefined;
+
 type SyncRunRow = {
   runId: number;
   pageLabel: string;
@@ -5,11 +7,11 @@ type SyncRunRow = {
   stream: string;
   trigger: string;
   status: string;
-  startedAt: Date;
-  finishedAt: Date | null;
+  startedAt: TimestampValue;
+  finishedAt: TimestampValue;
   errorSummary: string | null;
   stats: Record<string, unknown>;
-  lastActivityAt?: Date;
+  lastActivityAt?: TimestampValue;
 };
 
 type SyncRunEventRow = {
@@ -22,7 +24,7 @@ type SyncRunEventRow = {
   severity: "info" | "warn" | "error";
   message: string;
   details: Record<string, unknown>;
-  emittedAt: Date;
+  emittedAt: TimestampValue;
 };
 
 type SyncRequestAttemptRow = {
@@ -42,9 +44,11 @@ type SyncRequestAttemptRow = {
   requestShape: Record<string, unknown>;
   responseShape: Record<string, unknown>;
   errorMessage: string | null;
-  startedAt: Date;
-  finishedAt: Date | null;
+  startedAt: TimestampValue;
+  finishedAt: TimestampValue;
 };
+
+const DATE_PLACEHOLDER = "-";
 
 function statsObject(stats: Record<string, unknown> | null | undefined, key: string) {
   const value = stats?.[key];
@@ -66,13 +70,42 @@ function asString(value: unknown) {
   return typeof value === "string" ? value : null;
 }
 
-function formatDate(value: Date | null | undefined) {
-  return value ? value.toISOString() : "";
+function parseDate(value: TimestampValue) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function formatDuration(startedAt: Date, finishedAt: Date | null, now = new Date()) {
-  const end = finishedAt ?? now;
-  const ms = Math.max(0, end.getTime() - startedAt.getTime());
+function firstValidDate(...values: TimestampValue[]) {
+  for (const value of values) {
+    const parsed = parseDate(value);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function formatDate(value: TimestampValue) {
+  return parseDate(value)?.toISOString() ?? DATE_PLACEHOLDER;
+}
+
+function formatDuration(startedAt: TimestampValue, finishedAt: TimestampValue, now = new Date()) {
+  const start = parseDate(startedAt);
+  if (!start) {
+    return DATE_PLACEHOLDER;
+  }
+
+  const end = finishedAt === null || finishedAt === undefined ? now : parseDate(finishedAt);
+  if (!end) {
+    return DATE_PLACEHOLDER;
+  }
+
+  const ms = Math.max(0, end.getTime() - start.getTime());
   return formatMs(ms);
 }
 
@@ -93,8 +126,9 @@ function formatMs(ms: number) {
   return `${hours}h${minutes % 60}m`;
 }
 
-function formatAge(since: Date, now = new Date()) {
-  return formatMs(Math.max(0, now.getTime() - since.getTime()));
+function formatAge(since: TimestampValue, now = new Date()) {
+  const parsed = parseDate(since);
+  return parsed ? formatMs(Math.max(0, now.getTime() - parsed.getTime())) : DATE_PLACEHOLDER;
 }
 
 function formatValue(value: unknown) {
@@ -291,7 +325,7 @@ export function renderStatusDetail(input: {
   if (events.length > 0) {
     lines.push("Events:");
     for (const event of events) {
-      lines.push(`- ${event.emittedAt.toISOString()} [${event.severity}] ${event.eventType} ${event.message}`);
+      lines.push(`- ${formatDate(event.emittedAt)} [${event.severity}] ${event.eventType} ${event.message}`);
     }
   }
 
@@ -299,7 +333,7 @@ export function renderStatusDetail(input: {
     lines.push("Request Attempts:");
     for (const attempt of attempts) {
       const summary = [
-        attempt.startedAt.toISOString(),
+        formatDate(attempt.startedAt),
         attempt.operation,
         `#${attempt.attemptNumber}`,
         attempt.state,
@@ -326,11 +360,12 @@ function isRunStalled(
   activeAttempt: SyncRequestAttemptRow | undefined,
   now = new Date(),
 ) {
-  const lastActivityAt = run.lastActivityAt ?? run.startedAt;
-  if (now.getTime() - lastActivityAt.getTime() > 45_000) {
+  const lastActivityAt = firstValidDate(run.lastActivityAt, run.startedAt);
+  if (lastActivityAt && now.getTime() - lastActivityAt.getTime() > 45_000) {
     return true;
   }
-  if (activeAttempt && now.getTime() - activeAttempt.startedAt.getTime() > 35_000) {
+  const attemptStartedAt = activeAttempt ? parseDate(activeAttempt.startedAt) : null;
+  if (attemptStartedAt && now.getTime() - attemptStartedAt.getTime() > 35_000) {
     return true;
   }
   return false;
@@ -390,14 +425,14 @@ export function renderWatchTty(snapshot: {
 
   lines.push("", "Recent Events");
   for (const event of snapshot.events.slice(-10)) {
-    lines.push(`${event.emittedAt.toISOString()} [${event.severity}] ${event.pageLabel}/${event.stream} ${event.eventType} ${event.message}`);
+    lines.push(`${formatDate(event.emittedAt)} [${event.severity}] ${event.pageLabel}/${event.stream} ${event.eventType} ${event.message}`);
   }
 
   return lines.join("\n");
 }
 
 export function renderWatchEventLine(event: SyncRunEventRow) {
-  return `${event.emittedAt.toISOString()} run=${event.runId} page=${event.pageLabel} stream=${event.stream} event=${event.eventType} severity=${event.severity} ${event.message}`;
+  return `${formatDate(event.emittedAt)} run=${event.runId} page=${event.pageLabel} stream=${event.stream} event=${event.eventType} severity=${event.severity} ${event.message}`;
 }
 
 export function renderSyntheticStallLine(run: SyncRunRow, now = new Date()) {
