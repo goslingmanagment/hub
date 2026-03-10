@@ -22,6 +22,7 @@ async function main() {
       followerPageDelayMs: 5000,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
+      syncObservabilityRetentionDays: 30,
     },
     logger: createLogger("silent"),
     pool: {} as never,

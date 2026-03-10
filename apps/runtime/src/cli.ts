@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 import { Command } from "commander";
@@ -30,6 +31,8 @@ import { loadFanslySessionBundleFromFile, loadOnlyMonsterTokenBundleFromFile } f
 import { refreshPageMetadata } from "./services/sync/shared.ts";
 import {
   fanSpendForPage,
+  getStatusDetail,
+  getStatusWatchSnapshot,
   listFans,
   listFollowers,
   listModels,
@@ -41,6 +44,14 @@ import {
   runLightSync,
 } from "./services/sync.ts";
 import { resolvePageContext } from "./services/page-context.ts";
+import {
+  buildStatusRows,
+  listStalledRuns,
+  renderStatusDetail,
+  renderSyntheticStallLine,
+  renderWatchEventLine,
+  renderWatchTty,
+} from "./services/sync/view.ts";
 
 function requireCustomPeriod(from?: string, to?: string) {
   if (!from || !to) {
@@ -66,6 +77,22 @@ function parseDateOption(value: string) {
   return parsed;
 }
 
+function parseSinceOption(value: string) {
+  const relative = value.match(/^(\d+)([mhd])$/i);
+  if (relative) {
+    const amount = Number.parseInt(relative[1]!, 10);
+    const unit = relative[2]!.toLowerCase();
+    const multiplier = unit === "m"
+      ? 60_000
+      : unit === "h"
+        ? 60 * 60_000
+        : 24 * 60 * 60_000;
+    return new Date(Date.now() - amount * multiplier);
+  }
+
+  return parseDateOption(value);
+}
+
 function formatCell(value: unknown) {
   if (value === null || value === undefined) {
     return "";
@@ -86,6 +113,74 @@ function printRows(headers: string[], rows: Array<unknown[]>) {
   console.log(headers.join("\t"));
   for (const row of rows) {
     console.log(row.map((value) => formatCell(value)).join("\t"));
+  }
+}
+
+async function watchStatus(
+  options: {
+    page?: string;
+    limit: number;
+    since?: Date;
+  },
+) {
+  const app = await createAppContext();
+  let afterEventId = 0;
+  const emittedStalledRuns = new Set<number>();
+  let stopped = false;
+  const handleStop = () => {
+    stopped = true;
+  };
+
+  process.once("SIGINT", handleStop);
+  process.once("SIGTERM", handleStop);
+
+  try {
+    while (!stopped) {
+      const snapshot = await getStatusWatchSnapshot(app, {
+        pageLabel: options.page,
+        limit: options.limit,
+        since: options.since,
+        afterEventId,
+      });
+
+      if (snapshot.events.length > 0) {
+        afterEventId = snapshot.events[snapshot.events.length - 1]!.id;
+      }
+
+      if (process.stdout.isTTY) {
+        process.stdout.write("\u001bc");
+        console.log(renderWatchTty(snapshot));
+      } else {
+        for (const event of snapshot.events) {
+          console.log(renderWatchEventLine(event));
+        }
+
+        const stalledRuns = listStalledRuns(snapshot);
+        const stalledRunIds = new Set(stalledRuns.map((run) => run.runId));
+        for (const run of stalledRuns) {
+          if (!emittedStalledRuns.has(run.runId)) {
+            console.log(renderSyntheticStallLine(run));
+            emittedStalledRuns.add(run.runId);
+          }
+        }
+
+        for (const runId of Array.from(emittedStalledRuns)) {
+          if (!stalledRunIds.has(runId)) {
+            emittedStalledRuns.delete(runId);
+          }
+        }
+      }
+
+      if (stopped) {
+        break;
+      }
+
+      await delay(2000);
+    }
+  } finally {
+    await app.close();
+    process.removeListener("SIGINT", handleStop);
+    process.removeListener("SIGTERM", handleStop);
   }
 }
 
@@ -353,6 +448,10 @@ export function buildProgram() {
           const result = await runLightSync(app, options.page, {
             onlyFansTransactionStart: options.transactionsStart ?? null,
           });
+          if (result.status === "skipped") {
+            console.log("Skipped sync because the page lock is already held");
+            return;
+          }
           const txStats = result.stats.transactions as
             | {
               processed?: number;
@@ -374,6 +473,10 @@ export function buildProgram() {
 
         if (options.scope === "followers") {
           const result = await runFollowerSync(app, options.page);
+          if (result.status === "skipped") {
+            console.log("Skipped follower sync because the page lock is already held");
+            return;
+          }
           console.log(`Synced ${result.processed} followers (delta: +${result.delta})`);
           return;
         }
@@ -381,6 +484,10 @@ export function buildProgram() {
         const result = await runAllSync(app, options.page, {
           onlyFansTransactionStart: options.transactionsStart ?? null,
         });
+        if (result.light.status === "skipped") {
+          console.log("Skipped sync because the page lock is already held");
+          return;
+        }
         const txStats = result.light.stats.transactions as
           | {
             processed?: number;
@@ -395,9 +502,13 @@ export function buildProgram() {
           console.log(`✓ Synced ${txStats?.processed ?? 0} transactions`);
         }
         if (result.followers) {
-          console.log(
-            `✓ Synced ${result.followers.processed} followers (delta: +${result.followers.delta})`,
-          );
+          if (result.followers.status === "skipped") {
+            console.log("✓ Skipped follower sync because the page lock is already held");
+          } else {
+            console.log(
+              `✓ Synced ${result.followers.processed} followers (delta: +${result.followers.delta})`,
+            );
+          }
         } else {
           console.log("✓ Skipped follower sync (unsupported for OnlyFans pages)");
         }
@@ -411,12 +522,31 @@ export function buildProgram() {
     .command("status")
     .option("--page <label>")
     .option("--limit <n>", "maximum number of rows", parsePositiveInt, 20)
+    .option("--run <id>", "show a detailed view for one sync run", parsePositiveInt)
+    .option("--since <window>", "ISO timestamp or relative window like 30m, 6h, 2d", parseSinceOption)
+    .option("--watch", "watch sync activity live")
     .action(async (options) => {
+      if (options.watch) {
+        await watchStatus({
+          page: options.page,
+          limit: options.limit,
+          since: options.since,
+        });
+        return;
+      }
+
       const app = await createAppContext();
       try {
+        if (options.run) {
+          const detail = await getStatusDetail(app, options.run);
+          console.log(renderStatusDetail(detail));
+          return;
+        }
+
         const rows = await listStatus(app, {
           pageLabel: options.page,
           limit: options.limit,
+          since: options.since,
         });
         printRows(
           [
@@ -425,20 +555,16 @@ export function buildProgram() {
             "stream",
             "trigger",
             "status",
-            "started_at",
-            "finished_at",
-            "error_summary",
+            "health",
+            "duration",
+            "request_attempts",
+            "retry_attempts",
+            "failed_attempts",
+            "boundary_or_scan",
+            "checkpoint",
+            "anomalies",
           ],
-          rows.map((row) => [
-            row.runId,
-            row.pageLabel,
-            row.stream,
-            row.trigger,
-            row.status,
-            row.startedAt,
-            row.finishedAt,
-            row.errorSummary,
-          ]),
+          buildStatusRows(rows),
         );
       } finally {
         await app.close();

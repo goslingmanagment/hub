@@ -1,8 +1,9 @@
-import type { FanslySessionBundle, ProxyConfig } from "@fansly-connect/shared";
+import type { FanslySessionBundle, ProxyConfig, SyncRequestTelemetry } from "@fansly-connect/shared";
 
 export interface FanslyRequestContext {
   session: FanslySessionBundle;
   proxy?: ProxyConfig | null;
+  telemetry?: SyncRequestTelemetry | null;
 }
 
 export interface FanslyAccount {

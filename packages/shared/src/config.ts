@@ -14,6 +14,7 @@ const envSchema = z.object({
   FOLLOWER_PAGE_DELAY_MS: z.coerce.number().int().positive().default(5000),
   TRANSACTION_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
   TRANSACTION_RESCAN_CAP_DAYS: z.coerce.number().int().positive().default(30),
+  SYNC_OBSERVABILITY_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -41,5 +42,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,
     transactionLookbackDays: parsed.TRANSACTION_LOOKBACK_DAYS,
     transactionRescanCapDays: parsed.TRANSACTION_RESCAN_CAP_DAYS,
+    syncObservabilityRetentionDays: parsed.SYNC_OBSERVABILITY_RETENTION_DAYS,
   };
 }

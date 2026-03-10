@@ -1,16 +1,20 @@
 import {
   deleteExpiredRawPayloads,
+  deleteExpiredSyncObservability,
   findPageByLabel,
-  finishSyncRun,
   getCurrentSubscribers,
   getFollowersForPage,
   getFanSpendByIdentifier,
+  getSyncRun,
   getRevenueBreakdown,
   insertRawPayload,
   listPlatformAccounts,
   listModelsWithPageCounts,
   listPageSummaries,
   listRecentSyncRuns,
+  listRunningSyncRuns,
+  listSyncRequestAttempts,
+  listSyncRunEvents,
   listTopFansForPage,
   startSyncRun,
 } from "@fansly-connect/db";
@@ -21,6 +25,10 @@ import { resolveRevenuePeriodBoundsForPlatform } from "@fansly-connect/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext, type ResolvedPageContext } from "./page-context.ts";
 import { runFollowerSyncUnlocked } from "./sync/followers.ts";
+import {
+  summarizeCheckpoint,
+  SyncRunTelemetry,
+} from "./sync/observability.ts";
 import { PageSyncLockedError, withPageSyncLock } from "./sync/locking.ts";
 import { syncOnlyFansTransactions } from "./sync/onlyfans-transactions.ts";
 import {
@@ -32,6 +40,14 @@ import { syncSubscribers } from "./sync/subscribers.ts";
 import { syncTransactions } from "./sync/transactions.ts";
 
 const WORKER_PAGE_DISCOVERY_MS = 60_000;
+const DEFAULT_WATCH_LIMIT = 10;
+
+type SyncCommandResult = {
+  runId: number;
+  status: "success" | "partial" | "failed" | "skipped";
+  stats: Record<string, unknown>;
+  errors: string[];
+};
 
 function lightQueueName(page: { label: string; platform: "fansly" | "onlyfans" }) {
   return `${page.platform}.sync.light.${page.label}`;
@@ -57,27 +73,63 @@ async function withResolvedPageLock<T>(
   );
 }
 
+async function createObservedRun(
+  app: AppContext,
+  pageContext: ResolvedPageContext,
+  stream: "light" | "followers",
+  trigger: string,
+) {
+  const run = await startSyncRun(app.db, {
+    platformAccountId: pageContext.page.id,
+    stream,
+    trigger,
+  });
+  const telemetry = new SyncRunTelemetry(app, {
+    runId: run.id,
+    platformAccountId: pageContext.page.id,
+    pageLabel: pageContext.page.label,
+    provider: pageContext.platform,
+    stream,
+    trigger,
+  });
+  await telemetry.recordRunStarted();
+  return { run, telemetry };
+}
+
+function toSyncCommandResult(
+  run: {
+    id: number;
+    status: "running" | "success" | "partial" | "failed" | "skipped";
+    stats: Record<string, unknown>;
+    errorSummary: string | null;
+  },
+): SyncCommandResult {
+  return {
+    runId: run.id,
+    status: run.status === "running" ? "failed" : run.status,
+    stats: run.stats ?? {},
+    errors: run.errorSummary ? [run.errorSummary] : [],
+  };
+}
+
 async function runLightSyncUnlocked(
   app: AppContext,
   pageContext: ResolvedPageContext,
+  observedRun: Awaited<ReturnType<typeof createObservedRun>>,
   input?: {
     trigger?: string;
     onlyFansTransactionStart?: Date | null;
   },
 ) {
-  const trigger = input?.trigger ?? "cli";
-  const run = await startSyncRun(app.db, {
-    platformAccountId: pageContext.page.id,
-    stream: "light",
-    trigger,
-  });
-
+  const { run, telemetry } = observedRun;
   const errors: string[] = [];
   const stats: Record<string, unknown> = {};
 
   try {
+    await telemetry.recordPhaseStarted("page_metadata");
+
     if (pageContext.platform === "fansly") {
-      const accountMe = await refreshPageMetadata(app, pageContext, "light");
+      const accountMe = await refreshPageMetadata(app, pageContext, "light", telemetry);
       await insertRawPayload(app.db, {
         platformAccountId: pageContext.page.id,
         syncRunId: run.id,
@@ -94,12 +146,18 @@ async function runLightSyncUnlocked(
           throw new Error("Manual transaction rescans are only supported for OnlyFans pages");
         }
 
+        await telemetry.recordPhaseStarted("transactions");
         stats.transactions = await syncTransactions(app, {
           pageLabel: pageContext.page.label,
           platformAccountId: pageContext.page.id,
           commissionRate: pageContext.page.commissionRate,
-          requestContext: { session: pageContext.session, proxy: pageContext.proxy },
+          requestContext: {
+            session: pageContext.session,
+            proxy: pageContext.proxy,
+            telemetry,
+          },
           syncRunId: run.id,
+          telemetry,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -107,18 +165,24 @@ async function runLightSyncUnlocked(
       }
 
       try {
+        await telemetry.recordPhaseStarted("subscribers");
         stats.subscribers = await syncSubscribers(app, {
           pageLabel: pageContext.page.label,
           platformAccountId: pageContext.page.id,
-          requestContext: { session: pageContext.session, proxy: pageContext.proxy },
+          requestContext: {
+            session: pageContext.session,
+            proxy: pageContext.proxy,
+            telemetry,
+          },
           syncRunId: run.id,
+          telemetry,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         errors.push(`subscribers: ${message}`);
       }
     } else {
-      const account = await refreshPageMetadata(app, pageContext, "light");
+      const account = await refreshPageMetadata(app, pageContext, "light", telemetry);
       await insertRawPayload(app.db, {
         platformAccountId: pageContext.page.id,
         syncRunId: run.id,
@@ -131,14 +195,20 @@ async function runLightSyncUnlocked(
       });
 
       try {
+        await telemetry.recordPhaseStarted("transactions");
         stats.transactions = await syncOnlyFansTransactions(app, {
           pageLabel: pageContext.page.label,
           platformAccountId: pageContext.page.id,
           platformAccountIdValue: account.parsed.account.platform_account_id,
           commissionRate: pageContext.page.commissionRate,
           rescanStart: input?.onlyFansTransactionStart ?? null,
-          requestContext: { auth: pageContext.auth, proxy: pageContext.proxy },
+          requestContext: {
+            auth: pageContext.auth,
+            proxy: pageContext.proxy,
+            telemetry,
+          },
           syncRunId: run.id,
+          telemetry,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -146,16 +216,36 @@ async function runLightSyncUnlocked(
       }
     }
 
-    await finishSyncRun(app.db, run.id, {
-      status: errors.length ? "partial" : "success",
+    const hydration = telemetry.getHydrationSummary();
+    const requestTotals = telemetry.getRequestTotalsSnapshot();
+    const hydrationRequests = typeof hydration?.requestCount === "number" ? hydration.requestCount : 0;
+    if (
+      pageContext.platform === "fansly" &&
+      hydrationRequests >= 2 &&
+      requestTotals.totalAttempts > 0 &&
+      hydrationRequests / requestTotals.totalAttempts >= 0.4
+    ) {
+      await telemetry.addAnomaly({
+        code: "high_hydration_ratio",
+        severity: "warn",
+        message: "Hydration traffic consumed an unusually large share of the light sync",
+        details: {
+          hydrationRequests,
+          totalAttempts: requestTotals.totalAttempts,
+        },
+      });
+    }
+
+    const finishedRun = await telemetry.finish(
+      errors.length ? "partial" : "success",
+      errors.length ? errors.join("; ") : null,
       stats,
-      errorSummary: errors.length ? errors.join("; ") : null,
-    });
+    );
 
     return {
-      runId: run.id,
-      status: errors.length ? "partial" : "success",
-      stats,
+      runId: finishedRun.id,
+      status: finishedRun.status,
+      stats: finishedRun.stats,
       errors,
     };
   } catch (error) {
@@ -167,11 +257,7 @@ async function runLightSyncUnlocked(
       message,
       platform: pageContext.platform,
     });
-    await finishSyncRun(app.db, run.id, {
-      status: "failed",
-      stats,
-      errorSummary: message,
-    });
+    await telemetry.finish("failed", message, stats);
     throw error;
   }
 }
@@ -184,11 +270,33 @@ export async function runLightSync(
     onlyFansTransactionStart?: Date | null;
   },
 ) {
-  return withResolvedPageLock(
+  const pageContext = await resolvePageContext(app, label);
+  const observedRun = await createObservedRun(
     app,
-    label,
-    (pageContext) => runLightSyncUnlocked(app, pageContext, input),
+    pageContext,
+    "light",
+    input?.trigger ?? "cli",
   );
+
+  try {
+    return await withPageSyncLock(
+      app,
+      {
+        pageId: pageContext.page.id,
+        pageLabel: pageContext.page.label,
+      },
+      () => runLightSyncUnlocked(app, pageContext, observedRun, input),
+    );
+  } catch (error) {
+    if (error instanceof PageSyncLockedError) {
+      const skippedRun = await observedRun.telemetry.recordSkipped(
+        "Skipped sync because the page lock is already held",
+      );
+      return toSyncCommandResult(skippedRun);
+    }
+
+    throw error;
+  }
 }
 
 export async function runFollowerSync(
@@ -196,17 +304,38 @@ export async function runFollowerSync(
   label: string,
   trigger = "cli",
 ) {
-  return withResolvedPageLock(
-    app,
-    label,
-    (pageContext) => {
-      if (pageContext.platform === "onlyfans") {
-        throw new Error("Follower sync is not supported for OnlyFans pages");
-      }
+  const pageContext = await resolvePageContext(app, label);
+  if (pageContext.platform === "onlyfans") {
+    throw new Error("Follower sync is not supported for OnlyFans pages");
+  }
 
-      return runFollowerSyncUnlocked(app, pageContext, trigger);
-    },
-  );
+  const observedRun = await createObservedRun(app, pageContext, "followers", trigger);
+
+  try {
+    return await withPageSyncLock(
+      app,
+      {
+        pageId: pageContext.page.id,
+        pageLabel: pageContext.page.label,
+      },
+      () => runFollowerSyncUnlocked(app, pageContext, observedRun, trigger),
+    );
+  } catch (error) {
+    if (error instanceof PageSyncLockedError) {
+      const skippedRun = await observedRun.telemetry.recordSkipped(
+        "Skipped sync because the page lock is already held",
+      );
+      return {
+        runId: skippedRun.id,
+        status: skippedRun.status,
+        processed: 0,
+        delta: 0,
+        followerCount: pageContext.page.followerCount,
+      };
+    }
+
+    throw error;
+  }
 }
 
 export async function runAllSync(
@@ -217,26 +346,82 @@ export async function runAllSync(
     onlyFansTransactionStart?: Date | null;
   },
 ) {
-  return withResolvedPageLock(app, label, async (pageContext) => {
-    const light = await runLightSyncUnlocked(app, pageContext, input);
-    if (pageContext.platform === "onlyfans") {
+  const pageContext = await resolvePageContext(app, label);
+  const trigger = input?.trigger ?? "cli";
+  const lightRun = await createObservedRun(app, pageContext, "light", trigger);
+  const followerRun = pageContext.platform === "fansly"
+    ? await createObservedRun(app, pageContext, "followers", trigger)
+    : null;
+
+  try {
+    return await withPageSyncLock(
+      app,
+      {
+        pageId: pageContext.page.id,
+        pageLabel: pageContext.page.label,
+      },
+      async () => {
+        try {
+          const light = await runLightSyncUnlocked(app, pageContext, lightRun, input);
+          if (pageContext.platform === "onlyfans") {
+            return {
+              light,
+              followers: null,
+            };
+          }
+
+          const followers = await runFollowerSyncUnlocked(
+            app,
+            pageContext,
+            followerRun!,
+            trigger,
+          );
+
+          return {
+            light,
+            followers,
+          };
+        } catch (error) {
+          if (followerRun) {
+            await followerRun.telemetry.finish(
+              "skipped",
+              "Follower phase did not start because the light sync failed",
+              {
+                skippedReason: "light_sync_failed",
+              },
+            );
+          }
+          throw error;
+        }
+      },
+    );
+  } catch (error) {
+    if (error instanceof PageSyncLockedError) {
+      const light = toSyncCommandResult(
+        await lightRun.telemetry.recordSkipped(
+          "Skipped sync because the page lock is already held",
+        ),
+      );
+      const followers = followerRun
+        ? {
+          runId: (await followerRun.telemetry.recordSkipped(
+            "Skipped sync because the page lock is already held",
+          )).id,
+          status: "skipped" as const,
+          processed: 0,
+          delta: 0,
+          followerCount: pageContext.page.followerCount,
+        }
+        : null;
+
       return {
         light,
-        followers: null,
+        followers,
       };
     }
 
-    const followers = await runFollowerSyncUnlocked(
-      app,
-      pageContext,
-      input?.trigger ?? "cli",
-    );
-
-    return {
-      light,
-      followers,
-    };
-  });
+    throw error;
+  }
 }
 
 export async function listModels(app: AppContext) {
@@ -254,6 +439,7 @@ export async function listStatus(
   input?: {
     limit?: number;
     pageLabel?: string;
+    since?: Date;
   },
 ) {
   let platformAccountId: number | undefined;
@@ -269,7 +455,79 @@ export async function listStatus(
   return listRecentSyncRuns(app.db, {
     limit: input?.limit ?? 20,
     platformAccountId,
+    since: input?.since,
   });
+}
+
+export async function getStatusDetail(
+  app: AppContext,
+  runId: number,
+) {
+  const run = await getSyncRun(app.db, runId);
+  if (!run) {
+    throw new Error(`Sync run ${runId} was not found`);
+  }
+
+  const [events, attempts] = await Promise.all([
+    listSyncRunEvents(app.db, { runId, limit: 500 }),
+    listSyncRequestAttempts(app.db, { runId, limit: 2000 }),
+  ]);
+
+  return {
+    run,
+    events,
+    attempts,
+  };
+}
+
+export async function getStatusWatchSnapshot(
+  app: AppContext,
+  input?: {
+    pageLabel?: string;
+    limit?: number;
+    since?: Date;
+    afterEventId?: number;
+  },
+) {
+  let platformAccountId: number | undefined;
+
+  if (input?.pageLabel) {
+    const page = await findPageByLabel(app.db, input.pageLabel);
+    if (!page) {
+      throw new Error(`Page not found for label "${input.pageLabel}"`);
+    }
+    platformAccountId = page.page.id;
+  }
+
+  const [runningRuns, recentRuns, inflightAttempts, events] = await Promise.all([
+    listRunningSyncRuns(app.db, {
+      platformAccountId,
+      limit: input?.limit ?? DEFAULT_WATCH_LIMIT,
+    }),
+    listRecentSyncRuns(app.db, {
+      platformAccountId,
+      limit: input?.limit ?? DEFAULT_WATCH_LIMIT,
+      since: input?.since,
+    }),
+    listSyncRequestAttempts(app.db, {
+      platformAccountId,
+      inFlightOnly: true,
+      limit: 200,
+    }),
+    listSyncRunEvents(app.db, {
+      platformAccountId,
+      afterId: input?.afterEventId,
+      since: input?.since,
+      limit: 200,
+    }),
+  ]);
+
+  return {
+    runningRuns,
+    recentRuns,
+    inflightAttempts,
+    events,
+  };
 }
 
 export async function listFans(
@@ -321,7 +579,13 @@ export async function revenueBreakdownForPage(
     new Date(),
     custom,
   );
-  const rows = await getRevenueBreakdown(app.db, page.page.id, bounds.from, bounds.to);
+  const rows = await getRevenueBreakdown(
+    app.db,
+    page.page.id,
+    page.page.platform,
+    bounds.from,
+    bounds.to,
+  );
 
   return {
     page: page.page,
@@ -428,6 +692,10 @@ export async function scheduleExistingPages(app: AppContext, boss: {
   await discoverPages();
   await ensureScheduledWork("fansly.raw-payload-cleanup", "0 2 * * *", undefined, async () => {
     await deleteExpiredRawPayloads(app.db, new Date());
+    await deleteExpiredSyncObservability(
+      app.db,
+      new Date(Date.now() - app.config.syncObservabilityRetentionDays * 24 * 60 * 60 * 1000),
+    );
   });
 
   const discoveryTimer = setInterval(() => {

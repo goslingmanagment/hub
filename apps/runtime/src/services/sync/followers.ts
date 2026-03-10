@@ -1,12 +1,10 @@
 import {
   countActivePageFollows,
   deactivatePageFollowsMissingFromSnapshot,
-  finishSyncRun,
   getCheckpoint,
   insertRawPayload,
   refreshFanPageFollowerState,
   rebuildFollowerRollups,
-  startSyncRun,
   upsertCheckpoint,
   upsertFanPage,
   upsertFans,
@@ -17,30 +15,45 @@ import { fanslyFollowIdToDate } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { ResolvedFanslyPageContext } from "../page-context.ts";
+import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { insertFailedSyncPayload, refreshPageMetadata, retentionDate } from "./shared.ts";
 
 export async function runFollowerSyncUnlocked(
   app: AppContext,
   pageContext: ResolvedFanslyPageContext,
+  observedRun: {
+    run: {
+      id: number;
+    };
+    telemetry: SyncRunTelemetry;
+  },
   trigger = "cli",
 ) {
-  const run = await startSyncRun(app.db, {
-    platformAccountId: pageContext.page.id,
-    stream: "followers",
-    trigger,
-  });
+  const { run, telemetry } = observedRun;
 
   try {
-    const accountMe = await refreshPageMetadata(app, pageContext, "followers");
+    await telemetry.recordPhaseStarted("page_metadata", {
+      trigger,
+    });
+    const accountMe = await refreshPageMetadata(app, pageContext, "followers", telemetry);
     const checkpoint = await getCheckpoint(app.db, pageContext.page.id, "followers");
+    await telemetry.recordCheckpointLoaded("followers", summarizeCheckpoint(checkpoint));
     const knownFollowId = checkpoint?.cursorText ?? null;
-    const requestContext = { session: pageContext.session, proxy: pageContext.proxy };
+    const requestContext = {
+      session: pageContext.session,
+      proxy: pageContext.proxy,
+      telemetry,
+    };
 
     let offset = 0;
     let processed = 0;
     let delta = 0;
     let newestFollowId: string | null = knownFollowId;
     let done = false;
+    let incrementalPages = 0;
+    let reconcilePages = 0;
+    let sawKnownCheckpoint = false;
+    let stopReason: "checkpoint_hit" | "end_of_list" | null = null;
 
     const fetchFollowersPage = async (pageOffset: number, mode: "incremental" | "reconcile") => {
       const page = await app.adapter.getFollowersPage(
@@ -67,8 +80,10 @@ export async function runFollowerSyncUnlocked(
       return page;
     };
 
+    await telemetry.recordPhaseStarted("followers_incremental");
     while (!done) {
       const page = await fetchFollowersPage(offset, "incremental");
+      incrementalPages += 1;
 
       if (offset === 0 && page.items[0]?.id) {
         newestFollowId = page.items[0].id;
@@ -88,6 +103,8 @@ export async function runFollowerSyncUnlocked(
         processed += 1;
         if (knownFollowId && follower.id === knownFollowId) {
           done = true;
+          sawKnownCheckpoint = true;
+          stopReason = "checkpoint_hit";
           break;
         }
 
@@ -114,6 +131,7 @@ export async function runFollowerSyncUnlocked(
 
       if (page.done) {
         done = true;
+        stopReason = stopReason ?? "end_of_list";
       } else {
         offset += 100;
       }
@@ -121,12 +139,23 @@ export async function runFollowerSyncUnlocked(
 
     const activeFollowerCount = await countActivePageFollows(app.db, pageContext.page.id);
     if (activeFollowerCount !== accountMe.parsed.account.followCount) {
+      await telemetry.addAnomaly({
+        code: "followers_reconcile_triggered",
+        severity: "warn",
+        message: "Follower reconcile was triggered because active follow count drifted from the source",
+        details: {
+          activeFollowerCount,
+          sourceFollowerCount: accountMe.parsed.account.followCount,
+        },
+      });
+      await telemetry.recordPhaseStarted("followers_reconcile");
       const activeFollowIds = new Set<string>();
       let reconcileOffset = 0;
       let reconcileDone = false;
 
       while (!reconcileDone) {
         const page = await fetchFollowersPage(reconcileOffset, "reconcile");
+        reconcilePages += 1;
         if (reconcileOffset === 0 && page.items[0]?.id) {
           newestFollowId = page.items[0].id;
         }
@@ -179,13 +208,14 @@ export async function runFollowerSyncUnlocked(
       await refreshFanPageFollowerState(app.db, pageContext.page.id);
     }
 
+    let checkpointAfter = null;
     await rebuildFollowerRollups(
       app.db,
       pageContext.page.id,
       accountMe.parsed.account.followCount,
     );
     if (newestFollowId) {
-      await upsertCheckpoint(app.db, {
+      checkpointAfter = await upsertCheckpoint(app.db, {
         platformAccountId: pageContext.page.id,
         stream: "followers",
         cursorText: newestFollowId,
@@ -196,19 +226,62 @@ export async function runFollowerSyncUnlocked(
         lastSuccessfulRunId: run.id,
       });
     }
+    await telemetry.recordCheckpointAdvanced("followers", summarizeCheckpoint(checkpointAfter));
 
-    await finishSyncRun(app.db, run.id, {
-      status: "success",
-      stats: {
-        processed,
-        delta,
-        followerCount: accountMe.parsed.account.followCount,
-      },
+    if (knownFollowId && !sawKnownCheckpoint && stopReason === "end_of_list") {
+      await telemetry.addAnomaly({
+        code: "followers_checkpoint_missed",
+        severity: "error",
+        message: "Follower scan reached the end of the list without encountering the previous checkpoint",
+        details: {
+          knownFollowId,
+          newestFollowId,
+        },
+      });
+    }
+
+    if (
+      checkpoint?.cursorText &&
+      checkpointAfter?.cursorText &&
+      checkpointAfter.cursorText === checkpoint.cursorText &&
+      processed > 0
+    ) {
+      await telemetry.addAnomaly({
+        code: "checkpoint_stalled",
+        severity: "error",
+        message: "Follower checkpoint did not advance despite scanning follower data",
+        details: {
+          cursorText: checkpoint.cursorText,
+          processed,
+        },
+      });
+    }
+
+    telemetry.setScanSummary({
+      processed,
+      delta,
+      followerCount: accountMe.parsed.account.followCount,
+      incrementalPages,
+      reconcilePages,
+      stopReason,
+      knownFollowId,
+      newestFollowId,
+      approximateScanSpanMs: newestFollowId && knownFollowId
+        ? Math.max(
+          0,
+          fanslyFollowIdToDate(newestFollowId).getTime() - fanslyFollowIdToDate(knownFollowId).getTime(),
+        )
+        : null,
+    });
+    const finishedRun = await telemetry.finish("success", null, {
+      processed,
+      delta,
+      followerCount: accountMe.parsed.account.followCount,
     });
 
     return {
-      runId: run.id,
-      status: "success" as const,
+      runId: finishedRun.id,
+      status: finishedRun.status,
       processed,
       delta,
       followerCount: accountMe.parsed.account.followCount,
@@ -222,10 +295,7 @@ export async function runFollowerSyncUnlocked(
       message,
       platform: "fansly",
     });
-    await finishSyncRun(app.db, run.id, {
-      status: "failed",
-      errorSummary: message,
-    });
+    await telemetry.finish("failed", message);
     throw error;
   }
 }

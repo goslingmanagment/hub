@@ -1,4 +1,5 @@
 import {
+  getCheckpoint,
   getCurrentSubscribers,
   insertRawPayload,
   rebuildSubscriberRollups,
@@ -16,6 +17,7 @@ import { toMills } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { hydrateFans } from "./fan-hydration.ts";
+import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { retentionDate } from "./shared.ts";
 
 export async function syncSubscribers(
@@ -25,17 +27,22 @@ export async function syncSubscribers(
     platformAccountId: number;
     requestContext: Parameters<AppContext["adapter"]["getSubscribersPage"]>[0];
     syncRunId: number;
+    telemetry: SyncRunTelemetry;
   },
 ) {
+  const checkpoint = await getCheckpoint(app.db, input.platformAccountId, "subscribers");
+  await input.telemetry.recordCheckpointLoaded("subscribers", summarizeCheckpoint(checkpoint));
   let offset = 0;
   const items: Awaited<ReturnType<AppContext["adapter"]["getSubscribersPage"]>>["items"] = [];
   let stats: { totalActive: number; totalExpired: number; total: number } | null = null;
+  let pageCount = 0;
 
   while (true) {
     const page = await app.adapter.getSubscribersPage(
       input.requestContext,
       { limit: 100, offset, status: "3,4" },
     );
+    pageCount += 1;
 
     items.push(...page.items);
     stats = stats ?? {
@@ -64,6 +71,14 @@ export async function syncSubscribers(
   if (items.length === 0) {
     const currentSubscribers = await getCurrentSubscribers(app.db, input.platformAccountId);
     if (currentSubscribers.rows.length > 0) {
+      await input.telemetry.addAnomaly({
+        code: "partial_stream_failure",
+        severity: "warn",
+        message: "Subscriber sync returned zero rows while current subscriptions already existed",
+        details: {
+          existingCurrentSubscribers: currentSubscribers.rows.length,
+        },
+      });
       throw new Error("Subscriber sync returned zero rows; refusing to clear existing current subscriptions");
     }
   }
@@ -71,6 +86,7 @@ export async function syncSubscribers(
   const fanMap = await hydrateFans(app, {
     requestContext: input.requestContext,
     platformUserIds: items.map((item) => item.subscriberId),
+    telemetry: input.telemetry,
   });
 
   const activeIds: string[] = [];
@@ -134,11 +150,17 @@ export async function syncSubscribers(
       )
   `);
   await rebuildSubscriberRollups(app.db, input.platformAccountId);
-  await upsertCheckpoint(app.db, {
+  const checkpointAfter = await upsertCheckpoint(app.db, {
     platformAccountId: input.platformAccountId,
     stream: "subscribers",
     state: { count: activeIds.length, pageLabel: input.pageLabel },
     lastSuccessfulRunId: input.syncRunId,
+  });
+  await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(checkpointAfter));
+  input.telemetry.setScanSummary({
+    subscriberPages: pageCount,
+    processedSubscribers: items.length,
+    activeSubscribers: activeIds.length,
   });
 
   return {

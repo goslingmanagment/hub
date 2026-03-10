@@ -1,7 +1,14 @@
 import { and, eq, lt, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { platformAccounts, rawPayloads, syncCheckpoints, syncRuns } from "../schema.ts";
+import {
+  platformAccounts,
+  rawPayloads,
+  syncCheckpoints,
+  syncRequestAttempts,
+  syncRunEvents,
+  syncRuns,
+} from "../schema.ts";
 
 export async function startSyncRun(
   db: Database,
@@ -28,7 +35,7 @@ export async function finishSyncRun(
   db: Database,
   runId: number,
   input: {
-    status: "success" | "partial" | "failed";
+    status: "success" | "partial" | "failed" | "skipped";
     stats?: Record<string, unknown>;
     errorSummary?: string | null;
   },
@@ -129,8 +136,119 @@ export async function insertRawPayload(
   return created;
 }
 
+export async function insertSyncRequestAttempt(
+  db: Database,
+  input: {
+    syncRunId: number;
+    platformAccountId: number;
+    provider: "fansly" | "onlyfans";
+    stream: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+    operation: string;
+    logicalRequestId: string;
+    attemptNumber: number;
+    requestShape?: Record<string, unknown>;
+    startedAt?: Date;
+  },
+) {
+  const [attempt] = await db
+    .insert(syncRequestAttempts)
+    .values({
+      syncRunId: input.syncRunId,
+      platformAccountId: input.platformAccountId,
+      provider: input.provider,
+      stream: input.stream,
+      operation: input.operation,
+      logicalRequestId: input.logicalRequestId,
+      attemptNumber: input.attemptNumber,
+      state: "started",
+      requestShape: input.requestShape ?? {},
+      startedAt: input.startedAt ?? new Date(),
+    })
+    .returning();
+
+  return attempt;
+}
+
+export async function finishSyncRequestAttempt(
+  db: Database,
+  attemptId: number,
+  input: {
+    state: "success" | "retry" | "failed";
+    failureKind?: "timeout" | "transport" | "http" | "provider" | null;
+    httpStatus?: number | null;
+    retryDelayMs?: number | null;
+    durationMs?: number | null;
+    responseShape?: Record<string, unknown>;
+    errorMessage?: string | null;
+    finishedAt?: Date;
+  },
+) {
+  const [attempt] = await db
+    .update(syncRequestAttempts)
+    .set({
+      state: input.state,
+      failureKind: input.failureKind ?? null,
+      httpStatus: input.httpStatus ?? null,
+      retryDelayMs: input.retryDelayMs ?? null,
+      durationMs: input.durationMs ?? null,
+      responseShape: input.responseShape ?? {},
+      errorMessage: input.errorMessage ?? null,
+      finishedAt: input.finishedAt ?? new Date(),
+    })
+    .where(eq(syncRequestAttempts.id, attemptId))
+    .returning();
+
+  return attempt;
+}
+
+export async function insertSyncRunEvent(
+  db: Database,
+  input: {
+    syncRunId: number;
+    platformAccountId: number;
+    provider: "fansly" | "onlyfans";
+    stream: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+    eventType: string;
+    severity?: "info" | "warn" | "error";
+    message: string;
+    details?: Record<string, unknown>;
+    emittedAt?: Date;
+  },
+) {
+  const [event] = await db
+    .insert(syncRunEvents)
+    .values({
+      syncRunId: input.syncRunId,
+      platformAccountId: input.platformAccountId,
+      provider: input.provider,
+      stream: input.stream,
+      eventType: input.eventType,
+      severity: input.severity ?? "info",
+      message: input.message,
+      details: input.details ?? {},
+      emittedAt: input.emittedAt ?? new Date(),
+    })
+    .returning();
+
+  return event;
+}
+
 export async function deleteExpiredRawPayloads(db: Database, now = new Date()) {
   return db.delete(rawPayloads).where(lt(rawPayloads.retainUntil, now));
+}
+
+export async function deleteExpiredSyncObservability(db: Database, cutoff: Date) {
+  const [deletedAttempts, deletedEvents] = await Promise.all([
+    db
+      .delete(syncRequestAttempts)
+      .where(lt(sql`coalesce(${syncRequestAttempts.finishedAt}, ${syncRequestAttempts.startedAt})`, cutoff)),
+    db.delete(syncRunEvents).where(lt(syncRunEvents.emittedAt, cutoff)),
+  ]);
+
+  return {
+    deletedAttempts,
+    deletedEvents,
+  };
 }
 
 export async function listRecentSyncRuns(
@@ -138,30 +256,285 @@ export async function listRecentSyncRuns(
   input?: {
     limit?: number;
     platformAccountId?: number;
+    since?: Date;
   },
 ) {
-  const clauses = [
-    sql`true`,
-  ];
+  const clauses = [sql`true`];
 
   if (input?.platformAccountId !== undefined) {
     clauses.push(sql`${syncRuns.platformAccountId} = ${input.platformAccountId}`);
   }
 
-  return db
-    .select({
-      runId: syncRuns.id,
-      pageLabel: platformAccounts.label,
-      stream: syncRuns.stream,
-      trigger: syncRuns.trigger,
-      status: syncRuns.status,
-      startedAt: syncRuns.startedAt,
-      finishedAt: syncRuns.finishedAt,
-      errorSummary: syncRuns.errorSummary,
-    })
-    .from(syncRuns)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, syncRuns.platformAccountId))
-    .where(and(...clauses))
-    .orderBy(sql`${syncRuns.startedAt} desc`, sql`${syncRuns.id} desc`)
-    .limit(input?.limit ?? 20);
+  if (input?.since) {
+    clauses.push(sql`${syncRuns.startedAt} >= ${input.since}`);
+  }
+
+  const result = await db.execute<{
+    runId: number;
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    stream: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+    trigger: string;
+    status: "running" | "success" | "partial" | "failed" | "skipped";
+    startedAt: Date;
+    finishedAt: Date | null;
+    errorSummary: string | null;
+    stats: Record<string, unknown>;
+  }>(sql`
+    select sr.id as "runId",
+           sr.platform_account_id as "platformAccountId",
+           pa.label as "pageLabel",
+           pa.platform as "platform",
+           sr.stream as "stream",
+           sr.trigger as "trigger",
+           sr.status as "status",
+           sr.started_at as "startedAt",
+           sr.finished_at as "finishedAt",
+           sr.error_summary as "errorSummary",
+           sr.stats as "stats"
+    from sync_runs sr
+    inner join platform_accounts pa on pa.id = sr.platform_account_id
+    where ${and(...clauses)}
+    order by sr.started_at desc, sr.id desc
+    limit ${input?.limit ?? 20}
+  `);
+
+  return result.rows;
+}
+
+export async function getSyncRun(db: Database, runId: number) {
+  const result = await db.execute<{
+    runId: number;
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    stream: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+    trigger: string;
+    status: "running" | "success" | "partial" | "failed" | "skipped";
+    startedAt: Date;
+    finishedAt: Date | null;
+    errorSummary: string | null;
+    stats: Record<string, unknown>;
+  }>(sql`
+    select sr.id as "runId",
+           sr.platform_account_id as "platformAccountId",
+           pa.label as "pageLabel",
+           pa.platform as "platform",
+           sr.stream as "stream",
+           sr.trigger as "trigger",
+           sr.status as "status",
+           sr.started_at as "startedAt",
+           sr.finished_at as "finishedAt",
+           sr.error_summary as "errorSummary",
+           sr.stats as "stats"
+    from sync_runs sr
+    inner join platform_accounts pa on pa.id = sr.platform_account_id
+    where sr.id = ${runId}
+    limit 1
+  `);
+
+  return result.rows[0] ?? null;
+}
+
+export async function listSyncRunEvents(
+  db: Database,
+  input: {
+    runId?: number;
+    afterId?: number;
+    since?: Date;
+    platformAccountId?: number;
+    limit?: number;
+  },
+) {
+  const clauses = [sql`true`];
+
+  if (input.runId !== undefined) {
+    clauses.push(sql`${syncRunEvents.syncRunId} = ${input.runId}`);
+  }
+
+  if (input.afterId !== undefined) {
+    clauses.push(sql`${syncRunEvents.id} > ${input.afterId}`);
+  }
+
+  if (input.since) {
+    clauses.push(sql`${syncRunEvents.emittedAt} >= ${input.since}`);
+  }
+
+  if (input.platformAccountId !== undefined) {
+    clauses.push(sql`${syncRunEvents.platformAccountId} = ${input.platformAccountId}`);
+  }
+
+  const result = await db.execute<{
+    id: number;
+    runId: number;
+    platformAccountId: number;
+    pageLabel: string;
+    provider: "fansly" | "onlyfans";
+    stream: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+    eventType: string;
+    severity: "info" | "warn" | "error";
+    message: string;
+    details: Record<string, unknown>;
+    emittedAt: Date;
+  }>(sql`
+    select e.id as "id",
+           e.sync_run_id as "runId",
+           e.platform_account_id as "platformAccountId",
+           pa.label as "pageLabel",
+           e.provider as "provider",
+           e.stream as "stream",
+           e.event_type as "eventType",
+           e.severity as "severity",
+           e.message as "message",
+           e.details as "details",
+           e.emitted_at as "emittedAt"
+    from sync_run_events e
+    inner join platform_accounts pa on pa.id = e.platform_account_id
+    where ${and(...clauses)}
+    order by e.id asc
+    limit ${input.limit ?? 200}
+  `);
+
+  return result.rows;
+}
+
+export async function listSyncRequestAttempts(
+  db: Database,
+  input: {
+    runId?: number;
+    platformAccountId?: number;
+    inFlightOnly?: boolean;
+    limit?: number;
+  },
+) {
+  const clauses = [sql`true`];
+
+  if (input.runId !== undefined) {
+    clauses.push(sql`${syncRequestAttempts.syncRunId} = ${input.runId}`);
+  }
+
+  if (input.platformAccountId !== undefined) {
+    clauses.push(sql`${syncRequestAttempts.platformAccountId} = ${input.platformAccountId}`);
+  }
+
+  if (input.inFlightOnly) {
+    clauses.push(sql`${syncRequestAttempts.finishedAt} is null`);
+  }
+
+  const result = await db.execute<{
+    attemptId: number;
+    runId: number;
+    platformAccountId: number;
+    pageLabel: string;
+    provider: "fansly" | "onlyfans";
+    stream: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+    operation: string;
+    logicalRequestId: string;
+    attemptNumber: number;
+    state: "started" | "success" | "retry" | "failed";
+    failureKind: "timeout" | "transport" | "http" | "provider" | null;
+    httpStatus: number | null;
+    retryDelayMs: number | null;
+    durationMs: number | null;
+    requestShape: Record<string, unknown>;
+    responseShape: Record<string, unknown>;
+    errorMessage: string | null;
+    startedAt: Date;
+    finishedAt: Date | null;
+  }>(sql`
+    select a.id as "attemptId",
+           a.sync_run_id as "runId",
+           a.platform_account_id as "platformAccountId",
+           pa.label as "pageLabel",
+           a.provider as "provider",
+           a.stream as "stream",
+           a.operation as "operation",
+           a.logical_request_id as "logicalRequestId",
+           a.attempt_number as "attemptNumber",
+           a.state as "state",
+           a.failure_kind as "failureKind",
+           a.http_status as "httpStatus",
+           a.retry_delay_ms as "retryDelayMs",
+           a.duration_ms as "durationMs",
+           a.request_shape as "requestShape",
+           a.response_shape as "responseShape",
+           a.error_message as "errorMessage",
+           a.started_at as "startedAt",
+           a.finished_at as "finishedAt"
+    from sync_request_attempts a
+    inner join platform_accounts pa on pa.id = a.platform_account_id
+    where ${and(...clauses)}
+    order by a.started_at asc, a.id asc
+    limit ${input.limit ?? 1000}
+  `);
+
+  return result.rows;
+}
+
+export async function listRunningSyncRuns(
+  db: Database,
+  input?: {
+    platformAccountId?: number;
+    limit?: number;
+  },
+) {
+  const clauses = [sql`${syncRuns.status} = 'running'`];
+
+  if (input?.platformAccountId !== undefined) {
+    clauses.push(sql`${syncRuns.platformAccountId} = ${input.platformAccountId}`);
+  }
+
+  const result = await db.execute<{
+    runId: number;
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    stream: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+    trigger: string;
+    status: "running";
+    startedAt: Date;
+    finishedAt: Date | null;
+    errorSummary: string | null;
+    stats: Record<string, unknown>;
+    lastActivityAt: Date;
+  }>(sql`
+    with request_activity as (
+      select sync_run_id,
+             max(coalesce(finished_at, started_at)) as last_attempt_at
+      from sync_request_attempts
+      group by sync_run_id
+    ),
+    event_activity as (
+      select sync_run_id,
+             max(emitted_at) as last_event_at
+      from sync_run_events
+      group by sync_run_id
+    )
+    select sr.id as "runId",
+           sr.platform_account_id as "platformAccountId",
+           pa.label as "pageLabel",
+           pa.platform as "platform",
+           sr.stream as "stream",
+           sr.trigger as "trigger",
+           sr.status as "status",
+           sr.started_at as "startedAt",
+           sr.finished_at as "finishedAt",
+           sr.error_summary as "errorSummary",
+           sr.stats as "stats",
+           greatest(
+             sr.started_at,
+             coalesce(ra.last_attempt_at, sr.started_at),
+             coalesce(ea.last_event_at, sr.started_at)
+           ) as "lastActivityAt"
+    from sync_runs sr
+    inner join platform_accounts pa on pa.id = sr.platform_account_id
+    left join request_activity ra on ra.sync_run_id = sr.id
+    left join event_activity ea on ea.sync_run_id = sr.id
+    where ${and(...clauses)}
+    order by sr.started_at asc, sr.id asc
+    limit ${input?.limit ?? 20}
+  `);
+
+  return result.rows;
 }

@@ -2,12 +2,14 @@ import { upsertFans } from "@fansly-connect/db";
 import type { UpsertFanInput } from "@fansly-connect/db";
 
 import type { AppContext } from "../../bootstrap.ts";
+import type { SyncRunTelemetry } from "./observability.ts";
 
 export async function prepareHydratedFans(
   app: AppContext,
   input: {
     requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
     platformUserIds: string[];
+    telemetry?: SyncRunTelemetry;
   },
 ) {
   if (input.platformUserIds.length === 0) {
@@ -26,6 +28,12 @@ export async function prepareHydratedFans(
   const fallbackIds = uniqueIds.filter(
     (id) => !accounts.some((account) => account.id === id),
   );
+  input.telemetry?.mergeHydrationSummary({
+    uniqueFanIds: uniqueIds.length,
+    lookupBatches: Math.ceil(uniqueIds.length / 100),
+    fallbackMisses: fallbackIds.length,
+    requestCount: Math.ceil(uniqueIds.length / 100),
+  });
 
   return [
     ...accounts.map((account) => ({
@@ -49,6 +57,7 @@ export async function hydrateFans(
   input: {
     requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
     platformUserIds: string[];
+    telemetry?: SyncRunTelemetry;
   },
 ) {
   const fans = await upsertFans(app.db, await prepareHydratedFans(app, input));

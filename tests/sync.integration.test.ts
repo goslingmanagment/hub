@@ -38,7 +38,6 @@ import type {
 import { encryptJson } from "@fansly-connect/shared";
 
 import {
-  PageSyncLockedError,
   listFans,
   listFollowers,
   listModels,
@@ -68,6 +67,7 @@ class FakeFanslyAdapter {
     },
     private readonly options?: {
       failTransactionPage?: number;
+      ignoreTransactionAfter?: boolean;
       holdAccountMe?: {
         onEntered: () => void;
         release: Promise<void>;
@@ -133,7 +133,7 @@ class FakeFanslyAdapter {
       throw new Error(`transactions page ${pageIndex} failed`);
     }
 
-    const filtered = params.after
+    const filtered = params.after && !this.options?.ignoreTransactionAfter
       ? this.fixture.transactions.filter((item) => item.createdAt >= params.after!.getTime())
       : this.fixture.transactions;
     const items = filtered.slice(offset, offset + limit);
@@ -399,6 +399,7 @@ function createTestApp(
       followerPageDelayMs: 0,
       transactionLookbackDays: overrides?.transactionLookbackDays ?? 7,
       transactionRescanCapDays: overrides?.transactionRescanCapDays ?? 30,
+      syncObservabilityRetentionDays: 30,
     },
     adapter,
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as never),
@@ -864,6 +865,131 @@ describe("sync integration", () => {
     }
   });
 
+  it("records operator-facing request telemetry for a healthy light run", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const transactionsFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/earnings_transactions.json"), "utf8"),
+    ).data.response.data as FanslyEarningsTransaction[];
+    const subscribersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/subscribers.json"), "utf8"),
+    ).data.response.subscriptions as FanslySubscriber[];
+
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, new FakeFanslyAdapter({
+      accountMe: accountMeFixture,
+      transactions: transactionsFixture,
+      subscribers: subscribersFixture,
+      followers: [],
+    }));
+
+    const result = await runLightSync(app, page.label);
+    const attemptRows = await testDb.pool.query(`
+      select operation, state, request_shape
+      from sync_request_attempts
+      where sync_run_id = ${result.runId}
+      order by id asc
+    `);
+    const eventRows = await testDb.pool.query(`
+      select event_type
+      from sync_run_events
+      where sync_run_id = ${result.runId}
+      order by id asc
+    `);
+    const runRow = await testDb.pool.query(`
+      select stats->>'health' as health
+      from sync_runs
+      where id = ${result.runId}
+    `);
+
+    expect(result.status).toBe("success");
+    expect(result.stats.health).toBe("healthy");
+    expect(runRow.rows[0]?.health).toBe("healthy");
+    expect(attemptRows.rows.map((row: { operation: string }) => row.operation)).toEqual(
+      expect.arrayContaining(["account_me", "earnings_transactions", "subscribers", "account_lookup"]),
+    );
+    expect(
+      attemptRows.rows.find((row: { operation: string }) => row.operation === "account_lookup")?.request_shape,
+    ).toMatchObject({
+      idsCount: expect.any(Number),
+    });
+    expect(
+      attemptRows.rows.find((row: { operation: string }) => row.operation === "account_lookup")?.request_shape?.ids,
+    ).toBeUndefined();
+    expect(eventRows.rows.map((row: { event_type: string }) => row.event_type)).toEqual(
+      expect.arrayContaining([
+        "run_started",
+        "phase_started",
+        "checkpoint_loaded",
+        "checkpoint_advanced",
+        "run_finished",
+      ]),
+    );
+  });
+
+  it("flags after_ineffective when Fansly ignores the lower-bound filter", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const seedTransactions = JSON.parse(
+      await readFile(path.resolve("reference/responses/earnings_transactions.json"), "utf8"),
+    ).data.response.data as FanslyEarningsTransaction[];
+    const baseTransaction = seedTransactions[0]!;
+    const now = Date.now();
+    const recentAt = now - 2 * 24 * 60 * 60 * 1000;
+    const oldAt = now - 25 * 24 * 60 * 60 * 1000;
+    const adapter = new FakeFanslyAdapter(
+      {
+        accountMe: accountMeFixture,
+        transactions: [
+          buildTransaction(baseTransaction, {
+            transactionId: "recent-checkpoint",
+            correlationId: "recent-checkpoint",
+            createdAt: recentAt,
+            updatedAt: recentAt,
+          }),
+        ],
+        subscribers: [],
+        followers: [],
+      },
+      {
+        ignoreTransactionAfter: true,
+      },
+    );
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, adapter, {
+      transactionLookbackDays: 7,
+      transactionRescanCapDays: 30,
+    });
+
+    await runLightSync(app, page.label);
+
+    adapter.setTransactions(Array.from({ length: 150 }, (_, index) => buildTransaction(baseTransaction, {
+      transactionId: `old-ignored-${index}`,
+      correlationId: `old-ignored-${index}`,
+      createdAt: oldAt + index,
+      updatedAt: oldAt + index,
+    })));
+
+    const result = await runLightSync(app, page.label);
+    const anomalyCodes = (result.stats.anomalies as Array<{ code: string }>).map((entry) => entry.code);
+
+    expect(result.status).toBe("success");
+    expect(result.stats.health).toBe("suspicious");
+    expect(anomalyCodes).toEqual(expect.arrayContaining(["after_ineffective", "checkpoint_stalled"]));
+  });
+
   it("keeps current subscribers when a sync returns an unexpected empty page", async (context) => {
     if (!testDb) {
       context.skip();
@@ -906,7 +1032,7 @@ describe("sync integration", () => {
     expect(currentSubscriptions.rows[0]?.count).toBe(subscribersFixture.length);
   });
 
-  it("rejects overlapping syncs for the same page", async (context) => {
+  it("records skipped runs when a sync overlaps the page lock", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -939,13 +1065,23 @@ describe("sync integration", () => {
     const firstRun = runLightSync(app, page.label);
     await entered.promise;
 
-    await expect(runLightSync(app, page.label)).rejects.toBeInstanceOf(PageSyncLockedError);
+    const skippedRun = await runLightSync(app, page.label);
 
     release.resolve();
     await firstRun;
 
-    const runCount = await testDb.pool.query("select count(*)::int as count from sync_runs");
-    expect(runCount.rows[0]?.count).toBe(1);
+    const runRows = await testDb.pool.query(`
+      select status, error_summary, stats->>'health' as health
+      from sync_runs
+      order by id asc
+    `);
+    expect(skippedRun.status).toBe("skipped");
+    expect(runRows.rows).toHaveLength(2);
+    expect(runRows.rows[1]).toMatchObject({
+      status: "skipped",
+      error_summary: "Skipped sync because the page lock is already held",
+      health: "degraded",
+    });
   });
 
   it("stores payout reversals for audit but excludes them from revenue", async (context) => {
@@ -1929,6 +2065,278 @@ describe("sync integration", () => {
         {
           gross_amount_mills: 20000n,
           creator_net_amount_mills: 16000n,
+        },
+      ]);
+    } finally {
+      if (legacyDb) {
+        await legacyDb.stop();
+      }
+    }
+  });
+
+  it("re-buckets existing Fansly business dates to UTC when the UTC migration runs", async (context) => {
+    let legacyDb: StartedTestDatabase | null = null;
+
+    try {
+      legacyDb = await startTestDatabase({
+        through: "0011_fansly_gross_backfill.sql",
+      });
+    } catch (error) {
+      context.skip();
+      return;
+    }
+
+    try {
+      const model = await createModel(legacyDb.db, {
+        slug: "legacy-fansly-utc",
+        name: "Legacy Fansly UTC",
+      });
+      const page = await createFanslyPage(legacyDb.db, {
+        modelId: model.id,
+        label: "legacy-fansly-utc",
+      });
+      const insertedFan = await legacyDb.pool.query(`
+        insert into fans (platform, platform_user_id, username)
+        values ('fansly', 'legacy-utc-fan', 'legacyutcfan')
+        returning id
+      `);
+      const fanId = Number(insertedFan.rows[0]?.id ?? 0);
+
+      await legacyDb.pool.query(`
+        insert into fan_pages (
+          fan_id,
+          platform_account_id,
+          total_creator_net_mills
+        )
+        values (${fanId}, ${page.id}, 123)
+      `);
+      await legacyDb.pool.query(`
+        insert into transactions (
+          platform_account_id,
+          fan_id,
+          transaction_id,
+          raw_type,
+          canonical_type,
+          transaction_state,
+          raw_status,
+          gross_amount_mills,
+          source_destination_amount_mills,
+          creator_net_amount_mills,
+          occurred_at
+        )
+        values
+          (${page.id}, ${fanId}, 'legacy-nov-boundary', '20001', 'tip', 'posted', '2', 8000, 8000, 8000, '2025-11-30T21:30:00.000Z'::timestamptz),
+          (${page.id}, ${fanId}, 'legacy-dec-main', '20001', 'tip', 'posted', '2', 350376, 350376, 350376, '2025-12-15T12:00:00.000Z'::timestamptz)
+      `);
+      await legacyDb.pool.query(`
+        insert into page_follows (
+          platform_account_id,
+          fan_id,
+          platform_follow_id,
+          followed_at
+        )
+        values (${page.id}, ${fanId}, 'legacy-fansly-follow', '2026-03-01T21:30:00.000Z'::timestamptz)
+      `);
+      await legacyDb.pool.query(`
+        insert into page_subscriptions (
+          platform_subscription_id,
+          platform_account_id,
+          fan_id,
+          raw_status,
+          canonical_status,
+          price_mills,
+          renew_price_mills,
+          auto_renew,
+          source_created_at,
+          ends_at
+        )
+        values (
+          'legacy-fansly-sub',
+          ${page.id},
+          ${fanId},
+          3,
+          'active',
+          5000,
+          5000,
+          true,
+          '2026-03-01T21:30:00.000Z'::timestamptz,
+          '2026-03-05T21:30:00.000Z'::timestamptz
+        )
+      `);
+      await legacyDb.pool.query(`
+        insert into daily_revenue (
+          platform_account_id,
+          business_date,
+          canonical_type,
+          transaction_state,
+          transaction_count,
+          gross_amount_mills,
+          creator_net_amount_mills
+        )
+        values
+          (${page.id}, '2025-12-01'::date, 'tip', 'posted', 1, 8000, 8000),
+          (${page.id}, '2025-12-15'::date, 'tip', 'posted', 1, 350376, 350376)
+      `);
+      await legacyDb.pool.query(`
+        insert into spender_daily_facts (
+          platform_account_id,
+          fan_id,
+          business_date,
+          canonical_type,
+          transaction_state,
+          transaction_count,
+          gross_amount_mills,
+          creator_net_amount_mills,
+          last_transaction_at
+        )
+        values
+          (${page.id}, ${fanId}, '2025-12-01'::date, 'tip', 'posted', 1, 8000, 8000, '2025-11-30T21:30:00.000Z'::timestamptz),
+          (${page.id}, ${fanId}, '2025-12-15'::date, 'tip', 'posted', 1, 350376, 350376, '2025-12-15T12:00:00.000Z'::timestamptz)
+      `);
+      await legacyDb.pool.query(`
+        insert into spender_lifetime_page (
+          platform_account_id,
+          fan_id,
+          gross_amount_mills,
+          creator_net_amount_mills,
+          last_transaction_at
+        )
+        values (${page.id}, ${fanId}, 123, 123, '2025-12-15T12:00:00.000Z'::timestamptz)
+      `);
+      await legacyDb.pool.query(`
+        insert into daily_followers (
+          platform_account_id,
+          business_date,
+          new_followers
+        )
+        values (${page.id}, '2026-03-02'::date, 1)
+      `);
+      await legacyDb.pool.query(`
+        insert into daily_subscribers (
+          platform_account_id,
+          business_date,
+          new_subscribers,
+          active_subscribers
+        )
+        values (${page.id}, '2026-03-02'::date, 1, 1)
+      `);
+
+      await applyTestMigrations(legacyDb.pool, {
+        from: "0012_fansly_utc_business_dates.sql",
+      });
+
+      const revenueRows = await legacyDb.pool.query(`
+        select business_date::text as business_date,
+               creator_net_amount_mills
+        from daily_revenue
+        where platform_account_id = ${page.id}
+        order by business_date asc
+      `);
+      const spenderDailyRows = await legacyDb.pool.query(`
+        select business_date::text as business_date,
+               creator_net_amount_mills
+        from spender_daily_facts
+        where platform_account_id = ${page.id}
+          and fan_id = ${fanId}
+        order by business_date asc
+      `);
+      const followerRows = await legacyDb.pool.query(`
+        select business_date::text as business_date,
+               new_followers
+        from daily_followers
+        where platform_account_id = ${page.id}
+        order by business_date asc
+      `);
+      const subscriberRows = await legacyDb.pool.query(`
+        select business_date::text as business_date,
+               new_subscribers,
+               active_subscribers
+        from daily_subscribers
+        where platform_account_id = ${page.id}
+          and business_date between '2026-03-01'::date and '2026-03-06'::date
+        order by business_date asc
+      `);
+      const spenderLifetimeRows = await legacyDb.pool.query(`
+        select gross_amount_mills,
+               creator_net_amount_mills
+        from spender_lifetime_page
+        where platform_account_id = ${page.id}
+          and fan_id = ${fanId}
+      `);
+      const fanPageRows = await legacyDb.pool.query(`
+        select total_creator_net_mills
+        from fan_pages
+        where platform_account_id = ${page.id}
+          and fan_id = ${fanId}
+      `);
+
+      expect(revenueRows.rows).toEqual([
+        {
+          business_date: "2025-11-30",
+          creator_net_amount_mills: 8000n,
+        },
+        {
+          business_date: "2025-12-15",
+          creator_net_amount_mills: 350376n,
+        },
+      ]);
+      expect(spenderDailyRows.rows).toEqual([
+        {
+          business_date: "2025-11-30",
+          creator_net_amount_mills: 8000n,
+        },
+        {
+          business_date: "2025-12-15",
+          creator_net_amount_mills: 350376n,
+        },
+      ]);
+      expect(followerRows.rows).toEqual([
+        {
+          business_date: "2026-03-01",
+          new_followers: 1,
+        },
+      ]);
+      expect(subscriberRows.rows).toEqual([
+        {
+          business_date: "2026-03-01",
+          new_subscribers: 1,
+          active_subscribers: 1,
+        },
+        {
+          business_date: "2026-03-02",
+          new_subscribers: 0,
+          active_subscribers: 1,
+        },
+        {
+          business_date: "2026-03-03",
+          new_subscribers: 0,
+          active_subscribers: 1,
+        },
+        {
+          business_date: "2026-03-04",
+          new_subscribers: 0,
+          active_subscribers: 1,
+        },
+        {
+          business_date: "2026-03-05",
+          new_subscribers: 0,
+          active_subscribers: 1,
+        },
+        {
+          business_date: "2026-03-06",
+          new_subscribers: 0,
+          active_subscribers: 0,
+        },
+      ]);
+      expect(spenderLifetimeRows.rows).toEqual([
+        {
+          gross_amount_mills: 358376n,
+          creator_net_amount_mills: 358376n,
+        },
+      ]);
+      expect(fanPageRows.rows).toEqual([
+        {
+          total_creator_net_mills: 358376n,
         },
       ]);
     } finally {

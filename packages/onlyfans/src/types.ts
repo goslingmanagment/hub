@@ -1,8 +1,9 @@
-import type { OnlyMonsterTokenBundle, ProxyConfig } from "@fansly-connect/shared";
+import type { OnlyMonsterTokenBundle, ProxyConfig, SyncRequestTelemetry } from "@fansly-connect/shared";
 
 export interface OnlyFansRequestContext {
   auth: OnlyMonsterTokenBundle;
   proxy?: ProxyConfig | null;
+  telemetry?: SyncRequestTelemetry | null;
 }
 
 export interface OnlyMonsterAccount {

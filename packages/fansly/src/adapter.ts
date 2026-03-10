@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { fetch, ProxyAgent } from "undici";
@@ -36,6 +37,18 @@ type RequestResult<T> = {
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
+function classifyTransportError(error: unknown) {
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return "timeout" as const;
+  }
+
+  return "transport" as const;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
   private readonly rateLimitChains = new Map<string, Promise<void>>();
@@ -50,7 +63,14 @@ export class FanslyAdapter {
 
   async getAccountMe(context: FanslyRequestContext) {
     return this.request<FanslyAccountMeResponse>(context, "/account/me", {
+      operation: "account_me",
       category: "account",
+      requestShape: {},
+      summarizeResponse: (response) => ({
+        accountId: response.account.id,
+        followerCount: response.account.followCount,
+        subscriberCount: response.account.subscriberCount,
+      }),
     });
   }
 
@@ -60,8 +80,15 @@ export class FanslyAdapter {
     }
 
     return this.request<FanslyAccount[]>(context, "/account", {
+      operation: "account_lookup",
       query: { ids: ids.join(",") },
       category: "account",
+      requestShape: {
+        idsCount: ids.length,
+      },
+      summarizeResponse: (response) => ({
+        returnedItems: response.length,
+      }),
     });
   }
 
@@ -78,6 +105,7 @@ export class FanslyAdapter {
       context,
       "/account/wallets/earnings/transactions",
       {
+        operation: "earnings_transactions",
         query: {
           after: params.after ? String(params.after.getTime()) : undefined,
           before: params.before ? String(params.before.getTime()) : undefined,
@@ -85,6 +113,17 @@ export class FanslyAdapter {
           offset: params.offset ? String(params.offset) : undefined,
         },
         category: "transactions",
+        requestShape: {
+          after: params.after ? params.after.toISOString() : null,
+          before: params.before ? params.before.toISOString() : null,
+          limit: params.limit ?? 100,
+          offset: params.offset ?? 0,
+        },
+        summarizeResponse: (parsed) => ({
+          total: parsed.total,
+          returnedItems: parsed.data.length,
+          done: parsed.data.length < (params.limit ?? 100),
+        }),
       },
     );
 
@@ -109,6 +148,7 @@ export class FanslyAdapter {
     },
   ) {
     const response = await this.request<FanslySubscribersPage>(context, "/subscribers", {
+      operation: "subscribers",
       query: {
         offset: params.offset ? String(params.offset) : undefined,
         limit: params.limit ? String(params.limit) : undefined,
@@ -117,6 +157,19 @@ export class FanslyAdapter {
         status: params.status ?? "3,4",
       },
       category: "subscribers",
+      requestShape: {
+        offset: params.offset ?? 0,
+        limit: params.limit ?? 100,
+        after: params.after ? params.after.toISOString() : null,
+        before: params.before ? params.before.toISOString() : null,
+        status: params.status ?? "3,4",
+      },
+      summarizeResponse: (parsed) => ({
+        total: parsed.stats.total,
+        totalActive: parsed.stats.totalActive,
+        returnedItems: parsed.subscriptions.length,
+        done: parsed.subscriptions.length < (params.limit ?? 100),
+      }),
     });
 
     const limit = params.limit ?? 100;
@@ -144,6 +197,7 @@ export class FanslyAdapter {
       context,
       `/account/${accountId}/followersnew`,
       {
+        operation: "followers",
         query: {
           offset: params.offset ? String(params.offset) : undefined,
           limit: params.limit ? String(params.limit) : undefined,
@@ -152,6 +206,17 @@ export class FanslyAdapter {
         },
         category: "followers",
         minDelayMs: params.minDelayMs,
+        requestShape: {
+          offset: params.offset ?? 0,
+          limit: params.limit ?? 100,
+          afterPresent: Boolean(params.after),
+          beforePresent: Boolean(params.before),
+        },
+        summarizeResponse: (parsed) => ({
+          returnedItems: parsed.followers.length,
+          accountCount: parsed.aggregationData?.accounts?.length ?? 0,
+          done: parsed.followers.length < (params.limit ?? 100),
+        }),
       },
     );
 
@@ -176,8 +241,11 @@ export class FanslyAdapter {
     options: {
       query?: Record<string, string | undefined>;
       category: string;
+      operation: string;
+      requestShape?: Record<string, unknown>;
       minDelayMs?: number;
       retries?: number;
+      summarizeResponse?: (parsed: T) => Record<string, unknown>;
     },
   ): Promise<RequestResult<T>> {
     const query = new URLSearchParams({ "ngsw-bypass": "true" });
@@ -190,21 +258,76 @@ export class FanslyAdapter {
     const url = `${this.options.baseUrl}${pathname}?${query.toString()}`;
     const retries = options.retries ?? 3;
     const minDelayMs = options.minDelayMs ?? this.options.defaultDelayMs ?? 1000;
+    const logicalRequestId = `${options.operation}:${randomUUID()}`;
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const startedAt = Date.now();
+      const attemptId = await context.telemetry?.startAttempt({
+        logicalRequestId,
+        attemptNumber: attempt + 1,
+        operation: options.operation,
+        requestShape: options.requestShape ?? {},
+      }) ?? null;
+
       await this.waitForRateLimit(options.category, minDelayMs);
 
-      const response = await fetch(url, {
-        method: "GET",
-        headers: this.buildHeaders(context.session),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        dispatcher: context.proxy ? this.buildProxyDispatcher(context.proxy) : undefined,
-      });
+      let response: Awaited<ReturnType<typeof fetch>>;
+      try {
+        response = await fetch(url, {
+          method: "GET",
+          headers: this.buildHeaders(context.session),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          dispatcher: context.proxy ? this.buildProxyDispatcher(context.proxy) : undefined,
+        });
+      } catch (error) {
+        const failureKind = classifyTransportError(error);
+        const durationMs = Date.now() - startedAt;
+        if (attempt < retries) {
+          const retryDelayMs = 5000 * (attempt + 1);
+          await context.telemetry?.finishAttempt({
+            attemptId,
+            logicalRequestId,
+            attemptNumber: attempt + 1,
+            operation: options.operation,
+            state: "retry",
+            failureKind,
+            retryDelayMs,
+            durationMs,
+            errorMessage: errorMessage(error),
+          });
+          await delay(retryDelayMs);
+          continue;
+        }
+
+        await context.telemetry?.finishAttempt({
+          attemptId,
+          logicalRequestId,
+          attemptNumber: attempt + 1,
+          operation: options.operation,
+          state: "failed",
+          failureKind,
+          durationMs,
+          errorMessage: errorMessage(error),
+        });
+        throw error;
+      }
 
       const text = await response.text();
       const envelope = this.safeParseEnvelope<T>(text);
+      const durationMs = Date.now() - startedAt;
 
       if (response.status === 401 || response.status === 403) {
+        await context.telemetry?.finishAttempt({
+          attemptId,
+          logicalRequestId,
+          attemptNumber: attempt + 1,
+          operation: options.operation,
+          state: "failed",
+          failureKind: "http",
+          httpStatus: response.status,
+          durationMs,
+          errorMessage: envelope?.error?.message ?? `Fansly authorization failed (${response.status})`,
+        });
         throw new FanslyApiError(
           envelope?.error?.message ?? `Fansly authorization failed (${response.status})`,
           response.status,
@@ -216,11 +339,34 @@ export class FanslyAdapter {
       if ([429, 500, 502, 503, 504].includes(response.status) && attempt < retries) {
         const retryAfterSeconds = Number(response.headers.get("retry-after") ?? "0");
         const waitMs = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 5000 * (attempt + 1);
+        await context.telemetry?.finishAttempt({
+          attemptId,
+          logicalRequestId,
+          attemptNumber: attempt + 1,
+          operation: options.operation,
+          state: "retry",
+          failureKind: "http",
+          httpStatus: response.status,
+          retryDelayMs: waitMs,
+          durationMs,
+          errorMessage: envelope?.error?.message ?? `Fansly request failed (${response.status})`,
+        });
         await delay(waitMs);
         continue;
       }
 
       if (!response.ok) {
+        await context.telemetry?.finishAttempt({
+          attemptId,
+          logicalRequestId,
+          attemptNumber: attempt + 1,
+          operation: options.operation,
+          state: "failed",
+          failureKind: "http",
+          httpStatus: response.status,
+          durationMs,
+          errorMessage: envelope?.error?.message ?? `Fansly request failed (${response.status})`,
+        });
         throw new FanslyApiError(
           envelope?.error?.message ?? `Fansly request failed (${response.status})`,
           response.status,
@@ -230,6 +376,17 @@ export class FanslyAdapter {
       }
 
       if (!envelope?.success || envelope.response === undefined) {
+        await context.telemetry?.finishAttempt({
+          attemptId,
+          logicalRequestId,
+          attemptNumber: attempt + 1,
+          operation: options.operation,
+          state: "failed",
+          failureKind: "provider",
+          httpStatus: response.status,
+          durationMs,
+          errorMessage: envelope?.error?.message ?? "Fansly response envelope was unsuccessful",
+        });
         throw new FanslyApiError(
           envelope?.error?.message ?? "Fansly response envelope was unsuccessful",
           response.status,
@@ -237,6 +394,17 @@ export class FanslyAdapter {
           text.slice(0, 400),
         );
       }
+
+      await context.telemetry?.finishAttempt({
+        attemptId,
+        logicalRequestId,
+        attemptNumber: attempt + 1,
+        operation: options.operation,
+        state: "success",
+        httpStatus: response.status,
+        durationMs,
+        responseShape: options.summarizeResponse?.(envelope.response) ?? {},
+      });
 
       return {
         parsed: envelope.response,

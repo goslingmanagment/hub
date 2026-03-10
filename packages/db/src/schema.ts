@@ -22,6 +22,7 @@ export const syncRunStatusEnum = pgEnum("sync_run_status", [
   "success",
   "partial",
   "failed",
+  "skipped",
 ]);
 export const syncStreamEnum = pgEnum("sync_stream", [
   "light",
@@ -29,6 +30,23 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "transactions",
   "subscribers",
   "cleanup",
+]);
+export const syncRequestAttemptStateEnum = pgEnum("sync_request_attempt_state", [
+  "started",
+  "success",
+  "retry",
+  "failed",
+]);
+export const syncRequestFailureKindEnum = pgEnum("sync_request_failure_kind", [
+  "timeout",
+  "transport",
+  "http",
+  "provider",
+]);
+export const syncEventSeverityEnum = pgEnum("sync_event_severity", [
+  "info",
+  "warn",
+  "error",
 ]);
 export const transactionTypeEnum = pgEnum("transaction_type", [
   "subscription",
@@ -147,6 +165,70 @@ export const syncRuns = pgTable(
       table.stream,
       table.startedAt,
     ),
+  }),
+);
+
+export const syncRequestAttempts = pgTable(
+  "sync_request_attempts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    syncRunId: bigint("sync_run_id", { mode: "number" })
+      .references(() => syncRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    provider: platformEnum("provider").notNull(),
+    stream: syncStreamEnum("stream").notNull(),
+    operation: text("operation").notNull(),
+    logicalRequestId: text("logical_request_id").notNull(),
+    attemptNumber: integer("attempt_number").notNull(),
+    state: syncRequestAttemptStateEnum("state").notNull(),
+    failureKind: syncRequestFailureKindEnum("failure_kind"),
+    httpStatus: integer("http_status"),
+    retryDelayMs: integer("retry_delay_ms"),
+    durationMs: integer("duration_ms"),
+    requestShape: jsonb("request_shape").$type<Record<string, unknown>>().default({}).notNull(),
+    responseShape: jsonb("response_shape").$type<Record<string, unknown>>().default({}).notNull(),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => ({
+    runStartedIdx: index("sync_request_attempts_run_started_idx").on(
+      table.syncRunId,
+      table.startedAt,
+    ),
+    logicalIdx: index("sync_request_attempts_logical_idx").on(
+      table.syncRunId,
+      table.logicalRequestId,
+      table.attemptNumber,
+    ),
+    retentionIdx: index("sync_request_attempts_retention_idx").on(table.startedAt),
+  }),
+);
+
+export const syncRunEvents = pgTable(
+  "sync_run_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    syncRunId: bigint("sync_run_id", { mode: "number" })
+      .references(() => syncRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    provider: platformEnum("provider").notNull(),
+    stream: syncStreamEnum("stream").notNull(),
+    eventType: text("event_type").notNull(),
+    severity: syncEventSeverityEnum("severity").notNull(),
+    message: text("message").notNull(),
+    details: jsonb("details").$type<Record<string, unknown>>().default({}).notNull(),
+    emittedAt: timestamp("emitted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    runEmittedIdx: index("sync_run_events_run_emitted_idx").on(table.syncRunId, table.emittedAt),
+    emittedIdx: index("sync_run_events_emitted_idx").on(table.emittedAt),
   }),
 );
 

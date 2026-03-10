@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { buildProgram } from "../apps/runtime/src/cli.ts";
+import {
+  renderStatusDetail,
+  renderWatchEventLine,
+  renderWatchTty,
+} from "../apps/runtime/src/services/sync/view.ts";
 
 function createProgramHarness() {
   const program = buildProgram();
@@ -76,5 +81,110 @@ describe("CLI parsing", () => {
     const revenueHelp = revenueCommand?.helpInformation();
     expect(revenueHelp).toContain("--slug <slug>");
     expect(revenueHelp).toContain("--period <period>");
+  });
+
+  it("renders detailed status and both watch output paths", () => {
+    const run = {
+      runId: 12,
+      pageLabel: "lana",
+      platform: "fansly" as const,
+      stream: "light",
+      trigger: "worker",
+      status: "success",
+      startedAt: new Date("2026-03-10T10:00:00.000Z"),
+      finishedAt: new Date("2026-03-10T10:00:05.000Z"),
+      errorSummary: null,
+      stats: {
+        health: "healthy",
+        requestTotals: {
+          totalAttempts: 4,
+          logicalRequests: 4,
+          retryAttempts: 0,
+          failedAttempts: 0,
+        },
+        anomalies: [],
+        checkpoint: {
+          before: {
+            transactions: null,
+          },
+          after: {
+            transactions: {
+              cursorTimestamp: "2026-03-10T09:59:00.000Z",
+            },
+          },
+          advanced: {
+            transactions: true,
+          },
+        },
+        boundary: {
+          kind: "after",
+          requestedLowerBound: "2026-03-03T10:00:00.000Z",
+          olderThanBoundaryItems: 0,
+          olderThanBoundaryPages: 0,
+        },
+        scan: {
+          transactionPages: 1,
+          processedTransactions: 12,
+        },
+      },
+    };
+    const events = [{
+      id: 1,
+      runId: 12,
+      pageLabel: "lana",
+      provider: "fansly" as const,
+      stream: "light",
+      eventType: "run_started",
+      severity: "info" as const,
+      message: "Sync run started",
+      details: {},
+      emittedAt: new Date("2026-03-10T10:00:00.000Z"),
+    }];
+    const attempts = [{
+      attemptId: 1,
+      runId: 12,
+      pageLabel: "lana",
+      provider: "fansly" as const,
+      stream: "light",
+      operation: "account_me",
+      logicalRequestId: "account_me:test",
+      attemptNumber: 1,
+      state: "success",
+      failureKind: null,
+      httpStatus: 200,
+      retryDelayMs: null,
+      durationMs: 120,
+      requestShape: {},
+      responseShape: {},
+      errorMessage: null,
+      startedAt: new Date("2026-03-10T10:00:00.000Z"),
+      finishedAt: new Date("2026-03-10T10:00:00.120Z"),
+    }];
+
+    const detail = renderStatusDetail({ run, events, attempts });
+    const tty = renderWatchTty({
+      runningRuns: [
+        {
+          ...run,
+          status: "running",
+          finishedAt: null,
+          lastActivityAt: new Date("2026-03-10T10:00:10.000Z"),
+        },
+      ],
+      recentRuns: [run],
+      inflightAttempts: attempts.map((attempt) => ({
+        ...attempt,
+        state: "started",
+        finishedAt: null,
+      })),
+      events,
+    }, new Date("2026-03-10T10:00:20.000Z"));
+    const nonTty = renderWatchEventLine(events[0]!);
+
+    expect(detail).toContain("Run 12 lana light");
+    expect(detail).toContain("Requests: attempts=4");
+    expect(tty).toContain("Sync Watch 2026-03-10T10:00:20.000Z");
+    expect(tty).toContain("Active Runs");
+    expect(nonTty).toContain("event=run_started");
   });
 });

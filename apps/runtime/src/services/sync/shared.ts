@@ -13,6 +13,7 @@ import {
   type ResolvedPageContext,
 } from "../page-context.ts";
 import { buildOnlyFansMetadata, getOnlyMonsterAccountId } from "../onlyfans.ts";
+import type { SyncRunTelemetry } from "./observability.ts";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -24,21 +25,25 @@ export function refreshPageMetadata(
   app: AppContext,
   pageContext: ResolvedFanslyPageContext,
   syncType: "light" | "followers",
+  telemetry?: SyncRunTelemetry,
 ): ReturnType<AppContext["adapter"]["getAccountMe"]>;
 export function refreshPageMetadata(
   app: AppContext,
   pageContext: ResolvedOnlyFansPageContext,
   syncType: "light" | "followers",
+  telemetry?: SyncRunTelemetry,
 ): ReturnType<AppContext["onlyFansAdapter"]["getAccount"]>;
 export async function refreshPageMetadata(
   app: AppContext,
   pageContext: ResolvedPageContext,
   syncType: "light" | "followers",
+  telemetry?: SyncRunTelemetry,
 ) {
   if (pageContext.platform === "fansly") {
     const accountMe = await app.adapter.getAccountMe({
       session: pageContext.session,
       proxy: pageContext.proxy,
+      telemetry,
     });
 
     await updatePageMetadata(app.db, pageContext.page.id, {
@@ -62,6 +67,7 @@ export async function refreshPageMetadata(
     {
       auth: pageContext.auth,
       proxy: pageContext.proxy,
+      telemetry,
     },
     getOnlyMonsterAccountId(pageContext.page.metadata),
   );

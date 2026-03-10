@@ -27,6 +27,7 @@ export function createTestAppContext(
       followerPageDelayMs: 0,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
+      syncObservabilityRetentionDays: 30,
     },
     adapter: {} as AppContext["adapter"],
     onlyFansAdapter: {} as AppContext["onlyFansAdapter"],

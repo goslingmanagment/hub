@@ -25,6 +25,7 @@ import {
 } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { DAY_MS, retentionDate } from "./shared.ts";
 
 function buildOnlyFansFanInputs(
@@ -49,20 +50,13 @@ export async function syncOnlyFansTransactions(
     platformAccountIdValue: string;
     commissionRate: number;
     rescanStart?: Date | null;
-    requestContext: {
-      auth: {
-        token: string;
-      };
-      proxy?: {
-        url: string;
-        username?: string | null;
-        password?: string | null;
-      } | null;
-    };
+    requestContext: Parameters<AppContext["onlyFansAdapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
+    telemetry: SyncRunTelemetry;
   },
 ) {
   const checkpoint = await getCheckpoint(app.db, input.platformAccountId, "transactions");
+  await input.telemetry.recordCheckpointLoaded("transactions", summarizeCheckpoint(checkpoint));
   const oldestPendingAt = await getOldestPendingTransactionAt(app.db, input.platformAccountId);
   const lookbackStart = checkpoint?.cursorTimestamp
     ? new Date(
@@ -88,9 +82,20 @@ export async function syncOnlyFansTransactions(
     throw new Error(`OnlyFans transaction rescan start must be before ${end.toISOString()}`);
   }
 
+  if (input.rescanStart) {
+    await input.telemetry.addNote("Manual rescan override was applied", {
+      start: input.rescanStart.toISOString(),
+    });
+  }
+
   let newestSeenAt: Date | null = checkpoint?.cursorTimestamp ?? null;
+  let oldestSeenAt: Date | null = null;
   let processedTransactions = 0;
   let processedChargebacks = 0;
+  let transactionPages = 0;
+  let chargebackPages = 0;
+  let olderThanBoundaryItems = 0;
+  let olderThanBoundaryPages = 0;
   const sourceTransactionIds = new Set<string>();
   const transactionsToUpsert: Array<OnlyMonsterTransaction> = [];
   const chargebacksToUpsert: Array<OnlyMonsterChargeback> = [];
@@ -108,6 +113,7 @@ export async function syncOnlyFansTransactions(
         limit: 100,
       },
     );
+    transactionPages += 1;
 
     await insertRawPayload(app.db, {
       platformAccountId: input.platformAccountId,
@@ -131,9 +137,20 @@ export async function syncOnlyFansTransactions(
       sourceTransactionIds.add(item.id);
       const occurredAt = new Date(item.timestamp);
 
+      if (!oldestSeenAt || occurredAt < oldestSeenAt) {
+        oldestSeenAt = occurredAt;
+      }
       if (!newestSeenAt || occurredAt > newestSeenAt) {
         newestSeenAt = occurredAt;
       }
+    }
+
+    const olderItemsInPage = page.parsed.items.filter(
+      (item) => new Date(item.timestamp).getTime() < start.getTime(),
+    ).length;
+    olderThanBoundaryItems += olderItemsInPage;
+    if (olderItemsInPage > 0 && olderItemsInPage === page.parsed.items.length) {
+      olderThanBoundaryPages += 1;
     }
 
     processedTransactions += page.parsed.items.length;
@@ -152,6 +169,7 @@ export async function syncOnlyFansTransactions(
         limit: 100,
       },
     );
+    chargebackPages += 1;
 
     await insertRawPayload(app.db, {
       platformAccountId: input.platformAccountId,
@@ -175,15 +193,27 @@ export async function syncOnlyFansTransactions(
       sourceTransactionIds.add(item.id);
       const occurredAt = new Date(item.chargeback_timestamp);
 
+      if (!oldestSeenAt || occurredAt < oldestSeenAt) {
+        oldestSeenAt = occurredAt;
+      }
       if (!newestSeenAt || occurredAt > newestSeenAt) {
         newestSeenAt = occurredAt;
       }
+    }
+
+    const olderItemsInPage = page.parsed.items.filter(
+      (item) => new Date(item.chargeback_timestamp).getTime() < start.getTime(),
+    ).length;
+    olderThanBoundaryItems += olderItemsInPage;
+    if (olderItemsInPage > 0 && olderItemsInPage === page.parsed.items.length) {
+      olderThanBoundaryPages += 1;
     }
 
     processedChargebacks += page.parsed.items.length;
     chargebackCursor = page.parsed.cursor ?? null;
   } while (chargebackCursor);
 
+  let checkpointAfter = null;
   await app.db.transaction(async (tx) => {
     const fans = await upsertFans(
       tx as typeof app.db,
@@ -257,7 +287,7 @@ export async function syncOnlyFansTransactions(
     await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId);
 
     if (newestSeenAt) {
-      await upsertCheckpoint(tx as typeof app.db, {
+      checkpointAfter = await upsertCheckpoint(tx as typeof app.db, {
         platformAccountId: input.platformAccountId,
         stream: "transactions",
         cursorTimestamp: newestSeenAt,
@@ -270,6 +300,97 @@ export async function syncOnlyFansTransactions(
       });
     }
   });
+
+  await input.telemetry.recordCheckpointAdvanced("transactions", summarizeCheckpoint(checkpointAfter));
+  input.telemetry.setBoundarySummary({
+    kind: "start",
+    requestedLowerBound: start.toISOString(),
+    end: end.toISOString(),
+    lookbackStart: lookbackStart?.toISOString() ?? null,
+    oldestPendingAt: oldestPendingAt?.toISOString() ?? null,
+    rescanCapStart: rescanCapStart.toISOString(),
+    olderThanBoundaryItems,
+    olderThanBoundaryPages,
+  });
+  input.telemetry.setScanSummary({
+    transactionPages,
+    chargebackPages,
+    processedTransactions,
+    processedChargebacks,
+    oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+    newestSeenAt: newestSeenAt?.toISOString() ?? null,
+    deleteWindowApplied: processedTransactions > 0,
+  });
+  if (processedTransactions > 0) {
+    await input.telemetry.addNote("Delete-missing-in-window cleanup was applied to the OnlyFans transaction scan", {
+      from: start.toISOString(),
+      to: end.toISOString(),
+      keptTransactionIds: sourceTransactionIds.size,
+    });
+  }
+
+  if (oldestPendingAt && oldestPendingAt < rescanCapStart) {
+    await input.telemetry.addAnomaly({
+      code: "rescan_cap_clamped",
+      severity: "warn",
+      message: "OnlyFans scan window was clamped by the configured rescan cap",
+      details: {
+        oldestPendingAt: oldestPendingAt.toISOString(),
+        rescanCapStart: rescanCapStart.toISOString(),
+      },
+    });
+  }
+
+  if (lookbackStart && start.getTime() < lookbackStart.getTime() - DAY_MS) {
+    await input.telemetry.addAnomaly({
+      code: "wide_rescan",
+      severity: "warn",
+      message: "OnlyFans scan expanded materially beyond the normal incremental lookback window",
+      details: {
+        start: start.toISOString(),
+        lookbackStart: lookbackStart.toISOString(),
+      },
+    });
+  }
+
+  if (
+    checkpoint?.cursorTimestamp &&
+    newestSeenAt &&
+    newestSeenAt.getTime() <= checkpoint.cursorTimestamp.getTime() &&
+    (processedTransactions + processedChargebacks) > 0
+  ) {
+    await input.telemetry.addAnomaly({
+      code: "checkpoint_stalled",
+      severity: "error",
+      message: "OnlyFans transaction checkpoint did not advance despite scanning source data",
+      details: {
+        checkpointTimestamp: checkpoint.cursorTimestamp.toISOString(),
+        newestSeenAt: newestSeenAt.toISOString(),
+      },
+    });
+  }
+
+  if (
+    olderThanBoundaryPages > 1 ||
+    (
+      olderThanBoundaryItems > 100 &&
+      checkpoint?.cursorTimestamp &&
+      newestSeenAt &&
+      newestSeenAt.getTime() <= checkpoint.cursorTimestamp.getTime()
+    )
+  ) {
+    await input.telemetry.addAnomaly({
+      code: "after_ineffective",
+      severity: "error",
+      message: "The OnlyFans lower-bound filter behaved ineffectively and scanned materially old data",
+      details: {
+        start: start.toISOString(),
+        olderThanBoundaryItems,
+        olderThanBoundaryPages,
+        oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+      },
+    });
+  }
 
   return {
     processed: processedTransactions + processedChargebacks,

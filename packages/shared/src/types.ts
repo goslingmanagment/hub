@@ -133,3 +133,41 @@ export interface ProxyConfig {
   username?: string | null;
   password?: string | null;
 }
+
+export const syncHealthStates = ["healthy", "degraded", "suspicious", "failed"] as const;
+export type SyncHealth = (typeof syncHealthStates)[number];
+
+export const syncTelemetryAttemptStates = ["started", "success", "retry", "failed"] as const;
+export type SyncTelemetryAttemptState = (typeof syncTelemetryAttemptStates)[number];
+
+export const syncTelemetryFailureKinds = ["timeout", "transport", "http", "provider"] as const;
+export type SyncTelemetryFailureKind = (typeof syncTelemetryFailureKinds)[number];
+
+export const syncTelemetryEventSeverities = ["info", "warn", "error"] as const;
+export type SyncTelemetryEventSeverity = (typeof syncTelemetryEventSeverities)[number];
+
+export interface SyncTelemetryAttemptStartInput {
+  logicalRequestId: string;
+  attemptNumber: number;
+  operation: string;
+  requestShape?: Record<string, unknown>;
+}
+
+export interface SyncTelemetryAttemptFinishInput {
+  attemptId?: number | null;
+  logicalRequestId: string;
+  attemptNumber: number;
+  operation: string;
+  state: Exclude<SyncTelemetryAttemptState, "started">;
+  httpStatus?: number | null;
+  failureKind?: SyncTelemetryFailureKind | null;
+  retryDelayMs?: number | null;
+  durationMs?: number | null;
+  responseShape?: Record<string, unknown>;
+  errorMessage?: string | null;
+}
+
+export interface SyncRequestTelemetry {
+  startAttempt(input: SyncTelemetryAttemptStartInput): Promise<number | null>;
+  finishAttempt(input: SyncTelemetryAttemptFinishInput): Promise<void>;
+}

@@ -48,6 +48,7 @@ describe("db write safety", () => {
         followerPageDelayMs: 0,
         transactionLookbackDays: 7,
         transactionRescanCapDays: 30,
+        syncObservabilityRetentionDays: 30,
       },
       adapter: {
         async verifySession() {
@@ -85,6 +86,7 @@ describe("db write safety", () => {
         followerPageDelayMs: 0,
         transactionLookbackDays: 7,
         transactionRescanCapDays: 30,
+        syncObservabilityRetentionDays: 30,
       },
       onlyFansAdapter: {
         async listAccountsPage() {
@@ -1038,6 +1040,93 @@ describe("db write safety", () => {
       },
       {
         business_date: "2026-03-06",
+        gross_amount_mills: 5000n,
+        creator_net_amount_mills: 5000n,
+      },
+    ]);
+  });
+
+  it("rebuilds Fansly revenue rollups from the first affected UTC business day", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "partial-rollup-fansly-model",
+      name: "Partial Rollup Fansly Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "partial-rollup-fansly",
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "historic-fansly-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2025-11-30T21:30:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "same-day-early-fansly-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 2000n,
+      sourceDestinationAmountMills: 2000n,
+      creatorNetAmountMills: 2000n,
+      occurredAt: new Date("2025-12-01T00:10:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "same-day-late-fansly-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 3000n,
+      sourceDestinationAmountMills: 3000n,
+      creatorNetAmountMills: 3000n,
+      occurredAt: new Date("2025-12-01T20:00:00.000Z"),
+    });
+
+    await rebuildRevenueRollups(testDb.db, page.id);
+    await rebuildRevenueRollups(testDb.db, page.id, new Date("2025-12-01T18:00:00.000Z"));
+
+    const rows = await testDb.pool.query(`
+      select business_date,
+             gross_amount_mills,
+             creator_net_amount_mills
+      from daily_revenue
+      where platform_account_id = ${page.id}
+      order by business_date asc
+    `);
+
+    expect(rows.rows.map((row) => ({
+      ...row,
+      business_date: typeof row.business_date === "string"
+        ? row.business_date
+        : [
+          row.business_date.getFullYear(),
+          String(row.business_date.getMonth() + 1).padStart(2, "0"),
+          String(row.business_date.getDate()).padStart(2, "0"),
+        ].join("-"),
+    }))).toEqual([
+      {
+        business_date: "2025-11-30",
+        gross_amount_mills: 1000n,
+        creator_net_amount_mills: 1000n,
+      },
+      {
+        business_date: "2025-12-01",
         gross_amount_mills: 5000n,
         creator_net_amount_mills: 5000n,
       },
