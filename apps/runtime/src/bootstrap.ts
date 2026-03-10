@@ -20,7 +20,9 @@ export type AdapterLike = ProviderAdapter<
   FanslyEarningsTransaction,
   FanslySubscriber,
   FanslyFollower
->;
+> & {
+  close?(): Promise<void>;
+};
 
 export interface AppContext {
   config: ReturnType<typeof loadConfig>;
@@ -54,6 +56,8 @@ export async function createAppContext(): Promise<AppContext> {
     adapter,
     onlyFansAdapter,
     async close() {
+      await adapter.close?.();
+      await onlyFansAdapter.close();
       await pool.end();
     },
   };

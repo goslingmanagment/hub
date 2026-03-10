@@ -332,6 +332,41 @@ describe("api integration", () => {
     expect(afterLogout.statusCode).toBe(401);
   });
 
+  it("rate limits repeated login attempts", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          username: "dima",
+          password: "wrong",
+        },
+      });
+      expect(response.statusCode).toBe(401);
+    }
+
+    const limited = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "wrong",
+      },
+    });
+
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toEqual({
+      error: "rate_limit_exceeded",
+      message: "Too many login attempts",
+      statusCode: 429,
+    });
+  });
+
   it("rejects expired sessions", async (context) => {
     if (!testDb || !server) {
       context.skip();
@@ -744,6 +779,81 @@ describe("api integration", () => {
           totalNetMills: 10000,
         }),
       ]),
+    });
+  });
+
+  it("returns merged mixed-platform bounds in model reports", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const onlyFansPage = await createOnlyFansPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-of-bounds",
+    });
+    await updatePageMetadata(testDb.db, onlyFansPage.id, {
+      platformAccountIdValue: "of-bounds-42",
+      username: "lana_of_bounds",
+      displayName: "Lana OF Bounds",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {
+        onlyMonsterAccountId: 43,
+      },
+      syncType: "light",
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      transactionId: "of-bounds-tip-1",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "loading",
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-05T15:00:00.000Z"),
+    });
+    await rebuildRevenueRollups(testDb.db, onlyFansPage.id);
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/models/lana-model/revenue?period=custom&from=2026-03-01&to=2026-03-31",
+      headers: {
+        cookie,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const expected = await getModelRevenueReport(createTestAppContext(testDb), "lana-model", {
+      period: "custom",
+      custom: {
+        from: "2026-03-01",
+        to: "2026-03-31",
+      },
+    });
+
+    expect(response.json()).toMatchObject({
+      from: expected.from,
+      to: expected.to,
+      comparison: expected.comparison
+        ? {
+          from: expected.comparison.from,
+          to: expected.comparison.to,
+        }
+        : null,
     });
   });
 
@@ -1170,6 +1280,28 @@ describe("api integration", () => {
       occurredAt: new Date("2026-03-06T18:00:00.000Z"),
     });
     await rebuildRevenueRollups(testDb.db, fixture!.lanaPage.id);
+    await testDb.pool.query(`
+      insert into daily_revenue (
+        platform_account_id,
+        business_date,
+        canonical_type,
+        transaction_state,
+        transaction_count,
+        gross_amount_mills,
+        creator_net_amount_mills,
+        updated_at
+      )
+      values (
+        ${fixture!.lanaPage.id},
+        '2026-03-06',
+        'payout_reversal'::transaction_type,
+        'posted'::transaction_state,
+        1,
+        2000,
+        2000,
+        now()
+      )
+    `);
 
     const leadLogin = await server.inject({
       method: "POST",
@@ -1238,6 +1370,46 @@ describe("api integration", () => {
     expect(response.json().period.timeZone).toBe("Europe/Moscow");
     expect(response.json().period.asOf).toBeTruthy();
     expect(response.json().items[0].fan.fanId).toBeUndefined();
+  });
+
+  it("lists v2 spenders with page-scope lifetime totals and visible-platform lifetime totals", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&platform=fansly&period=30d&limit=10&offset=0",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items[0]).toMatchObject({
+      fan: {
+        platformUserId: "fan-001",
+      },
+      metrics: {
+        lifetime: {
+          scopeGrossAmountMills: 7000,
+          scopeCreatorNetAmountMills: 7000,
+          platformGrossAmountMills: 10000,
+          platformCreatorNetAmountMills: 10000,
+        },
+      },
+    });
   });
 
   it("serves v2 spender detail with visible-platform totals and scoped page breakdowns", async (context) => {

@@ -560,6 +560,13 @@ export async function getSpenderList(
     })
     : [];
   const comparisonByFanId = new Map(comparisonRows.map((row) => [row.fanId, row]));
+  const platformLifetimeRows = ranked.items.length === 0
+    ? []
+    : await getSpenderLifetimeMetrics(app.db, {
+      pageIds: scope.visiblePlatformPageIds,
+      fanIds: ranked.items.map((item) => item.fanId),
+    });
+  const platformLifetimeByFanId = new Map(platformLifetimeRows.map((row) => [row.fanId, row]));
   const diagnostics = await getSpenderRevenueDiagnosticsForScope(app.db, {
     pageIds: scope.pageIds,
     fromBusinessDate: fromBusinessDate ?? null,
@@ -586,10 +593,7 @@ export async function getSpenderList(
             grossAmountMills: item.lifetimeGrossAmountMills,
             creatorNetAmountMills: item.lifetimeCreatorNetAmountMills,
           },
-          {
-            grossAmountMills: item.lifetimeGrossAmountMills,
-            creatorNetAmountMills: item.lifetimeCreatorNetAmountMills,
-          },
+          platformLifetimeByFanId.get(item.fanId) ?? null,
         ),
         comparison: period === "lifetime"
           ? null

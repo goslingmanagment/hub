@@ -1,8 +1,10 @@
 import { and, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 
 import {
+  businessDateToUtcStart,
   getTransactionClassification,
   reportableTransactionTypes,
+  resolveBusinessTimeZone,
   toBusinessDate,
   type TransactionType,
 } from "@fansly-connect/shared";
@@ -89,56 +91,76 @@ export async function rebuildRevenueRollups(
   platformAccountId: number,
   from?: Date | null,
 ) {
-  const fromClause = from
-    ? sql`and t.occurred_at >= ${from}`
-    : sql``;
   const reportableTransactionTypeSql = transactionTypeListSql(reportableTransactionTypes);
+  await db.transaction(async (tx) => {
+    const [account] = await tx.select({
+      platform: platformAccounts.platform,
+    }).from(platformAccounts)
+      .where(eq(platformAccounts.id, platformAccountId));
 
-  await db.delete(dailyRevenue).where(eq(dailyRevenue.platformAccountId, platformAccountId));
-  await db.execute(sql`
-    insert into daily_revenue (
-      platform_account_id,
-      business_date,
-      canonical_type,
-      transaction_state,
-      transaction_count,
-      gross_amount_mills,
-      creator_net_amount_mills,
-      updated_at
-    )
-    select t.platform_account_id,
-           (
-             timezone(
-               case
-                 when pa.platform = 'onlyfans'::platform then 'UTC'
-                 else 'Europe/Moscow'
-               end,
-               t.occurred_at
-             )::date
-           ) as business_date,
-           t.canonical_type,
-           t.transaction_state,
-           count(*)::int,
-           coalesce(sum(t.gross_amount_mills), 0)::bigint,
-           coalesce(sum(t.creator_net_amount_mills), 0)::bigint,
-           now()
-    from transactions t
-    join platform_accounts pa on pa.id = t.platform_account_id
-    where t.platform_account_id = ${platformAccountId}
-      and t.canonical_type in (${reportableTransactionTypeSql})
-      ${fromClause}
-    group by 1, 2, 3, 4
-    on conflict (
-      platform_account_id,
-      business_date,
-      canonical_type,
-      transaction_state
-    ) do update set
-      transaction_count = excluded.transaction_count,
-      gross_amount_mills = excluded.gross_amount_mills,
-      creator_net_amount_mills = excluded.creator_net_amount_mills,
-      updated_at = excluded.updated_at
-  `);
+    if (!account) {
+      return;
+    }
+
+    const timeZone = resolveBusinessTimeZone(account.platform);
+    const affectedFrom = from
+      ? businessDateToUtcStart(toBusinessDate(from, timeZone), timeZone)
+      : null;
+    const fromClause = affectedFrom
+      ? sql`and t.occurred_at >= ${affectedFrom}`
+      : sql``;
+
+    await tx.delete(dailyRevenue).where(affectedFrom
+      ? and(
+        eq(dailyRevenue.platformAccountId, platformAccountId),
+        gte(dailyRevenue.businessDate, toBusinessDate(affectedFrom, timeZone)),
+      )
+      : eq(dailyRevenue.platformAccountId, platformAccountId));
+    await tx.execute(sql`
+      insert into daily_revenue (
+        platform_account_id,
+        business_date,
+        canonical_type,
+        transaction_state,
+        transaction_count,
+        gross_amount_mills,
+        creator_net_amount_mills,
+        updated_at
+      )
+      select t.platform_account_id,
+             (
+               timezone(
+                 case
+                   when pa.platform = 'onlyfans'::platform then 'UTC'
+                   else 'Europe/Moscow'
+                 end,
+                 t.occurred_at
+               )::date
+             ) as business_date,
+             t.canonical_type,
+             t.transaction_state,
+             count(*)::int,
+             coalesce(sum(t.gross_amount_mills), 0)::bigint,
+             coalesce(sum(t.creator_net_amount_mills), 0)::bigint,
+             now()
+      from transactions t
+      join platform_accounts pa on pa.id = t.platform_account_id
+      where t.platform_account_id = ${platformAccountId}
+        and t.canonical_type in (${reportableTransactionTypeSql})
+        ${fromClause}
+      group by 1, 2, 3, 4
+      on conflict (
+        platform_account_id,
+        business_date,
+        canonical_type,
+        transaction_state
+      ) do update set
+        transaction_count = excluded.transaction_count,
+        gross_amount_mills = excluded.gross_amount_mills,
+        creator_net_amount_mills = excluded.creator_net_amount_mills,
+        updated_at = excluded.updated_at
+    `);
+  });
 }
 
 export async function rebuildFollowerRollups(

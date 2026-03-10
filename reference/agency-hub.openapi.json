@@ -201,6 +201,35 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -730,7 +759,8 @@
                         {
                           "type": "null"
                         }
-                      ]
+                      ],
+                      "description": "Window start. For mixed-platform scopes, this is the earliest included platform-local start."
                     },
                     "to": {
                       "anyOf": [
@@ -740,7 +770,8 @@
                         {
                           "type": "null"
                         }
-                      ]
+                      ],
+                      "description": "Window end. For mixed-platform scopes, this is the latest included platform-local end."
                     },
                     "currency": {
                       "type": "string",
@@ -796,10 +827,12 @@
                           "type": "object",
                           "properties": {
                             "from": {
-                              "type": "string"
+                              "type": "string",
+                              "description": "Comparison window start. For mixed-platform scopes, this is the earliest included platform-local start."
                             },
                             "to": {
-                              "type": "string"
+                              "type": "string",
+                              "description": "Comparison window end. For mixed-platform scopes, this is the latest included platform-local end."
                             },
                             "netEarningsMills": {
                               "type": "integer",
@@ -1110,7 +1143,8 @@
                         {
                           "type": "null"
                         }
-                      ]
+                      ],
+                      "description": "Window start. For mixed-platform scopes, this is the earliest included platform-local start."
                     },
                     "to": {
                       "anyOf": [
@@ -1120,7 +1154,8 @@
                         {
                           "type": "null"
                         }
-                      ]
+                      ],
+                      "description": "Window end. For mixed-platform scopes, this is the latest included platform-local end."
                     },
                     "currency": {
                       "type": "string",
@@ -1176,10 +1211,12 @@
                           "type": "object",
                           "properties": {
                             "from": {
-                              "type": "string"
+                              "type": "string",
+                              "description": "Comparison window start. For mixed-platform scopes, this is the earliest included platform-local start."
                             },
                             "to": {
-                              "type": "string"
+                              "type": "string",
+                              "description": "Comparison window end. For mixed-platform scopes, this is the latest included platform-local end."
                             },
                             "netEarningsMills": {
                               "type": "integer",
@@ -1507,7 +1544,8 @@
                         {
                           "type": "null"
                         }
-                      ]
+                      ],
+                      "description": "Window start. For mixed-platform scopes, this is the earliest included platform-local start."
                     },
                     "to": {
                       "anyOf": [
@@ -1517,7 +1555,8 @@
                         {
                           "type": "null"
                         }
-                      ]
+                      ],
+                      "description": "Window end. For mixed-platform scopes, this is the latest included platform-local end."
                     },
                     "currency": {
                       "type": "string",
@@ -1573,10 +1612,12 @@
                           "type": "object",
                           "properties": {
                             "from": {
-                              "type": "string"
+                              "type": "string",
+                              "description": "Comparison window start. For mixed-platform scopes, this is the earliest included platform-local start."
                             },
                             "to": {
-                              "type": "string"
+                              "type": "string",
+                              "description": "Comparison window end. For mixed-platform scopes, this is the latest included platform-local end."
                             },
                             "netEarningsMills": {
                               "type": "integer",

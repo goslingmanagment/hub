@@ -245,12 +245,14 @@ export async function syncOnlyFansTransactions(
       });
     }
 
-    await deleteTransactionsMissingFromWindow(tx as typeof app.db, {
-      platformAccountId: input.platformAccountId,
-      from: start,
-      to: end,
-      keepTransactionIds: Array.from(sourceTransactionIds),
-    });
+    if (processedTransactions > 0) {
+      await deleteTransactionsMissingFromWindow(tx as typeof app.db, {
+        platformAccountId: input.platformAccountId,
+        from: start,
+        to: end,
+        keepTransactionIds: Array.from(sourceTransactionIds),
+      });
+    }
     await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId);
     await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId);
 

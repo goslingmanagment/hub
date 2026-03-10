@@ -6,6 +6,7 @@ import {
   createModel,
   getFollowersForPage,
   recalculateFanPageSpend,
+  rebuildRevenueRollups,
   storeFanslySession,
   storeProxyConfig,
   upsertCheckpoint,
@@ -956,6 +957,93 @@ describe("db write safety", () => {
     expect(BigInt(spendAfterPayoutReversal.rows[0]?.creator_net_amount_mills ?? 0)).toBe(4300n);
   });
 
+  it("rebuilds revenue rollups from the first affected business day without deleting older history", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "partial-rollup-model",
+      name: "Partial Rollup Model",
+    });
+    const page = await createOnlyFansPage(testDb.db, {
+      modelId: model.id,
+      label: "partial-rollup-of",
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "historic-of-tip",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-05T12:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "same-day-early-of-tip",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 2000n,
+      sourceDestinationAmountMills: 2000n,
+      creatorNetAmountMills: 2000n,
+      occurredAt: new Date("2026-03-06T01:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "same-day-late-of-tip",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 3000n,
+      sourceDestinationAmountMills: 3000n,
+      creatorNetAmountMills: 3000n,
+      occurredAt: new Date("2026-03-06T20:00:00.000Z"),
+    });
+
+    await rebuildRevenueRollups(testDb.db, page.id);
+    await rebuildRevenueRollups(testDb.db, page.id, new Date("2026-03-06T18:00:00.000Z"));
+
+    const rows = await testDb.pool.query(`
+      select business_date,
+             gross_amount_mills,
+             creator_net_amount_mills
+      from daily_revenue
+      where platform_account_id = ${page.id}
+      order by business_date asc
+    `);
+
+    expect(rows.rows.map((row) => ({
+      ...row,
+      business_date: typeof row.business_date === "string"
+        ? row.business_date
+        : [
+          row.business_date.getFullYear(),
+          String(row.business_date.getMonth() + 1).padStart(2, "0"),
+          String(row.business_date.getDate()).padStart(2, "0"),
+        ].join("-"),
+    }))).toEqual([
+      {
+        business_date: "2026-03-05",
+        gross_amount_mills: 1000n,
+        creator_net_amount_mills: 1000n,
+      },
+      {
+        business_date: "2026-03-06",
+        gross_amount_mills: 5000n,
+        creator_net_amount_mills: 5000n,
+      },
+    ]);
+  });
+
   it("fully clears stale spender projections when qualifying ledger rows disappear", async (context) => {
     if (!testDb) {
       context.skip();
@@ -1008,6 +1096,13 @@ describe("db write safety", () => {
         creator_net_amount_mills: 2000n,
       },
     ]);
+    const beforeDeleteFanPage = await testDb.pool.query(`
+      select total_creator_net_mills
+      from fan_pages
+      where fan_id = ${fan.id}
+        and platform_account_id = ${page.id}
+    `);
+    expect(BigInt(beforeDeleteFanPage.rows[0]?.total_creator_net_mills ?? 0)).toBe(2000n);
 
     await testDb.pool.query(`
       delete from transactions
@@ -1029,8 +1124,15 @@ describe("db write safety", () => {
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
+    const afterDeleteFanPage = await testDb.pool.query(`
+      select total_creator_net_mills
+      from fan_pages
+      where fan_id = ${fan.id}
+        and platform_account_id = ${page.id}
+    `);
 
     expect(afterDeleteLifetime.rows[0]?.count).toBe(0);
     expect(afterDeleteDailyFacts.rows[0]?.count).toBe(0);
+    expect(BigInt(afterDeleteFanPage.rows[0]?.total_creator_net_mills ?? 0)).toBe(0n);
   });
 });

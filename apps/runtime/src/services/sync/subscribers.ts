@@ -1,4 +1,5 @@
 import {
+  getCurrentSubscribers,
   insertRawPayload,
   rebuildSubscriberRollups,
   setPageSubscriptionsCurrentFlag,
@@ -58,6 +59,13 @@ export async function syncSubscribers(
       break;
     }
     offset += 100;
+  }
+
+  if (items.length === 0) {
+    const currentSubscribers = await getCurrentSubscribers(app.db, input.platformAccountId);
+    if (currentSubscribers.rows.length > 0) {
+      throw new Error("Subscriber sync returned zero rows; refusing to clear existing current subscriptions");
+    }
   }
 
   const fanMap = await hydrateFans(app, {

@@ -167,6 +167,77 @@ export async function upsertPageFollow(
   return pageFollow;
 }
 
+export async function countActivePageFollows(db: Database, platformAccountId: number) {
+  const result = await db.execute(sql`
+    select count(*)::int as count
+    from page_follows
+    where platform_account_id = ${platformAccountId}
+      and is_active = true
+  `);
+
+  return result.rows[0]?.count ?? 0;
+}
+
+export async function deactivatePageFollowsMissingFromSnapshot(
+  db: Database,
+  platformAccountId: number,
+  activeFollowIds: string[],
+) {
+  if (activeFollowIds.length === 0) {
+    await db
+      .update(pageFollows)
+      .set({
+        isActive: false,
+        lastSeenAt: new Date(),
+      })
+      .where(eq(pageFollows.platformAccountId, platformAccountId));
+    return;
+  }
+
+  await db
+    .update(pageFollows)
+    .set({
+      isActive: false,
+      lastSeenAt: new Date(),
+    })
+    .where(and(
+      eq(pageFollows.platformAccountId, platformAccountId),
+      notInArray(pageFollows.platformFollowId, activeFollowIds),
+    ));
+}
+
+export async function refreshFanPageFollowerState(db: Database, platformAccountId: number) {
+  await db.execute(sql`
+    update fan_pages fp
+    set is_follower = active.active_followed_at is not null,
+        follower_since = active.active_followed_at,
+        last_seen_at = now()
+    from (
+      select fan_id,
+             min(followed_at) as active_followed_at
+      from page_follows
+      where platform_account_id = ${platformAccountId}
+        and is_active = true
+      group by fan_id
+    ) active
+    where fp.platform_account_id = ${platformAccountId}
+      and fp.fan_id = active.fan_id
+  `);
+  await db.execute(sql`
+    update fan_pages
+    set is_follower = false,
+        follower_since = null,
+        last_seen_at = now()
+    where platform_account_id = ${platformAccountId}
+      and fan_id not in (
+        select fan_id
+        from page_follows
+        where platform_account_id = ${platformAccountId}
+          and is_active = true
+      )
+  `);
+}
+
 export async function setPageSubscriptionsCurrentFlag(
   db: Database,
   platformAccountId: number,

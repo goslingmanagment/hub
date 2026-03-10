@@ -7,7 +7,7 @@ import {
   getFanSpendByIdentifier,
   getRevenueBreakdown,
   insertRawPayload,
-  listFanslyPages,
+  listPlatformAccounts,
   listModelsWithPageCounts,
   listPageSummaries,
   listRecentSyncRuns,
@@ -30,6 +30,16 @@ import {
 } from "./sync/shared.ts";
 import { syncSubscribers } from "./sync/subscribers.ts";
 import { syncTransactions } from "./sync/transactions.ts";
+
+const WORKER_PAGE_DISCOVERY_MS = 60_000;
+
+function lightQueueName(page: { label: string; platform: "fansly" | "onlyfans" }) {
+  return `${page.platform}.sync.light.${page.label}`;
+}
+
+function followerQueueName(page: { label: string }) {
+  return `fansly.sync.followers.${page.label}`;
+}
 
 async function withResolvedPageLock<T>(
   app: AppContext,
@@ -360,35 +370,76 @@ export async function scheduleExistingPages(app: AppContext, boss: {
   schedule: (...args: any[]) => Promise<unknown>;
   work: (...args: any[]) => Promise<unknown>;
 }) {
-  const pages = await listFanslyPages(app.db);
-  for (const page of pages) {
-    const lightQueue = `fansly.sync.light.${page.label}`;
-    const followerQueue = `fansly.sync.followers.${page.label}`;
+  const scheduledQueues = new Set<string>();
+  const workerQueues = new Set<string>();
 
-    await boss.schedule(lightQueue, "0 * * * *", { label: page.label });
-    await boss.schedule(followerQueue, "0 */12 * * *", { label: page.label });
-    await boss.work(lightQueue, async (job: { data?: { label: string } }) => {
-      const label = (job.data as { label: string }).label;
-      await runWorkerSync(app, {
-        label,
-        stream: "light",
-        run: () => runLightSync(app, label, { trigger: "worker" }),
-      });
-    });
-    await boss.work(followerQueue, async (job: { data?: { label: string } }) => {
-      const label = (job.data as { label: string }).label;
-      await runWorkerSync(app, {
-        label,
-        stream: "followers",
-        run: () => runFollowerSync(app, label, "worker"),
-      });
-    });
-  }
+  const ensureScheduledWork = async (
+    queueName: string,
+    cron: string,
+    data: Record<string, unknown> | undefined,
+    worker: ((job: { data?: { label: string } }) => Promise<void>) | (() => Promise<void>),
+  ) => {
+    if (!scheduledQueues.has(queueName)) {
+      if (data) {
+        await boss.schedule(queueName, cron, data);
+      } else {
+        await boss.schedule(queueName, cron);
+      }
+      scheduledQueues.add(queueName);
+    }
+    if (!workerQueues.has(queueName)) {
+      await boss.work(queueName, worker);
+      workerQueues.add(queueName);
+    }
+  };
 
-  await boss.schedule("fansly.raw-payload-cleanup", "0 2 * * *");
-  await boss.work("fansly.raw-payload-cleanup", async () => {
+  const discoverPages = async () => {
+    const pages = await listPlatformAccounts(app.db);
+    for (const page of pages) {
+      const lightQueue = lightQueueName(page);
+      await ensureScheduledWork(lightQueue, "0 * * * *", { label: page.label }, async (job) => {
+        const label = (job.data as { label: string }).label;
+        await runWorkerSync(app, {
+          label,
+          stream: "light",
+          run: () => runLightSync(app, label, { trigger: "worker" }),
+        });
+      });
+
+      if (page.platform === "fansly") {
+        const followerQueue = followerQueueName(page);
+        await ensureScheduledWork(
+          followerQueue,
+          "0 */12 * * *",
+          { label: page.label },
+          async (job) => {
+            const label = (job.data as { label: string }).label;
+            await runWorkerSync(app, {
+              label,
+              stream: "followers",
+              run: () => runFollowerSync(app, label, "worker"),
+            });
+          },
+        );
+      }
+    }
+  };
+
+  await discoverPages();
+  await ensureScheduledWork("fansly.raw-payload-cleanup", "0 2 * * *", undefined, async () => {
     await deleteExpiredRawPayloads(app.db, new Date());
   });
+
+  const discoveryTimer = setInterval(() => {
+    void discoverPages().catch((error) => {
+      app.logger.error({ err: error }, "Failed to discover worker pages");
+    });
+  }, WORKER_PAGE_DISCOVERY_MS);
+  discoveryTimer.unref?.();
+
+  return {
+    discoverPages,
+  };
 }
 
 export { PageSyncLockedError } from "./sync/locking.ts";

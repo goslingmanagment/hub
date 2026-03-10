@@ -48,6 +48,7 @@ import {
   runAllSync,
   runFollowerSync,
   runLightSync,
+  scheduleExistingPages,
 } from "../apps/runtime/src/services/sync.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { applyTestMigrations, startTestDatabase, seedFanslyPage } from "./helpers/db.ts";
@@ -80,6 +81,10 @@ class FakeFanslyAdapter {
 
   setFollowers(followers: FanslyFollower[]) {
     this.fixture.followers = followers;
+  }
+
+  setSubscribers(subscribers: FanslySubscriber[]) {
+    this.fixture.subscribers = subscribers;
   }
 
   clearTransactionAfterHistory() {
@@ -708,6 +713,63 @@ describe("sync integration", () => {
     expect(followCount.rows[0]?.count).toBe(followersFixture.length + 1);
   });
 
+  it("reconciles follower removals when the authoritative count drops", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const followersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
+    ).data.response.followers as FanslyFollower[];
+
+    const fixture = {
+      accountMe: {
+        ...accountMeFixture,
+        account: {
+          ...accountMeFixture.account,
+          followCount: followersFixture.length,
+        },
+      },
+      transactions: [] as FanslyEarningsTransaction[],
+      subscribers: [] as FanslySubscriber[],
+      followers: [...followersFixture],
+    };
+
+    const adapter = new FakeFanslyAdapter(fixture);
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, adapter);
+
+    await runFollowerSync(app, page.label);
+
+    fixture.followers = followersFixture.slice(0, 1);
+    fixture.accountMe = {
+      ...fixture.accountMe,
+      account: {
+        ...fixture.accountMe.account,
+        followCount: fixture.followers.length,
+      },
+    };
+
+    const secondRun = await runFollowerSync(app, page.label);
+    const activeFollowers = await listFollowers(app, page.label);
+    const followRows = await testDb.pool.query(`
+      select (count(*) filter (where is_active))::int as active_count,
+             (count(*) filter (where not is_active))::int as inactive_count
+      from page_follows
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(secondRun.delta).toBe(0);
+    expect(activeFollowers).toHaveLength(1);
+    expect(activeFollowers[0]?.platform_user_id).toBe(fixture.followers[0]!.followerId);
+    expect(followRows.rows[0]?.active_count).toBe(1);
+    expect(followRows.rows[0]?.inactive_count).toBe(followersFixture.length - 1);
+  });
+
   it("lists operator read models for models, pages, status, and top fans", async (context) => {
     if (!testDb) {
       context.skip();
@@ -800,6 +862,48 @@ describe("sync integration", () => {
         (fans[index]!.total_creator_net_mills as bigint) ?? 0n,
       );
     }
+  });
+
+  it("keeps current subscribers when a sync returns an unexpected empty page", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const subscribersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/subscribers.json"), "utf8"),
+    ).data.response.subscriptions as FanslySubscriber[];
+
+    const fixture = {
+      accountMe: accountMeFixture,
+      transactions: [] as FanslyEarningsTransaction[],
+      subscribers: [...subscribersFixture],
+      followers: [] as FanslyFollower[],
+    };
+
+    const adapter = new FakeFanslyAdapter(fixture);
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, adapter);
+
+    const firstRun = await runLightSync(app, page.label);
+    adapter.setSubscribers([]);
+    const secondRun = await runLightSync(app, page.label);
+    const currentSubscriptions = await testDb.pool.query(`
+      select count(*)::int as count
+      from page_subscriptions
+      where platform_account_id = ${page.id}
+        and is_current = true
+    `);
+
+    expect(firstRun.status).toBe("success");
+    expect(secondRun.status).toBe("partial");
+    expect(secondRun.errors).toContain(
+      "subscribers: Subscriber sync returned zero rows; refusing to clear existing current subscriptions",
+    );
+    expect(currentSubscriptions.rows[0]?.count).toBe(subscribersFixture.length);
   });
 
   it("rejects overlapping syncs for the same page", async (context) => {
@@ -1388,7 +1492,7 @@ describe("sync integration", () => {
     }
   });
 
-  it("reconciles delayed OnlyFans chargebacks by removing stale positives inside the rescan window", async (context) => {
+  it("preserves existing OnlyFans window transactions when the transaction fetch is empty", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1467,6 +1571,12 @@ describe("sync integration", () => {
           canonical_type: "chargeback",
           amount_mills: -4990n,
           net_amount_mills: -3990n,
+        },
+        {
+          transaction_id: "vip-subscription",
+          canonical_type: "subscription",
+          amount_mills: 4990n,
+          net_amount_mills: 3990n,
         },
       ]);
       expect(checkpoint?.cursorTimestamp?.toISOString()).toBe("2026-03-08T04:06:31.000Z");
@@ -1621,6 +1731,48 @@ describe("sync integration", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("schedules light sync for all platforms and discovers new pages without duplicate registrations", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const { page: fanslyPage } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    await seedOnlyFansPage(testDb, "worker-existing-of");
+
+    const schedules: string[] = [];
+    const workers: string[] = [];
+    const boss = {
+      async schedule(name: string) {
+        schedules.push(name);
+      },
+      async work(name: string) {
+        workers.push(name);
+      },
+    };
+
+    const app = createTestApp(testDb, createUnusedFanslyAdapter(), {
+      onlyFansAdapter: {} as AppContext["onlyFansAdapter"],
+    });
+
+    const scheduler = await scheduleExistingPages(app, boss);
+
+    expect(schedules).toContain(`fansly.sync.light.${fanslyPage.label}`);
+    expect(schedules).toContain(`fansly.sync.followers.${fanslyPage.label}`);
+    expect(schedules).toContain("onlyfans.sync.light.worker-existing-of");
+    expect(schedules).not.toContain("onlyfans.sync.followers.worker-existing-of");
+    expect(workers).toContain(`fansly.sync.light.${fanslyPage.label}`);
+    expect(workers).toContain(`fansly.sync.followers.${fanslyPage.label}`);
+    expect(workers).toContain("onlyfans.sync.light.worker-existing-of");
+
+    await seedOnlyFansPage(testDb, "worker-new-of");
+    await scheduler.discoverPages();
+
+    expect(schedules.filter((name) => name === `fansly.sync.light.${fanslyPage.label}`)).toHaveLength(1);
+    expect(schedules.filter((name) => name === "onlyfans.sync.light.worker-new-of")).toHaveLength(1);
+    expect(workers.filter((name) => name === "onlyfans.sync.light.worker-new-of")).toHaveLength(1);
   });
 
   it("backfills existing Fansly gross revenue when the gross migration runs", async (context) => {

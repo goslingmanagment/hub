@@ -300,8 +300,12 @@ export const revenueBreakdownItemSchema = z.object({
 });
 
 export const revenueComparisonSchema = z.object({
-  from: isoTimestamp,
-  to: isoTimestamp,
+  from: isoTimestamp.describe(
+    "Comparison window start. For mixed-platform scopes, this is the earliest included platform-local start.",
+  ),
+  to: isoTimestamp.describe(
+    "Comparison window end. For mixed-platform scopes, this is the latest included platform-local end.",
+  ),
   netEarningsMills: mills,
   totalNetMills: mills,
   deltaNetMills: mills,
@@ -310,8 +314,12 @@ export const revenueComparisonSchema = z.object({
 
 export const revenueWindowSchema = revenueSummarySchema.extend({
   period: periodEnum,
-  from: isoTimestamp.nullable(),
-  to: isoTimestamp.nullable(),
+  from: isoTimestamp.nullable().describe(
+    "Window start. For mixed-platform scopes, this is the earliest included platform-local start.",
+  ),
+  to: isoTimestamp.nullable().describe(
+    "Window end. For mixed-platform scopes, this is the latest included platform-local end.",
+  ),
   currency: z.literal("USD"),
   breakdown: z.array(revenueBreakdownItemSchema),
   comparison: revenueComparisonSchema.nullable(),
@@ -706,6 +714,7 @@ export const routeSchemas = {
     response: {
       200: authStateSchema,
       401: errorResponseSchema,
+      429: errorResponseSchema,
     },
   },
   logout: {

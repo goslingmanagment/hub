@@ -1,7 +1,10 @@
 import {
+  countActivePageFollows,
+  deactivatePageFollowsMissingFromSnapshot,
   finishSyncRun,
   getCheckpoint,
   insertRawPayload,
+  refreshFanPageFollowerState,
   rebuildFollowerRollups,
   startSyncRun,
   upsertCheckpoint,
@@ -31,6 +34,7 @@ export async function runFollowerSyncUnlocked(
     const accountMe = await refreshPageMetadata(app, pageContext, "followers");
     const checkpoint = await getCheckpoint(app.db, pageContext.page.id, "followers");
     const knownFollowId = checkpoint?.cursorText ?? null;
+    const requestContext = { session: pageContext.session, proxy: pageContext.proxy };
 
     let offset = 0;
     let processed = 0;
@@ -38,12 +42,12 @@ export async function runFollowerSyncUnlocked(
     let newestFollowId: string | null = knownFollowId;
     let done = false;
 
-    while (!done) {
+    const fetchFollowersPage = async (pageOffset: number, mode: "incremental" | "reconcile") => {
       const page = await app.adapter.getFollowersPage(
-        { session: pageContext.session, proxy: pageContext.proxy },
+        requestContext,
         accountMe.parsed.account.id,
         {
-          offset,
+          offset: pageOffset,
           limit: 100,
           minDelayMs: app.config.followerPageDelayMs,
         },
@@ -53,12 +57,18 @@ export async function runFollowerSyncUnlocked(
         platformAccountId: pageContext.page.id,
         syncRunId: run.id,
         endpoint: "followers",
-        requestParams: { offset, limit: 100 },
+        requestParams: { offset: pageOffset, limit: 100, mode },
         responsePayload: page.raw,
         mapperVersion: FANSLY_MAPPER_VERSION,
         payloadKind: "mapping_critical",
         retainUntil: retentionDate(),
       });
+
+      return page;
+    };
+
+    while (!done) {
+      const page = await fetchFollowersPage(offset, "incremental");
 
       if (offset === 0 && page.items[0]?.id) {
         newestFollowId = page.items[0].id;
@@ -107,6 +117,66 @@ export async function runFollowerSyncUnlocked(
       } else {
         offset += 100;
       }
+    }
+
+    const activeFollowerCount = await countActivePageFollows(app.db, pageContext.page.id);
+    if (activeFollowerCount !== accountMe.parsed.account.followCount) {
+      const activeFollowIds = new Set<string>();
+      let reconcileOffset = 0;
+      let reconcileDone = false;
+
+      while (!reconcileDone) {
+        const page = await fetchFollowersPage(reconcileOffset, "reconcile");
+        if (reconcileOffset === 0 && page.items[0]?.id) {
+          newestFollowId = page.items[0].id;
+        }
+
+        const fanRows = await upsertFans(app.db, page.accounts.map((account) => ({
+          platform: "fansly" as const,
+          platformUserId: account.id,
+          username: account.username,
+          displayName: account.displayName,
+          createdAtExternal: account.createdAt ? new Date(account.createdAt) : null,
+          metadata: {},
+        })));
+        const fanMap = new Map(fanRows.map((fan) => [fan.platformUserId, fan.id]));
+
+        for (const follower of page.items) {
+          activeFollowIds.add(follower.id);
+
+          const fanId = fanMap.get(follower.followerId);
+          if (!fanId) {
+            continue;
+          }
+
+          const followedAt = fanslyFollowIdToDate(follower.id);
+          await upsertPageFollow(app.db, {
+            platformAccountId: pageContext.page.id,
+            fanId,
+            platformFollowId: follower.id,
+            followedAt,
+          });
+          await upsertFanPage(app.db, {
+            fanId,
+            platformAccountId: pageContext.page.id,
+            isFollower: true,
+            followerSince: followedAt,
+          });
+        }
+
+        if (page.done) {
+          reconcileDone = true;
+        } else {
+          reconcileOffset += 100;
+        }
+      }
+
+      await deactivatePageFollowsMissingFromSnapshot(
+        app.db,
+        pageContext.page.id,
+        Array.from(activeFollowIds),
+      );
+      await refreshFanPageFollowerState(app.db, pageContext.page.id);
     }
 
     await rebuildFollowerRollups(

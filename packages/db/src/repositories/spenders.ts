@@ -128,9 +128,22 @@ export async function rebuildSpenderProjections(
   platformAccountId: number,
   rebuiltAt = new Date(),
 ) {
-  await rebuildSpenderDailyFacts(db, platformAccountId);
-  await rebuildSpenderLifetimePage(db, platformAccountId);
-  await upsertSpenderProjectionWatermark(db, platformAccountId, rebuiltAt);
+  await db.transaction(async (tx) => {
+    const dbTx = tx as Database;
+    await rebuildSpenderDailyFacts(dbTx, platformAccountId);
+    await rebuildSpenderLifetimePage(dbTx, platformAccountId);
+    await tx.execute(sql`
+      update fan_pages fp
+      set total_creator_net_mills = coalesce((
+            select slp.creator_net_amount_mills
+            from spender_lifetime_page slp
+            where slp.platform_account_id = fp.platform_account_id
+              and slp.fan_id = fp.fan_id
+          ), 0)::bigint
+      where fp.platform_account_id = ${platformAccountId}
+    `);
+    await upsertSpenderProjectionWatermark(dbTx, platformAccountId, rebuiltAt);
+  });
 }
 
 export async function upsertSpenderLifetimePage(
@@ -949,6 +962,10 @@ export async function getUnattributedRevenueForScope(
 
   const revenueClauses = [inArray(dailyRevenue.platformAccountId, input.pageIds)];
   const attributedClauses = [inArray(spenderDailyFacts.platformAccountId, input.pageIds)];
+  revenueClauses.push(inArray(
+    dailyRevenue.canonicalType,
+    spenderAnalyticsTransactionTypes as Array<typeof dailyRevenue.$inferSelect.canonicalType>,
+  ));
 
   if (input.fromBusinessDate) {
     revenueClauses.push(gte(dailyRevenue.businessDate, input.fromBusinessDate));
@@ -999,6 +1016,10 @@ export async function getSpenderRevenueDiagnosticsForScope(
 
   const revenueClauses = [inArray(dailyRevenue.platformAccountId, input.pageIds)];
   const attributedClauses = [inArray(spenderDailyFacts.platformAccountId, input.pageIds)];
+  revenueClauses.push(inArray(
+    dailyRevenue.canonicalType,
+    spenderAnalyticsTransactionTypes as Array<typeof dailyRevenue.$inferSelect.canonicalType>,
+  ));
 
   if (input.fromBusinessDate) {
     revenueClauses.push(gte(dailyRevenue.businessDate, input.fromBusinessDate));

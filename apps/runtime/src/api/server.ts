@@ -1,4 +1,5 @@
 import cookie from "@fastify/cookie";
+import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import {
@@ -97,6 +98,14 @@ export async function buildApiServer(appContext: AppContext) {
   server.decorateRequest("auth");
 
   await server.register(cookie);
+  await server.register(rateLimit, {
+    global: false,
+    errorResponseBuilder: () => ({
+      error: "rate_limit_exceeded",
+      message: "Too many login attempts",
+      statusCode: 429,
+    }),
+  });
   await server.register(swagger, {
     openapi: {
       openapi: "3.1.0",
@@ -193,6 +202,24 @@ export async function buildApiServer(appContext: AppContext) {
       return;
     }
 
+    if (
+      error &&
+      typeof error === "object" &&
+      "statusCode" in error &&
+      typeof error.statusCode === "number" &&
+      "error" in error &&
+      typeof error.error === "string" &&
+      "message" in error &&
+      typeof error.message === "string"
+    ) {
+      reply.code(error.statusCode).send({
+        error: error.error,
+        message: error.message,
+        statusCode: error.statusCode,
+      });
+      return;
+    }
+
     request.log.error(error);
     reply.code(500).send({
       error: "internal_error",
@@ -209,6 +236,12 @@ export async function buildApiServer(appContext: AppContext) {
 
   server.post("/api/v1/auth/login", {
     schema: routeSchemas.login,
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: 60_000,
+      },
+    },
   }, async (request, reply) => {
     const result = await loginWithPassword(appContext, request.body);
     applyCookie(reply, result.sessionToken, appContext);

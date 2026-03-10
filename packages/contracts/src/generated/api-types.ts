@@ -105,6 +105,19 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
             };
         };
         delete?: never;
@@ -382,7 +395,9 @@ export interface paths {
                             totalNetMills: number;
                             /** @enum {string} */
                             period: "today" | "7d" | "30d" | "all" | "custom";
+                            /** @description Window start. For mixed-platform scopes, this is the earliest included platform-local start. */
                             from: string | null;
+                            /** @description Window end. For mixed-platform scopes, this is the latest included platform-local end. */
                             to: string | null;
                             /** @enum {string} */
                             currency: "USD";
@@ -394,7 +409,9 @@ export interface paths {
                                 netAmountMills: number;
                             }[];
                             comparison: {
+                                /** @description Comparison window start. For mixed-platform scopes, this is the earliest included platform-local start. */
                                 from: string;
+                                /** @description Comparison window end. For mixed-platform scopes, this is the latest included platform-local end. */
                                 to: string;
                                 netEarningsMills: number;
                                 totalNetMills: number;
@@ -493,7 +510,9 @@ export interface paths {
                             totalNetMills: number;
                             /** @enum {string} */
                             period: "today" | "7d" | "30d" | "all" | "custom";
+                            /** @description Window start. For mixed-platform scopes, this is the earliest included platform-local start. */
                             from: string | null;
+                            /** @description Window end. For mixed-platform scopes, this is the latest included platform-local end. */
                             to: string | null;
                             /** @enum {string} */
                             currency: "USD";
@@ -505,7 +524,9 @@ export interface paths {
                                 netAmountMills: number;
                             }[];
                             comparison: {
+                                /** @description Comparison window start. For mixed-platform scopes, this is the earliest included platform-local start. */
                                 from: string;
+                                /** @description Comparison window end. For mixed-platform scopes, this is the latest included platform-local end. */
                                 to: string;
                                 netEarningsMills: number;
                                 totalNetMills: number;
@@ -615,7 +636,9 @@ export interface paths {
                             totalNetMills: number;
                             /** @enum {string} */
                             period: "today" | "7d" | "30d" | "all" | "custom";
+                            /** @description Window start. For mixed-platform scopes, this is the earliest included platform-local start. */
                             from: string | null;
+                            /** @description Window end. For mixed-platform scopes, this is the latest included platform-local end. */
                             to: string | null;
                             /** @enum {string} */
                             currency: "USD";
@@ -627,7 +650,9 @@ export interface paths {
                                 netAmountMills: number;
                             }[];
                             comparison: {
+                                /** @description Comparison window start. For mixed-platform scopes, this is the earliest included platform-local start. */
                                 from: string;
+                                /** @description Comparison window end. For mixed-platform scopes, this is the latest included platform-local end. */
                                 to: string;
                                 netEarningsMills: number;
                                 totalNetMills: number;

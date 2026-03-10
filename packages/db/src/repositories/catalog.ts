@@ -204,6 +204,10 @@ export async function listFanslyPages(db: Database) {
   return listPagesByPlatform(db, "fansly");
 }
 
+export async function listPlatformAccounts(db: Database) {
+  return db.query.platformAccounts.findMany();
+}
+
 export async function listPagesByPlatform(db: Database, platform: Platform) {
   return db.query.platformAccounts.findMany({
     where: eq(platformAccounts.platform, platform),

@@ -213,6 +213,8 @@ function addComparison(
 }
 
 function combinePeriodBounds(bounds: PeriodBounds[]): PeriodBounds {
+  // Mixed-platform reports keep a single top-level window by taking the union
+  // of each platform-local period.
   const withFrom = bounds
     .map((bounds) => bounds.from)
     .filter((value): value is Date => Boolean(value));

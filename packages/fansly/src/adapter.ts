@@ -34,10 +34,19 @@ type RequestResult<T> = {
   raw: T;
 };
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
+  private readonly rateLimitChains = new Map<string, Promise<void>>();
+  private readonly proxyAgents = new Map<string, ProxyAgent>();
 
   constructor(private readonly options: AdapterOptions) {}
+
+  async close() {
+    await Promise.all(Array.from(this.proxyAgents.values(), (agent) => agent.close()));
+    this.proxyAgents.clear();
+  }
 
   async getAccountMe(context: FanslyRequestContext) {
     return this.request<FanslyAccountMeResponse>(context, "/account/me", {
@@ -188,6 +197,7 @@ export class FanslyAdapter {
       const response = await fetch(url, {
         method: "GET",
         headers: this.buildHeaders(context.session),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         dispatcher: context.proxy ? this.buildProxyDispatcher(context.proxy) : undefined,
       });
 
@@ -269,26 +279,48 @@ export class FanslyAdapter {
   }
 
   private buildProxyDispatcher(proxy: ProxyConfig) {
-    if (!proxy.username || !proxy.password) {
-      return new ProxyAgent(proxy.url);
+    const proxyUrl = new URL(proxy.url);
+    if (proxy.username && proxy.password) {
+      proxyUrl.username = proxy.username;
+      proxyUrl.password = proxy.password;
     }
 
-    const proxyUrl = new URL(proxy.url);
-    proxyUrl.username = proxy.username;
-    proxyUrl.password = proxy.password;
+    const cacheKey = proxyUrl.toString();
+    const cached = this.proxyAgents.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
 
-    return new ProxyAgent(proxyUrl.toString());
+    const agent = new ProxyAgent(cacheKey);
+    this.proxyAgents.set(cacheKey, agent);
+    return agent;
   }
 
   private async waitForRateLimit(category: string, minDelayMs: number) {
-    const lastStartedAt = this.requestTimestamps.get(category);
-    const now = Date.now();
-    if (lastStartedAt !== undefined) {
-      const elapsed = now - lastStartedAt;
-      if (elapsed < minDelayMs) {
-        await delay(minDelayMs - elapsed);
+    const previous = this.rateLimitChains.get(category) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const chain = previous.then(() => gate);
+    this.rateLimitChains.set(category, chain);
+
+    await previous;
+    try {
+      const lastStartedAt = this.requestTimestamps.get(category);
+      const now = Date.now();
+      if (lastStartedAt !== undefined) {
+        const elapsed = now - lastStartedAt;
+        if (elapsed < minDelayMs) {
+          await delay(minDelayMs - elapsed);
+        }
+      }
+      this.requestTimestamps.set(category, Date.now());
+    } finally {
+      release();
+      if (this.rateLimitChains.get(category) === chain) {
+        this.rateLimitChains.delete(category);
       }
     }
-    this.requestTimestamps.set(category, Date.now());
   }
 }
