@@ -1,15 +1,15 @@
 import { and, eq, notInArray, sql } from "drizzle-orm";
 
-import { fanLtvTransactionTypes, type TransactionType } from "@fansly-connect/shared";
 import type { Database } from "../client.ts";
-import { fanPages, fans, pageFollows, pageSubscriptions, transactions } from "../schema.ts";
-
-function transactionTypeListSql(transactionTypes: TransactionType[]) {
-  return sql.join(
-    transactionTypes.map((transactionType) => sql`${transactionType}::transaction_type`),
-    sql`, `,
-  );
-}
+import {
+  fanPages,
+  fans,
+  fanUsernameAliases,
+  pageFollows,
+  pageSubscriptions,
+  spenderLifetimePage,
+} from "../schema.ts";
+import { rebuildSpenderProjections } from "./spenders.ts";
 
 export interface UpsertFanInput {
   platform: "fansly" | "onlyfans";
@@ -56,6 +56,22 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
         set: updateSet,
       })
       .returning();
+
+    if (fan.username && fan.username.trim().length > 0) {
+      await db.insert(fanUsernameAliases).values({
+        fanId: fan.id,
+        username: fan.username,
+        firstSeenAt: fan.firstSeenAt,
+        lastSeenAt: fan.lastSeenAt,
+      }).onConflictDoUpdate({
+        target: [fanUsernameAliases.fanId, fanUsernameAliases.username],
+        set: {
+          firstSeenAt: sql`least(${fanUsernameAliases.firstSeenAt}, ${fan.firstSeenAt})`,
+          lastSeenAt: fan.lastSeenAt,
+        },
+      });
+    }
+
     results.push(fan);
   }
 
@@ -73,19 +89,15 @@ export async function upsertFanPage(
     subscriberSince?: Date | null;
     subscriptionExpiresAt?: Date | null;
     autoRenew?: boolean | null;
-    totalCreatorNetMills?: bigint;
-    lastTransactionAt?: Date | null;
   },
 ) {
   const patch = {
-    totalCreatorNetMills: input.totalCreatorNetMills ?? 0n,
     isFollower: input.isFollower ?? false,
     followerSince: input.followerSince ?? null,
     isSubscriber: input.isSubscriber ?? false,
     subscriberSince: input.subscriberSince ?? null,
     subscriptionExpiresAt: input.subscriptionExpiresAt ?? null,
     autoRenew: input.autoRenew ?? null,
-    lastTransactionAt: input.lastTransactionAt ?? null,
     lastSeenAt: new Date(),
   };
 
@@ -93,9 +105,6 @@ export async function upsertFanPage(
     lastSeenAt: patch.lastSeenAt,
   };
 
-  if (input.totalCreatorNetMills !== undefined) {
-    updateSet.totalCreatorNetMills = input.totalCreatorNetMills;
-  }
   if (input.isFollower !== undefined) {
     updateSet.isFollower = input.isFollower;
   }
@@ -113,9 +122,6 @@ export async function upsertFanPage(
   }
   if (input.autoRenew !== undefined) {
     updateSet.autoRenew = input.autoRenew;
-  }
-  if (input.lastTransactionAt !== undefined) {
-    updateSet.lastTransactionAt = input.lastTransactionAt;
   }
 
   const [fanPage] = await db
@@ -253,26 +259,7 @@ export async function upsertPageSubscription(
 }
 
 export async function recalculateFanPageSpend(db: Database, platformAccountId: number) {
-  const fanLtvTransactionTypeSql = transactionTypeListSql(fanLtvTransactionTypes);
-
-  await db.execute(sql`
-    update fan_pages fp
-    set total_creator_net_mills = coalesce(tx.total_creator_net_mills, 0),
-        last_transaction_at = tx.last_transaction_at,
-        last_seen_at = now()
-    from (
-      select fan_id,
-             sum(net_amount_mills) as total_creator_net_mills,
-             max(occurred_at) as last_transaction_at
-      from transactions
-      where platform_account_id = ${platformAccountId}
-        and fan_id is not null
-        and canonical_type in (${fanLtvTransactionTypeSql})
-      group by fan_id
-    ) tx
-    where fp.platform_account_id = ${platformAccountId}
-      and fp.fan_id = tx.fan_id
-  `);
+  await rebuildSpenderProjections(db, platformAccountId);
 }
 
 export async function getFanSpendByIdentifier(
@@ -283,11 +270,30 @@ export async function getFanSpendByIdentifier(
   return db.execute(sql`
     select f.platform_user_id,
            f.username,
-           fp.total_creator_net_mills
+           coalesce(slp.creator_net_amount_mills, 0)::bigint as total_creator_net_mills
     from fan_pages fp
     join fans f on f.id = fp.fan_id
+    left join spender_lifetime_page slp
+      on slp.platform_account_id = fp.platform_account_id
+     and slp.fan_id = fp.fan_id
     where fp.platform_account_id = ${platformAccountId}
-      and (f.platform_user_id = ${identifier} or f.username = ${identifier})
+      and (
+        f.platform_user_id = ${identifier}
+        or f.username = ${identifier}
+        or exists (
+          select 1
+          from fan_username_aliases fua
+          where fua.fan_id = f.id
+            and fua.username = ${identifier}
+        )
+      )
+    order by
+      case
+        when f.platform_user_id = ${identifier} then 0
+        when f.username = ${identifier} then 1
+        else 2
+      end,
+      f.id asc
     limit 1
   `);
 }
@@ -301,15 +307,18 @@ export async function listTopFansForPage(
     select f.platform_user_id,
            f.username,
            f.display_name,
-           fp.total_creator_net_mills,
+           coalesce(slp.creator_net_amount_mills, 0)::bigint as total_creator_net_mills,
            fp.is_subscriber,
            fp.is_follower,
-           fp.last_transaction_at
+           slp.last_transaction_at
     from fan_pages fp
     join fans f on f.id = fp.fan_id
+    left join spender_lifetime_page slp
+      on slp.platform_account_id = fp.platform_account_id
+     and slp.fan_id = fp.fan_id
     where fp.platform_account_id = ${platformAccountId}
-    order by fp.total_creator_net_mills desc,
-             fp.last_transaction_at desc nulls last,
+    order by coalesce(slp.creator_net_amount_mills, 0) desc,
+             slp.last_transaction_at desc nulls last,
              f.id asc
     limit ${limit}
   `);

@@ -13,4 +13,4 @@ export function createDb(pool: Pool) {
   return drizzle(pool, { schema });
 }
 
-export type Database = ReturnType<typeof createDb>;
+export type Database = Omit<ReturnType<typeof createDb>, "$client">;

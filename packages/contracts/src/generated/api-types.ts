@@ -1592,6 +1592,832 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v2/spenders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List ranked spenders for a scoped platform view */
+        get: {
+            parameters: {
+                query: {
+                    scope: "page" | "model" | "agency";
+                    pageLabel?: string;
+                    modelSlug?: string;
+                    platform?: "fansly" | "onlyfans";
+                    period: "today" | "7d" | "30d" | "90d" | "mtd" | "custom" | "lifetime";
+                    from?: string;
+                    to?: string;
+                    limit?: number;
+                    offset?: number;
+                    query?: string;
+                    sortBy?: "grossAmountMills" | "creatorNetAmountMills" | "postedGrossAmountMills" | "pendingGrossAmountMills" | "postedCreatorNetAmountMills" | "pendingCreatorNetAmountMills" | "lifetimeGrossAmountMills" | "lifetimeCreatorNetAmountMills" | "lastTransactionAt" | "platformUserId" | "username" | "displayName";
+                    sortDir?: "asc" | "desc";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            scope: {
+                                /** @enum {string} */
+                                kind: "page" | "model" | "agency";
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                pageCount: number;
+                                page: {
+                                    id: number;
+                                    label: string;
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    modelSlug: string;
+                                    modelName: string;
+                                } | null;
+                                model: {
+                                    slug: string;
+                                    name: string;
+                                } | null;
+                            };
+                            period: {
+                                timeZone: string;
+                                fromBusinessDate: string | null;
+                                toBusinessDateInclusive: string | null;
+                                asOf: string | null;
+                            };
+                            diagnostics: {
+                                totalGrossAmountMills: number;
+                                totalCreatorNetAmountMills: number;
+                                attributedGrossAmountMills: number;
+                                attributedCreatorNetAmountMills: number;
+                                unattributedGrossAmountMills: number;
+                                unattributedCreatorNetAmountMills: number;
+                            };
+                            items: {
+                                fan: {
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    platformUserId: string;
+                                    username: string | null;
+                                    displayName: string | null;
+                                    createdAtExternal: string | null;
+                                };
+                                metrics: {
+                                    window: {
+                                        grossAmountMills: number;
+                                        creatorNetAmountMills: number;
+                                        postedGrossAmountMills: number;
+                                        pendingGrossAmountMills: number;
+                                        unknownGrossAmountMills: number;
+                                        postedCreatorNetAmountMills: number;
+                                        pendingCreatorNetAmountMills: number;
+                                        unknownCreatorNetAmountMills: number;
+                                        transactionCount: number;
+                                        lastTransactionAt: string | null;
+                                    } | null;
+                                    lifetime: {
+                                        scopeGrossAmountMills: number;
+                                        scopeCreatorNetAmountMills: number;
+                                        platformGrossAmountMills: number;
+                                        platformCreatorNetAmountMills: number;
+                                    };
+                                    comparison: {
+                                        previousGrossAmountMills: number;
+                                        previousCreatorNetAmountMills: number;
+                                        deltaGrossAmountMills: number;
+                                        deltaCreatorNetAmountMills: number;
+                                        deltaPct: number | null;
+                                    } | null;
+                                };
+                            }[];
+                            limit: number;
+                            offset: number;
+                            total: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/spenders/{platform}/{platformUserId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one platform-scoped spender */
+        get: {
+            parameters: {
+                query: {
+                    scope: "page" | "model" | "agency";
+                    pageLabel?: string;
+                    modelSlug?: string;
+                    platform?: "fansly" | "onlyfans";
+                    period: "today" | "7d" | "30d" | "90d" | "mtd" | "custom" | "lifetime";
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path: {
+                    platform: "fansly" | "onlyfans";
+                    platformUserId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            scope: {
+                                /** @enum {string} */
+                                kind: "page" | "model" | "agency";
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                pageCount: number;
+                                page: {
+                                    id: number;
+                                    label: string;
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    modelSlug: string;
+                                    modelName: string;
+                                } | null;
+                                model: {
+                                    slug: string;
+                                    name: string;
+                                } | null;
+                            };
+                            fan: {
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                platformUserId: string;
+                                username: string | null;
+                                displayName: string | null;
+                                createdAtExternal: string | null;
+                            };
+                            period: {
+                                timeZone: string;
+                                fromBusinessDate: string | null;
+                                toBusinessDateInclusive: string | null;
+                                asOf: string | null;
+                            };
+                            metrics: {
+                                window: {
+                                    grossAmountMills: number;
+                                    creatorNetAmountMills: number;
+                                    postedGrossAmountMills: number;
+                                    pendingGrossAmountMills: number;
+                                    unknownGrossAmountMills: number;
+                                    postedCreatorNetAmountMills: number;
+                                    pendingCreatorNetAmountMills: number;
+                                    unknownCreatorNetAmountMills: number;
+                                    transactionCount: number;
+                                    lastTransactionAt: string | null;
+                                } | null;
+                                lifetime: {
+                                    scopeGrossAmountMills: number;
+                                    scopeCreatorNetAmountMills: number;
+                                    platformGrossAmountMills: number;
+                                    platformCreatorNetAmountMills: number;
+                                };
+                                comparison: {
+                                    previousGrossAmountMills: number;
+                                    previousCreatorNetAmountMills: number;
+                                    deltaGrossAmountMills: number;
+                                    deltaCreatorNetAmountMills: number;
+                                    deltaPct: number | null;
+                                } | null;
+                            };
+                            pages: {
+                                pageId: number;
+                                pageLabel: string;
+                                modelSlug: string;
+                                modelName: string;
+                                inScope: boolean;
+                                grossAmountMills: number;
+                                creatorNetAmountMills: number;
+                                lastTransactionAt: string | null;
+                                isFollower: boolean;
+                                followerSince: string | null;
+                                isSubscriber: boolean;
+                                subscriberSince: string | null;
+                                subscriptionExpiresAt: string | null;
+                                autoRenew: boolean | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/spenders/{platform}/{platformUserId}/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get zero-filled spender trend series */
+        get: {
+            parameters: {
+                query: {
+                    scope: "page" | "model" | "agency";
+                    pageLabel?: string;
+                    modelSlug?: string;
+                    platform?: "fansly" | "onlyfans";
+                    period: "today" | "7d" | "30d" | "90d" | "mtd" | "custom" | "lifetime";
+                    from?: string;
+                    to?: string;
+                    granularity?: "day" | "week" | "month" | "auto";
+                };
+                header?: never;
+                path: {
+                    platform: "fansly" | "onlyfans";
+                    platformUserId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            scope: {
+                                /** @enum {string} */
+                                kind: "page" | "model" | "agency";
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                pageCount: number;
+                                page: {
+                                    id: number;
+                                    label: string;
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    modelSlug: string;
+                                    modelName: string;
+                                } | null;
+                                model: {
+                                    slug: string;
+                                    name: string;
+                                } | null;
+                            };
+                            fan: {
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                platformUserId: string;
+                                username: string | null;
+                                displayName: string | null;
+                                createdAtExternal: string | null;
+                            };
+                            period: {
+                                timeZone: string;
+                                fromBusinessDate: string | null;
+                                toBusinessDateInclusive: string | null;
+                                asOf: string | null;
+                            };
+                            /** @enum {string} */
+                            granularity: "day" | "week" | "month";
+                            items: {
+                                fromBusinessDate: string;
+                                toBusinessDateInclusive: string;
+                                metrics: {
+                                    grossAmountMills: number;
+                                    creatorNetAmountMills: number;
+                                    postedGrossAmountMills: number;
+                                    pendingGrossAmountMills: number;
+                                    unknownGrossAmountMills: number;
+                                    postedCreatorNetAmountMills: number;
+                                    pendingCreatorNetAmountMills: number;
+                                    unknownCreatorNetAmountMills: number;
+                                    transactionCount: number;
+                                    lastTransactionAt: string | null;
+                                };
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/spenders{batch}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Batch-resolve spender metrics for platform-scoped fan identities */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    batch: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        scope: "page" | "model" | "agency";
+                        pageLabel?: string;
+                        modelSlug?: string;
+                        /** @enum {string} */
+                        platform?: "fansly" | "onlyfans";
+                        /** @enum {string} */
+                        period?: "today" | "7d" | "30d" | "90d" | "mtd" | "custom" | "lifetime";
+                        from?: string;
+                        to?: string;
+                        fans: {
+                            /** @enum {string} */
+                            platform: "fansly" | "onlyfans";
+                            platformUserId: string;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            scope: {
+                                /** @enum {string} */
+                                kind: "page" | "model" | "agency";
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                pageCount: number;
+                                page: {
+                                    id: number;
+                                    label: string;
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    modelSlug: string;
+                                    modelName: string;
+                                } | null;
+                                model: {
+                                    slug: string;
+                                    name: string;
+                                } | null;
+                            };
+                            period: {
+                                timeZone: string;
+                                fromBusinessDate: string | null;
+                                toBusinessDateInclusive: string | null;
+                                asOf: string | null;
+                            };
+                            items: {
+                                requestedFan: {
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    platformUserId: string;
+                                };
+                                found: boolean;
+                                fan: {
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    platformUserId: string;
+                                    username: string | null;
+                                    displayName: string | null;
+                                    createdAtExternal: string | null;
+                                } | null;
+                                metrics: {
+                                    window: {
+                                        grossAmountMills: number;
+                                        creatorNetAmountMills: number;
+                                        postedGrossAmountMills: number;
+                                        pendingGrossAmountMills: number;
+                                        unknownGrossAmountMills: number;
+                                        postedCreatorNetAmountMills: number;
+                                        pendingCreatorNetAmountMills: number;
+                                        unknownCreatorNetAmountMills: number;
+                                        transactionCount: number;
+                                        lastTransactionAt: string | null;
+                                    } | null;
+                                    lifetime: {
+                                        scopeGrossAmountMills: number;
+                                        scopeCreatorNetAmountMills: number;
+                                        platformGrossAmountMills: number;
+                                        platformCreatorNetAmountMills: number;
+                                    };
+                                    comparison: {
+                                        previousGrossAmountMills: number;
+                                        previousCreatorNetAmountMills: number;
+                                        deltaGrossAmountMills: number;
+                                        deltaCreatorNetAmountMills: number;
+                                        deltaPct: number | null;
+                                    } | null;
+                                } | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/fans/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search visible platform-scoped fan identities */
+        get: {
+            parameters: {
+                query: {
+                    scope: "page" | "model" | "agency";
+                    pageLabel?: string;
+                    modelSlug?: string;
+                    platform?: "fansly" | "onlyfans";
+                    limit?: number;
+                    offset?: number;
+                    query: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            scope: {
+                                /** @enum {string} */
+                                kind: "page" | "model" | "agency";
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                pageCount: number;
+                                page: {
+                                    id: number;
+                                    label: string;
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    modelSlug: string;
+                                    modelName: string;
+                                } | null;
+                                model: {
+                                    slug: string;
+                                    name: string;
+                                } | null;
+                            };
+                            items: {
+                                fan: {
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    platformUserId: string;
+                                    username: string | null;
+                                    displayName: string | null;
+                                    createdAtExternal: string | null;
+                                };
+                                /** @enum {string} */
+                                matchKind: "platformUserId" | "username" | "alias" | "displayName";
+                                matchedValue: string | null;
+                                pages: {
+                                    pageId: number;
+                                    pageLabel: string;
+                                    modelSlug: string;
+                                    modelName: string;
+                                    isFollower: boolean;
+                                    followerSince: string | null;
+                                    isSubscriber: boolean;
+                                    subscriberSince: string | null;
+                                    subscriptionExpiresAt: string | null;
+                                    autoRenew: boolean | null;
+                                }[];
+                            }[];
+                            limit: number;
+                            offset: number;
+                            total: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {

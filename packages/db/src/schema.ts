@@ -9,6 +9,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -218,6 +219,25 @@ export const fans = pgTable(
   }),
 );
 
+export const fanUsernameAliases = pgTable(
+  "fan_username_aliases",
+  {
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    username: text("username").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "fan_username_aliases_pkey",
+      columns: [table.fanId, table.username],
+    }),
+    usernameIdx: index("fan_username_aliases_username_idx").on(table.username),
+  }),
+);
+
 export const fanPages = pgTable(
   "fan_pages",
   {
@@ -326,11 +346,11 @@ export const transactions = pgTable(
     transactionState: transactionStateEnum("transaction_state").notNull(),
     destination: integer("destination"),
     rawStatus: text("raw_status").notNull(),
-    amountMills: bigint("amount_mills", { mode: "bigint" }).notNull(),
-    destinationAmountMills: bigint("destination_amount_mills", {
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).notNull(),
+    sourceDestinationAmountMills: bigint("source_destination_amount_mills", {
       mode: "bigint",
     }).notNull(),
-    netAmountMills: bigint("net_amount_mills", { mode: "bigint" }).notNull(),
+    creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" }).notNull(),
     rawDestinationTax: integer("raw_destination_tax"),
     newBalanceMills: bigint("new_balance_mills", { mode: "bigint" }),
     senderId: text("sender_id"),
@@ -363,7 +383,10 @@ export const dailyRevenue = pgTable(
     canonicalType: transactionTypeEnum("canonical_type").notNull(),
     transactionState: transactionStateEnum("transaction_state").notNull(),
     transactionCount: integer("transaction_count").default(0).notNull(),
-    netAmountMills: bigint("net_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" })
+      .default(0n)
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -374,6 +397,90 @@ export const dailyRevenue = pgTable(
       table.transactionState,
     ),
   }),
+);
+
+export const spenderDailyFacts = pgTable(
+  "spender_daily_facts",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    businessDate: date("business_date").notNull(),
+    canonicalType: transactionTypeEnum("canonical_type").notNull(),
+    transactionState: transactionStateEnum("transaction_state").notNull(),
+    transactionCount: integer("transaction_count").default(0).notNull(),
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" })
+      .default(0n)
+      .notNull(),
+    lastTransactionAt: timestamp("last_transaction_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "spender_daily_facts_pkey",
+      columns: [
+        table.platformAccountId,
+        table.fanId,
+        table.businessDate,
+        table.canonicalType,
+        table.transactionState,
+      ],
+    }),
+    accountDateFanIdx: index("spender_daily_facts_account_date_fan_idx").on(
+      table.platformAccountId,
+      table.businessDate,
+      table.fanId,
+    ),
+    fanAccountDateIdx: index("spender_daily_facts_fan_account_date_idx").on(
+      table.fanId,
+      table.platformAccountId,
+      table.businessDate,
+    ),
+  }),
+);
+
+export const spenderLifetimePage = pgTable(
+  "spender_lifetime_page",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" })
+      .default(0n)
+      .notNull(),
+    lastTransactionAt: timestamp("last_transaction_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "spender_lifetime_page_pkey",
+      columns: [table.platformAccountId, table.fanId],
+    }),
+    fanAccountIdx: index("spender_lifetime_page_fan_account_idx").on(
+      table.fanId,
+      table.platformAccountId,
+    ),
+  }),
+);
+
+export const spenderProjectionWatermarks = pgTable(
+  "spender_projection_watermarks",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull()
+      .primaryKey(),
+    lastRebuiltAt: timestamp("last_rebuilt_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
 );
 
 export const dailyFollowers = pgTable(

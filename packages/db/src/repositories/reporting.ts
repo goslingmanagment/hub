@@ -13,10 +13,12 @@ import {
   dailySubscribers,
   fanPages,
   fans,
+  fanUsernameAliases,
   models,
   pageFollows,
   pageSubscriptions,
   platformAccounts,
+  spenderLifetimePage,
   transactions,
 } from "../schema.ts";
 
@@ -223,7 +225,7 @@ export async function getRevenuePageTotals(
     modelId: models.id,
     modelSlug: models.slug,
     modelName: models.name,
-    netEarningsMills: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)::bigint`,
+    netEarningsMills: sql<bigint>`coalesce(sum(${dailyRevenue.creatorNetAmountMills}), 0)::bigint`,
   }).from(dailyRevenue)
     .innerJoin(platformAccounts, eq(platformAccounts.id, dailyRevenue.platformAccountId))
     .innerJoin(models, eq(models.id, platformAccounts.modelId))
@@ -251,7 +253,7 @@ export async function getRevenueBreakdownForScope(
 
   const rows = await db.select({
     canonicalType: dailyRevenue.canonicalType,
-    netAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)::bigint`,
+    netAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.creatorNetAmountMills}), 0)::bigint`,
   }).from(dailyRevenue)
     .where(and(...clauses))
     .groupBy(dailyRevenue.canonicalType)
@@ -296,9 +298,9 @@ export async function listTransactionsForPage(
     rawType: transactions.rawType,
     canonicalType: transactions.canonicalType,
     transactionState: transactions.transactionState,
-    amountMills: transactions.amountMills,
-    destinationAmountMills: transactions.destinationAmountMills,
-    netAmountMills: transactions.netAmountMills,
+    amountMills: transactions.grossAmountMills,
+    destinationAmountMills: transactions.sourceDestinationAmountMills,
+    netAmountMills: transactions.creatorNetAmountMills,
     walletId: transactions.walletId,
     correlationId: transactions.correlationId,
     correlationAccountId: transactions.correlationAccountId,
@@ -463,6 +465,12 @@ export async function listFansForPage(
       ilike(fans.platformUserId, pattern),
       ilike(sql`coalesce(${fans.username}, '')`, pattern),
       ilike(sql`coalesce(${fans.displayName}, '')`, pattern),
+      sql`exists (
+        select 1
+        from ${fanUsernameAliases} fua
+        where fua.fan_id = ${fans.id}
+          and fua.username ilike ${pattern}
+      )`,
     )!);
   }
 
@@ -476,7 +484,7 @@ export async function listFansForPage(
     platformUserId: fans.platformUserId,
     username: fans.username,
     displayName: fans.displayName,
-    totalCreatorNetMills: fanPages.totalCreatorNetMills,
+    totalCreatorNetMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
     currency: fanPages.currency,
     isFollower: fanPages.isFollower,
     followerSince: fanPages.followerSince,
@@ -484,11 +492,19 @@ export async function listFansForPage(
     subscriberSince: fanPages.subscriberSince,
     subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
     autoRenew: fanPages.autoRenew,
-    lastTransactionAt: fanPages.lastTransactionAt,
+    lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
+    .leftJoin(spenderLifetimePage, and(
+      eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
+      eq(spenderLifetimePage.fanId, fanPages.fanId),
+    ))
     .where(and(...clauses))
-    .orderBy(desc(fanPages.totalCreatorNetMills), desc(fanPages.lastTransactionAt), asc(fans.id))
+    .orderBy(
+      desc(sql`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)`),
+      desc(spenderLifetimePage.lastTransactionAt),
+      asc(fans.id),
+    )
     .limit(input.limit)
     .offset(input.offset);
 
@@ -523,7 +539,7 @@ export async function findFanOnPage(db: Database, pageId: number, platformUserId
     pageLabel: platformAccounts.label,
     modelSlug: models.slug,
     modelName: models.name,
-    totalCreatorNetMills: fanPages.totalCreatorNetMills,
+    totalCreatorNetMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
     currency: fanPages.currency,
     isFollower: fanPages.isFollower,
     followerSince: fanPages.followerSince,
@@ -531,11 +547,15 @@ export async function findFanOnPage(db: Database, pageId: number, platformUserId
     subscriberSince: fanPages.subscriberSince,
     subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
     autoRenew: fanPages.autoRenew,
-    lastTransactionAt: fanPages.lastTransactionAt,
+    lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
     .innerJoin(platformAccounts, eq(platformAccounts.id, fanPages.platformAccountId))
     .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .leftJoin(spenderLifetimePage, and(
+      eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
+      eq(spenderLifetimePage.fanId, fanPages.fanId),
+    ))
     .where(and(
       eq(fanPages.platformAccountId, pageId),
       eq(fans.platformUserId, platformUserId),
@@ -568,7 +588,7 @@ export async function listFanPageContexts(
     pageLabel: platformAccounts.label,
     modelSlug: models.slug,
     modelName: models.name,
-    totalCreatorNetMills: fanPages.totalCreatorNetMills,
+    totalCreatorNetMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
     currency: fanPages.currency,
     isFollower: fanPages.isFollower,
     followerSince: fanPages.followerSince,
@@ -576,20 +596,44 @@ export async function listFanPageContexts(
     subscriberSince: fanPages.subscriberSince,
     subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
     autoRenew: fanPages.autoRenew,
-    lastTransactionAt: fanPages.lastTransactionAt,
+    lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
     .innerJoin(platformAccounts, eq(platformAccounts.id, fanPages.platformAccountId))
     .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .leftJoin(spenderLifetimePage, and(
+      eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
+      eq(spenderLifetimePage.fanId, fanPages.fanId),
+    ))
     .where(and(...clauses))
     .orderBy(models.slug, platformAccounts.label);
 }
 
-export async function getPlatformTotalSpendForFan(db: Database, fanId: number) {
+export async function getPlatformTotalSpendForFan(
+  db: Database,
+  input: {
+    fanId: number;
+    platform: "fansly" | "onlyfans";
+    pageIds?: number[];
+  },
+) {
+  const clauses = [
+    eq(spenderLifetimePage.fanId, input.fanId),
+    eq(platformAccounts.platform, input.platform),
+  ];
+
+  if (input.pageIds !== undefined) {
+    if (input.pageIds.length === 0) {
+      return 0n;
+    }
+    clauses.push(inArray(spenderLifetimePage.platformAccountId, input.pageIds));
+  }
+
   const [row] = await db.select({
-    total: sql<bigint>`coalesce(sum(${fanPages.totalCreatorNetMills}), 0)::bigint`,
-  }).from(fanPages)
-    .where(eq(fanPages.fanId, fanId));
+    total: sql<bigint>`coalesce(sum(${spenderLifetimePage.creatorNetAmountMills}), 0)::bigint`,
+  }).from(spenderLifetimePage)
+    .innerJoin(platformAccounts, eq(platformAccounts.id, spenderLifetimePage.platformAccountId))
+    .where(and(...clauses));
 
   return row?.total ?? 0n;
 }

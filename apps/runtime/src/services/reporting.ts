@@ -713,6 +713,7 @@ export async function getPageFanDetailReport(
   app: AppContext,
   pageLabel: string,
   platformUserId: string,
+  pageIds?: number[],
 ): Promise<PageFanDetailResponse> {
   const page = await getPageSummary(app, pageLabel);
   const fan = await findFanOnPage(app.db, page.id, platformUserId);
@@ -724,7 +725,11 @@ export async function getPageFanDetailReport(
     listFanNotesForPages(app.db, fan.fanId, [page.id]),
     listFanSummariesForPages(app.db, fan.fanId, [page.id]),
     listFanFlags(app.db, fan.fanId),
-    getPlatformTotalSpendForFan(app.db, fan.fanId),
+    getPlatformTotalSpendForFan(app.db, {
+      fanId: fan.fanId,
+      platform: fan.platform,
+      pageIds,
+    }),
   ]);
 
   return {
@@ -794,7 +799,11 @@ export async function getCrossPageFanDetailReport(
     listFanNotesForPages(app.db, fan.id, pageIds),
     listFanSummariesForPages(app.db, fan.id, pageIds),
     listFanFlags(app.db, fan.id),
-    getPlatformTotalSpendForFan(app.db, fan.id),
+    getPlatformTotalSpendForFan(app.db, {
+      fanId: fan.id,
+      platform: fan.platform,
+      pageIds: input.pageIds,
+    }),
   ]);
 
   const notesByPage = buildMetadataLookup(notes);

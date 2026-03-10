@@ -35,9 +35,9 @@ export interface UpsertTransactionInput {
   transactionState: "pending" | "posted" | "unknown";
   destination?: number | null;
   rawStatus: string | number;
-  amountMills: bigint;
-  destinationAmountMills: bigint;
-  netAmountMills: bigint;
+  grossAmountMills: bigint;
+  sourceDestinationAmountMills: bigint;
+  creatorNetAmountMills: bigint;
   rawDestinationTax?: number | null;
   newBalanceMills?: bigint | null;
   senderId?: string | null;
@@ -58,9 +58,9 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     transactionState: input.transactionState,
     destination: input.destination ?? null,
     rawStatus: String(input.rawStatus),
-    amountMills: input.amountMills,
-    destinationAmountMills: input.destinationAmountMills,
-    netAmountMills: input.netAmountMills,
+    grossAmountMills: input.grossAmountMills,
+    sourceDestinationAmountMills: input.sourceDestinationAmountMills,
+    creatorNetAmountMills: input.creatorNetAmountMills,
     rawDestinationTax: input.rawDestinationTax ?? null,
     newBalanceMills: input.newBalanceMills ?? null,
     senderId: input.senderId ?? null,
@@ -94,50 +94,51 @@ export async function rebuildRevenueRollups(
     : sql``;
   const reportableTransactionTypeSql = transactionTypeListSql(reportableTransactionTypes);
 
-  await db.transaction(async (tx) => {
-    await tx.delete(dailyRevenue).where(eq(dailyRevenue.platformAccountId, platformAccountId));
-    await tx.execute(sql`
-      insert into daily_revenue (
-        platform_account_id,
-        business_date,
-        canonical_type,
-        transaction_state,
-        transaction_count,
-        net_amount_mills,
-        updated_at
-      )
-      select t.platform_account_id,
-             (
-               timezone(
-                 case
-                   when pa.platform = 'onlyfans'::platform then 'UTC'
-                   else 'Europe/Moscow'
-                 end,
-                 t.occurred_at
-               )::date
-             ) as business_date,
-             t.canonical_type,
-             t.transaction_state,
-             count(*)::int,
-             coalesce(sum(t.net_amount_mills), 0)::bigint,
-             now()
-      from transactions t
-      join platform_accounts pa on pa.id = t.platform_account_id
-      where t.platform_account_id = ${platformAccountId}
-        and t.canonical_type in (${reportableTransactionTypeSql})
-        ${fromClause}
-      group by 1, 2, 3, 4
-      on conflict (
-        platform_account_id,
-        business_date,
-        canonical_type,
-        transaction_state
-      ) do update set
-        transaction_count = excluded.transaction_count,
-        net_amount_mills = excluded.net_amount_mills,
-        updated_at = excluded.updated_at
-    `);
-  });
+  await db.delete(dailyRevenue).where(eq(dailyRevenue.platformAccountId, platformAccountId));
+  await db.execute(sql`
+    insert into daily_revenue (
+      platform_account_id,
+      business_date,
+      canonical_type,
+      transaction_state,
+      transaction_count,
+      gross_amount_mills,
+      creator_net_amount_mills,
+      updated_at
+    )
+    select t.platform_account_id,
+           (
+             timezone(
+               case
+                 when pa.platform = 'onlyfans'::platform then 'UTC'
+                 else 'Europe/Moscow'
+               end,
+               t.occurred_at
+             )::date
+           ) as business_date,
+           t.canonical_type,
+           t.transaction_state,
+           count(*)::int,
+           coalesce(sum(t.gross_amount_mills), 0)::bigint,
+           coalesce(sum(t.creator_net_amount_mills), 0)::bigint,
+           now()
+    from transactions t
+    join platform_accounts pa on pa.id = t.platform_account_id
+    where t.platform_account_id = ${platformAccountId}
+      and t.canonical_type in (${reportableTransactionTypeSql})
+      ${fromClause}
+    group by 1, 2, 3, 4
+    on conflict (
+      platform_account_id,
+      business_date,
+      canonical_type,
+      transaction_state
+    ) do update set
+      transaction_count = excluded.transaction_count,
+      gross_amount_mills = excluded.gross_amount_mills,
+      creator_net_amount_mills = excluded.creator_net_amount_mills,
+      updated_at = excluded.updated_at
+  `);
 }
 
 export async function rebuildFollowerRollups(
@@ -262,7 +263,8 @@ export async function getRevenueBreakdown(
   const rows = await db
     .select({
       canonicalType: dailyRevenue.canonicalType,
-      netAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.netAmountMills}), 0)`,
+      grossAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.grossAmountMills}), 0)::bigint`,
+      creatorNetAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.creatorNetAmountMills}), 0)::bigint`,
     })
     .from(dailyRevenue)
     .where(and(...clauses))
@@ -270,6 +272,7 @@ export async function getRevenueBreakdown(
 
   return rows.map((row) => ({
     ...row,
+    netAmountMills: row.creatorNetAmountMills,
     bucket: getTransactionClassification(row.canonicalType).bucket,
   }));
 }

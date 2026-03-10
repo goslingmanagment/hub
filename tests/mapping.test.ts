@@ -58,7 +58,7 @@ describe("Fansly transaction mapping", () => {
     expect(mapOnlyMonsterTransactionState("mystery")).toBe("unknown");
   });
 
-  it("classifies canonical transaction types for reporting and fan LTV", () => {
+  it("classifies canonical transaction types for reporting and spender analytics", () => {
     expect(transactionTypesByReportingBucket.revenue).toEqual([
       "subscription",
       "tip",
@@ -79,19 +79,19 @@ describe("Fansly transaction mapping", () => {
 
     expect(getTransactionClassification("chargeback")).toEqual({
       bucket: "adjustment",
-      affectsFanLtv: true,
+      affectsSpenderAnalytics: true,
     });
     expect(getTransactionClassification("refund")).toEqual({
       bucket: "adjustment",
-      affectsFanLtv: true,
+      affectsSpenderAnalytics: true,
     });
     expect(getTransactionClassification("other")).toEqual({
       bucket: "unclassified",
-      affectsFanLtv: true,
+      affectsSpenderAnalytics: true,
     });
     expect(getTransactionClassification("payout_reversal")).toEqual({
       bucket: "excluded",
-      affectsFanLtv: false,
+      affectsSpenderAnalytics: false,
     });
   });
 });

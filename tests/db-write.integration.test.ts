@@ -134,7 +134,9 @@ describe("db write safety", () => {
     }
     await testDb.pool.query(`
       truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
-               auth_sessions, user_page_assignments, users, daily_revenue,
+               auth_sessions, user_page_assignments, users, fan_username_aliases,
+               spender_projection_watermarks, spender_lifetime_page, spender_daily_facts,
+               daily_revenue,
                daily_followers, daily_subscribers, transactions, page_subscriptions,
                page_follows, fan_pages, fans, raw_payloads, sync_checkpoints,
                sync_runs, platform_account_proxies, platform_account_credentials,
@@ -715,7 +717,6 @@ describe("db write safety", () => {
       platformAccountId: page.id,
       isFollower: true,
       followerSince: new Date("2026-03-02T00:00:00.000Z"),
-      totalCreatorNetMills: 1200n,
     });
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
@@ -727,8 +728,7 @@ describe("db write safety", () => {
     const fanPageRows = await testDb.pool.query(`
       select count(*)::int as count,
              bool_or(is_follower) as is_follower,
-             bool_or(is_subscriber) as is_subscriber,
-             max(total_creator_net_mills)::bigint as total_creator_net_mills
+             bool_or(is_subscriber) as is_subscriber
       from fan_pages
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
@@ -736,7 +736,6 @@ describe("db write safety", () => {
     expect(fanPageRows.rows[0]?.count).toBe(1);
     expect(fanPageRows.rows[0]?.is_follower).toBe(true);
     expect(fanPageRows.rows[0]?.is_subscriber).toBe(true);
-    expect(BigInt(fanPageRows.rows[0]?.total_creator_net_mills ?? 0)).toBe(1200n);
 
     await upsertPageFollow(testDb.db, {
       platformAccountId: page.id,
@@ -810,9 +809,9 @@ describe("db write safety", () => {
       canonicalType: "subscription",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: 1000n,
-      destinationAmountMills: 1000n,
-      netAmountMills: 1000n,
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
       occurredAt: new Date("2026-03-05T00:00:00.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -823,9 +822,9 @@ describe("db write safety", () => {
       canonicalType: "payout_reversal",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: 331000n,
-      destinationAmountMills: 331000n,
-      netAmountMills: 331000n,
+      grossAmountMills: 331000n,
+      sourceDestinationAmountMills: 331000n,
+      creatorNetAmountMills: 331000n,
       occurredAt: new Date("2026-03-05T01:00:00.000Z"),
     });
 
@@ -833,7 +832,7 @@ describe("db write safety", () => {
       select count(*)::int as count,
              max(raw_type)::int as raw_type,
              max(canonical_type) as canonical_type,
-             max(net_amount_mills)::bigint as net_amount_mills
+             max(creator_net_amount_mills)::bigint as net_amount_mills
       from transactions
       where platform_account_id = ${page.id}
         and transaction_id = 'tx-1'
@@ -844,7 +843,7 @@ describe("db write safety", () => {
     expect(BigInt(transactionRows.rows[0]?.net_amount_mills ?? 0)).toBe(331000n);
   });
 
-  it("recalculates fan spend using fan-LTV transaction rules", async (context) => {
+  it("rebuilds spender lifetime from ledger truth using shared analytics rules", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -867,7 +866,6 @@ describe("db write safety", () => {
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
       platformAccountId: page.id,
-      totalCreatorNetMills: 0n,
     });
 
     await upsertTransaction(testDb.db, {
@@ -878,9 +876,9 @@ describe("db write safety", () => {
       canonicalType: "subscription",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: 5000n,
-      destinationAmountMills: 5000n,
-      netAmountMills: 5000n,
+      grossAmountMills: 5000n,
+      sourceDestinationAmountMills: 5000n,
+      creatorNetAmountMills: 5000n,
       occurredAt: new Date("2026-03-05T00:00:00.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -891,9 +889,9 @@ describe("db write safety", () => {
       canonicalType: "chargeback",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: -800n,
-      destinationAmountMills: -800n,
-      netAmountMills: -800n,
+      grossAmountMills: -800n,
+      sourceDestinationAmountMills: -800n,
+      creatorNetAmountMills: -800n,
       occurredAt: new Date("2026-03-06T00:00:00.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -904,9 +902,9 @@ describe("db write safety", () => {
       canonicalType: "refund",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: -200n,
-      destinationAmountMills: -200n,
-      netAmountMills: -200n,
+      grossAmountMills: -200n,
+      sourceDestinationAmountMills: -200n,
+      creatorNetAmountMills: -200n,
       occurredAt: new Date("2026-03-07T00:00:00.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -917,21 +915,21 @@ describe("db write safety", () => {
       canonicalType: "other",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: 300n,
-      destinationAmountMills: 300n,
-      netAmountMills: 300n,
+      grossAmountMills: 300n,
+      sourceDestinationAmountMills: 300n,
+      creatorNetAmountMills: 300n,
       occurredAt: new Date("2026-03-08T00:00:00.000Z"),
     });
 
     await recalculateFanPageSpend(testDb.db, page.id);
 
     const spendBeforePayoutReversal = await testDb.pool.query(`
-      select total_creator_net_mills
-      from fan_pages
+      select creator_net_amount_mills
+      from spender_lifetime_page
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
-    expect(BigInt(spendBeforePayoutReversal.rows[0]?.total_creator_net_mills ?? 0)).toBe(4300n);
+    expect(BigInt(spendBeforePayoutReversal.rows[0]?.creator_net_amount_mills ?? 0)).toBe(4300n);
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
@@ -941,20 +939,98 @@ describe("db write safety", () => {
       canonicalType: "payout_reversal",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: 2000n,
-      destinationAmountMills: 2000n,
-      netAmountMills: 2000n,
+      grossAmountMills: 2000n,
+      sourceDestinationAmountMills: 2000n,
+      creatorNetAmountMills: 2000n,
       occurredAt: new Date("2026-03-09T00:00:00.000Z"),
     });
 
     await recalculateFanPageSpend(testDb.db, page.id);
 
     const spendAfterPayoutReversal = await testDb.pool.query(`
-      select total_creator_net_mills
-      from fan_pages
+      select creator_net_amount_mills
+      from spender_lifetime_page
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
-    expect(BigInt(spendAfterPayoutReversal.rows[0]?.total_creator_net_mills ?? 0)).toBe(4300n);
+    expect(BigInt(spendAfterPayoutReversal.rows[0]?.creator_net_amount_mills ?? 0)).toBe(4300n);
+  });
+
+  it("fully clears stale spender projections when qualifying ledger rows disappear", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "stale-spender-model",
+      name: "Stale Spender Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "stale-spender-page",
+    });
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "stale-fan-1",
+      username: "stalefan",
+    }]);
+
+    await upsertFanPage(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      transactionId: "stale-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 2000n,
+      sourceDestinationAmountMills: 2000n,
+      creatorNetAmountMills: 2000n,
+      occurredAt: new Date("2026-03-05T00:00:00.000Z"),
+    });
+
+    await recalculateFanPageSpend(testDb.db, page.id);
+
+    const beforeDelete = await testDb.pool.query(`
+      select gross_amount_mills, creator_net_amount_mills
+      from spender_lifetime_page
+      where fan_id = ${fan.id}
+        and platform_account_id = ${page.id}
+    `);
+    expect(beforeDelete.rows).toEqual([
+      {
+        gross_amount_mills: 2000n,
+        creator_net_amount_mills: 2000n,
+      },
+    ]);
+
+    await testDb.pool.query(`
+      delete from transactions
+      where platform_account_id = ${page.id}
+        and transaction_id = 'stale-tip'
+    `);
+
+    await recalculateFanPageSpend(testDb.db, page.id);
+
+    const afterDeleteLifetime = await testDb.pool.query(`
+      select count(*)::int as count
+      from spender_lifetime_page
+      where fan_id = ${fan.id}
+        and platform_account_id = ${page.id}
+    `);
+    const afterDeleteDailyFacts = await testDb.pool.query(`
+      select count(*)::int as count
+      from spender_daily_facts
+      where fan_id = ${fan.id}
+        and platform_account_id = ${page.id}
+    `);
+
+    expect(afterDeleteLifetime.rows[0]?.count).toBe(0);
+    expect(afterDeleteDailyFacts.rows[0]?.count).toBe(0);
   });
 });

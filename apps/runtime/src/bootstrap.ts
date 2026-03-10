@@ -1,4 +1,4 @@
-import { createDb, createPool } from "@fansly-connect/db";
+import { createDb, createPool, type Database } from "@fansly-connect/db";
 import { FanslyAdapter } from "@fansly-connect/fansly";
 import { OnlyFansAdapter } from "@fansly-connect/onlyfans";
 import type {
@@ -26,7 +26,7 @@ export interface AppContext {
   config: ReturnType<typeof loadConfig>;
   logger: ReturnType<typeof createLogger>;
   pool: ReturnType<typeof createPool>;
-  db: ReturnType<typeof createDb>;
+  db: Database;
   adapter: AdapterLike;
   onlyFansAdapter: OnlyFansAdapter;
   close(): Promise<void>;

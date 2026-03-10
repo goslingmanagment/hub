@@ -482,7 +482,9 @@ describe("sync integration", () => {
     }
     await testDb.pool.query(`
       truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
-               auth_sessions, user_page_assignments, users, daily_revenue,
+               auth_sessions, user_page_assignments, users, fan_username_aliases,
+               spender_projection_watermarks, spender_lifetime_page, spender_daily_facts,
+               daily_revenue,
                daily_followers, daily_subscribers, transactions, page_subscriptions,
                page_follows, fan_pages, fans, raw_payloads, sync_checkpoints,
                sync_runs, platform_account_proxies, platform_account_credentials,
@@ -525,7 +527,7 @@ describe("sync integration", () => {
     const followCount = await testDb.pool.query("select count(*)::int from page_follows");
     const subscriptionCount = await testDb.pool.query("select count(*)::int from page_subscriptions");
     const revenueRows = await testDb.pool.query(
-      "select coalesce(sum(net_amount_mills), 0)::bigint as total from daily_revenue",
+      "select coalesce(sum(creator_net_amount_mills), 0)::bigint as total from daily_revenue",
     );
     const followerRollupRows = await testDb.pool.query(
       "select coalesce(sum(new_followers), 0)::int as total from daily_followers",
@@ -817,7 +819,7 @@ describe("sync integration", () => {
     await runAllSync(app, page.label);
 
     const payoutRows = await testDb.pool.query(`
-      select raw_type, canonical_type, net_amount_mills
+      select raw_type, canonical_type, creator_net_amount_mills as net_amount_mills
       from transactions
       where raw_type = '16013'
     `);
@@ -827,7 +829,7 @@ describe("sync integration", () => {
       where canonical_type = 'payout_reversal'
     `);
     const totalRevenueRows = await testDb.pool.query(`
-      select coalesce(sum(net_amount_mills), 0)::bigint as total
+      select coalesce(sum(creator_net_amount_mills), 0)::bigint as total
       from daily_revenue
     `);
     const breakdown = await revenueBreakdownForPage(app, page.label, "all");
@@ -888,7 +890,7 @@ describe("sync integration", () => {
     const revenueRows = await testDb.pool.query(`
       select count(*)::int as row_count,
              count(distinct (business_date, canonical_type, transaction_state))::int as distinct_count,
-             coalesce(sum(net_amount_mills), 0)::bigint as total
+             coalesce(sum(creator_net_amount_mills), 0)::bigint as total
       from daily_revenue
       where platform_account_id = ${page.id}
     `);
@@ -1389,8 +1391,8 @@ describe("sync integration", () => {
       const txRows = await testDb.pool.query(`
         select transaction_id,
                canonical_type,
-               amount_mills,
-               net_amount_mills
+               gross_amount_mills as amount_mills,
+               creator_net_amount_mills as net_amount_mills
         from transactions
         where platform_account_id = ${page.id}
         order by transaction_id asc
@@ -1480,9 +1482,9 @@ describe("sync integration", () => {
         select transaction_id,
                raw_type,
                canonical_type,
-               amount_mills,
-               destination_amount_mills,
-               net_amount_mills
+               gross_amount_mills as amount_mills,
+               source_destination_amount_mills as destination_amount_mills,
+               creator_net_amount_mills as net_amount_mills
         from transactions
         where platform_account_id = ${page.id}
         order by transaction_id asc
@@ -1540,17 +1542,17 @@ describe("sync integration", () => {
           expect.objectContaining({
             canonicalType: "tip",
             bucket: "revenue",
-            netAmountMills: "10000",
+            netAmountMills: 10000n,
           }),
           expect.objectContaining({
             canonicalType: "subscription",
             bucket: "revenue",
-            netAmountMills: "4000",
+            netAmountMills: 4000n,
           }),
           expect.objectContaining({
             canonicalType: "chargeback",
             bucket: "adjustment",
-            netAmountMills: "-2000",
+            netAmountMills: -2000n,
           }),
         ]),
       );
@@ -1586,31 +1588,37 @@ describe("sync integration", () => {
 
       expect(pageId).toBeGreaterThan(0);
 
-      await upsertTransaction(legacyDb.db, {
-        platformAccountId: pageId,
-        transactionId: "legacy-tip",
-        rawType: "Tip from",
-        canonicalType: "tip",
-        transactionState: "posted",
-        rawStatus: "done",
-        amountMills: 12500n,
-        destinationAmountMills: 12500n,
-        netAmountMills: 12500n,
-        occurredAt: new Date("2026-03-05T12:00:00.000Z"),
-      });
-      await upsertTransaction(legacyDb.db, {
-        platformAccountId: pageId,
-        transactionId: "legacy-chargeback",
-        rawType: "Tip from",
-        canonicalType: "chargeback",
-        transactionState: "posted",
-        rawStatus: "undo",
-        amountMills: -2500n,
-        destinationAmountMills: -2500n,
-        netAmountMills: -2500n,
-        occurredAt: new Date("2026-03-06T12:00:00.000Z"),
-      });
-      await rebuildRevenueRollups(legacyDb.db, pageId);
+      await legacyDb.pool.query(`
+        insert into transactions (
+          platform_account_id,
+          fan_id,
+          transaction_id,
+          raw_type,
+          canonical_type,
+          transaction_state,
+          raw_status,
+          amount_mills,
+          destination_amount_mills,
+          net_amount_mills,
+          occurred_at
+        )
+        values
+          (${pageId}, null, 'legacy-tip', 'Tip from', 'tip', 'posted', 'done', 12500, 12500, 12500, '2026-03-05T12:00:00.000Z'::timestamptz),
+          (${pageId}, null, 'legacy-chargeback', 'Tip from', 'chargeback', 'posted', 'undo', -2500, -2500, -2500, '2026-03-06T12:00:00.000Z'::timestamptz)
+      `);
+      await legacyDb.pool.query(`
+        insert into daily_revenue (
+          platform_account_id,
+          business_date,
+          canonical_type,
+          transaction_state,
+          transaction_count,
+          net_amount_mills
+        )
+        values
+          (${pageId}, '2026-03-05'::date, 'tip', 'posted', 1, 12500),
+          (${pageId}, '2026-03-06'::date, 'chargeback', 'posted', 1, -2500)
+      `);
 
       const beforeRows = await legacyDb.pool.query(`
         select transaction_id, net_amount_mills
@@ -1656,13 +1664,13 @@ describe("sync integration", () => {
         where id = ${pageId}
       `);
       const afterRows = await legacyDb.pool.query(`
-        select transaction_id, net_amount_mills
+        select transaction_id, creator_net_amount_mills as net_amount_mills
         from transactions
         where platform_account_id = ${pageId}
         order by transaction_id asc
       `);
       const afterRevenueRows = await legacyDb.pool.query(`
-        select canonical_type, net_amount_mills
+        select canonical_type, creator_net_amount_mills as net_amount_mills
         from daily_revenue
         where platform_account_id = ${pageId}
         order by canonical_type asc
@@ -1713,36 +1721,44 @@ describe("sync integration", () => {
         slug: "legacy-of-cent-rounding",
         name: "Legacy OF Cent Rounding",
       });
-      const page = await createOnlyFansPage(legacyDb.db, {
-        modelId: model.id,
-        label: "legacy-of-cent-rounding",
-      });
+      const insertedPage = await legacyDb.pool.query(`
+        insert into platform_accounts (model_id, platform, label, commission_rate)
+        values (${model.id}, 'onlyfans', 'legacy-of-cent-rounding', 0.2)
+        returning id
+      `);
+      const page = { id: Number(insertedPage.rows[0]?.id ?? 0) };
 
-      await upsertTransaction(legacyDb.db, {
-        platformAccountId: page.id,
-        transactionId: "legacy-subscription",
-        rawType: "Subscription",
-        canonicalType: "subscription",
-        transactionState: "posted",
-        rawStatus: "done",
-        amountMills: 4990n,
-        destinationAmountMills: 4990n,
-        netAmountMills: 3992n,
-        occurredAt: new Date("2026-03-05T12:00:00.000Z"),
-      });
-      await upsertTransaction(legacyDb.db, {
-        platformAccountId: page.id,
-        transactionId: "legacy-chargeback",
-        rawType: "Subscription",
-        canonicalType: "chargeback",
-        transactionState: "posted",
-        rawStatus: "undo",
-        amountMills: -4990n,
-        destinationAmountMills: -4990n,
-        netAmountMills: -3992n,
-        occurredAt: new Date("2026-03-06T12:00:00.000Z"),
-      });
-      await rebuildRevenueRollups(legacyDb.db, page.id);
+      await legacyDb.pool.query(`
+        insert into transactions (
+          platform_account_id,
+          fan_id,
+          transaction_id,
+          raw_type,
+          canonical_type,
+          transaction_state,
+          raw_status,
+          amount_mills,
+          destination_amount_mills,
+          net_amount_mills,
+          occurred_at
+        )
+        values
+          (${page.id}, null, 'legacy-subscription', 'Subscription', 'subscription', 'posted', 'done', 4990, 4990, 3992, '2026-03-05T12:00:00.000Z'::timestamptz),
+          (${page.id}, null, 'legacy-chargeback', 'Subscription', 'chargeback', 'posted', 'undo', -4990, -4990, -3992, '2026-03-06T12:00:00.000Z'::timestamptz)
+      `);
+      await legacyDb.pool.query(`
+        insert into daily_revenue (
+          platform_account_id,
+          business_date,
+          canonical_type,
+          transaction_state,
+          transaction_count,
+          net_amount_mills
+        )
+        values
+          (${page.id}, '2026-03-05'::date, 'subscription', 'posted', 1, 3992),
+          (${page.id}, '2026-03-06'::date, 'chargeback', 'posted', 1, -3992)
+      `);
 
       const beforeRows = await legacyDb.pool.query(`
         select transaction_id, net_amount_mills
@@ -1783,13 +1799,13 @@ describe("sync integration", () => {
       });
 
       const afterRows = await legacyDb.pool.query(`
-        select transaction_id, net_amount_mills
+        select transaction_id, creator_net_amount_mills as net_amount_mills
         from transactions
         where platform_account_id = ${page.id}
         order by transaction_id asc
       `);
       const afterRevenueRows = await legacyDb.pool.query(`
-        select canonical_type, net_amount_mills
+        select canonical_type, creator_net_amount_mills as net_amount_mills
         from daily_revenue
         where platform_account_id = ${page.id}
         order by canonical_type asc

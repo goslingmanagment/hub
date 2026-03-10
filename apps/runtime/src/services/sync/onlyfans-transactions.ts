@@ -3,7 +3,7 @@ import {
   getCheckpoint,
   getOldestPendingTransactionAt,
   insertRawPayload,
-  recalculateFanPageSpend,
+  rebuildSpenderProjections,
   rebuildRevenueRollups,
   upsertCheckpoint,
   upsertFanPage,
@@ -27,29 +27,18 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { DAY_MS, retentionDate } from "./shared.ts";
 
-async function upsertOnlyFansForBatch(
-  app: AppContext,
-  platformAccountId: number,
+function buildOnlyFansFanInputs(
   fanPlatformIds: string[],
 ) {
   if (fanPlatformIds.length === 0) {
-    return new Map<string, number>();
+    return [];
   }
 
-  const fans = await upsertFans(app.db, Array.from(new Set(fanPlatformIds)).map((platformUserId) => ({
+  return Array.from(new Set(fanPlatformIds)).map((platformUserId) => ({
     platform: "onlyfans" as const,
     platformUserId,
     metadata: {},
-  })));
-
-  for (const fan of fans) {
-    await upsertFanPage(app.db, {
-      fanId: fan.id,
-      platformAccountId,
-    });
-  }
-
-  return new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
+  }));
 }
 
 export async function syncOnlyFansTransactions(
@@ -103,6 +92,9 @@ export async function syncOnlyFansTransactions(
   let processedTransactions = 0;
   let processedChargebacks = 0;
   const sourceTransactionIds = new Set<string>();
+  const transactionsToUpsert: Array<OnlyMonsterTransaction> = [];
+  const chargebacksToUpsert: Array<OnlyMonsterChargeback> = [];
+  const fanPlatformIds = new Set<string>();
 
   let transactionCursor: string | null = null;
   do {
@@ -133,41 +125,11 @@ export async function syncOnlyFansTransactions(
       retainUntil: retentionDate(),
     });
 
-    const fanMap = await upsertOnlyFansForBatch(
-      app,
-      input.platformAccountId,
-      page.parsed.items.map((item) => item.fan.id),
-    );
-
     for (const item of page.parsed.items) {
-      const amountMills = dollarsToMills(item.amount);
-      const netAmountMills = calculateNetMillsFromGross(amountMills, input.commissionRate);
-      const fanId = fanMap.get(item.fan.id) ?? null;
-      const occurredAt = new Date(item.timestamp);
+      fanPlatformIds.add(item.fan.id);
+      transactionsToUpsert.push(item);
       sourceTransactionIds.add(item.id);
-
-      await upsertTransaction(app.db, {
-        platformAccountId: input.platformAccountId,
-        fanId,
-        transactionId: item.id,
-        correlationAccountId: item.fan.id,
-        rawType: item.type,
-        canonicalType: mapOnlyMonsterTransactionType(item.type),
-        transactionState: mapOnlyMonsterTransactionState(item.status),
-        rawStatus: item.status,
-        amountMills,
-        destinationAmountMills: amountMills,
-        netAmountMills,
-        occurredAt,
-      });
-
-      if (fanId) {
-        await upsertFanPage(app.db, {
-          fanId,
-          platformAccountId: input.platformAccountId,
-          lastTransactionAt: occurredAt,
-        });
-      }
+      const occurredAt = new Date(item.timestamp);
 
       if (!newestSeenAt || occurredAt > newestSeenAt) {
         newestSeenAt = occurredAt;
@@ -207,42 +169,11 @@ export async function syncOnlyFansTransactions(
       retainUntil: retentionDate(),
     });
 
-    const fanMap = await upsertOnlyFansForBatch(
-      app,
-      input.platformAccountId,
-      page.parsed.items.map((item) => item.fan.id),
-    );
-
     for (const item of page.parsed.items) {
-      const amountMills = -dollarsToMills(item.amount);
-      const netAmountMills = calculateNetMillsFromGross(amountMills, input.commissionRate);
-      const fanId = fanMap.get(item.fan.id) ?? null;
-      const occurredAt = new Date(item.chargeback_timestamp);
+      fanPlatformIds.add(item.fan.id);
+      chargebacksToUpsert.push(item);
       sourceTransactionIds.add(item.id);
-
-      await upsertTransaction(app.db, {
-        platformAccountId: input.platformAccountId,
-        fanId,
-        transactionId: item.id,
-        correlationAccountId: item.fan.id,
-        rawType: item.type,
-        canonicalType: "chargeback",
-        transactionState: mapOnlyMonsterTransactionState(item.status),
-        rawStatus: item.status,
-        amountMills,
-        destinationAmountMills: amountMills,
-        netAmountMills,
-        occurredAt,
-        sourceUpdatedAt: new Date(item.transaction_timestamp),
-      });
-
-      if (fanId) {
-        await upsertFanPage(app.db, {
-          fanId,
-          platformAccountId: input.platformAccountId,
-          lastTransactionAt: occurredAt,
-        });
-      }
+      const occurredAt = new Date(item.chargeback_timestamp);
 
       if (!newestSeenAt || occurredAt > newestSeenAt) {
         newestSeenAt = occurredAt;
@@ -253,28 +184,90 @@ export async function syncOnlyFansTransactions(
     chargebackCursor = page.parsed.cursor ?? null;
   } while (chargebackCursor);
 
-  await deleteTransactionsMissingFromWindow(app.db, {
-    platformAccountId: input.platformAccountId,
-    from: start,
-    to: end,
-    keepTransactionIds: Array.from(sourceTransactionIds),
-  });
-  await recalculateFanPageSpend(app.db, input.platformAccountId);
-  await rebuildRevenueRollups(app.db, input.platformAccountId);
+  await app.db.transaction(async (tx) => {
+    const fans = await upsertFans(
+      tx as typeof app.db,
+      buildOnlyFansFanInputs(Array.from(fanPlatformIds)),
+    );
+    const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
 
-  if (newestSeenAt) {
-    await upsertCheckpoint(app.db, {
+    for (const fan of fans) {
+      await upsertFanPage(tx as typeof app.db, {
+        fanId: fan.id,
+        platformAccountId: input.platformAccountId,
+      });
+    }
+
+    for (const item of transactionsToUpsert) {
+      const grossAmountMills = dollarsToMills(item.amount);
+      const creatorNetAmountMills = calculateNetMillsFromGross(
+        grossAmountMills,
+        input.commissionRate,
+      );
+
+      await upsertTransaction(tx as typeof app.db, {
+        platformAccountId: input.platformAccountId,
+        fanId: fanMap.get(item.fan.id) ?? null,
+        transactionId: item.id,
+        correlationAccountId: item.fan.id,
+        rawType: item.type,
+        canonicalType: mapOnlyMonsterTransactionType(item.type),
+        transactionState: mapOnlyMonsterTransactionState(item.status),
+        rawStatus: item.status,
+        grossAmountMills,
+        sourceDestinationAmountMills: grossAmountMills,
+        creatorNetAmountMills,
+        occurredAt: new Date(item.timestamp),
+      });
+    }
+
+    for (const item of chargebacksToUpsert) {
+      const grossAmountMills = -dollarsToMills(item.amount);
+      const creatorNetAmountMills = calculateNetMillsFromGross(
+        grossAmountMills,
+        input.commissionRate,
+      );
+
+      await upsertTransaction(tx as typeof app.db, {
+        platformAccountId: input.platformAccountId,
+        fanId: fanMap.get(item.fan.id) ?? null,
+        transactionId: item.id,
+        correlationAccountId: item.fan.id,
+        rawType: item.type,
+        canonicalType: "chargeback",
+        transactionState: mapOnlyMonsterTransactionState(item.status),
+        rawStatus: item.status,
+        grossAmountMills,
+        sourceDestinationAmountMills: grossAmountMills,
+        creatorNetAmountMills,
+        occurredAt: new Date(item.chargeback_timestamp),
+        sourceUpdatedAt: new Date(item.transaction_timestamp),
+      });
+    }
+
+    await deleteTransactionsMissingFromWindow(tx as typeof app.db, {
       platformAccountId: input.platformAccountId,
-      stream: "transactions",
-      cursorTimestamp: newestSeenAt,
-      state: {
-        pageLabel: input.pageLabel,
-        processedTransactions,
-        processedChargebacks,
-      },
-      lastSuccessfulRunId: input.syncRunId,
+      from: start,
+      to: end,
+      keepTransactionIds: Array.from(sourceTransactionIds),
     });
-  }
+    await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId);
+    await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId);
+
+    if (newestSeenAt) {
+      await upsertCheckpoint(tx as typeof app.db, {
+        platformAccountId: input.platformAccountId,
+        stream: "transactions",
+        cursorTimestamp: newestSeenAt,
+        state: {
+          pageLabel: input.pageLabel,
+          processedTransactions,
+          processedChargebacks,
+        },
+        lastSuccessfulRunId: input.syncRunId,
+      });
+    }
+  });
 
   return {
     processed: processedTransactions + processedChargebacks,

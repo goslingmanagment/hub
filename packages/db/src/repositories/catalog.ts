@@ -8,6 +8,7 @@ import {
   platformAccountCredentials,
   platformAccountProxies,
   platformAccounts,
+  spenderProjectionWatermarks,
 } from "../schema.ts";
 
 function defaultCommissionRateForPlatform(platform: Platform) {
@@ -87,15 +88,25 @@ export async function createPlatformPage(
     label: string;
   },
 ) {
-  const [created] = await db
-    .insert(platformAccounts)
-    .values({
-      modelId: input.modelId,
-      platform: input.platform,
-      commissionRate: defaultCommissionRateForPlatform(input.platform),
-      label: input.label,
-    })
-    .returning();
+  const [created] = await db.transaction(async (tx) => {
+    const [page] = await tx
+      .insert(platformAccounts)
+      .values({
+        modelId: input.modelId,
+        platform: input.platform,
+        commissionRate: defaultCommissionRateForPlatform(input.platform),
+        label: input.label,
+      })
+      .returning();
+
+    await tx.insert(spenderProjectionWatermarks).values({
+      platformAccountId: page.id,
+      lastRebuiltAt: new Date(0),
+      updatedAt: new Date(),
+    });
+
+    return [page];
+  });
 
   return created;
 }

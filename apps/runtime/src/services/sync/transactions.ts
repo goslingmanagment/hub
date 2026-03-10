@@ -2,10 +2,11 @@ import {
   getCheckpoint,
   getOldestPendingTransactionAt,
   insertRawPayload,
-  recalculateFanPageSpend,
+  rebuildSpenderProjections,
   rebuildRevenueRollups,
   upsertCheckpoint,
   upsertFanPage,
+  upsertFans,
   upsertTransaction,
 } from "@fansly-connect/db";
 import {
@@ -16,7 +17,7 @@ import {
 import { toMills } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { hydrateFans } from "./fan-hydration.ts";
+import { prepareHydratedFans } from "./fan-hydration.ts";
 import { DAY_MS, retentionDate } from "./shared.ts";
 
 export async function syncTransactions(
@@ -59,6 +60,7 @@ export async function syncTransactions(
   let offset = 0;
   let processed = 0;
   let newestSeenAt: Date | null = checkpoint?.cursorTimestamp ?? null;
+  const collectedItems: Awaited<ReturnType<AppContext["adapter"]["getTransactionsPage"]>>["items"] = [];
 
   while (true) {
     const page = await app.adapter.getTransactionsPage(
@@ -77,51 +79,9 @@ export async function syncTransactions(
       retainUntil: retentionDate(),
     });
 
-    const fanMap = await hydrateFans(app, {
-      requestContext: input.requestContext,
-      platformUserIds: page.items
-        .map((item) => item.correlationAccountId)
-        .filter((value): value is string => Boolean(value)),
-    });
-
     for (const item of page.items) {
-      const fanId = item.correlationAccountId
-        ? (fanMap.get(item.correlationAccountId) ?? null)
-        : null;
       const occurredAt = new Date(item.createdAt);
-      const sourceUpdatedAt = item.updatedAt ? new Date(item.updatedAt) : null;
-
-      await upsertTransaction(app.db, {
-        platformAccountId: input.platformAccountId,
-        fanId,
-        transactionId: item.transactionId,
-        walletId: item.walletId,
-        accountId: item.accountId,
-        correlationId: item.correlationId,
-        correlationAccountId: item.correlationAccountId,
-        rawType: item.type,
-        canonicalType: mapFanslyTransactionType(item.type),
-        transactionState: mapFanslyTransactionState(item.status),
-        destination: item.destination,
-        rawStatus: item.status,
-        amountMills: toMills(item.amount),
-        destinationAmountMills: toMills(item.destinationAmount),
-        netAmountMills: toMills(item.destinationAmount),
-        rawDestinationTax: item.destinationTax,
-        newBalanceMills: item.newBalance64 ? toMills(item.newBalance64) : null,
-        senderId: item.senderId,
-        receiverId: item.receiverId,
-        occurredAt,
-        sourceUpdatedAt,
-      });
-
-      if (fanId) {
-        await upsertFanPage(app.db, {
-          fanId,
-          platformAccountId: input.platformAccountId,
-          lastTransactionAt: occurredAt,
-        });
-      }
+      collectedItems.push(item);
 
       if (!newestSeenAt || occurredAt > newestSeenAt) {
         newestSeenAt = occurredAt;
@@ -135,18 +95,67 @@ export async function syncTransactions(
     offset += 100;
   }
 
-  await recalculateFanPageSpend(app.db, input.platformAccountId);
-  await rebuildRevenueRollups(app.db, input.platformAccountId);
+  const hydratedFans = await prepareHydratedFans(app, {
+    requestContext: input.requestContext,
+    platformUserIds: collectedItems
+      .map((item) => item.correlationAccountId)
+      .filter((value): value is string => Boolean(value)),
+  });
 
-  if (newestSeenAt) {
-    await upsertCheckpoint(app.db, {
-      platformAccountId: input.platformAccountId,
-      stream: "transactions",
-      cursorTimestamp: newestSeenAt,
-      state: { pageLabel: input.pageLabel },
-      lastSuccessfulRunId: input.syncRunId,
-    });
-  }
+  await app.db.transaction(async (tx) => {
+    const fans = await upsertFans(tx as typeof app.db, hydratedFans);
+    const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
+
+    for (const fan of fans) {
+      await upsertFanPage(tx as typeof app.db, {
+        fanId: fan.id,
+        platformAccountId: input.platformAccountId,
+      });
+    }
+
+    for (const item of collectedItems) {
+      const fanId = item.correlationAccountId
+        ? (fanMap.get(item.correlationAccountId) ?? null)
+        : null;
+
+      await upsertTransaction(tx as typeof app.db, {
+        platformAccountId: input.platformAccountId,
+        fanId,
+        transactionId: item.transactionId,
+        walletId: item.walletId,
+        accountId: item.accountId,
+        correlationId: item.correlationId,
+        correlationAccountId: item.correlationAccountId,
+        rawType: item.type,
+        canonicalType: mapFanslyTransactionType(item.type),
+        transactionState: mapFanslyTransactionState(item.status),
+        destination: item.destination,
+        rawStatus: item.status,
+        grossAmountMills: toMills(item.amount),
+        sourceDestinationAmountMills: toMills(item.destinationAmount),
+        creatorNetAmountMills: toMills(item.destinationAmount),
+        rawDestinationTax: item.destinationTax,
+        newBalanceMills: item.newBalance64 ? toMills(item.newBalance64) : null,
+        senderId: item.senderId,
+        receiverId: item.receiverId,
+        occurredAt: new Date(item.createdAt),
+        sourceUpdatedAt: item.updatedAt ? new Date(item.updatedAt) : null,
+      });
+    }
+
+    await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId);
+    await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId);
+
+    if (newestSeenAt) {
+      await upsertCheckpoint(tx as typeof app.db, {
+        platformAccountId: input.platformAccountId,
+        stream: "transactions",
+        cursorTimestamp: newestSeenAt,
+        state: { pageLabel: input.pageLabel },
+        lastSuccessfulRunId: input.syncRunId,
+      });
+    }
+  });
 
   return { processed, newestSeenAt };
 }

@@ -1,8 +1,9 @@
 import { upsertFans } from "@fansly-connect/db";
+import type { UpsertFanInput } from "@fansly-connect/db";
 
 import type { AppContext } from "../../bootstrap.ts";
 
-export async function hydrateFans(
+export async function prepareHydratedFans(
   app: AppContext,
   input: {
     requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
@@ -10,7 +11,7 @@ export async function hydrateFans(
   },
 ) {
   if (input.platformUserIds.length === 0) {
-    return new Map<string, number>();
+    return [] as UpsertFanInput[];
   }
 
   const uniqueIds = Array.from(new Set(input.platformUserIds.filter(Boolean)));
@@ -26,7 +27,7 @@ export async function hydrateFans(
     (id) => !accounts.some((account) => account.id === id),
   );
 
-  const fans = await upsertFans(app.db, [
+  return [
     ...accounts.map((account) => ({
       platform: "fansly" as const,
       platformUserId: account.id,
@@ -40,7 +41,16 @@ export async function hydrateFans(
       platformUserId: id,
       metadata: {},
     })),
-  ]);
+  ] satisfies UpsertFanInput[];
+}
 
+export async function hydrateFans(
+  app: AppContext,
+  input: {
+    requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
+    platformUserIds: string[];
+  },
+) {
+  const fans = await upsertFans(app.db, await prepareHydratedFans(app, input));
   return new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
 }

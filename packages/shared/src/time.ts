@@ -3,6 +3,16 @@ import type { Platform } from "./types.ts";
 export const MOSCOW_TIME_ZONE = "Europe/Moscow";
 export const UTC_TIME_ZONE = "UTC";
 export const PERIOD_OPTIONS = ["today", "7d", "30d", "all", "custom"] as const;
+export const SPENDER_PERIOD_OPTIONS = [
+  "today",
+  "7d",
+  "30d",
+  "90d",
+  "mtd",
+  "custom",
+  "lifetime",
+] as const;
+export const SPENDER_SERIES_GRANULARITIES = ["day", "week", "month", "auto"] as const;
 const BUSINESS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 interface DateParts {
@@ -15,6 +25,8 @@ interface DateParts {
 }
 
 export type Period = (typeof PERIOD_OPTIONS)[number];
+export type SpenderPeriod = (typeof SPENDER_PERIOD_OPTIONS)[number];
+export type SpenderSeriesGranularity = (typeof SPENDER_SERIES_GRANULARITIES)[number];
 
 export interface PeriodBounds {
   from: Date | null;
@@ -31,9 +43,19 @@ interface TrailingPeriodOffsets {
   "30d": number;
 }
 
+interface SpenderTrailingPeriodOffsets extends TrailingPeriodOffsets {
+  "90d": number;
+}
+
 const DEFAULT_TRAILING_PERIOD_OFFSETS: TrailingPeriodOffsets = {
   "7d": 6,
   "30d": 29,
+};
+
+const DEFAULT_SPENDER_TRAILING_PERIOD_OFFSETS: SpenderTrailingPeriodOffsets = {
+  "7d": 6,
+  "30d": 29,
+  "90d": 89,
 };
 
 const ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS: TrailingPeriodOffsets = {
@@ -52,6 +74,20 @@ export function parsePeriod(value: string): Period {
 
   throw new Error(
     `Unsupported period "${value}". Valid options: ${PERIOD_OPTIONS.join(", ")}.`,
+  );
+}
+
+export function isSpenderPeriod(value: string): value is SpenderPeriod {
+  return (SPENDER_PERIOD_OPTIONS as readonly string[]).includes(value);
+}
+
+export function parseSpenderPeriod(value: string): SpenderPeriod {
+  if (isSpenderPeriod(value)) {
+    return value;
+  }
+
+  throw new Error(
+    `Unsupported period "${value}". Valid options: ${SPENDER_PERIOD_OPTIONS.join(", ")}.`,
   );
 }
 
@@ -161,8 +197,31 @@ export function parseBusinessDate(value: string) {
   return { year, month, day };
 }
 
+function formatBusinessDate(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function shiftBusinessDate(value: string, days: number) {
+  const { year, month, day } = parseBusinessDate(value);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return formatBusinessDate(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth() + 1,
+    shifted.getUTCDate(),
+  );
+}
+
+function daysInMonth(year: number, month: number) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
 export function resolveBusinessTimeZone(platform: Platform): string {
   return platform === "onlyfans" ? UTC_TIME_ZONE : MOSCOW_TIME_ZONE;
+}
+
+export function businessDateToUtcStart(value: string, timeZone = MOSCOW_TIME_ZONE) {
+  const { year, month, day } = parseBusinessDate(value);
+  return zonedDateTimeToUtc({ year, month, day }, timeZone);
 }
 
 function resolveCustomPeriodBounds(
@@ -312,4 +371,154 @@ export function resolveBusinessDateRange(
     from: bounds.from ? toBusinessDate(bounds.from, timeZone) : null,
     toExclusive: bounds.to ? toBusinessDate(bounds.to, timeZone) : null,
   };
+}
+
+function resolveSpenderPeriodBounds(
+  period: SpenderPeriod,
+  now: Date,
+  custom: { from: string; to: string } | undefined,
+  timeZone: string,
+): PeriodBounds {
+  const todayStart = startOfBusinessDay(now, timeZone);
+
+  if (period === "lifetime") {
+    return { from: null, to: null };
+  }
+
+  if (period === "today") {
+    return { from: todayStart, to: addUtcDays(todayStart, 1) };
+  }
+
+  if (period === "7d" || period === "30d" || period === "90d") {
+    return {
+      from: addUtcDays(todayStart, -DEFAULT_SPENDER_TRAILING_PERIOD_OFFSETS[period]),
+      to: addUtcDays(todayStart, 1),
+    };
+  }
+
+  if (period === "mtd") {
+    const parts = getDateParts(now, timeZone);
+    const from = zonedDateTimeToUtc(
+      { year: parts.year, month: parts.month, day: 1 },
+      timeZone,
+    );
+    return {
+      from,
+      to: addUtcDays(todayStart, 1),
+    };
+  }
+
+  if (!custom) {
+    throw new Error("Custom period requires from/to dates");
+  }
+
+  return resolveCustomPeriodBounds(custom, timeZone);
+}
+
+export function resolveSpenderPeriodBoundsForPlatform(
+  platform: Platform,
+  period: SpenderPeriod,
+  now = new Date(),
+  custom?: { from: string; to: string },
+): PeriodBounds {
+  return resolveSpenderPeriodBounds(
+    period,
+    now,
+    custom,
+    resolveBusinessTimeZone(platform),
+  );
+}
+
+export function resolveSpenderComparisonPeriodBoundsForPlatform(
+  platform: Platform,
+  period: SpenderPeriod,
+  now = new Date(),
+  custom?: { from: string; to: string },
+): PeriodBounds | null {
+  const timeZone = resolveBusinessTimeZone(platform);
+  const current = resolveSpenderPeriodBounds(period, now, custom, timeZone);
+
+  if (period === "lifetime" || !current.from || !current.to) {
+    return null;
+  }
+
+  if (period === "mtd") {
+    const todayBusinessDate = toBusinessDate(now, timeZone);
+    const { year, month, day } = parseBusinessDate(todayBusinessDate);
+    const previousMonth = month === 1
+      ? { year: year - 1, month: 12 }
+      : { year, month: month - 1 };
+    const previousMonthLastDay = daysInMonth(previousMonth.year, previousMonth.month);
+    const previousToDay = Math.min(day, previousMonthLastDay);
+    const from = zonedDateTimeToUtc(
+      { year: previousMonth.year, month: previousMonth.month, day: 1 },
+      timeZone,
+    );
+    const to = addUtcDays(
+      zonedDateTimeToUtc(
+        { year: previousMonth.year, month: previousMonth.month, day: previousToDay },
+        timeZone,
+      ),
+      1,
+    );
+
+    return { from, to };
+  }
+
+  const durationMs = current.to.getTime() - current.from.getTime();
+  return {
+    from: new Date(current.from.getTime() - durationMs),
+    to: new Date(current.from.getTime()),
+  };
+}
+
+export function resolveSpenderBusinessDateRangeForPlatform(
+  platform: Platform,
+  period: SpenderPeriod,
+  now = new Date(),
+  custom?: { from: string; to: string },
+) {
+  const timeZone = resolveBusinessTimeZone(platform);
+  const bounds = resolveSpenderPeriodBounds(period, now, custom, timeZone);
+
+  return {
+    timeZone,
+    fromBusinessDate: bounds.from ? toBusinessDate(bounds.from, timeZone) : null,
+    toBusinessDateInclusive: bounds.to
+      ? shiftBusinessDate(toBusinessDate(bounds.to, timeZone), -1)
+      : null,
+    bounds,
+  };
+}
+
+export function diffBusinessDays(fromBusinessDate: string, toBusinessDateInclusive: string) {
+  const { year: fromYear, month: fromMonth, day: fromDay } = parseBusinessDate(fromBusinessDate);
+  const { year: toYear, month: toMonth, day: toDay } = parseBusinessDate(toBusinessDateInclusive);
+  const fromDate = Date.UTC(fromYear, fromMonth - 1, fromDay);
+  const toDate = Date.UTC(toYear, toMonth - 1, toDay);
+  return Math.floor((toDate - fromDate) / (24 * 60 * 60 * 1000)) + 1;
+}
+
+export function resolveAutoSpenderSeriesGranularity(
+  fromBusinessDate: string,
+  toBusinessDateInclusive: string,
+): Exclude<SpenderSeriesGranularity, "auto"> {
+  const dayCount = diffBusinessDays(fromBusinessDate, toBusinessDateInclusive);
+
+  if (dayCount <= 90) {
+    return "day";
+  }
+  if (dayCount <= 365) {
+    return "week";
+  }
+
+  return "month";
+}
+
+export function nextBusinessDate(value: string) {
+  return shiftBusinessDate(value, 1);
+}
+
+export function previousBusinessDate(value: string) {
+  return shiftBusinessDate(value, -1);
 }

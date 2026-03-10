@@ -78,22 +78,18 @@ async function seedPhase2Fixture(testDb: NonNullable<Awaited<ReturnType<typeof s
   await upsertFanPage(testDb.db, {
     fanId: fan.id,
     platformAccountId: lanaPage.id,
-    totalCreatorNetMills: 7000n,
     isFollower: true,
     followerSince: new Date("2026-03-02T12:00:00.000Z"),
     isSubscriber: true,
     subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
     subscriptionExpiresAt: new Date("2026-03-20T12:00:00.000Z"),
     autoRenew: true,
-    lastTransactionAt: new Date("2026-03-06T12:00:00.000Z"),
   });
   await upsertFanPage(testDb.db, {
     fanId: fan.id,
     platformAccountId: lilyPage.id,
-    totalCreatorNetMills: 3000n,
     isFollower: false,
     isSubscriber: false,
-    lastTransactionAt: new Date("2026-03-06T13:00:00.000Z"),
   });
 
   await upsertPageFollow(testDb.db, {
@@ -123,9 +119,9 @@ async function seedPhase2Fixture(testDb: NonNullable<Awaited<ReturnType<typeof s
     canonicalType: "subscription",
     transactionState: "posted",
     rawStatus: 2,
-    amountMills: 5000n,
-    destinationAmountMills: 5000n,
-    netAmountMills: 5000n,
+    grossAmountMills: 5000n,
+    sourceDestinationAmountMills: 5000n,
+    creatorNetAmountMills: 5000n,
     occurredAt: new Date("2026-03-05T12:00:00.000Z"),
   });
   await upsertTransaction(testDb.db, {
@@ -136,9 +132,9 @@ async function seedPhase2Fixture(testDb: NonNullable<Awaited<ReturnType<typeof s
     canonicalType: "tip",
     transactionState: "pending",
     rawStatus: 1,
-    amountMills: 2000n,
-    destinationAmountMills: 2000n,
-    netAmountMills: 2000n,
+    grossAmountMills: 2000n,
+    sourceDestinationAmountMills: 2000n,
+    creatorNetAmountMills: 2000n,
     occurredAt: new Date("2026-03-06T12:00:00.000Z"),
   });
   await upsertTransaction(testDb.db, {
@@ -149,15 +145,31 @@ async function seedPhase2Fixture(testDb: NonNullable<Awaited<ReturnType<typeof s
     canonicalType: "payout_reversal",
     transactionState: "posted",
     rawStatus: 2,
-    amountMills: 900n,
-    destinationAmountMills: 900n,
-    netAmountMills: 900n,
+    grossAmountMills: 900n,
+    sourceDestinationAmountMills: 900n,
+    creatorNetAmountMills: 900n,
     occurredAt: new Date("2026-03-07T12:00:00.000Z"),
+  });
+  await upsertTransaction(testDb.db, {
+    platformAccountId: lilyPage.id,
+    fanId: fan.id,
+    transactionId: "tx-lily-tip",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 3000n,
+    sourceDestinationAmountMills: 3000n,
+    creatorNetAmountMills: 3000n,
+    occurredAt: new Date("2026-03-06T13:00:00.000Z"),
   });
 
   await rebuildRevenueRollups(testDb.db, lanaPage.id);
+  await rebuildRevenueRollups(testDb.db, lilyPage.id);
   await rebuildFollowerRollups(testDb.db, lanaPage.id, 1);
   await rebuildSubscriberRollups(testDb.db, lanaPage.id);
+  await recalculateFanPageSpend(testDb.db, lanaPage.id);
+  await recalculateFanPageSpend(testDb.db, lilyPage.id);
 
   return {
     lanaModel,
@@ -206,7 +218,9 @@ describe("api integration", () => {
 
     await testDb.pool.query(`
       truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
-               auth_sessions, user_page_assignments, users, daily_revenue,
+               auth_sessions, user_page_assignments, users, fan_username_aliases,
+               spender_projection_watermarks, spender_lifetime_page, spender_daily_facts,
+               daily_revenue,
                daily_followers, daily_subscribers, transactions, page_subscriptions,
                page_follows, fan_pages, fans, raw_payloads, sync_checkpoints,
                sync_runs, platform_account_proxies, platform_account_credentials,
@@ -561,9 +575,9 @@ describe("api integration", () => {
       canonicalType: "chargeback",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: -1000n,
-      destinationAmountMills: -1000n,
-      netAmountMills: -1000n,
+      grossAmountMills: -1000n,
+      sourceDestinationAmountMills: -1000n,
+      creatorNetAmountMills: -1000n,
       occurredAt: new Date("2026-03-08T12:00:00.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -574,9 +588,9 @@ describe("api integration", () => {
       canonicalType: "other",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: 300n,
-      destinationAmountMills: 300n,
-      netAmountMills: 300n,
+      grossAmountMills: 300n,
+      sourceDestinationAmountMills: 300n,
+      creatorNetAmountMills: 300n,
       occurredAt: new Date("2026-03-09T12:00:00.000Z"),
     });
     await rebuildRevenueRollups(testDb.db, fixture.lanaPage.id);
@@ -665,9 +679,9 @@ describe("api integration", () => {
       canonicalType: "tip",
       transactionState: "posted",
       rawStatus: "loading",
-      amountMills: 12000n,
-      destinationAmountMills: 12000n,
-      netAmountMills: 12000n,
+      grossAmountMills: 12000n,
+      sourceDestinationAmountMills: 12000n,
+      creatorNetAmountMills: 12000n,
       occurredAt: new Date("2026-03-05T15:00:00.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -677,9 +691,9 @@ describe("api integration", () => {
       canonicalType: "chargeback",
       transactionState: "posted",
       rawStatus: "undo",
-      amountMills: -2000n,
-      destinationAmountMills: -2000n,
-      netAmountMills: -2000n,
+      grossAmountMills: -2000n,
+      sourceDestinationAmountMills: -2000n,
+      creatorNetAmountMills: -2000n,
       occurredAt: new Date("2026-03-06T15:00:00.000Z"),
     });
     await rebuildRevenueRollups(testDb.db, onlyFansPage.id);
@@ -768,9 +782,9 @@ describe("api integration", () => {
       canonicalType: "tip",
       transactionState: "posted",
       rawStatus: "done",
-      amountMills: 500n,
-      destinationAmountMills: 500n,
-      netAmountMills: 500n,
+      grossAmountMills: 500n,
+      sourceDestinationAmountMills: 500n,
+      creatorNetAmountMills: 500n,
       occurredAt: new Date("2026-02-06T23:59:59.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -780,9 +794,9 @@ describe("api integration", () => {
       canonicalType: "tip",
       transactionState: "posted",
       rawStatus: "done",
-      amountMills: 1000n,
-      destinationAmountMills: 1000n,
-      netAmountMills: 1000n,
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
       occurredAt: new Date("2026-02-07T00:10:15.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -792,9 +806,9 @@ describe("api integration", () => {
       canonicalType: "tip",
       transactionState: "posted",
       rawStatus: "done",
-      amountMills: 2000n,
-      destinationAmountMills: 2000n,
-      netAmountMills: 2000n,
+      grossAmountMills: 2000n,
+      sourceDestinationAmountMills: 2000n,
+      creatorNetAmountMills: 2000n,
       occurredAt: new Date("2026-02-07T20:59:59.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -804,9 +818,9 @@ describe("api integration", () => {
       canonicalType: "tip",
       transactionState: "posted",
       rawStatus: "done",
-      amountMills: 3000n,
-      destinationAmountMills: 3000n,
-      netAmountMills: 3000n,
+      grossAmountMills: 3000n,
+      sourceDestinationAmountMills: 3000n,
+      creatorNetAmountMills: 3000n,
       occurredAt: new Date("2026-02-07T21:00:00.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -816,9 +830,9 @@ describe("api integration", () => {
       canonicalType: "tip",
       transactionState: "posted",
       rawStatus: "done",
-      amountMills: 4000n,
-      destinationAmountMills: 4000n,
-      netAmountMills: 4000n,
+      grossAmountMills: 4000n,
+      sourceDestinationAmountMills: 4000n,
+      creatorNetAmountMills: 4000n,
       occurredAt: new Date("2026-03-10T00:00:00.000Z"),
     });
 
@@ -830,7 +844,7 @@ describe("api integration", () => {
     });
     const rollupRows = await testDb.pool.query(`
       select business_date::text as business_date,
-             net_amount_mills
+             creator_net_amount_mills as net_amount_mills
       from daily_revenue
       where platform_account_id = ${onlyFansPage.id}
       order by business_date asc
@@ -897,10 +911,8 @@ describe("api integration", () => {
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
       platformAccountId: createdAtPage.id,
-      totalCreatorNetMills: 0n,
       isFollower: false,
       isSubscriber: false,
-      lastTransactionAt: null,
     });
 
     await upsertTransaction(testDb.db, {
@@ -911,9 +923,9 @@ describe("api integration", () => {
       canonicalType: "tip",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: 2000n,
-      destinationAmountMills: 2000n,
-      netAmountMills: 2000n,
+      grossAmountMills: 2000n,
+      sourceDestinationAmountMills: 2000n,
+      creatorNetAmountMills: 2000n,
       occurredAt: new Date("2026-03-05T12:00:00.000Z"),
     });
     await upsertTransaction(testDb.db, {
@@ -924,9 +936,9 @@ describe("api integration", () => {
       canonicalType: "tip",
       transactionState: "posted",
       rawStatus: 2,
-      amountMills: 1000n,
-      destinationAmountMills: 1000n,
-      netAmountMills: 1000n,
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
       occurredAt: new Date("2026-01-15T12:00:00.000Z"),
     });
 
@@ -1104,7 +1116,7 @@ describe("api integration", () => {
     });
     expect(leadFan.statusCode).toBe(200);
     expect(leadFan.json()).toMatchObject({
-      platformTotalSpendMills: 10000,
+      platformTotalSpendMills: 7000,
     });
     expect(leadFan.json().pages).toHaveLength(1);
     expect(leadFan.json().pages[0]?.pageLabel).toBe("lana");
@@ -1136,6 +1148,397 @@ describe("api integration", () => {
     });
     expect(ownerFan.statusCode).toBe(200);
     expect(ownerFan.json().pages).toHaveLength(2);
+  });
+
+  it("lists v2 spenders with scoped diagnostics and no hidden-page leakage", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture!.lanaPage.id,
+      fanId: null,
+      transactionId: "tx-unattributed-v2",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 500n,
+      sourceDestinationAmountMills: 500n,
+      creatorNetAmountMills: 500n,
+      occurredAt: new Date("2026-03-06T18:00:00.000Z"),
+    });
+    await rebuildRevenueRollups(testDb.db, fixture!.lanaPage.id);
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "lead",
+        password: "lead-secret",
+      },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=agency&platform=fansly&period=30d&limit=10&offset=0",
+      headers: {
+        cookie: leadCookie,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      scope: {
+        kind: "agency",
+        platform: "fansly",
+        pageCount: 1,
+      },
+      diagnostics: {
+        totalGrossAmountMills: 7500,
+        totalCreatorNetAmountMills: 7500,
+        attributedGrossAmountMills: 7000,
+        attributedCreatorNetAmountMills: 7000,
+        unattributedGrossAmountMills: 500,
+        unattributedCreatorNetAmountMills: 500,
+      },
+      items: [
+        {
+          fan: {
+            platform: "fansly",
+            platformUserId: "fan-001",
+            username: "buyer",
+            displayName: "Buyer One",
+          },
+          metrics: {
+            window: {
+              grossAmountMills: 7000,
+              creatorNetAmountMills: 7000,
+              postedGrossAmountMills: 5000,
+              pendingGrossAmountMills: 2000,
+              unknownGrossAmountMills: 0,
+              postedCreatorNetAmountMills: 5000,
+              pendingCreatorNetAmountMills: 2000,
+              unknownCreatorNetAmountMills: 0,
+              transactionCount: 2,
+            },
+            lifetime: {
+              scopeGrossAmountMills: 7000,
+              scopeCreatorNetAmountMills: 7000,
+              platformGrossAmountMills: 7000,
+              platformCreatorNetAmountMills: 7000,
+            },
+          },
+        },
+      ],
+      total: 1,
+    });
+    expect(response.json().period.timeZone).toBe("Europe/Moscow");
+    expect(response.json().period.asOf).toBeTruthy();
+    expect(response.json().items[0].fan.fanId).toBeUndefined();
+  });
+
+  it("serves v2 spender detail with visible-platform totals and scoped page breakdowns", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "lead",
+        password: "lead-secret",
+      },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+    const leadResponse = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders/fansly/fan-001?scope=page&pageLabel=lana&period=30d",
+      headers: {
+        cookie: leadCookie,
+      },
+    });
+
+    expect(leadResponse.statusCode).toBe(200);
+    expect(leadResponse.json()).toMatchObject({
+      scope: {
+        kind: "page",
+        platform: "fansly",
+      },
+      metrics: {
+        lifetime: {
+          scopeGrossAmountMills: 7000,
+          scopeCreatorNetAmountMills: 7000,
+          platformGrossAmountMills: 7000,
+          platformCreatorNetAmountMills: 7000,
+        },
+      },
+    });
+    expect(leadResponse.json().pages).toHaveLength(1);
+    expect(leadResponse.json().pages[0]).toMatchObject({
+      pageLabel: "lana",
+      inScope: true,
+      creatorNetAmountMills: 7000,
+    });
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+    const ownerResponse = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders/fansly/fan-001?scope=page&pageLabel=lana&period=30d",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+
+    expect(ownerResponse.statusCode).toBe(200);
+    expect(ownerResponse.json().metrics.lifetime).toMatchObject({
+      scopeGrossAmountMills: 7000,
+      scopeCreatorNetAmountMills: 7000,
+      platformGrossAmountMills: 10000,
+      platformCreatorNetAmountMills: 10000,
+    });
+    expect(ownerResponse.json().pages).toHaveLength(2);
+    expect(ownerResponse.json().pages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        pageLabel: "lana",
+        inScope: true,
+        creatorNetAmountMills: 7000,
+      }),
+      expect.objectContaining({
+        pageLabel: "lily1",
+        inScope: false,
+        creatorNetAmountMills: 3000,
+      }),
+    ]));
+    expect(ownerResponse.json().fan.fanId).toBeUndefined();
+  });
+
+  it("returns zero-filled v2 spender day series buckets", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders/fansly/fan-001/series?scope=page&pageLabel=lana&period=custom&from=2026-03-04&to=2026-03-07&granularity=day",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      granularity: "day",
+      period: {
+        timeZone: "Europe/Moscow",
+        fromBusinessDate: "2026-03-04",
+        toBusinessDateInclusive: "2026-03-07",
+      },
+    });
+    expect(response.json().items).toEqual([
+      {
+        fromBusinessDate: "2026-03-04",
+        toBusinessDateInclusive: "2026-03-04",
+        metrics: {
+          grossAmountMills: 0,
+          creatorNetAmountMills: 0,
+          postedGrossAmountMills: 0,
+          pendingGrossAmountMills: 0,
+          unknownGrossAmountMills: 0,
+          postedCreatorNetAmountMills: 0,
+          pendingCreatorNetAmountMills: 0,
+          unknownCreatorNetAmountMills: 0,
+          transactionCount: 0,
+          lastTransactionAt: null,
+        },
+      },
+      {
+        fromBusinessDate: "2026-03-05",
+        toBusinessDateInclusive: "2026-03-05",
+        metrics: {
+          grossAmountMills: 5000,
+          creatorNetAmountMills: 5000,
+          postedGrossAmountMills: 5000,
+          pendingGrossAmountMills: 0,
+          unknownGrossAmountMills: 0,
+          postedCreatorNetAmountMills: 5000,
+          pendingCreatorNetAmountMills: 0,
+          unknownCreatorNetAmountMills: 0,
+          transactionCount: 1,
+          lastTransactionAt: "2026-03-05T12:00:00.000Z",
+        },
+      },
+      {
+        fromBusinessDate: "2026-03-06",
+        toBusinessDateInclusive: "2026-03-06",
+        metrics: {
+          grossAmountMills: 2000,
+          creatorNetAmountMills: 2000,
+          postedGrossAmountMills: 0,
+          pendingGrossAmountMills: 2000,
+          unknownGrossAmountMills: 0,
+          postedCreatorNetAmountMills: 0,
+          pendingCreatorNetAmountMills: 2000,
+          unknownCreatorNetAmountMills: 0,
+          transactionCount: 1,
+          lastTransactionAt: "2026-03-06T12:00:00.000Z",
+        },
+      },
+      {
+        fromBusinessDate: "2026-03-07",
+        toBusinessDateInclusive: "2026-03-07",
+        metrics: {
+          grossAmountMills: 0,
+          creatorNetAmountMills: 0,
+          postedGrossAmountMills: 0,
+          pendingGrossAmountMills: 0,
+          unknownGrossAmountMills: 0,
+          postedCreatorNetAmountMills: 0,
+          pendingCreatorNetAmountMills: 0,
+          unknownCreatorNetAmountMills: 0,
+          transactionCount: 0,
+          lastTransactionAt: null,
+        },
+      },
+    ]);
+  });
+
+  it("supports alias-aware v2 fan search and page-scoped bearer batch lookups", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-001",
+      username: "spender-renamed",
+      displayName: "Renamed Fan",
+    }]);
+
+    const appContext = createTestAppContext(testDb);
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const search = await server.inject({
+      method: "GET",
+      url: "/api/v2/fans/search?scope=page&pageLabel=lana&query=buyer&limit=10&offset=0",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+
+    expect(search.statusCode).toBe(200);
+    expect(search.json()).toMatchObject({
+      scope: {
+        kind: "page",
+        platform: "fansly",
+      },
+      items: [
+        {
+          fan: {
+            platform: "fansly",
+            platformUserId: "fan-001",
+            username: "spender-renamed",
+            displayName: "Renamed Fan",
+          },
+          matchKind: "alias",
+          matchedValue: "buyer",
+        },
+      ],
+    });
+    expect(search.json().items[0].fan.fanId).toBeUndefined();
+    expect(search.json().items[0].metrics).toBeUndefined();
+
+    const batch = await server.inject({
+      method: "POST",
+      url: "/api/v2/spenders:batch",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+      payload: {
+        scope: "page",
+        pageLabel: "lana",
+        period: "30d",
+        fans: [
+          { platform: "fansly", platformUserId: "fan-001" },
+          { platform: "fansly", platformUserId: "fan-missing" },
+        ],
+      },
+    });
+
+    expect(batch.statusCode).toBe(200);
+    expect(batch.json().items).toEqual([
+      expect.objectContaining({
+        requestedFan: {
+          platform: "fansly",
+          platformUserId: "fan-001",
+        },
+        found: true,
+        metrics: expect.objectContaining({
+          window: expect.objectContaining({
+            creatorNetAmountMills: 7000,
+          }),
+          lifetime: {
+            scopeGrossAmountMills: 7000,
+            scopeCreatorNetAmountMills: 7000,
+            platformGrossAmountMills: 7000,
+            platformCreatorNetAmountMills: 7000,
+          },
+        }),
+      }),
+      {
+        requestedFan: {
+          platform: "fansly",
+          platformUserId: "fan-missing",
+        },
+        found: false,
+        fan: null,
+        metrics: null,
+      },
+    ]);
+
+    const forbidden = await server.inject({
+      method: "POST",
+      url: "/api/v2/spenders:batch",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+      payload: {
+        scope: "agency",
+        platform: "fansly",
+        period: "30d",
+        fans: [
+          { platform: "fansly", platformUserId: "fan-001" },
+        ],
+      },
+    });
+
+    expect(forbidden.statusCode).toBe(403);
   });
 
   it("serves follower and subscriber daily series plus swagger security schemes", async (context) => {

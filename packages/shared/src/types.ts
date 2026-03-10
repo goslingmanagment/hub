@@ -26,45 +26,45 @@ export type TransactionReportingBucket = (typeof transactionReportingBuckets)[nu
 
 export interface TransactionClassificationMetadata {
   bucket: TransactionReportingBucket;
-  affectsFanLtv: boolean;
+  affectsSpenderAnalytics: boolean;
 }
 
 export const transactionClassificationByType = {
   subscription: {
     bucket: "revenue",
-    affectsFanLtv: true,
+    affectsSpenderAnalytics: true,
   },
   tip: {
     bucket: "revenue",
-    affectsFanLtv: true,
+    affectsSpenderAnalytics: true,
   },
   message_purchase: {
     bucket: "revenue",
-    affectsFanLtv: true,
+    affectsSpenderAnalytics: true,
   },
   post_purchase: {
     bucket: "revenue",
-    affectsFanLtv: true,
+    affectsSpenderAnalytics: true,
   },
   stream_tip: {
     bucket: "revenue",
-    affectsFanLtv: true,
+    affectsSpenderAnalytics: true,
   },
   chargeback: {
     bucket: "adjustment",
-    affectsFanLtv: true,
+    affectsSpenderAnalytics: true,
   },
   refund: {
     bucket: "adjustment",
-    affectsFanLtv: true,
+    affectsSpenderAnalytics: true,
   },
   other: {
     bucket: "unclassified",
-    affectsFanLtv: true,
+    affectsSpenderAnalytics: true,
   },
   payout_reversal: {
     bucket: "excluded",
-    affectsFanLtv: false,
+    affectsSpenderAnalytics: false,
   },
 } as const satisfies Record<TransactionType, TransactionClassificationMetadata>;
 
@@ -84,8 +84,8 @@ export const reportableTransactionTypes = filterTransactionTypes(
   (transactionType) => getTransactionClassification(transactionType).bucket !== "excluded",
 );
 
-export const fanLtvTransactionTypes = filterTransactionTypes(
-  (transactionType) => getTransactionClassification(transactionType).affectsFanLtv,
+export const spenderAnalyticsTransactionTypes = filterTransactionTypes(
+  (transactionType) => getTransactionClassification(transactionType).affectsSpenderAnalytics,
 );
 
 export const transactionTypesByReportingBucket = Object.fromEntries(

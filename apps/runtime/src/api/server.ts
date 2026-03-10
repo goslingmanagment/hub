@@ -45,6 +45,13 @@ import {
   listModelSummaries,
   listPageSummaries,
 } from "../services/reporting.ts";
+import {
+  getSpenderBatch,
+  getSpenderDetail,
+  getSpenderList,
+  getSpenderSeries,
+  searchVisibleFans,
+} from "../services/spenders.ts";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -382,6 +389,7 @@ export async function buildApiServer(appContext: AppContext) {
       appContext,
       request.params.pageLabel,
       request.params.platformUserId,
+      pageScopeFor(principal),
     );
   });
 
@@ -395,6 +403,43 @@ export async function buildApiServer(appContext: AppContext) {
       platformUserId: request.params.platformUserId,
       pageIds: pageScopeFor(principal),
     });
+  });
+
+  server.get("/api/v2/spenders", {
+    schema: routeSchemas.spenders,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return getSpenderList(appContext, principal, request.query);
+  });
+
+  server.get("/api/v2/spenders/:platform/:platformUserId", {
+    schema: routeSchemas.spenderDetail,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getSpenderDetail(appContext, principal, request.params, request.query);
+  });
+
+  server.get("/api/v2/spenders/:platform/:platformUserId/series", {
+    schema: routeSchemas.spenderSeries,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return getSpenderSeries(appContext, principal, request.params, request.query);
+  });
+
+  server.post("/api/v2/spenders:batch", {
+    schema: routeSchemas.spenderBatch,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getSpenderBatch(appContext, principal, request.body);
+  });
+
+  server.get("/api/v2/fans/search", {
+    schema: routeSchemas.fansSearch,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return searchVisibleFans(appContext, principal, request.query);
   });
 
   return server;
