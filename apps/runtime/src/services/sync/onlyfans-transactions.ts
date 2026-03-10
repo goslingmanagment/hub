@@ -2,7 +2,6 @@ import {
   deleteTransactionsMissingFromWindow,
   getCheckpoint,
   getOldestPendingTransactionAt,
-  insertRawPayload,
   rebuildSpenderProjections,
   rebuildRevenueRollups,
   upsertCheckpoint,
@@ -26,7 +25,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
-import { DAY_MS, retentionDate } from "./shared.ts";
+import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
 
 function buildOnlyFansFanInputs(
   fanPlatformIds: string[],
@@ -117,7 +116,7 @@ export async function syncOnlyFansTransactions(
     );
     transactionPages += 1;
 
-    await insertRawPayload(app.db, {
+    await persistRawPayload(app.db, {
       platformAccountId: input.platformAccountId,
       syncRunId: input.syncRunId,
       endpoint: "onlymonster_transactions",
@@ -131,6 +130,8 @@ export async function syncOnlyFansTransactions(
       mapperVersion: ONLYMONSTER_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
+    }, {
+      action: "inserting onlymonster_transactions raw payload",
     });
 
     for (const item of page.parsed.items) {
@@ -176,7 +177,7 @@ export async function syncOnlyFansTransactions(
     );
     chargebackPages += 1;
 
-    await insertRawPayload(app.db, {
+    await persistRawPayload(app.db, {
       platformAccountId: input.platformAccountId,
       syncRunId: input.syncRunId,
       endpoint: "onlymonster_chargebacks",
@@ -190,6 +191,8 @@ export async function syncOnlyFansTransactions(
       mapperVersion: ONLYMONSTER_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
+    }, {
+      action: "inserting onlymonster_chargebacks raw payload",
     });
 
     for (const item of page.parsed.items) {

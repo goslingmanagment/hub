@@ -15,6 +15,11 @@ import type {
 } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import {
+  normalizeErrorSummary,
+  type NormalizedSyncError,
+  type PersistedSyncError,
+} from "./errors.ts";
 
 type SyncStream = "light" | "followers" | "transactions" | "subscribers" | "cleanup";
 type SyncProvider = "fansly" | "onlyfans";
@@ -422,11 +427,17 @@ export class SyncRunTelemetry {
 
   async finish(
     status: "success" | "partial" | "failed" | "skipped",
-    errorSummary?: string | null,
+    failure?: string | NormalizedSyncError | null,
     extraStats?: Record<string, unknown>,
   ) {
     this.applyAutomaticAnomalies(status);
     const finishedAt = new Date();
+    const normalizedFailure = typeof failure === "string" || !failure
+      ? null
+      : failure;
+    const errorSummary = typeof failure === "string"
+      ? normalizeErrorSummary(failure)
+      : (failure?.summary ?? null);
     const requestSummary = this.requestSummaryCollector.buildSummaryRecord(
       this.metadata,
       status,
@@ -434,7 +445,7 @@ export class SyncRunTelemetry {
       finishedAt,
     );
     await this.emitRequestSummary(requestSummary);
-    const stats = this.buildStats(status, errorSummary ?? null, extraStats, requestSummary);
+    const stats = this.buildStats(status, normalizedFailure?.error ?? null, extraStats, requestSummary);
     await this.safeTelemetryOp(
       "run_finished_event",
       () => insertSyncRunEvent(this.app.db, {
@@ -445,11 +456,12 @@ export class SyncRunTelemetry {
         eventType: "run_finished",
         severity: status === "failed" ? "error" : status === "partial" ? "warn" : "info",
         message: `Sync run finished with status ${status}`,
-        details: {
+        details: compactRecord({
           status,
           health: stats.health,
-          errorSummary: errorSummary ?? null,
-        },
+          errorSummary: normalizedFailure ? undefined : errorSummary ?? undefined,
+          error: normalizedFailure?.error ?? undefined,
+        }),
         emittedAt: finishedAt,
       }),
     );
@@ -462,7 +474,7 @@ export class SyncRunTelemetry {
 
   buildStats(
     status: "success" | "partial" | "failed" | "skipped",
-    errorSummary?: string | null,
+    error?: PersistedSyncError | null,
     extraStats?: Record<string, unknown>,
     requestSummary?: RequestSummaryRecord,
   ) {
@@ -503,8 +515,8 @@ export class SyncRunTelemetry {
       scan: this.scan,
       hydration: this.hydration,
       phases: this.phaseNames,
-      errorSummary: errorSummary ?? null,
       ...extraStats,
+      ...(error ? { error } : {}),
     } satisfies Record<string, unknown>;
   }
 

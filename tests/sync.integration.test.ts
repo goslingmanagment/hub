@@ -14,6 +14,7 @@ import {
   pageFollows,
   pageSubscriptions,
   platformAccounts,
+  rawPayloads,
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
@@ -72,6 +73,10 @@ class FakeFanslyAdapter {
         onEntered: () => void;
         release: Promise<void>;
       };
+      buildFollowersRawPage?: (input: {
+        followers: FanslyFollower[];
+        accounts: FanslyAccount[];
+      }) => Record<string, unknown>;
     },
   ) {}
 
@@ -186,18 +191,21 @@ class FakeFanslyAdapter {
       displayName: `Fan ${item.followerId.slice(-4)}`,
       createdAt: 1770000000000,
     }));
+    const raw = this.options?.buildFollowersRawPage
+      ? this.options.buildFollowersRawPage({ followers: items, accounts })
+      : {
+        followers: items,
+        aggregationData: {
+          accounts,
+        },
+      };
     return {
       total: this.fixture.followers.length,
       items,
       offset,
       done: items.length < limit,
       accounts,
-      raw: {
-        followers: items,
-        aggregationData: {
-          accounts,
-        },
-      },
+      raw,
     };
   }
 }
@@ -386,6 +394,7 @@ function createTestApp(
   testDb: StartedTestDatabase,
   adapter: FakeFanslyAdapter,
   overrides?: {
+    db?: AppContext["db"];
     logger?: StartedTestDatabase["logger"];
     transactionLookbackDays?: number;
     transactionRescanCapDays?: number;
@@ -393,7 +402,7 @@ function createTestApp(
   },
 ) {
   return {
-    db: testDb.db,
+    db: overrides?.db ?? testDb.db,
     pool: testDb.pool,
     logger: overrides?.logger ?? testDb.logger,
     config: {
@@ -416,6 +425,49 @@ function createTestApp(
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as never),
     async close() {},
   };
+}
+
+function createRawPayloadInsertFailureDb(
+  db: AppContext["db"],
+  input: {
+    error: Error;
+    endpoint: string;
+    payloadKind?: string;
+    failTimes?: number;
+  },
+) {
+  let failuresRemaining = input.failTimes ?? 1;
+
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop !== "insert") {
+        return Reflect.get(target, prop, receiver);
+      }
+
+      return (table: unknown) => {
+        const realBuilder = target.insert(table as never);
+        if (table !== rawPayloads) {
+          return realBuilder;
+        }
+
+        return {
+          ...realBuilder,
+          values(values: Record<string, unknown>) {
+            if (
+              failuresRemaining > 0 &&
+              values.endpoint === input.endpoint &&
+              values.payloadKind === (input.payloadKind ?? "mapping_critical")
+            ) {
+              failuresRemaining -= 1;
+              return Promise.reject(input.error);
+            }
+
+            return realBuilder.values(values as never);
+          },
+        };
+      };
+    },
+  });
 }
 
 async function seedOnlyFansPage(testDb: StartedTestDatabase, label: string) {
@@ -660,6 +712,213 @@ describe("sync integration", () => {
       const current = new Date(rows[index]!.followed_at as string | Date).getTime();
       expect(previous).toBeGreaterThanOrEqual(current);
     }
+  });
+
+  it("stores trimmed follower raw payloads with mapper fields only", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const followersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
+    ).data.response.followers as FanslyFollower[];
+    const sampleFollowers = followersFixture.slice(0, 2);
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(
+      testDb,
+      new FakeFanslyAdapter(
+        {
+          accountMe: {
+            ...accountMeFixture,
+            account: {
+              ...accountMeFixture.account,
+              followCount: sampleFollowers.length,
+            },
+          },
+          transactions: [],
+          subscribers: [],
+          followers: sampleFollowers,
+        },
+        {
+          buildFollowersRawPage: ({ followers, accounts }) => ({
+            followers,
+            aggregationData: {
+              accounts: accounts.map((account) => ({
+                ...account,
+                profile: {
+                  bio: "extra",
+                  media: [{
+                    id: "profile-media-1",
+                    url: "https://example.invalid/profile-media-1",
+                  }],
+                },
+              })),
+              accountMediaBundles: [{
+                id: "bundle-1",
+                items: [{
+                  id: "bundle-item-1",
+                  url: "https://example.invalid/bundle-item-1",
+                }],
+              }],
+            },
+            accountMedia: [{
+              id: "account-media-1",
+              url: "https://example.invalid/account-media-1",
+            }],
+            extraBlock: {
+              nested: true,
+            },
+          }),
+        },
+      ),
+    );
+
+    const result = await runFollowerSync(app, page.label);
+    const payloadRows = await testDb.pool.query(
+      `select response_payload
+       from raw_payloads
+       where platform_account_id = ${page.id}
+         and endpoint = 'followers'
+         and payload_kind = 'mapping_critical'
+       order by id desc
+       limit 1`,
+    );
+
+    expect(result.status).toBe("success");
+    expect(payloadRows.rows).toHaveLength(1);
+    expect(payloadRows.rows[0]?.response_payload).toEqual({
+      followers: sampleFollowers,
+      aggregationData: {
+        accounts: sampleFollowers.map((follower) => ({
+          id: follower.followerId,
+          username: `fan_${follower.followerId.slice(-4)}`,
+          displayName: `Fan ${follower.followerId.slice(-4)}`,
+          createdAt: 1770000000000,
+        })),
+      },
+    });
+  });
+
+  it("bounds failed follower persistence diagnostics and strips query text", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const followersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/followers.json"), "utf8"),
+    ).data.response.followers as FanslyFollower[];
+    const sampleFollowers = followersFixture.slice(0, 2);
+    const hugeParams = "payload-fragment-".repeat(300);
+    const drizzleError = new Error(
+      `Failed query: insert into raw_payloads values (...) returning * params: [${hugeParams}]`,
+    );
+    drizzleError.name = "DrizzleQueryError";
+    (drizzleError as Error & { cause: { code: string } }).cause = { code: "54000" };
+
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(
+      testDb,
+      new FakeFanslyAdapter({
+        accountMe: {
+          ...accountMeFixture,
+          account: {
+            ...accountMeFixture.account,
+            followCount: sampleFollowers.length,
+          },
+        },
+        transactions: [],
+        subscribers: [],
+        followers: sampleFollowers,
+      }),
+      {
+        db: createRawPayloadInsertFailureDb(testDb.db, {
+          error: drizzleError,
+          endpoint: "followers",
+        }) as AppContext["db"],
+      },
+    );
+
+    await expect(runFollowerSync(app, page.label)).rejects.toThrow(
+      "Failed to persist raw payload while inserting followers raw payload",
+    );
+
+    const runRows = await testDb.pool.query(
+      `select id, status, error_summary, stats
+       from sync_runs
+       where platform_account_id = ${page.id}
+       order by id desc
+       limit 1`,
+    );
+    const failedPayloadRows = await testDb.pool.query(
+      `select error_message, response_payload
+       from raw_payloads
+       where platform_account_id = ${page.id}
+         and endpoint = 'followers'
+         and payload_kind = 'failed'
+       order by id desc
+       limit 1`,
+    );
+    const eventRows = await testDb.pool.query(
+      `select details
+       from sync_run_events
+       where sync_run_id = ${runRows.rows[0]!.id}
+         and event_type = 'run_finished'
+       order by id desc
+       limit 1`,
+    );
+
+    expect(runRows.rows).toHaveLength(1);
+    expect(runRows.rows[0]?.status).toBe("failed");
+    expect(runRows.rows[0]?.error_summary).toBe(
+      "DrizzleQueryError while inserting followers raw payload (54000)",
+    );
+    expect(runRows.rows[0]?.error_summary.length).toBeLessThanOrEqual(1024);
+    expect(runRows.rows[0]?.error_summary).not.toContain("Failed query:");
+    expect(runRows.rows[0]?.error_summary).not.toContain("params:");
+    expect(runRows.rows[0]?.stats.errorSummary).toBeUndefined();
+    expect(runRows.rows[0]?.stats.error).toMatchObject({
+      type: "DrizzleQueryError",
+      summary: "DrizzleQueryError while inserting followers raw payload (54000)",
+      endpoint: "followers",
+      code: "54000",
+      truncated: true,
+    });
+    expect(runRows.rows[0]?.stats.error.originalMessageLength).toBeGreaterThan(1024);
+
+    expect(failedPayloadRows.rows).toHaveLength(1);
+    expect(failedPayloadRows.rows[0]?.error_message).toBe(
+      "DrizzleQueryError while inserting followers raw payload (54000)",
+    );
+    expect(failedPayloadRows.rows[0]?.error_message.length).toBeLessThanOrEqual(1024);
+    expect(failedPayloadRows.rows[0]?.response_payload).toMatchObject({
+      error: {
+        type: "DrizzleQueryError",
+        summary: "DrizzleQueryError while inserting followers raw payload (54000)",
+        endpoint: "followers",
+        code: "54000",
+        truncated: true,
+      },
+    });
+
+    expect(eventRows.rows).toHaveLength(1);
+    expect(eventRows.rows[0]?.details.error).toMatchObject({
+      type: "DrizzleQueryError",
+      summary: "DrizzleQueryError while inserting followers raw payload (54000)",
+      endpoint: "followers",
+      code: "54000",
+      truncated: true,
+    });
+    expect(JSON.stringify(eventRows.rows[0]?.details)).not.toContain("Failed query:");
+    expect(JSON.stringify(eventRows.rows[0]?.details)).not.toContain("params:");
+    expect(JSON.stringify(eventRows.rows[0]?.details)).not.toContain(hugeParams);
   });
 
   it("advances the follower checkpoint across second and third runs", async (context) => {

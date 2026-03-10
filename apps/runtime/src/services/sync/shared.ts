@@ -1,4 +1,5 @@
 import {
+  type Database,
   insertRawPayload,
   updatePageMetadata,
 } from "@fansly-connect/db";
@@ -13,12 +14,95 @@ import {
   type ResolvedPageContext,
 } from "../page-context.ts";
 import { buildOnlyFansMetadata, getOnlyMonsterAccountId } from "../onlyfans.ts";
+import type { NormalizedSyncError } from "./errors.ts";
+import { SyncPayloadPersistenceError } from "./errors.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function retentionDate(now = new Date()) {
   return new Date(now.getTime() + 180 * DAY_MS);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asNullableString(value: unknown) {
+  return typeof value === "string" ? value : null;
+}
+
+function asNullableNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export type RawPayloadInsertInput = Parameters<typeof insertRawPayload>[1];
+
+export async function persistRawPayload(
+  db: Database,
+  input: RawPayloadInsertInput,
+  options?: {
+    action?: string;
+  },
+) {
+  try {
+    await insertRawPayload(db, input);
+  } catch (error) {
+    throw new SyncPayloadPersistenceError({
+      endpoint: input.endpoint,
+      action: options?.action ?? `inserting ${input.endpoint} raw payload`,
+      cause: error,
+    });
+  }
+}
+
+export function trimFanslyFollowerPayload(raw: unknown) {
+  const payload = isRecord(raw) ? raw : {};
+  const followers = Array.isArray(payload.followers)
+    ? payload.followers.flatMap((item) => {
+      if (!isRecord(item)) {
+        return [];
+      }
+
+      const id = asNullableString(item.id);
+      const followerId = asNullableString(item.followerId);
+      if (!id || !followerId) {
+        return [];
+      }
+
+      return [{
+        id,
+        followerId,
+      }];
+    })
+    : [];
+  const aggregationData = isRecord(payload.aggregationData) ? payload.aggregationData : {};
+  const accounts = Array.isArray(aggregationData.accounts)
+    ? aggregationData.accounts.flatMap((item) => {
+      if (!isRecord(item)) {
+        return [];
+      }
+
+      const id = asNullableString(item.id);
+      if (!id) {
+        return [];
+      }
+
+      return [{
+        id,
+        username: asNullableString(item.username),
+        displayName: asNullableString(item.displayName),
+        createdAt: asNullableNumber(item.createdAt),
+      }];
+    })
+    : [];
+
+  return {
+    followers,
+    aggregationData: {
+      accounts,
+    },
+  };
 }
 
 export function refreshPageMetadata(
@@ -86,27 +170,39 @@ export async function refreshPageMetadata(
   return account;
 }
 
-export async function insertFailedSyncPayload(
-  app: AppContext,
+export async function persistFailedSyncPayload(
+  app: Pick<AppContext, "db" | "logger">,
   input: {
     platformAccountId: number;
     syncRunId: number;
     endpoint: string;
-    message: string;
     platform: "fansly" | "onlyfans";
+    failure: NormalizedSyncError;
   },
 ) {
-  await insertRawPayload(app.db, {
-    platformAccountId: input.platformAccountId,
-    syncRunId: input.syncRunId,
-    endpoint: input.endpoint,
-    requestParams: {},
-    responsePayload: { message: input.message },
-    mapperVersion: input.platform === "fansly"
-      ? FANSLY_MAPPER_VERSION
-      : ONLYMONSTER_MAPPER_VERSION,
-    payloadKind: "failed",
-    errorMessage: input.message,
-    retainUntil: retentionDate(),
-  });
+  try {
+    await insertRawPayload(app.db, {
+      platformAccountId: input.platformAccountId,
+      syncRunId: input.syncRunId,
+      endpoint: input.endpoint,
+      requestParams: {},
+      responsePayload: { error: input.failure.error },
+      mapperVersion: input.platform === "fansly"
+        ? FANSLY_MAPPER_VERSION
+        : ONLYMONSTER_MAPPER_VERSION,
+      payloadKind: "failed",
+      errorMessage: input.failure.summary,
+      retainUntil: retentionDate(),
+    });
+  } catch (error) {
+    app.logger.warn(
+      {
+        syncRunId: input.syncRunId,
+        platformAccountId: input.platformAccountId,
+        endpoint: input.endpoint,
+        err: error,
+      },
+      "Failed to persist failed sync payload; continuing",
+    );
+  }
 }

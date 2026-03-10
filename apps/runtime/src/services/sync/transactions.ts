@@ -1,7 +1,6 @@
 import {
   getCheckpoint,
   getOldestPendingTransactionAt,
-  insertRawPayload,
   rebuildSpenderProjections,
   rebuildRevenueRollups,
   upsertCheckpoint,
@@ -19,7 +18,7 @@ import { calculateGrossMillsFromNet, toMills } from "@fansly-connect/shared";
 import type { AppContext } from "../../bootstrap.ts";
 import { prepareHydratedFans } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
-import { DAY_MS, retentionDate } from "./shared.ts";
+import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
 
 function resolveFanslyCommissionRate(
   destinationTax: number | null,
@@ -103,7 +102,7 @@ export async function syncTransactions(
     );
     pageCount += 1;
 
-    await insertRawPayload(app.db, {
+    await persistRawPayload(app.db, {
       platformAccountId: input.platformAccountId,
       syncRunId: input.syncRunId,
       endpoint: "earnings_transactions",
@@ -112,6 +111,8 @@ export async function syncTransactions(
       mapperVersion: FANSLY_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
+    }, {
+      action: "inserting earnings_transactions raw payload",
     });
 
     for (const item of page.items) {

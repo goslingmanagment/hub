@@ -196,7 +196,7 @@ export async function insertRawPayload(
     retainUntil: Date;
   },
 ) {
-  const [created] = await db
+  await db
     .insert(rawPayloads)
     .values({
       platformAccountId: input.platformAccountId,
@@ -209,9 +209,7 @@ export async function insertRawPayload(
       statusCode: input.statusCode ?? null,
       errorMessage: input.errorMessage ?? null,
       retainUntil: input.retainUntil,
-    })
-    .returning();
-  return created;
+    });
 }
 
 export async function insertSyncRequestAttempt(

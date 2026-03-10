@@ -2,7 +2,6 @@ import {
   countActivePageFollows,
   deactivatePageFollowsMissingFromSnapshot,
   getCheckpoint,
-  insertRawPayload,
   refreshFanPageFollowerState,
   rebuildFollowerRollups,
   upsertCheckpoint,
@@ -15,8 +14,15 @@ import { fanslyFollowIdToDate } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { ResolvedFanslyPageContext } from "../page-context.ts";
+import { normalizeSyncError } from "./errors.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
-import { insertFailedSyncPayload, refreshPageMetadata, retentionDate } from "./shared.ts";
+import {
+  persistFailedSyncPayload,
+  persistRawPayload,
+  refreshPageMetadata,
+  retentionDate,
+  trimFanslyFollowerPayload,
+} from "./shared.ts";
 
 export async function runFollowerSyncUnlocked(
   app: AppContext,
@@ -66,15 +72,17 @@ export async function runFollowerSyncUnlocked(
         },
       );
 
-      await insertRawPayload(app.db, {
+      await persistRawPayload(app.db, {
         platformAccountId: pageContext.page.id,
         syncRunId: run.id,
         endpoint: "followers",
         requestParams: { offset: pageOffset, limit: 100, mode },
-        responsePayload: page.raw,
+        responsePayload: trimFanslyFollowerPayload(page.raw),
         mapperVersion: FANSLY_MAPPER_VERSION,
         payloadKind: "mapping_critical",
         retainUntil: retentionDate(),
+      }, {
+        action: "inserting followers raw payload",
       });
 
       return page;
@@ -287,15 +295,27 @@ export async function runFollowerSyncUnlocked(
       followerCount: accountMe.parsed.account.followCount,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await insertFailedSyncPayload(app, {
+    app.logger.error(
+      {
+        err: error,
+        runId: run.id,
+        pageLabel: pageContext.page.label,
+        stream: "followers",
+      },
+      "Follower sync failed",
+    );
+    const failure = normalizeSyncError(error, {
+      endpoint: "followers",
+      action: "running follower sync",
+    });
+    await telemetry.finish("failed", failure);
+    await persistFailedSyncPayload(app, {
       platformAccountId: pageContext.page.id,
       syncRunId: run.id,
       endpoint: "followers",
-      message,
       platform: "fansly",
+      failure,
     });
-    await telemetry.finish("failed", message);
     throw error;
   }
 }

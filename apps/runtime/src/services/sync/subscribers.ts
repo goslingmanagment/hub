@@ -1,7 +1,6 @@
 import {
   getCheckpoint,
   getCurrentSubscribers,
-  insertRawPayload,
   rebuildSubscriberRollups,
   setPageSubscriptionsCurrentFlag,
   upsertCheckpoint,
@@ -18,7 +17,7 @@ import { toMills } from "@fansly-connect/shared";
 import type { AppContext } from "../../bootstrap.ts";
 import { hydrateFans } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
-import { retentionDate } from "./shared.ts";
+import { persistRawPayload, retentionDate } from "./shared.ts";
 
 export async function syncSubscribers(
   app: AppContext,
@@ -51,7 +50,7 @@ export async function syncSubscribers(
       total: page.total ?? 0,
     };
 
-    await insertRawPayload(app.db, {
+    await persistRawPayload(app.db, {
       platformAccountId: input.platformAccountId,
       syncRunId: input.syncRunId,
       endpoint: "subscribers",
@@ -60,6 +59,8 @@ export async function syncSubscribers(
       mapperVersion: FANSLY_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
+    }, {
+      action: "inserting subscribers raw payload",
     });
 
     if (page.done) {

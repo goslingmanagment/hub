@@ -7,7 +7,6 @@ import {
   getFanSpendByIdentifier,
   getSyncRun,
   getRevenueBreakdown,
-  insertRawPayload,
   listPlatformAccounts,
   listModelsWithPageCounts,
   listPageSummaries,
@@ -24,6 +23,7 @@ import { resolveRevenuePeriodBoundsForPlatform } from "@fansly-connect/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext, type ResolvedPageContext } from "./page-context.ts";
+import { normalizeSyncError } from "./sync/errors.ts";
 import { runFollowerSyncUnlocked } from "./sync/followers.ts";
 import {
   summarizeCheckpoint,
@@ -32,7 +32,8 @@ import {
 import { PageSyncLockedError, withPageSyncLock } from "./sync/locking.ts";
 import { syncOnlyFansTransactions } from "./sync/onlyfans-transactions.ts";
 import {
-  insertFailedSyncPayload,
+  persistFailedSyncPayload,
+  persistRawPayload,
   refreshPageMetadata,
   retentionDate,
 } from "./sync/shared.ts";
@@ -132,7 +133,7 @@ async function runLightSyncUnlocked(
 
     if (pageContext.platform === "fansly") {
       const accountMe = await refreshPageMetadata(app, pageContext, "light", telemetry);
-      await insertRawPayload(app.db, {
+      await persistRawPayload(app.db, {
         platformAccountId: pageContext.page.id,
         syncRunId: run.id,
         endpoint: "account_me",
@@ -141,6 +142,8 @@ async function runLightSyncUnlocked(
         mapperVersion: FANSLY_MAPPER_VERSION,
         payloadKind: "mapping_critical",
         retainUntil: retentionDate(),
+      }, {
+        action: "inserting account_me raw payload",
       });
 
       try {
@@ -162,8 +165,11 @@ async function runLightSyncUnlocked(
           telemetry,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        errors.push(`transactions: ${message}`);
+        const failure = normalizeSyncError(error, {
+          endpoint: "earnings_transactions",
+          action: "running transaction sync",
+        });
+        errors.push(`transactions: ${failure.summary}`);
       }
 
       try {
@@ -180,12 +186,15 @@ async function runLightSyncUnlocked(
           telemetry,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        errors.push(`subscribers: ${message}`);
+        const failure = normalizeSyncError(error, {
+          endpoint: "subscribers",
+          action: "running subscriber sync",
+        });
+        errors.push(`subscribers: ${failure.summary}`);
       }
     } else {
       const account = await refreshPageMetadata(app, pageContext, "light", telemetry);
-      await insertRawPayload(app.db, {
+      await persistRawPayload(app.db, {
         platformAccountId: pageContext.page.id,
         syncRunId: run.id,
         endpoint: "onlymonster_account",
@@ -194,6 +203,8 @@ async function runLightSyncUnlocked(
         mapperVersion: ONLYMONSTER_MAPPER_VERSION,
         payloadKind: "mapping_critical",
         retainUntil: retentionDate(),
+      }, {
+        action: "inserting onlymonster_account raw payload",
       });
 
       try {
@@ -213,8 +224,11 @@ async function runLightSyncUnlocked(
           telemetry,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        errors.push(`transactions: ${message}`);
+        const failure = normalizeSyncError(error, {
+          endpoint: "onlymonster_transactions",
+          action: "running OnlyFans transaction sync",
+        });
+        errors.push(`transactions: ${failure.summary}`);
       }
     }
 
@@ -251,15 +265,27 @@ async function runLightSyncUnlocked(
       errors,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await insertFailedSyncPayload(app, {
+    app.logger.error(
+      {
+        err: error,
+        runId: run.id,
+        pageLabel: pageContext.page.label,
+        stream: "light",
+      },
+      "Light sync failed",
+    );
+    const failure = normalizeSyncError(error, {
+      endpoint: "light_sync",
+      action: "running light sync",
+    });
+    await telemetry.finish("failed", failure, stats);
+    await persistFailedSyncPayload(app, {
       platformAccountId: pageContext.page.id,
       syncRunId: run.id,
       endpoint: "light_sync",
-      message,
       platform: pageContext.platform,
+      failure,
     });
-    await telemetry.finish("failed", message, stats);
     throw error;
   }
 }
