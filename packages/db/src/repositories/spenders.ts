@@ -229,11 +229,16 @@ export async function getSpenderProjectionAsOf(
     .innerJoin(platformAccounts, eq(platformAccounts.id, spenderProjectionWatermarks.platformAccountId))
     .where(and(...clauses));
 
-  if (!row?.asOf || row.asOf.getTime() <= 0) {
+  if (!row?.asOf) {
     return null;
   }
 
-  return row.asOf;
+  const asOfDate = row.asOf instanceof Date ? row.asOf : new Date(row.asOf as unknown as string);
+  if (Number.isNaN(asOfDate.getTime()) || asOfDate.getTime() <= 0) {
+    return null;
+  }
+
+  return asOfDate;
 }
 
 export async function listVisibleScopePages(
