@@ -614,11 +614,19 @@ const spenderPageBreakdownSchema = z.object({
   autoRenew: z.boolean().nullable(),
 });
 
+const spenderTypeBreakdownItemSchema = z.object({
+  canonicalType: transactionTypeEnum,
+  grossAmountMills: mills,
+  creatorNetAmountMills: mills,
+  transactionCount: z.number().int(),
+});
+
 export const spenderDetailResponseSchema = z.object({
   scope: spenderScopeResponseSchema,
   fan: spenderFanSchema,
   period: spenderPeriodMetadataSchema,
   metrics: spenderMetricsSchema,
+  typeBreakdown: z.array(spenderTypeBreakdownItemSchema),
   pages: z.array(spenderPageBreakdownSchema),
 });
 

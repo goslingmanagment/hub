@@ -1862,6 +1862,13 @@ export interface paths {
                                     deltaPct: number | null;
                                 } | null;
                             };
+                            typeBreakdown: {
+                                /** @enum {string} */
+                                canonicalType: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
+                                grossAmountMills: number;
+                                creatorNetAmountMills: number;
+                                transactionCount: number;
+                            }[];
                             pages: {
                                 pageId: number;
                                 pageLabel: string;

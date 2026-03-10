@@ -1246,6 +1246,21 @@ describe("api integration", () => {
       return;
     }
 
+    const expectedTypeBreakdown = [
+      {
+        canonicalType: "subscription",
+        grossAmountMills: 5000,
+        creatorNetAmountMills: 5000,
+        transactionCount: 1,
+      },
+      {
+        canonicalType: "tip",
+        grossAmountMills: 2000,
+        creatorNetAmountMills: 2000,
+        transactionCount: 1,
+      },
+    ];
+
     const leadLogin = await server.inject({
       method: "POST",
       url: "/api/v1/auth/login",
@@ -1277,6 +1292,7 @@ describe("api integration", () => {
           platformCreatorNetAmountMills: 7000,
         },
       },
+      typeBreakdown: expectedTypeBreakdown,
     });
     expect(leadResponse.json().pages).toHaveLength(1);
     expect(leadResponse.json().pages[0]).toMatchObject({
@@ -1284,6 +1300,7 @@ describe("api integration", () => {
       inScope: true,
       creatorNetAmountMills: 7000,
     });
+    expect(leadResponse.json().typeBreakdown.some((row: { canonicalType: string }) => row.canonicalType === "payout_reversal")).toBe(false);
 
     const ownerLogin = await server.inject({
       method: "POST",
@@ -1309,6 +1326,7 @@ describe("api integration", () => {
       platformGrossAmountMills: 10000,
       platformCreatorNetAmountMills: 10000,
     });
+    expect(ownerResponse.json().typeBreakdown).toEqual(expectedTypeBreakdown);
     expect(ownerResponse.json().pages).toHaveLength(2);
     expect(ownerResponse.json().pages).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -1322,6 +1340,7 @@ describe("api integration", () => {
         creatorNetAmountMills: 3000,
       }),
     ]));
+    expect(ownerResponse.json().typeBreakdown.some((row: { canonicalType: string }) => row.canonicalType === "payout_reversal")).toBe(false);
     expect(ownerResponse.json().fan.fanId).toBeUndefined();
   });
 

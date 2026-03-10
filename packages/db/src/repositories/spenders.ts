@@ -398,6 +398,60 @@ export async function getSpenderWindowMetrics(
     .groupBy(spenderDailyFacts.fanId);
 }
 
+export async function getSpenderTypeBreakdown(
+  db: Database,
+  input: {
+    fanId: number;
+    pageIds: number[];
+    fromBusinessDate?: string;
+    toBusinessDateExclusive?: string;
+  },
+) {
+  if (input.pageIds.length === 0) {
+    return [] as Array<{
+      canonicalType: TransactionType;
+      grossAmountMills: bigint;
+      creatorNetAmountMills: bigint;
+      transactionCount: number;
+    }>;
+  }
+
+  const clauses = [
+    eq(spenderDailyFacts.fanId, input.fanId),
+    inArray(spenderDailyFacts.platformAccountId, input.pageIds),
+  ];
+
+  if (input.fromBusinessDate) {
+    clauses.push(gte(spenderDailyFacts.businessDate, input.fromBusinessDate));
+  }
+  if (input.toBusinessDateExclusive) {
+    clauses.push(lt(spenderDailyFacts.businessDate, input.toBusinessDateExclusive));
+  }
+
+  const rows = await db.select({
+    canonicalType: spenderDailyFacts.canonicalType,
+    grossAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.grossAmountMills}), 0)::bigint`,
+    creatorNetAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.creatorNetAmountMills}), 0)::bigint`,
+    transactionCount: sql<number>`coalesce(sum(${spenderDailyFacts.transactionCount}), 0)::int`,
+  }).from(spenderDailyFacts)
+    .where(and(...clauses))
+    .groupBy(spenderDailyFacts.canonicalType);
+
+  return rows
+    .filter((row) =>
+      row.grossAmountMills !== 0n ||
+      row.creatorNetAmountMills !== 0n ||
+      row.transactionCount !== 0
+    )
+    .sort((left, right) => {
+      if (left.grossAmountMills === right.grossAmountMills) {
+        return left.canonicalType.localeCompare(right.canonicalType);
+      }
+
+      return left.grossAmountMills > right.grossAmountMills ? -1 : 1;
+    });
+}
+
 function buildSpenderQueryClause(
   query: string | undefined,
   input: {

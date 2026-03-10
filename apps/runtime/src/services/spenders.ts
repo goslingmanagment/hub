@@ -20,6 +20,7 @@ import {
   getSpenderLifetimeMetrics,
   getSpenderProjectionAsOf,
   getSpenderRevenueDiagnosticsForScope,
+  getSpenderTypeBreakdown,
   getSpenderWindowMetrics,
   getVisibleFanPageMemberships,
   listRankedSpenders,
@@ -86,6 +87,8 @@ type LifetimeMetricLike = {
 };
 
 type SerializedWindowMetrics = NonNullable<SpenderListResponse["items"][number]["metrics"]["window"]>;
+type SerializedSpenderTypeBreakdown =
+  SpenderDetailResponse["typeBreakdown"][number];
 
 type FanLike = {
   platform: Platform;
@@ -195,6 +198,20 @@ function serializeComparison(
     deltaPct: previousMetrics.grossAmountMills === 0n
       ? null
       : (Number(deltaGrossAmountMills) / Number(previousMetrics.grossAmountMills)) * 100,
+  };
+}
+
+function serializeTypeBreakdownItem(input: {
+  canonicalType: SerializedSpenderTypeBreakdown["canonicalType"];
+  grossAmountMills: bigint;
+  creatorNetAmountMills: bigint;
+  transactionCount: number;
+}): SerializedSpenderTypeBreakdown {
+  return {
+    canonicalType: input.canonicalType,
+    grossAmountMills: millsToNumber(input.grossAmountMills),
+    creatorNetAmountMills: millsToNumber(input.creatorNetAmountMills),
+    transactionCount: input.transactionCount,
   };
 }
 
@@ -627,6 +644,7 @@ export async function getSpenderDetail(
 
   let windowMetrics: SpenderDetailResponse["metrics"]["window"] = null;
   let comparison: SpenderDetailResponse["metrics"]["comparison"] = null;
+  let typeBreakdown: SpenderDetailResponse["typeBreakdown"] = [];
 
   if (period !== "lifetime") {
     const currentRange = resolveSpenderBusinessDateRangeForPlatform(
@@ -657,6 +675,21 @@ export async function getSpenderDetail(
 
     windowMetrics = serializeWindowMetrics(currentRow);
     comparison = serializeComparison(currentRow, comparisonRow);
+    typeBreakdown = (
+      await getSpenderTypeBreakdown(app.db, {
+        fanId: fan.fanId,
+        pageIds: scope.pageIds,
+        fromBusinessDate: currentRange.fromBusinessDate!,
+        toBusinessDateExclusive: nextBusinessDate(currentRange.toBusinessDateInclusive!),
+      })
+    ).map(serializeTypeBreakdownItem);
+  } else {
+    typeBreakdown = (
+      await getSpenderTypeBreakdown(app.db, {
+        fanId: fan.fanId,
+        pageIds: scope.pageIds,
+      })
+    ).map(serializeTypeBreakdownItem);
   }
 
   const pageMemberships = await getVisibleFanPageMemberships(app.db, {
@@ -673,6 +706,7 @@ export async function getSpenderDetail(
       lifetime: serializeLifetimeMetrics(scopeLifetimeRow, platformLifetimeRow),
       comparison,
     },
+    typeBreakdown,
     pages: pageMemberships.map((row) => ({
       pageId: row.pageId,
       pageLabel: row.pageLabel,
