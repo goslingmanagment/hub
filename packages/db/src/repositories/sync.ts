@@ -11,6 +11,23 @@ import {
 } from "../schema.ts";
 
 type TimestampValue = Date | string | null | undefined;
+type NumericValue = number | bigint | null | undefined;
+
+function normalizeNumber(value: NumericValue, field: string) {
+  if (value === null || value === undefined) {
+    throw new Error(`Expected ${field} to be present`);
+  }
+
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+
+  if (typeof value === "number") {
+    return value;
+  }
+
+  throw new Error(`Expected ${field} to be a number`);
+}
 
 function parseTimestamp(value: TimestampValue, field: string) {
   if (value === null || value === undefined) {
@@ -34,17 +51,23 @@ function requireTimestamp(value: Date | string, field: string) {
 }
 
 function normalizeSyncRunRow<T extends {
+  runId: NumericValue;
+  platformAccountId: NumericValue;
   startedAt: Date | string;
   finishedAt: TimestampValue;
 }>(row: T): Omit<T, "startedAt" | "finishedAt"> & { startedAt: Date; finishedAt: Date | null } {
   return {
     ...row,
+    runId: normalizeNumber(row.runId, "runId"),
+    platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
     startedAt: requireTimestamp(row.startedAt, "startedAt"),
     finishedAt: parseTimestamp(row.finishedAt, "finishedAt"),
   };
 }
 
 function normalizeRunningSyncRunRow<T extends {
+  runId: NumericValue;
+  platformAccountId: NumericValue;
   startedAt: Date | string;
   finishedAt: TimestampValue;
   lastActivityAt: TimestampValue;
@@ -62,6 +85,8 @@ function normalizeRunningSyncRunRow<T extends {
 
   return {
     ...row,
+    runId: normalizeNumber(row.runId, "runId"),
+    platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
     startedAt: requireTimestamp(row.startedAt, "startedAt"),
     finishedAt: parseTimestamp(row.finishedAt, "finishedAt"),
     lastActivityAt: normalized,
@@ -69,20 +94,32 @@ function normalizeRunningSyncRunRow<T extends {
 }
 
 function normalizeSyncRunEventRow<T extends {
+  id: NumericValue;
+  runId: NumericValue;
+  platformAccountId: NumericValue;
   emittedAt: Date | string;
 }>(row: T): Omit<T, "emittedAt"> & { emittedAt: Date } {
   return {
     ...row,
+    id: normalizeNumber(row.id, "id"),
+    runId: normalizeNumber(row.runId, "runId"),
+    platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
     emittedAt: requireTimestamp(row.emittedAt, "emittedAt"),
   };
 }
 
 function normalizeSyncRequestAttemptRow<T extends {
+  attemptId: NumericValue;
+  runId: NumericValue;
+  platformAccountId: NumericValue;
   startedAt: Date | string;
   finishedAt: TimestampValue;
 }>(row: T): Omit<T, "startedAt" | "finishedAt"> & { startedAt: Date; finishedAt: Date | null } {
   return {
     ...row,
+    attemptId: normalizeNumber(row.attemptId, "attemptId"),
+    runId: normalizeNumber(row.runId, "runId"),
+    platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
     startedAt: requireTimestamp(row.startedAt, "startedAt"),
     finishedAt: parseTimestamp(row.finishedAt, "finishedAt"),
   };
@@ -178,6 +215,39 @@ export async function upsertCheckpoint(
       },
     })
     .returning();
+  return checkpoint;
+}
+
+export async function upsertCheckpointProgress(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    stream: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+    cursorText?: string | null;
+    cursorTimestamp?: Date | null;
+    state?: Record<string, unknown>;
+  },
+) {
+  const [checkpoint] = await db
+    .insert(syncCheckpoints)
+    .values({
+      platformAccountId: input.platformAccountId,
+      stream: input.stream,
+      cursorText: input.cursorText ?? null,
+      cursorTimestamp: input.cursorTimestamp ?? null,
+      state: input.state ?? {},
+    })
+    .onConflictDoUpdate({
+      target: [syncCheckpoints.platformAccountId, syncCheckpoints.stream],
+      set: {
+        cursorText: input.cursorText ?? null,
+        cursorTimestamp: input.cursorTimestamp ?? null,
+        state: input.state ?? {},
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+
   return checkpoint;
 }
 

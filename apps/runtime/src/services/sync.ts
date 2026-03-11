@@ -213,6 +213,7 @@ async function runLightSyncUnlocked(
           pageLabel: pageContext.page.label,
           platformAccountId: pageContext.page.id,
           platformAccountIdValue: account.parsed.account.platform_account_id,
+          pageMetadata: pageContext.page.metadata,
           commissionRate: pageContext.page.commissionRate,
           rescanStart: input?.onlyFansTransactionStart ?? null,
           requestContext: {

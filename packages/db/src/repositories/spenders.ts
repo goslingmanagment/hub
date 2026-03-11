@@ -1,9 +1,12 @@
 import { and, asc, desc, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
 
 import {
+  businessDateToUtcStart,
   spenderAnalyticsTransactionTypes,
+  toBusinessDate,
   type Platform,
   type TransactionType,
+  UTC_TIME_ZONE,
 } from "@fansly-connect/shared";
 import type { Database } from "../client.ts";
 import {
@@ -31,8 +34,21 @@ const spenderTransactionTypeSql = transactionTypeListSql(spenderAnalyticsTransac
 export async function rebuildSpenderDailyFacts(
   db: Database,
   platformAccountId: number,
+  from?: Date | null,
 ) {
-  await db.delete(spenderDailyFacts).where(eq(spenderDailyFacts.platformAccountId, platformAccountId));
+  const affectedFrom = from
+    ? businessDateToUtcStart(toBusinessDate(from, UTC_TIME_ZONE), UTC_TIME_ZONE)
+    : null;
+  const fromClause = affectedFrom
+    ? sql`and t.occurred_at >= ${affectedFrom}`
+    : sql``;
+
+  await db.delete(spenderDailyFacts).where(affectedFrom
+    ? and(
+      eq(spenderDailyFacts.platformAccountId, platformAccountId),
+      gte(spenderDailyFacts.businessDate, toBusinessDate(affectedFrom, UTC_TIME_ZONE)),
+    )
+    : eq(spenderDailyFacts.platformAccountId, platformAccountId));
   await db.execute(sql`
     insert into spender_daily_facts (
       platform_account_id,
@@ -60,6 +76,7 @@ export async function rebuildSpenderDailyFacts(
     where t.platform_account_id = ${platformAccountId}
       and t.fan_id is not null
       and t.canonical_type in (${spenderTransactionTypeSql})
+      ${fromClause}
     group by 1, 2, 3, 4, 5
   `);
 }
@@ -67,8 +84,53 @@ export async function rebuildSpenderDailyFacts(
 export async function rebuildSpenderLifetimePage(
   db: Database,
   platformAccountId: number,
+  from?: Date | null,
 ) {
-  await db.delete(spenderLifetimePage).where(eq(spenderLifetimePage.platformAccountId, platformAccountId));
+  if (!from) {
+    await db.delete(spenderLifetimePage).where(eq(spenderLifetimePage.platformAccountId, platformAccountId));
+    await db.execute(sql`
+      insert into spender_lifetime_page (
+        platform_account_id,
+        fan_id,
+        gross_amount_mills,
+        creator_net_amount_mills,
+        last_transaction_at,
+        updated_at
+      )
+      select sdf.platform_account_id,
+             sdf.fan_id,
+             coalesce(sum(sdf.gross_amount_mills), 0)::bigint,
+             coalesce(sum(sdf.creator_net_amount_mills), 0)::bigint,
+             max(sdf.last_transaction_at),
+             now()
+      from spender_daily_facts sdf
+      where sdf.platform_account_id = ${platformAccountId}
+      group by 1, 2
+    `);
+    return;
+  }
+
+  const affectedFrom = businessDateToUtcStart(toBusinessDate(from, UTC_TIME_ZONE), UTC_TIME_ZONE);
+  const affectedFanRows = await db.selectDistinct({
+    fanId: transactions.fanId,
+  }).from(transactions)
+    .where(and(
+      eq(transactions.platformAccountId, platformAccountId),
+      gte(transactions.occurredAt, affectedFrom),
+      sql`${transactions.fanId} is not null`,
+    ));
+  const affectedFanIds = affectedFanRows
+    .map((row) => row.fanId)
+    .filter((fanId): fanId is number => fanId !== null);
+
+  if (affectedFanIds.length === 0) {
+    return;
+  }
+
+  await db.delete(spenderLifetimePage).where(and(
+    eq(spenderLifetimePage.platformAccountId, platformAccountId),
+    inArray(spenderLifetimePage.fanId, affectedFanIds),
+  ));
   await db.execute(sql`
     insert into spender_lifetime_page (
       platform_account_id,
@@ -86,7 +148,20 @@ export async function rebuildSpenderLifetimePage(
            now()
     from spender_daily_facts sdf
     where sdf.platform_account_id = ${platformAccountId}
+      and sdf.fan_id in (${sql.join(affectedFanIds.map((fanId) => sql`${fanId}`), sql`, `)})
     group by 1, 2
+  `);
+
+  await db.execute(sql`
+    update fan_pages fp
+    set total_creator_net_mills = coalesce((
+          select slp.creator_net_amount_mills
+          from spender_lifetime_page slp
+          where slp.platform_account_id = fp.platform_account_id
+            and slp.fan_id = fp.fan_id
+        ), 0)::bigint
+    where fp.platform_account_id = ${platformAccountId}
+      and fp.fan_id in (${sql.join(affectedFanIds.map((fanId) => sql`${fanId}`), sql`, `)})
   `);
 }
 
@@ -117,22 +192,25 @@ export async function upsertSpenderProjectionWatermark(
 export async function rebuildSpenderProjections(
   db: Database,
   platformAccountId: number,
+  from?: Date | null,
   rebuiltAt = new Date(),
 ) {
   await db.transaction(async (tx) => {
     const dbTx = tx as Database;
-    await rebuildSpenderDailyFacts(dbTx, platformAccountId);
-    await rebuildSpenderLifetimePage(dbTx, platformAccountId);
-    await tx.execute(sql`
-      update fan_pages fp
-      set total_creator_net_mills = coalesce((
-            select slp.creator_net_amount_mills
-            from spender_lifetime_page slp
-            where slp.platform_account_id = fp.platform_account_id
-              and slp.fan_id = fp.fan_id
-          ), 0)::bigint
-      where fp.platform_account_id = ${platformAccountId}
-    `);
+    await rebuildSpenderDailyFacts(dbTx, platformAccountId, from);
+    await rebuildSpenderLifetimePage(dbTx, platformAccountId, from);
+    if (!from) {
+      await tx.execute(sql`
+        update fan_pages fp
+        set total_creator_net_mills = coalesce((
+              select slp.creator_net_amount_mills
+              from spender_lifetime_page slp
+              where slp.platform_account_id = fp.platform_account_id
+                and slp.fan_id = fp.fan_id
+            ), 0)::bigint
+        where fp.platform_account_id = ${platformAccountId}
+      `);
+    }
     await upsertSpenderProjectionWatermark(dbTx, platformAccountId, rebuiltAt);
   });
 }

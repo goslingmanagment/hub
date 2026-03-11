@@ -4,6 +4,7 @@ import {
   rebuildSpenderProjections,
   rebuildRevenueRollups,
   upsertCheckpoint,
+  upsertCheckpointProgress,
   upsertFanPage,
   upsertFans,
   upsertTransaction,
@@ -19,6 +20,12 @@ import type { AppContext } from "../../bootstrap.ts";
 import { prepareHydratedFans } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
+import {
+  buildBackfillProgressMessage,
+  isoDateOrNull,
+  parseTransactionBackfillState,
+  type FanslyTransactionBackfillState,
+} from "./transaction-backfill.ts";
 
 function resolveFanslyCommissionRate(
   destinationTax: number | null,
@@ -36,7 +43,40 @@ function resolveFanslyCommissionRate(
   return fallbackCommissionRate;
 }
 
-export async function syncTransactions(
+function minDate(a: Date | null, b: Date | null) {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  return a <= b ? a : b;
+}
+
+function maxDate(a: Date | null, b: Date | null) {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  return a >= b ? a : b;
+}
+
+async function flushFanslyDirtyRange(
+  app: AppContext,
+  platformAccountId: number,
+  dirtyFrom: Date | null,
+) {
+  if (!dirtyFrom) {
+    return;
+  }
+
+  await rebuildSpenderProjections(app.db, platformAccountId, dirtyFrom);
+  await rebuildRevenueRollups(app.db, platformAccountId, dirtyFrom);
+}
+
+async function syncTransactionsIncremental(
   app: AppContext,
   input: {
     pageLabel: string;
@@ -46,9 +86,8 @@ export async function syncTransactions(
     syncRunId: number;
     telemetry: SyncRunTelemetry;
   },
+  checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
 ) {
-  const checkpoint = await getCheckpoint(app.db, input.platformAccountId, "transactions");
-  await input.telemetry.recordCheckpointLoaded("transactions", summarizeCheckpoint(checkpoint));
   const oldestPendingAt = await getOldestPendingTransactionAt(app.db, input.platformAccountId);
   const lookbackStart = checkpoint?.cursorTimestamp
     ? new Date(
@@ -145,6 +184,7 @@ export async function syncTransactions(
     offset += 100;
   }
 
+  let checkpointAfter = null;
   const hydratedFans = await prepareHydratedFans(app, {
     requestContext: input.requestContext,
     platformUserIds: collectedItems
@@ -152,8 +192,6 @@ export async function syncTransactions(
       .filter((value): value is string => Boolean(value)),
     telemetry: input.telemetry,
   });
-
-  let checkpointAfter = null;
   await app.db.transaction(async (tx) => {
     const fans = await upsertFans(tx as typeof app.db, hydratedFans);
     const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
@@ -176,7 +214,6 @@ export async function syncTransactions(
         item.destinationTax,
         input.commissionRate,
       );
-      // Live Fansly earnings rows currently repeat creator-net in both amount fields.
       const grossAmountMills = sourceAmountMills === destinationAmountMills
         ? calculateGrossMillsFromNet(creatorNetAmountMills, commissionRate)
         : sourceAmountMills;
@@ -236,6 +273,7 @@ export async function syncTransactions(
     processedTransactions: processed,
     oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
+    mode: "incremental",
   });
 
   if (after && lookbackStart && after.getTime() < lookbackStart.getTime() - DAY_MS) {
@@ -297,4 +335,302 @@ export async function syncTransactions(
   }
 
   return { processed, newestSeenAt };
+}
+
+async function syncTransactionsBackfill(
+  app: AppContext,
+  input: {
+    pageLabel: string;
+    platformAccountId: number;
+    commissionRate: number;
+    requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
+    syncRunId: number;
+    telemetry: SyncRunTelemetry;
+  },
+  checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
+  existingState: FanslyTransactionBackfillState | null,
+) {
+  let state: FanslyTransactionBackfillState = existingState ?? {
+    mode: "backfill",
+    completed: false,
+    provider: "fansly",
+    phase: "transactions",
+    snapshotEnd: new Date().toISOString(),
+    newestSeenAt: null,
+    dirtyFrom: null,
+    processedTransactions: 0,
+    processedChargebacks: 0,
+    transactionPages: 0,
+    chargebackPages: 0,
+    offset: 0,
+  };
+
+  const snapshotEnd = new Date(state.snapshotEnd);
+  let oldestSeenAt: Date | null = null;
+  let newestSeenAt = state.newestSeenAt ? new Date(state.newestSeenAt) : null;
+  let currentRunProcessed = 0;
+
+  await input.telemetry.addNote(
+    existingState
+      ? "Resuming incomplete Fansly transaction backfill"
+      : "Starting Fansly full-history transaction backfill",
+    {
+      snapshotEnd: state.snapshotEnd,
+      offset: state.offset,
+      processedTransactions: state.processedTransactions,
+    },
+  );
+
+  input.telemetry.setBoundarySummary({
+    kind: "backfill",
+    snapshotEnd: state.snapshotEnd,
+    requestedLowerBound: null,
+    resumeOffset: state.offset,
+  });
+  input.telemetry.setScanSummary({
+    mode: "backfill",
+    phase: "transactions",
+    transactionPages: state.transactionPages,
+    processedTransactions: state.processedTransactions,
+    processedTransactionsThisRun: currentRunProcessed,
+    oldestSeenAt: null,
+    newestSeenAt: newestSeenAt?.toISOString() ?? null,
+  });
+
+  try {
+    while (true) {
+      const page = await app.adapter.getTransactionsPage(
+        input.requestContext,
+        {
+          before: snapshotEnd,
+          limit: 100,
+          offset: state.offset,
+        },
+      );
+
+      await persistRawPayload(app.db, {
+        platformAccountId: input.platformAccountId,
+        syncRunId: input.syncRunId,
+        endpoint: "earnings_transactions",
+        requestParams: {
+          after: null,
+          before: snapshotEnd.toISOString(),
+          offset: state.offset,
+          limit: 100,
+        },
+        responsePayload: page.raw,
+        mapperVersion: FANSLY_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
+      }, {
+        action: "inserting earnings_transactions raw payload",
+      });
+
+      const pageOldestSeenAt = page.items.reduce<Date | null>(
+        (oldest, item) => minDate(oldest, new Date(item.createdAt)),
+        null,
+      );
+      const pageNewestSeenAt = page.items.reduce<Date | null>(
+        (latest, item) => maxDate(latest, new Date(item.createdAt)),
+        null,
+      );
+      oldestSeenAt = minDate(oldestSeenAt, pageOldestSeenAt);
+      newestSeenAt = maxDate(newestSeenAt, pageNewestSeenAt);
+
+      const nextState: FanslyTransactionBackfillState = {
+        ...state,
+        offset: state.offset + page.items.length,
+        transactionPages: state.transactionPages + 1,
+        processedTransactions: state.processedTransactions + page.items.length,
+        newestSeenAt: isoDateOrNull(newestSeenAt),
+        dirtyFrom: isoDateOrNull(minDate(
+          state.dirtyFrom ? new Date(state.dirtyFrom) : null,
+          pageOldestSeenAt,
+        )),
+      };
+
+      const hydratedFans = await prepareHydratedFans(app, {
+        requestContext: input.requestContext,
+        platformUserIds: page.items
+          .map((item) => item.correlationAccountId)
+          .filter((value): value is string => Boolean(value)),
+        telemetry: input.telemetry,
+      });
+
+      await app.db.transaction(async (tx) => {
+        const dbTx = tx as typeof app.db;
+        const fans = await upsertFans(dbTx, hydratedFans);
+        const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
+
+        for (const fan of fans) {
+          await upsertFanPage(dbTx, {
+            fanId: fan.id,
+            platformAccountId: input.platformAccountId,
+          });
+        }
+
+        for (const item of page.items) {
+          const fanId = item.correlationAccountId
+            ? (fanMap.get(item.correlationAccountId) ?? null)
+            : null;
+          const sourceAmountMills = toMills(item.amount);
+          const destinationAmountMills = toMills(item.destinationAmount);
+          const creatorNetAmountMills = destinationAmountMills;
+          const commissionRate = resolveFanslyCommissionRate(
+            item.destinationTax,
+            input.commissionRate,
+          );
+          const grossAmountMills = sourceAmountMills === destinationAmountMills
+            ? calculateGrossMillsFromNet(creatorNetAmountMills, commissionRate)
+            : sourceAmountMills;
+
+          await upsertTransaction(dbTx, {
+            platformAccountId: input.platformAccountId,
+            fanId,
+            transactionId: item.transactionId,
+            walletId: item.walletId,
+            accountId: item.accountId,
+            correlationId: item.correlationId,
+            correlationAccountId: item.correlationAccountId,
+            rawType: item.type,
+            canonicalType: mapFanslyTransactionType(item.type),
+            transactionState: mapFanslyTransactionState(item.status),
+            destination: item.destination,
+            rawStatus: item.status,
+            grossAmountMills,
+            sourceDestinationAmountMills: destinationAmountMills,
+            creatorNetAmountMills,
+            rawDestinationTax: item.destinationTax,
+            newBalanceMills: item.newBalance64 ? toMills(item.newBalance64) : null,
+            senderId: item.senderId,
+            receiverId: item.receiverId,
+            occurredAt: new Date(item.createdAt),
+            sourceUpdatedAt: item.updatedAt ? new Date(item.updatedAt) : null,
+          });
+        }
+
+        await upsertCheckpointProgress(dbTx, {
+          platformAccountId: input.platformAccountId,
+          stream: "transactions",
+          state: nextState,
+        });
+      });
+
+      state = nextState;
+      currentRunProcessed += page.items.length;
+
+      const progressMessage = buildBackfillProgressMessage({
+        provider: "fansly",
+        phase: "transactions",
+        page: state.transactionPages,
+        processedTransactions: state.processedTransactions,
+        oldestSeenAt,
+        newestSeenAt,
+      });
+      await input.telemetry.addNote(progressMessage, {
+        page: state.transactionPages,
+        processedTransactions: state.processedTransactions,
+        oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+        newestSeenAt: newestSeenAt?.toISOString() ?? null,
+        phase: "transactions",
+      });
+      app.logger.info({
+        pageLabel: input.pageLabel,
+        platformAccountId: input.platformAccountId,
+        provider: "fansly",
+        stream: "transactions",
+        phase: "transactions",
+        page: state.transactionPages,
+        processedTransactions: state.processedTransactions,
+        oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+        newestSeenAt: newestSeenAt?.toISOString() ?? null,
+      }, progressMessage);
+      input.telemetry.setScanSummary({
+        mode: "backfill",
+        phase: "transactions",
+        transactionPages: state.transactionPages,
+        processedTransactions: state.processedTransactions,
+        processedTransactionsThisRun: currentRunProcessed,
+        oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+        newestSeenAt: newestSeenAt?.toISOString() ?? null,
+      });
+
+      if (page.done) {
+        break;
+      }
+    }
+  } catch (error) {
+    const dirtyFrom = state.dirtyFrom ? new Date(state.dirtyFrom) : null;
+    await flushFanslyDirtyRange(app, input.platformAccountId, dirtyFrom);
+    if (dirtyFrom) {
+      state = {
+        ...state,
+        dirtyFrom: null,
+      };
+      await upsertCheckpointProgress(app.db, {
+        platformAccountId: input.platformAccountId,
+        stream: "transactions",
+        state,
+      });
+    }
+
+    throw error;
+  }
+
+  await flushFanslyDirtyRange(
+    app,
+    input.platformAccountId,
+    state.dirtyFrom ? new Date(state.dirtyFrom) : null,
+  );
+
+  const checkpointAfter = await upsertCheckpoint(app.db, {
+    platformAccountId: input.platformAccountId,
+    stream: "transactions",
+    cursorTimestamp: newestSeenAt ?? snapshotEnd,
+    state: { pageLabel: input.pageLabel },
+    lastSuccessfulRunId: input.syncRunId,
+  });
+
+  await input.telemetry.recordCheckpointAdvanced("transactions", summarizeCheckpoint(checkpointAfter));
+  input.telemetry.setScanSummary({
+    mode: "backfill",
+    phase: "transactions",
+    transactionPages: state.transactionPages,
+    processedTransactions: state.processedTransactions,
+    processedTransactionsThisRun: currentRunProcessed,
+    oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+    newestSeenAt: newestSeenAt?.toISOString() ?? null,
+    snapshotEnd: snapshotEnd.toISOString(),
+  });
+
+  return {
+    processed: currentRunProcessed,
+    newestSeenAt: newestSeenAt ?? snapshotEnd,
+  };
+}
+
+export async function syncTransactions(
+  app: AppContext,
+  input: {
+    pageLabel: string;
+    platformAccountId: number;
+    commissionRate: number;
+    requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
+    syncRunId: number;
+    telemetry: SyncRunTelemetry;
+  },
+) {
+  const checkpoint = await getCheckpoint(app.db, input.platformAccountId, "transactions");
+  await input.telemetry.recordCheckpointLoaded("transactions", summarizeCheckpoint(checkpoint));
+
+  const backfillState = parseTransactionBackfillState(checkpoint?.state);
+  if (backfillState?.provider === "fansly") {
+    return syncTransactionsBackfill(app, input, checkpoint, backfillState);
+  }
+
+  if (checkpoint?.cursorTimestamp) {
+    return syncTransactionsIncremental(app, input, checkpoint);
+  }
+
+  return syncTransactionsBackfill(app, input, checkpoint, null);
 }

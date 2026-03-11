@@ -11,6 +11,7 @@
     "db:generate": "drizzle-kit generate --config=packages/db/drizzle.config.ts",
     "db:migrate": "node --import tsx/esm packages/db/src/migrate.ts",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "dev:db": "docker compose up -d postgres"
   },
