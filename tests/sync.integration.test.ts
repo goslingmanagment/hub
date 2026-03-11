@@ -115,6 +115,7 @@ class FakeFanslyAdapter {
     private readonly options?: {
       failTransactionPage?: number;
       ignoreTransactionAfter?: boolean;
+      emptyFirstTransactionsPageWhenBeforePresent?: boolean;
       holdAccountMe?: {
         onEntered: () => void;
         release: Promise<void>;
@@ -203,6 +204,42 @@ class FakeFanslyAdapter {
 
     if (this.options?.failTransactionPage === pageIndex) {
       throw new Error(`transactions page ${pageIndex} failed`);
+    }
+
+    if (
+      this.options?.emptyFirstTransactionsPageWhenBeforePresent &&
+      params.before &&
+      offset === 0
+    ) {
+      await emitFakeRequest(context, {
+        operation: "earnings_transactions",
+        endpointTemplate: "/account/wallets/earnings/transactions",
+        requestMetadata: {
+          after: params.after?.toISOString() ?? null,
+          before: params.before.toISOString(),
+          limit,
+          offset,
+        },
+        responseMetadata: {
+          returnedItems: 0,
+          total: this.fixture.transactions.length,
+          done: true,
+        },
+        pagination: {
+          offset,
+          limit,
+        },
+      });
+      return {
+        total: this.fixture.transactions.length,
+        items: [],
+        offset,
+        done: true,
+        raw: {
+          total: this.fixture.transactions.length,
+          data: [],
+        },
+      };
     }
 
     const filtered = this.fixture.transactions.filter((item) => {
@@ -1884,7 +1921,7 @@ describe("sync integration", () => {
       transactionRescanCapDays: 1,
     });
 
-    await runLightSync(app, page.label);
+    const result = await runLightSync(app, page.label);
 
     const rows = await testDb.pool.query(`
       select transaction_id
@@ -1894,14 +1931,89 @@ describe("sync integration", () => {
     `);
     const checkpoint = await getCheckpoint(testDb.db, page.id, "transactions");
 
+    expect(result.status).toBe("success");
+    expect((result.stats.boundary as Record<string, unknown> | undefined)?.strategy).toBe("offset_head_scan");
     expect(adapter.transactionAfterHistory[0]).toBeNull();
-    expect(adapter.transactionBeforeHistory[0]).not.toBeNull();
+    expect(adapter.transactionBeforeHistory[0]).toBeNull();
     expect(rows.rows).toEqual([
       {
         transaction_id: "tx-history-old",
       },
       {
         transaction_id: "tx-history-recent",
+      },
+    ]);
+    expect(checkpoint?.cursorTimestamp).not.toBeNull();
+    expect(checkpoint?.state).toEqual({
+      pageLabel: page.label,
+    });
+  });
+
+  it("backfills Fansly history even when before-based paging would return an empty first page", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const seedTransactions = JSON.parse(
+      await readFile(path.resolve("reference/responses/earnings_transactions.json"), "utf8"),
+    ).data.response.data as FanslyEarningsTransaction[];
+
+    const baseTransaction = seedTransactions[0]!;
+    const now = Date.now();
+    const historicalTransactions = [
+      buildTransaction(baseTransaction, {
+        transactionId: "tx-empty-first-old",
+        correlationId: "corr-empty-first-old",
+        createdAt: now - 60 * 24 * 60 * 60 * 1000,
+        updatedAt: now - 60 * 24 * 60 * 60 * 1000,
+        status: 2,
+      }),
+      buildTransaction(baseTransaction, {
+        transactionId: "tx-empty-first-recent",
+        correlationId: "corr-empty-first-recent",
+        createdAt: now - 13 * 24 * 60 * 60 * 1000,
+        updatedAt: now - 13 * 24 * 60 * 60 * 1000,
+        status: 2,
+      }),
+    ].sort((left, right) => right.createdAt - left.createdAt);
+
+    const adapter = new FakeFanslyAdapter(
+      {
+        accountMe: accountMeFixture,
+        transactions: historicalTransactions,
+        subscribers: [],
+        followers: [],
+      },
+      { emptyFirstTransactionsPageWhenBeforePresent: true },
+    );
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, adapter, {
+      transactionLookbackDays: 1,
+      transactionRescanCapDays: 1,
+    });
+
+    const result = await runLightSync(app, page.label);
+
+    const rows = await testDb.pool.query(`
+      select transaction_id
+      from transactions
+      where platform_account_id = ${page.id}
+      order by transaction_id asc
+    `);
+    const checkpoint = await getCheckpoint(testDb.db, page.id, "transactions");
+
+    expect(result.status).toBe("success");
+    expect(adapter.transactionBeforeHistory[0]).toBeNull();
+    expect(rows.rows).toEqual([
+      {
+        transaction_id: "tx-empty-first-old",
+      },
+      {
+        transaction_id: "tx-empty-first-recent",
       },
     ]);
     expect(checkpoint?.cursorTimestamp).not.toBeNull();
@@ -1988,9 +2100,7 @@ describe("sync integration", () => {
 
     expect(resumed.status).toBe("success");
     expect(resumedAdapter.transactionOffsetHistory[0]).toBe(100);
-    expect(resumedAdapter.transactionBeforeHistory[0]?.toISOString()).toBe(
-      (checkpoint?.state as { snapshotEnd: string }).snapshotEnd,
-    );
+    expect(resumedAdapter.transactionBeforeHistory[0]).toBeNull();
     expect(resumedTxCount.rows[0]?.count).toBe(150);
     expect(resumedCheckpoint?.cursorTimestamp).not.toBeNull();
     expect(resumedCheckpoint?.state).toEqual({

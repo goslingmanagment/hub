@@ -383,12 +383,14 @@ async function syncTransactionsBackfill(
 
   input.telemetry.setBoundarySummary({
     kind: "backfill",
+    strategy: "offset_head_scan",
     snapshotEnd: state.snapshotEnd,
     requestedLowerBound: null,
     resumeOffset: state.offset,
   });
   input.telemetry.setScanSummary({
     mode: "backfill",
+    strategy: "offset_head_scan",
     phase: "transactions",
     transactionPages: state.transactionPages,
     processedTransactions: state.processedTransactions,
@@ -402,11 +404,28 @@ async function syncTransactionsBackfill(
       const page = await app.adapter.getTransactionsPage(
         input.requestContext,
         {
-          before: snapshotEnd,
           limit: 100,
           offset: state.offset,
         },
       );
+
+      if (
+        state.transactionPages === 0 &&
+        state.offset === 0 &&
+        page.items.length === 0 &&
+        (page.total ?? 0) > 0
+      ) {
+        await input.telemetry.addAnomaly({
+          code: "backfill_empty_head_page",
+          severity: "error",
+          message: "Fansly head-scan backfill returned an empty first page despite a non-zero total",
+          details: {
+            total: page.total,
+            snapshotEnd: state.snapshotEnd,
+          },
+        });
+        throw new Error("Fansly transaction backfill returned an empty first page despite a non-zero total");
+      }
 
       await persistRawPayload(app.db, {
         platformAccountId: input.platformAccountId,
@@ -414,7 +433,7 @@ async function syncTransactionsBackfill(
         endpoint: "earnings_transactions",
         requestParams: {
           after: null,
-          before: snapshotEnd.toISOString(),
+          before: null,
           offset: state.offset,
           limit: 100,
         },
@@ -547,6 +566,7 @@ async function syncTransactionsBackfill(
       }, progressMessage);
       input.telemetry.setScanSummary({
         mode: "backfill",
+        strategy: "offset_head_scan",
         phase: "transactions",
         transactionPages: state.transactionPages,
         processedTransactions: state.processedTransactions,
@@ -594,6 +614,7 @@ async function syncTransactionsBackfill(
   await input.telemetry.recordCheckpointAdvanced("transactions", summarizeCheckpoint(checkpointAfter));
   input.telemetry.setScanSummary({
     mode: "backfill",
+    strategy: "offset_head_scan",
     phase: "transactions",
     transactionPages: state.transactionPages,
     processedTransactions: state.processedTransactions,
