@@ -1,11 +1,7 @@
+import type { AuthState } from "@fansly-connect/contracts";
 import { create } from "zustand";
 
-interface User {
-  id: number;
-  username: string;
-  role: string;
-  assignedPages: Array<{ pageLabel: string; platform: string }>;
-}
+type User = AuthState["user"];
 
 interface AuthStore {
   user: User | null;

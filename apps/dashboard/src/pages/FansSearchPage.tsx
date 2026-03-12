@@ -1,9 +1,9 @@
 import { useState } from "react";
+import type { FansSearchResponse } from "@fansly-connect/contracts";
 import { useNavigate } from "react-router";
 import { useFansSearch } from "@/api/queries";
 import { DataTable, type Column } from "@/components/shared/DataTable";
 import { PlatformIcon } from "@/components/shared/PlatformIcon";
-import { MoneyCell } from "@/components/shared/MoneyCell";
 import { Input } from "@/components/ui/input";
 import { SkeletonTable } from "@/components/shared/SkeletonTable";
 
@@ -13,17 +13,20 @@ export function FansSearchPage() {
   const navigate = useNavigate();
 
   const query: Record<string, string> = { limit: "50" };
-  if (search) query.q = search;
+  if (search) query.query = search;
   if (platform) query.platform = platform;
 
   const { data, isLoading } = useFansSearch(query, search.length >= 2);
+  const rows = (data?.items ?? []).map((item) => ({
+    ...item.fan,
+    pageCount: item.pages.length,
+  }));
 
-  const columns: Column<any>[] = [
+  const columns: Column<(typeof rows)[number]>[] = [
     { key: "username", header: "Username", render: (r) => <span className="font-medium text-zinc-100">{r.username ?? r.platformUserId}</span> },
     { key: "displayName", header: "Display Name", render: (r) => <span className="text-zinc-300">{r.displayName ?? "—"}</span> },
     { key: "platform", header: "Platform", render: (r) => <PlatformIcon platform={r.platform} /> },
-    { key: "pages", header: "Pages", render: (r) => <span className="text-zinc-400">{r.pageCount ?? "—"}</span> },
-    { key: "totalSpend", header: "Total Spend", className: "text-right", render: (r) => <MoneyCell mills={r.totalSpendMills} /> },
+    { key: "pages", header: "Pages", render: (r) => <span className="text-zinc-400">{r.pageCount}</span> },
   ];
 
   return (
@@ -53,8 +56,8 @@ export function FansSearchPage() {
       ) : (
         <DataTable
           columns={columns}
-          data={data?.fans ?? []}
-          onRowClick={(r: any) => navigate(`/fans/${r.platform}/${r.platformUserId}`)}
+          data={rows}
+          onRowClick={(r) => navigate(`/fans/${r.platform}/${r.platformUserId}`)}
         />
       )}
     </div>

@@ -1,7 +1,8 @@
 import PgBoss from "pg-boss";
 
 import { createAppContext } from "./bootstrap.ts";
-import { runAllSync, runFollowerSync, runLightSync, scheduleExistingPages } from "./services/sync.ts";
+import { scheduleExistingPages } from "./services/sync.ts";
+import { processSyncTriggerBatch, type SyncTriggerJob } from "./worker-sync-trigger.ts";
 
 async function main() {
   const app = await createAppContext();
@@ -13,15 +14,8 @@ async function main() {
   await scheduleExistingPages(app, boss);
 
   // Handle on-demand sync triggers from the API
-  await boss.work("sync.trigger", { batchSize: 10 }, async ([job]) => {
-    const { pageLabel, scope } = job.data as { pageLabel: string; scope: "light" | "followers" | "all" };
-    if (scope === "light") {
-      await runLightSync(app, pageLabel, { trigger: "api" });
-    } else if (scope === "followers") {
-      await runFollowerSync(app, pageLabel, "api");
-    } else {
-      await runAllSync(app, pageLabel, { trigger: "api" });
-    }
+  await boss.work("sync.trigger", { batchSize: 10 }, async (jobs) => {
+    await processSyncTriggerBatch(app, jobs as SyncTriggerJob[]);
   });
 
   app.logger.info("Worker started");

@@ -21,18 +21,29 @@ export function SpenderDetailPage() {
   const [period, setPeriod] = useState("30d");
   const { data, isLoading } = useSpenderSeries(platform!, platformUserId!, { period });
 
-  const chartData = (data?.series ?? []).map((s: any) => ({
-    date: formatBusinessDate(s.businessDate),
-    spend: s.totalSpendMills / 1000,
+  const chartData = (data?.items ?? []).map((item) => ({
+    date: formatBusinessDate(item.fromBusinessDate),
+    spend: item.metrics.grossAmountMills / 1000,
   }));
 
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <PlatformIcon platform={platform!} />
-        <h1 className="text-lg font-semibold text-zinc-100">{platformUserId}</h1>
+        <h1 className="text-lg font-semibold text-zinc-100">
+          {data?.fan.username ?? data?.fan.platformUserId ?? platformUserId}
+        </h1>
       </div>
-      <PeriodSelector value={period} onChange={setPeriod} />
+      <PeriodSelector
+        value={period}
+        onChange={setPeriod}
+        options={[
+          { value: "7d", label: "7D" },
+          { value: "30d", label: "30D" },
+          { value: "90d", label: "90D" },
+          { value: "lifetime", label: "Lifetime" },
+        ]}
+      />
       {isLoading ? <SkeletonTable rows={4} cols={2} /> : (
         <Card>
           <CardTitle>Spending Trend</CardTitle>

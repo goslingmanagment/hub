@@ -266,7 +266,17 @@ export const spenderBatchBodySchema = spenderScopeFieldsSchema
 export const fansSearchQuerySchema = spenderScopeFieldsSchema
   .merge(paginationQuerySchema)
   .extend({
-    query: z.string().min(1),
+    query: z.string().min(1).optional(),
+    q: z.string().min(1).optional(),
+  })
+  .superRefine((value, context) => {
+    if (!value.query && !value.q) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["query"],
+        message: "`query` is required",
+      });
+    }
   });
 
 export const assignedPageSchema = pageRefSchema.extend({
@@ -783,7 +793,9 @@ export const revenueDailyTypedItemSchema = z.object({
 });
 
 export const revenueDailyResponseSchema = z.object({
-  series: z.array(z.union([revenueDailyItemSchema, revenueDailyTypedItemSchema])),
+  series: z.array(revenueDailyItemSchema.extend({
+    canonicalType: transactionTypeEnum.optional(),
+  })),
 });
 
 export const crossPageTransactionItemSchema = z.object({
@@ -1046,6 +1058,16 @@ export const verifyPageResponseSchema = z.object({
   verified: z.boolean(),
   username: z.string().nullable(),
   platform: platformEnum,
+});
+
+export const adminCreatePageResponseSchema = z.object({
+  page: assignedPageSchema,
+  verified: z.boolean(),
+});
+
+export const updateCredentialsResponseSchema = z.object({
+  updated: z.boolean(),
+  verified: z.boolean(),
 });
 
 const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
@@ -1600,7 +1622,7 @@ export const routeSchemas = {
     security: cookieOnlySecurity,
     body: createPageBodySchema,
     response: {
-      200: z.object({ page: assignedPageSchema, verified: z.boolean() }),
+      200: adminCreatePageResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
@@ -1636,7 +1658,7 @@ export const routeSchemas = {
     params: pageParamsSchema,
     body: updateCredentialsBodySchema,
     response: {
-      200: z.object({ updated: z.boolean(), verified: z.boolean() }),
+      200: updateCredentialsResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -1647,6 +1669,7 @@ export const routeSchemas = {
 
 export type RouteSchemas = typeof routeSchemas;
 export type AuthState = z.infer<typeof authStateSchema>;
+export type AuthUser = z.infer<typeof authUserSchema>;
 export type AssignedPage = z.infer<typeof assignedPageSchema>;
 export type CrossPageFanDetailResponse = z.infer<typeof crossPageFanDetailResponseSchema>;
 export type FanListQuery = z.infer<typeof fanListQuerySchema>;
@@ -1658,6 +1681,7 @@ export type LoginBody = z.infer<typeof loginBodySchema>;
 export type ModelListItem = z.infer<typeof modelListItemSchema>;
 export type ModelParams = z.infer<typeof modelParamsSchema>;
 export type ModelRevenueResponse = z.infer<typeof modelRevenueResponseSchema>;
+export type OverviewResponse = z.infer<typeof overviewResponseSchema>;
 export type OverviewRevenueResponse = z.infer<typeof overviewRevenueResponseSchema>;
 export type PageFanDetailResponse = z.infer<typeof pageFanDetailResponseSchema>;
 export type PageFanParams = z.infer<typeof pageFanParamsSchema>;
@@ -1665,10 +1689,25 @@ export type PageParams = z.infer<typeof pageParamsSchema>;
 export type PageRevenueResponse = z.infer<typeof pageRevenueResponseSchema>;
 export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 export type RevenueQuery = z.infer<typeof revenueQuerySchema>;
+export type RevenueDailyQuery = z.infer<typeof revenueDailyQuerySchema>;
+export type RevenueDailyItem = z.infer<typeof revenueDailyItemSchema>;
+export type RevenueDailyTypedItem = z.infer<typeof revenueDailyTypedItemSchema>;
+export type RevenueDailyResponse = z.infer<typeof revenueDailyResponseSchema>;
 export type SubscriberDailyResponse = z.infer<typeof subscriberDailyResponseSchema>;
 export type SubscriberListResponse = z.infer<typeof subscriberListResponseSchema>;
 export type TransactionListQuery = z.infer<typeof transactionListQuerySchema>;
 export type TransactionListResponse = z.infer<typeof transactionListResponseSchema>;
+export type CrossPageTransactionItem = z.infer<typeof crossPageTransactionItemSchema>;
+export type CrossPageTransactionListQuery = z.infer<typeof crossPageTransactionListQuerySchema>;
+export type CrossPageTransactionListResponse = z.infer<typeof crossPageTransactionListResponseSchema>;
+export type FanTransactionItem = z.infer<typeof fanTransactionItemSchema>;
+export type FanTransactionListResponse = z.infer<typeof fanTransactionListResponseSchema>;
+export type CrossPageFanTransactionItem = z.infer<typeof crossPageFanTransactionItemSchema>;
+export type CrossPageFanTransactionListResponse = z.infer<typeof crossPageFanTransactionListResponseSchema>;
+export type CreateFanNoteBody = z.infer<typeof createFanNoteBodySchema>;
+export type FanNoteResponse = z.infer<typeof fanNoteResponseSchema>;
+export type SetFanFlagsBody = z.infer<typeof setFanFlagsBodySchema>;
+export type FanFlagsResponse = z.infer<typeof fanFlagsResponseSchema>;
 export type FansSearchQuery = z.infer<typeof fansSearchQuerySchema>;
 export type FansSearchResponse = z.infer<typeof fansSearchResponseSchema>;
 export type SpenderBatchBody = z.infer<typeof spenderBatchBodySchema>;
@@ -1679,3 +1718,25 @@ export type SpenderListQuery = z.infer<typeof spenderListQuerySchema>;
 export type SpenderListResponse = z.infer<typeof spenderListResponseSchema>;
 export type SpenderSeriesQuery = z.infer<typeof spenderSeriesQuerySchema>;
 export type SpenderSeriesResponse = z.infer<typeof spenderSeriesResponseSchema>;
+export type AdminCreateUserBody = z.infer<typeof adminCreateUserBodySchema>;
+export type AdminSetPasswordBody = z.infer<typeof adminSetPasswordBodySchema>;
+export type AdminAssignPageBody = z.infer<typeof adminAssignPageBodySchema>;
+export type AdminIssueApiKeyBody = z.infer<typeof adminIssueApiKeyBodySchema>;
+export type ApiKeyItem = z.infer<typeof apiKeyItemSchema>;
+export type IssuedApiKeyResponse = z.infer<typeof issuedApiKeyResponseSchema>;
+export type SyncRunItem = z.infer<typeof syncRunItemSchema>;
+export type SyncRunDetailResponse = z.infer<typeof syncRunDetailResponseSchema>;
+export type SyncTriggerBody = z.infer<typeof syncTriggerBodySchema>;
+export type SyncTriggerResponse = z.infer<typeof syncTriggerResponseSchema>;
+export type SyncTriggerAllResponse = z.infer<typeof syncTriggerAllResponseSchema>;
+export type SyncRunsQuery = z.infer<typeof syncRunsQuerySchema>;
+export type ConnectionItem = z.infer<typeof connectionItemSchema>;
+export type VerifyCredentialsBody = z.infer<typeof verifyCredentialsBodySchema>;
+export type VerifyCredentialsResponse = z.infer<typeof verifyCredentialsResponseSchema>;
+export type CreateModelBody = z.infer<typeof createModelBodySchema>;
+export type CreateModelResponse = z.infer<typeof createModelResponseSchema>;
+export type CreatePageBody = z.infer<typeof createPageBodySchema>;
+export type AdminCreatePageResponse = z.infer<typeof adminCreatePageResponseSchema>;
+export type UpdateCredentialsBody = z.infer<typeof updateCredentialsBodySchema>;
+export type UpdateCredentialsResponse = z.infer<typeof updateCredentialsResponseSchema>;
+export type VerifyPageResponse = z.infer<typeof verifyPageResponseSchema>;

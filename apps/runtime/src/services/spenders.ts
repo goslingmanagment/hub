@@ -914,11 +914,15 @@ export async function searchVisibleFans(
   principal: AuthPrincipal,
   query: FansSearchQuery,
 ): Promise<FansSearchResponse> {
+  const searchQuery = query.query ?? query.q;
+  if (!searchQuery) {
+    throw new BadRequestError("`query` is required");
+  }
   const scope = await resolveSpenderScope(app, principal, query);
   const results = await searchFansInScope(app.db, {
     platform: scope.platform,
     pageIds: scope.pageIds,
-    query: query.query,
+    query: searchQuery,
     limit: query.limit,
     offset: query.offset,
   });

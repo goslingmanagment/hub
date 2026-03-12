@@ -10,21 +10,29 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fansly_connect"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   api:
     build: .
+    image: fansly-connect/runtime:local
     command: ["pnpm", "api"]
     ports:
       - "3000:3000"
     env_file: .env
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   worker:
-    build: .
+    image: fansly-connect/runtime:local
     env_file: .env
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres_data:

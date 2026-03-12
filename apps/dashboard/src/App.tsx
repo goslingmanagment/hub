@@ -1,6 +1,12 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  MutationCache,
+  QueryCache,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { Toaster } from "sonner";
+import { handle401 } from "@/api/queries";
 import { ProtectedLayout } from "@/components/layout/ProtectedLayout";
 import { LoginPage } from "@/pages/LoginPage";
 import { OverviewPage } from "@/pages/OverviewPage";
@@ -19,6 +25,12 @@ import { SyncPage } from "@/pages/SyncPage";
 import { ApiRunnerPage } from "@/pages/ApiRunnerPage";
 
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: handle401,
+  }),
+  mutationCache: new MutationCache({
+    onError: (error) => handle401(error),
+  }),
   defaultOptions: {
     queries: {
       retry: false,

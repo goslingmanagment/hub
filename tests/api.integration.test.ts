@@ -4,10 +4,12 @@ import {
   createOnlyFansPage,
   createFanslyPage,
   createModel,
+  finishSyncRun,
   recalculateFanPageSpend,
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
+  startSyncRun,
   updatePageMetadata,
   upsertFanPage,
   upsertFans,
@@ -780,6 +782,93 @@ describe("api integration", () => {
         }),
       ]),
     });
+  });
+
+  it("merges and sorts overview revenue daily rows across platforms", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const onlyFansPage = await createOnlyFansPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-daily-of",
+    });
+    await updatePageMetadata(testDb.db, onlyFansPage.id, {
+      platformAccountIdValue: "of-daily-42",
+      username: "lana_daily_of",
+      displayName: "Lana Daily OF",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {
+        onlyMonsterAccountId: 44,
+      },
+      syncType: "light",
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      transactionId: "of-daily-tip-1",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 4000n,
+      sourceDestinationAmountMills: 4000n,
+      creatorNetAmountMills: 4000n,
+      occurredAt: new Date("2026-03-06T15:00:00.000Z"),
+    });
+    await rebuildRevenueRollups(testDb.db, onlyFansPage.id);
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const summarySeries = await server.inject({
+      method: "GET",
+      url: "/api/v1/overview/revenue/daily?period=30d",
+      headers: { cookie },
+    });
+    expect(summarySeries.statusCode).toBe(200);
+    expect(summarySeries.json().series).toEqual([
+      {
+        businessDate: "2026-03-05",
+        netAmountMills: 5000,
+        transactionCount: 1,
+      },
+      {
+        businessDate: "2026-03-06",
+        netAmountMills: 9000,
+        transactionCount: 3,
+      },
+    ]);
+
+    const groupedSeries = await server.inject({
+      method: "GET",
+      url: "/api/v1/overview/revenue/daily?period=30d&groupByType=true",
+      headers: { cookie },
+    });
+    expect(groupedSeries.statusCode).toBe(200);
+    expect(groupedSeries.json().series).toEqual([
+      {
+        businessDate: "2026-03-05",
+        canonicalType: "subscription",
+        netAmountMills: 5000,
+        transactionCount: 1,
+      },
+      {
+        businessDate: "2026-03-06",
+        canonicalType: "tip",
+        netAmountMills: 9000,
+        transactionCount: 3,
+      },
+    ]);
   });
 
   it("returns merged mixed-platform bounds in model reports", async (context) => {
@@ -1833,6 +1922,16 @@ describe("api integration", () => {
     expect(search.json().items[0].fan.fanId).toBeUndefined();
     expect(search.json().items[0].metrics).toBeUndefined();
 
+    const legacySearch = await server.inject({
+      method: "GET",
+      url: "/api/v2/fans/search?scope=page&pageLabel=lana&q=buyer&limit=10&offset=0",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(legacySearch.statusCode).toBe(200);
+    expect(legacySearch.json().items).toEqual(search.json().items);
+
     const batch = await server.inject({
       method: "POST",
       url: "/api/v2/spenders:batch",
@@ -1898,6 +1997,97 @@ describe("api integration", () => {
     });
 
     expect(forbidden.statusCode).toBe(403);
+  });
+
+  it("returns a typed 404 when onboarding references a missing model slug", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/pages",
+      headers: { cookie },
+      payload: {
+        platform: "fansly",
+        modelSlug: "missing-model",
+        label: "ghost-page",
+        session: {
+          authorization: "token",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({
+      error: "not_found",
+      message: 'Model "missing-model" does not exist',
+      statusCode: 404,
+    });
+  });
+
+  it("uses the latest light sync run for connection health", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const latestLightRun = await startSyncRun(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      stream: "light",
+      trigger: "worker",
+    });
+    await finishSyncRun(testDb.db, latestLightRun.id, {
+      status: "success",
+      stats: {},
+    });
+
+    const followerRun = await startSyncRun(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      stream: "followers",
+      trigger: "worker",
+    });
+    await finishSyncRun(testDb.db, followerRun.id, {
+      status: "failed",
+      stats: {},
+      errorSummary: "Follower sync failed",
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/connections",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: "lana",
+        connectionStatus: "active",
+        lastSyncError: null,
+      }),
+    ]));
   });
 
   it("serves follower and subscriber daily series plus swagger security schemes", async (context) => {

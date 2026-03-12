@@ -25,7 +25,7 @@ export type ConnectionStatus =
   | "never_synced"
   | "unverified";
 
-const STALE_THRESHOLD_HOURS = 3;
+const STALE_THRESHOLD_HOURS = 9;
 
 function isAuthError(errorSummary: string | null): boolean {
   if (!errorSummary) return false;
@@ -68,7 +68,7 @@ function classifyConnectionStatus(
   }
 
   const hoursSinceSync = (Date.now() - lastLightSyncAt.getTime()) / (1000 * 60 * 60);
-  if (hoursSinceSync > STALE_THRESHOLD_HOURS * 3) {
+  if (hoursSinceSync > STALE_THRESHOLD_HOURS) {
     return "stale";
   }
 
@@ -85,7 +85,9 @@ export async function listConnectionStatuses(
   }
 
   const allPageIds = pages.map((p) => p.id);
-  const latestRuns = await getLatestSyncRunPerPage(app.db, allPageIds);
+  const latestRuns = await getLatestSyncRunPerPage(app.db, allPageIds, {
+    stream: "light",
+  });
   const runsByPageId = new Map(latestRuns.map((r) => [r.platformAccountId, r]));
 
   return pages.map((page) => {

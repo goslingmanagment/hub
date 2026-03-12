@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { SyncRunItem } from "@fansly-connect/contracts";
 import {
   useAdminSyncRuns,
   useAdminSyncRunDetail,
@@ -26,10 +27,16 @@ export function SyncPage() {
   const { data: runs, isLoading } = useAdminSyncRuns(query, polling ? 5000 : undefined);
 
   // Start/stop polling based on whether any run is active
-  const hasRunning = runs?.some((r: any) => r.status === "running") ?? false;
-  if (hasRunning !== polling) setPolling(hasRunning);
+  const hasRunning = runs?.some((run) => run.status === "running") ?? false;
+  useEffect(() => {
+    if (hasRunning !== polling) {
+      setPolling(hasRunning);
+    }
+  }, [hasRunning, polling]);
 
-  const { data: detail } = useAdminSyncRunDetail(selectedRunId ?? 0);
+  const { data: detail } = useAdminSyncRunDetail(selectedRunId ?? 0, {
+    enabled: !!selectedRunId,
+  });
   const syncTrigger = useAdminSyncTrigger();
   const syncTriggerAll = useAdminSyncTriggerAll();
 
@@ -39,7 +46,7 @@ export function SyncPage() {
     }
   };
 
-  const columns: Column<any>[] = [
+  const columns: Column<SyncRunItem>[] = [
     { key: "runId", header: "ID", className: "w-16", render: (r) => <span className="text-zinc-400">#{r.runId}</span> },
     { key: "pageLabel", header: "Page", render: (r) => <span className="text-zinc-100">{r.pageLabel}</span> },
     { key: "stream", header: "Stream", render: (r) => <span className="text-zinc-300">{r.stream}</span> },
@@ -83,7 +90,7 @@ export function SyncPage() {
             className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100"
           >
             <option value="">Select page</option>
-            {(overview?.pages ?? []).map((p: any) => (
+            {(overview?.pages ?? []).map((p) => (
               <option key={p.label} value={p.label}>{p.label}</option>
             ))}
           </select>
@@ -113,7 +120,7 @@ export function SyncPage() {
           className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100"
         >
           <option value="">All pages</option>
-          {(overview?.pages ?? []).map((p: any) => (
+          {(overview?.pages ?? []).map((p) => (
             <option key={p.label} value={p.label}>{p.label}</option>
           ))}
         </select>
@@ -123,7 +130,7 @@ export function SyncPage() {
         <DataTable
           columns={columns}
           data={runs ?? []}
-          onRowClick={(r: any) => setSelectedRunId(r.runId === selectedRunId ? null : r.runId)}
+          onRowClick={(r) => setSelectedRunId(r.runId === selectedRunId ? null : r.runId)}
         />
       )}
 
@@ -134,7 +141,7 @@ export function SyncPage() {
           <div>
             <h3 className="text-xs font-medium text-zinc-500 mb-2">Events ({detail.events.length})</h3>
             <div className="max-h-64 overflow-y-auto space-y-1">
-              {detail.events.map((e: any) => (
+              {detail.events.map((e) => (
                 <div key={e.id} className="flex gap-2 text-xs">
                   <StatusBadge status={e.severity} />
                   <span className="text-zinc-400">{e.eventType}</span>
@@ -148,7 +155,7 @@ export function SyncPage() {
           <div>
             <h3 className="text-xs font-medium text-zinc-500 mb-2">HTTP Attempts ({detail.attempts.length})</h3>
             <div className="max-h-64 overflow-y-auto space-y-1">
-              {detail.attempts.map((a: any) => (
+              {detail.attempts.map((a) => (
                 <div key={a.attemptId} className="flex gap-2 text-xs">
                   <StatusBadge status={a.state} />
                   <span className="text-zinc-300">{a.operation}</span>

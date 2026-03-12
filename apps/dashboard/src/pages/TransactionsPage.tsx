@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import type { CrossPageTransactionItem } from "@fansly-connect/contracts";
 import { useTransactions, useOverview } from "@/api/queries";
 import { DataTable, type Column } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/MoneyCell";
@@ -30,14 +31,14 @@ export function TransactionsPage() {
     setOffset(0);
   }, [sortBy]);
 
-  const columns: Column<any>[] = [
+  const columns: Column<CrossPageTransactionItem>[] = [
     { key: "occurredAt", header: "Date", sortable: true, render: (r) => new Date(r.occurredAt).toLocaleDateString() },
     { key: "pageLabel", header: "Page", render: (r) => <span className="text-zinc-300">{r.pageLabel}</span> },
     { key: "platform", header: "Platform", render: (r) => <PlatformIcon platform={r.platform} /> },
     { key: "type", header: "Type", render: (r) => TRANSACTION_TYPE_LABELS[r.canonicalType] ?? r.canonicalType },
     { key: "state", header: "State", render: (r) => <span className="text-zinc-400">{r.transactionState}</span> },
-    { key: "fan", header: "Fan", render: (r) => r.fanUsername ?? r.fanPlatformUserId ?? "—" },
-    { key: "grossAmountMills", header: "Gross", sortable: true, className: "text-right", render: (r) => <MoneyCell mills={r.grossAmountMills} /> },
+    { key: "fan", header: "Fan", render: (r) => r.fan?.username ?? r.fan?.platformUserId ?? "—" },
+    { key: "grossAmountMills", header: "Gross", sortable: true, className: "text-right", render: (r) => <MoneyCell mills={r.amountMills} /> },
     { key: "netAmountMills", header: "Net", sortable: true, className: "text-right", render: (r) => <MoneyCell mills={r.netAmountMills} /> },
   ];
 
@@ -51,7 +52,7 @@ export function TransactionsPage() {
           className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100"
         >
           <option value="">All pages</option>
-          {(overview?.pages ?? []).map((p: any) => (
+          {(overview?.pages ?? []).map((p) => (
             <option key={p.label} value={p.label}>{p.label}</option>
           ))}
         </select>

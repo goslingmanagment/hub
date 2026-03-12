@@ -4,6 +4,7 @@ import { buildApiServer } from "./api/server.ts";
 async function main() {
   const appContext = await createAppContext();
   const server = await buildApiServer(appContext);
+  const keepAlive = setInterval(() => {}, 60_000);
 
   try {
     await server.listen({
@@ -15,12 +16,14 @@ async function main() {
       port: appContext.config.apiPort,
     }, "API server started");
   } catch (error) {
+    clearInterval(keepAlive);
     await server.close().catch(() => undefined);
     await appContext.close().catch(() => undefined);
     throw error;
   }
 
   const shutdown = async () => {
+    clearInterval(keepAlive);
     await server.close();
     await appContext.close();
     process.exit(0);

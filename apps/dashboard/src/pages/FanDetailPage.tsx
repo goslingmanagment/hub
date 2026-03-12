@@ -1,4 +1,8 @@
 import { useState } from "react";
+import type {
+  CrossPageFanDetailResponse,
+  CrossPageFanTransactionItem,
+} from "@fansly-connect/contracts";
 import { useParams } from "react-router";
 import { useFanDetail, useFanTransactions, useCreateFanNote, useSetFanFlags } from "@/api/queries";
 import { Card, CardTitle, CardContent } from "@/components/ui/card";
@@ -13,10 +17,11 @@ import { TRANSACTION_TYPE_LABELS } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth";
 
 const FLAG_OPTIONS = ["whale", "vip", "risky"] as const;
+type FanFlagOption = (typeof FLAG_OPTIONS)[number];
 
 export function FanDetailPage() {
   const { platform, platformUserId } = useParams<{ platform: string; platformUserId: string }>();
-  const { data: fan, isLoading } = useFanDetail(platform!, platformUserId!);
+  const { data: fanDetail, isLoading } = useFanDetail(platform!, platformUserId!);
   const { data: txns, isLoading: txnLoading } = useFanTransactions(platform!, platformUserId!, { limit: "50" });
   const createNote = useCreateFanNote();
   const setFlags = useSetFanFlags();
@@ -26,11 +31,15 @@ export function FanDetailPage() {
   const [notePageLabel, setNotePageLabel] = useState("");
 
   if (isLoading) return <SkeletonTable />;
-  if (!fan) return <p className="text-zinc-400">Fan not found</p>;
+  if (!fanDetail) return <p className="text-zinc-400">Fan not found</p>;
 
-  const activeFlags: string[] = (fan.flags ?? []).map((f: any) => f.flag);
+  const activeFlags = fanDetail.flags.map((flag) => flag.flag);
+  const pages = fanDetail.pages;
+  const notes = pages
+    .flatMap((page) => page.notes.map((note) => ({ ...note, pageLabel: page.pageLabel })))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 
-  const toggleFlag = (flag: string) => {
+  const toggleFlag = (flag: FanFlagOption) => {
     const next = activeFlags.includes(flag)
       ? activeFlags.filter((f) => f !== flag)
       : [...activeFlags, flag];
@@ -46,24 +55,24 @@ export function FanDetailPage() {
     );
   };
 
-  const txnColumns: Column<any>[] = [
+  const txnColumns: Column<CrossPageFanTransactionItem>[] = [
     { key: "occurredAt", header: "Date", render: (r) => new Date(r.occurredAt).toLocaleDateString() },
     { key: "pageLabel", header: "Page", render: (r) => <span className="text-zinc-300">{r.pageLabel}</span> },
     { key: "type", header: "Type", render: (r) => TRANSACTION_TYPE_LABELS[r.canonicalType] ?? r.canonicalType },
-    { key: "gross", header: "Gross", className: "text-right", render: (r) => <MoneyCell mills={r.grossAmountMills} /> },
+    { key: "gross", header: "Gross", className: "text-right", render: (r) => <MoneyCell mills={r.amountMills} /> },
     { key: "net", header: "Net", className: "text-right", render: (r) => <MoneyCell mills={r.netAmountMills} /> },
   ];
-
-  const pages: Array<{ pageLabel: string }> = fan.pages ?? [];
 
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <PlatformIcon platform={platform!} />
         <h1 className="text-lg font-semibold text-zinc-100">
-          {fan.username ?? fan.platformUserId}
+          {fanDetail.fan.username ?? fanDetail.fan.platformUserId}
         </h1>
-        {fan.displayName && <span className="text-zinc-400">({fan.displayName})</span>}
+        {fanDetail.fan.displayName && (
+          <span className="text-zinc-400">({fanDetail.fan.displayName})</span>
+        )}
       </div>
 
       {/* Flags */}
@@ -83,11 +92,11 @@ export function FanDetailPage() {
 
       {/* Spend by page */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {(fan.spendByPage ?? []).map((s: any) => (
-          <Card key={s.pageLabel}>
-            <CardTitle>{s.pageLabel}</CardTitle>
+        {pages.map((page) => (
+          <Card key={page.pageLabel}>
+            <CardTitle>{page.pageLabel}</CardTitle>
             <CardContent>
-              <MoneyCell mills={s.totalSpendMills} />
+              <MoneyCell mills={page.totalCreatorNetMills} />
             </CardContent>
           </Card>
         ))}
@@ -105,12 +114,13 @@ export function FanDetailPage() {
       <div>
         <h2 className="mb-2 text-sm font-medium text-zinc-400">Notes</h2>
         <div className="space-y-2 mb-4">
-          {(fan.notes ?? []).map((note: any) => (
+          {notes.map((note) => (
             <div key={note.id} className="rounded border border-zinc-800 bg-zinc-900 p-3">
               <p className="text-sm text-zinc-200">{note.body}</p>
               <p className="mt-1 text-xs text-zinc-500">
-                {note.authorUsername} — {new Date(note.createdAt).toLocaleDateString()}
-                {note.pageLabel && ` on ${note.pageLabel}`}
+                {new Date(note.createdAt).toLocaleDateString()}
+                {note.authorUserId != null ? ` by #${note.authorUserId}` : ""}
+                {` on ${note.pageLabel}`}
               </p>
             </div>
           ))}

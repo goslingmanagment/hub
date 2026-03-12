@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { CrossPageTransactionItem } from "@fansly-connect/contracts";
 import { useParams } from "react-router";
 import { usePageRevenueDaily, useTransactions } from "@/api/queries";
 import { Card, CardTitle, CardContent } from "@/components/ui/card";
@@ -32,16 +33,16 @@ export function PageDetailPage() {
     { pageLabel: pageLabel!, limit: "50", sortBy: "occurredAt", sortDir: "desc" },
   );
 
-  const chartData = (revenue?.series ?? []).map((s: any) => ({
+  const chartData = (revenue?.series ?? []).map((s) => ({
     date: formatBusinessDate(s.businessDate),
     net: s.netAmountMills / 1000,
   }));
 
-  const txnColumns: Column<any>[] = [
+  const txnColumns: Column<CrossPageTransactionItem>[] = [
     { key: "occurredAt", header: "Date", render: (r) => new Date(r.occurredAt).toLocaleDateString() },
     { key: "type", header: "Type", render: (r) => TRANSACTION_TYPE_LABELS[r.canonicalType] ?? r.canonicalType },
-    { key: "fan", header: "Fan", render: (r) => r.fanUsername ?? r.fanPlatformUserId ?? "—" },
-    { key: "gross", header: "Gross", className: "text-right", render: (r) => <MoneyCell mills={r.grossAmountMills} /> },
+    { key: "fan", header: "Fan", render: (r) => r.fan?.username ?? r.fan?.platformUserId ?? "—" },
+    { key: "gross", header: "Gross", className: "text-right", render: (r) => <MoneyCell mills={r.amountMills} /> },
     { key: "net", header: "Net", className: "text-right", render: (r) => <MoneyCell mills={r.netAmountMills} /> },
     { key: "state", header: "State", render: (r) => <span className="text-zinc-400">{r.transactionState}</span> },
   ];

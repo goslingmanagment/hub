@@ -688,9 +688,17 @@ export async function listRunningSyncRuns(
 export async function getLatestSyncRunPerPage(
   db: Database,
   pageIds: number[],
+  input?: {
+    stream?: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+  },
 ) {
   if (pageIds.length === 0) {
     return [];
+  }
+
+  const clauses = [inArray(syncRuns.platformAccountId, pageIds)];
+  if (input?.stream) {
+    clauses.push(eq(syncRuns.stream, input.stream));
   }
 
   const result = await db.execute<{
@@ -702,17 +710,17 @@ export async function getLatestSyncRunPerPage(
     finishedAt: Date | null;
     errorSummary: string | null;
   }>(sql`
-    select distinct on (sr.platform_account_id)
-           sr.platform_account_id as "platformAccountId",
-           sr.id as "runId",
-           sr.stream as "stream",
-           sr.status as "status",
-           sr.started_at as "startedAt",
-           sr.finished_at as "finishedAt",
-           sr.error_summary as "errorSummary"
-    from sync_runs sr
-    where sr.platform_account_id = any(${pageIds})
-    order by sr.platform_account_id, sr.started_at desc, sr.id desc
+    select distinct on (${syncRuns.platformAccountId})
+           ${syncRuns.platformAccountId} as "platformAccountId",
+           ${syncRuns.id} as "runId",
+           ${syncRuns.stream} as "stream",
+           ${syncRuns.status} as "status",
+           ${syncRuns.startedAt} as "startedAt",
+           ${syncRuns.finishedAt} as "finishedAt",
+           ${syncRuns.errorSummary} as "errorSummary"
+    from ${syncRuns}
+    where ${and(...clauses)}
+    order by ${syncRuns.platformAccountId}, ${syncRuns.startedAt} desc, ${syncRuns.id} desc
   `);
 
   return result.rows;

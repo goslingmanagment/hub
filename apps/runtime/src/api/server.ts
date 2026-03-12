@@ -7,6 +7,7 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import {
   routeSchemas,
+  type RevenueDailyTypedItem,
 } from "@fansly-connect/contracts";
 import {
   countDistinctFansForPages,
@@ -31,6 +32,7 @@ import {
   resolveBusinessDateRangeForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
   toMills,
+  type Period,
   type Platform,
 } from "@fansly-connect/shared";
 import type { FastifyReply } from "fastify";
@@ -655,6 +657,7 @@ export async function buildApiServer(appContext: AppContext) {
     pages: Array<{ platform: Platform }>,
     query: { period: string; from?: string; to?: string; groupByType: boolean },
   ) {
+    type RevenueDailyCanonicalType = RevenueDailyTypedItem["canonicalType"];
     const groupedPageIds = new Map<Platform, number[]>();
     for (let i = 0; i < pages.length; i++) {
       const ids = groupedPageIds.get(pages[i].platform) ?? [];
@@ -662,32 +665,96 @@ export async function buildApiServer(appContext: AppContext) {
       groupedPageIds.set(pages[i].platform, ids);
     }
 
-    const allResults = [];
+    const mergedResults = new Map<string, {
+      businessDate: string;
+      canonicalType?: RevenueDailyCanonicalType;
+      netAmountMills: bigint;
+      transactionCount: number;
+    }>();
+
     for (const [platform, ids] of groupedPageIds) {
       const range = resolveBusinessDateRangeForPlatform(
         platform,
-        query.period as any,
+        query.period as Period,
         new Date(),
         query.period === "custom" && query.from && query.to
           ? { from: query.from, to: query.to }
           : undefined,
       );
+      if (query.groupByType) {
+        const rows = await listRevenueDailyForPages(appContext.db, {
+          pageIds: ids,
+          fromBusinessDate: range.from,
+          toBusinessDate: range.toExclusive,
+          groupByType: true,
+        }) as Array<{
+          businessDate: string;
+          canonicalType: RevenueDailyCanonicalType;
+          netAmountMills: bigint;
+          transactionCount: number;
+        }>;
+
+        for (const row of rows) {
+          const key = `${row.businessDate}:${row.canonicalType}`;
+          const current = mergedResults.get(key);
+          if (current) {
+            current.netAmountMills += row.netAmountMills;
+            current.transactionCount += row.transactionCount;
+            continue;
+          }
+
+          mergedResults.set(key, {
+            businessDate: row.businessDate,
+            canonicalType: row.canonicalType,
+            netAmountMills: row.netAmountMills,
+            transactionCount: row.transactionCount,
+          });
+        }
+        continue;
+      }
+
       const rows = await listRevenueDailyForPages(appContext.db, {
         pageIds: ids,
         fromBusinessDate: range.from,
         toBusinessDate: range.toExclusive,
-        groupByType: query.groupByType,
-      });
-      allResults.push(...rows);
+        groupByType: false,
+      }) as Array<{
+        businessDate: string;
+        netAmountMills: bigint;
+        transactionCount: number;
+      }>;
+
+      for (const row of rows) {
+        const current = mergedResults.get(row.businessDate);
+        if (current) {
+          current.netAmountMills += row.netAmountMills;
+          current.transactionCount += row.transactionCount;
+          continue;
+        }
+
+        mergedResults.set(row.businessDate, {
+          businessDate: row.businessDate,
+          netAmountMills: row.netAmountMills,
+          transactionCount: row.transactionCount,
+        });
+      }
     }
 
     return {
-      series: allResults.map((r: any) => ({
-        businessDate: r.businessDate,
-        ...(r.canonicalType ? { canonicalType: r.canonicalType } : {}),
-        netAmountMills: millsToNumber(r.netAmountMills),
-        transactionCount: r.transactionCount,
-      })),
+      series: Array.from(mergedResults.values())
+        .sort((left, right) => {
+          const dateCompare = left.businessDate.localeCompare(right.businessDate);
+          if (dateCompare !== 0) {
+            return dateCompare;
+          }
+          return (left.canonicalType ?? "").localeCompare(right.canonicalType ?? "");
+        })
+        .map((row) => ({
+          businessDate: row.businessDate,
+          ...(row.canonicalType ? { canonicalType: row.canonicalType } : {}),
+          netAmountMills: millsToNumber(row.netAmountMills),
+          transactionCount: row.transactionCount,
+        })),
     };
   }
 
@@ -1255,7 +1322,7 @@ export async function buildApiServer(appContext: AppContext) {
   });
 
   // SPA static serving in production
-  const dashboardDist = resolve(import.meta.dirname ?? ".", "../../dashboard/dist");
+  const dashboardDist = resolve(import.meta.dirname ?? ".", "../../../dashboard/dist");
   if (existsSync(dashboardDist)) {
     const fastifyStatic = (await import("@fastify/static")).default;
     await server.register(fastifyStatic, {

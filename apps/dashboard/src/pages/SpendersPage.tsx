@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { SpenderListResponse } from "@fansly-connect/contracts";
 import { useNavigate } from "react-router";
 import { useSpenders, useOverview } from "@/api/queries";
 import { DataTable, type Column } from "@/components/shared/DataTable";
@@ -23,13 +24,21 @@ export function SpendersPage() {
   }
 
   const { data, isLoading } = useSpenders(query);
+  const rows = (data?.items ?? []).map((item, index) => ({
+    _rank: index + 1,
+    platform: item.fan.platform,
+    platformUserId: item.fan.platformUserId,
+    username: item.fan.username,
+    grossAmountMills: item.metrics.window?.grossAmountMills ?? item.metrics.lifetime.scopeGrossAmountMills,
+    transactionCount: item.metrics.window?.transactionCount ?? null,
+  }));
 
-  const columns: Column<any>[] = [
-    { key: "rank", header: "#", className: "w-10", render: (_r, ) => "" },
+  const columns: Column<(typeof rows)[number]>[] = [
+    { key: "rank", header: "#", className: "w-10", render: (r) => r._rank },
     { key: "username", header: "Fan", render: (r) => <span className="font-medium text-zinc-100">{r.username ?? r.platformUserId}</span> },
     { key: "platform", header: "Platform", render: (r) => <PlatformIcon platform={r.platform} /> },
-    { key: "totalSpend", header: "Total Spend", className: "text-right", render: (r) => <MoneyCell mills={r.totalSpendMills} /> },
-    { key: "txnCount", header: "Txns", className: "text-right", render: (r) => r.transactionCount },
+    { key: "totalSpend", header: "Total Spend", className: "text-right", render: (r) => <MoneyCell mills={r.grossAmountMills} /> },
+    { key: "txnCount", header: "Txns", className: "text-right", render: (r) => r.transactionCount ?? "—" },
   ];
 
   return (
@@ -73,7 +82,7 @@ export function SpendersPage() {
             className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100"
           >
             <option value="">Select page</option>
-            {(overview?.pages ?? []).map((p: any) => (
+            {(overview?.pages ?? []).map((p) => (
               <option key={p.label} value={p.label}>{p.label}</option>
             ))}
           </select>
@@ -82,8 +91,8 @@ export function SpendersPage() {
       {isLoading ? <SkeletonTable /> : (
         <DataTable
           columns={columns}
-          data={(data?.spenders ?? []).map((s: any, i: number) => ({ ...s, _rank: i + 1 }))}
-          onRowClick={(r: any) => navigate(`/spenders/${r.platform}/${r.platformUserId}`)}
+          data={rows}
+          onRowClick={(r) => navigate(`/spenders/${r.platform}/${r.platformUserId}`)}
         />
       )}
     </div>

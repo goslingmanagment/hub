@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { AuthUser } from "@fansly-connect/contracts";
 import {
   useAdminUsers,
   useAdminCreateUser,
@@ -28,7 +29,7 @@ export function UsersPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [newUsername, setNewUsername] = useState("");
-  const [newRole, setNewRole] = useState("chatter");
+  const [newRole, setNewRole] = useState<AuthUser["role"]>("chatter");
   const [newPassword, setNewPassword] = useState("");
 
   const [pwUser, setPwUser] = useState("");
@@ -58,7 +59,7 @@ export function UsersPage() {
     setPassword.mutate({ username: pwUser, password: pwValue }, { onSuccess: () => { setPwUser(""); setPwValue(""); } });
   };
 
-  const columns: Column<any>[] = [
+  const columns: Column<AuthUser>[] = [
     { key: "username", header: "Username", render: (r) => <span className="font-medium text-zinc-100">{r.username}</span> },
     { key: "role", header: "Role", render: (r) => <Badge>{ROLE_LABELS[r.role] ?? r.role}</Badge> },
     {
@@ -66,11 +67,12 @@ export function UsersPage() {
       header: "Assigned Pages",
       render: (r) => (
         <div className="flex flex-wrap gap-1">
-          {(r.assignedPages ?? []).map((p: any) => (
-            <span key={p.pageLabel} className="inline-flex items-center gap-1">
-              <Badge variant="outline">{p.pageLabel}</Badge>
+          {(r.assignedPages ?? []).map((p) => (
+            <span key={p.label} className="inline-flex items-center gap-1">
+              <Badge variant="outline">{p.label}</Badge>
               <button
-                onClick={(e) => { e.stopPropagation(); unassignPage.mutate({ username: r.username, pageLabel: p.pageLabel }); }}
+                type="button"
+                onClick={(e) => { e.stopPropagation(); unassignPage.mutate({ username: r.username, pageLabel: p.label }); }}
                 className="text-xs text-zinc-500 hover:text-red-400"
                 title="Remove"
               >
@@ -92,9 +94,9 @@ export function UsersPage() {
             variant="ghost"
             size="sm"
             onClick={() =>
-              issueKey.mutate(
-                { username: r.username },
-                { onSuccess: (data) => setIssuedKey(data.key) },
+                  issueKey.mutate(
+                    { username: r.username },
+                    { onSuccess: (data) => setIssuedKey(data.key) },
               )
             }
           >
@@ -131,7 +133,7 @@ export function UsersPage() {
       {showCreate && (
         <form onSubmit={handleCreate} className="flex gap-2 items-end rounded border border-zinc-800 bg-zinc-900 p-3">
           <Input placeholder="Username" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className="w-40" />
-          <select value={newRole} onChange={(e) => setNewRole(e.target.value)} className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100">
+          <select value={newRole} onChange={(e) => setNewRole(e.target.value as AuthUser["role"])} className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100">
             <option value="owner">Owner</option>
             <option value="team_lead">Team Lead</option>
             <option value="chatter">Chatter</option>
@@ -139,7 +141,7 @@ export function UsersPage() {
           </select>
           <Input type="password" placeholder="Password (optional)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-40" />
           <Button type="submit" size="sm" disabled={createUser.isPending}>Create</Button>
-          <Button variant="ghost" size="sm" onClick={() => setShowCreate(false)}>Cancel</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowCreate(false)}>Cancel</Button>
         </form>
       )}
 
@@ -148,7 +150,7 @@ export function UsersPage() {
           <span className="text-sm text-zinc-400">Set password for {pwUser}:</span>
           <Input type="password" placeholder="New password" value={pwValue} onChange={(e) => setPwValue(e.target.value)} className="w-48" />
           <Button type="submit" size="sm" disabled={setPassword.isPending}>Set</Button>
-          <Button variant="ghost" size="sm" onClick={() => setPwUser("")}>Cancel</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setPwUser("")}>Cancel</Button>
         </form>
       )}
 
@@ -157,7 +159,7 @@ export function UsersPage() {
           <span className="text-sm text-zinc-400">Assign page to {assignUser}:</span>
           <select value={assignPageLabel} onChange={(e) => setAssignPageLabel(e.target.value)} className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100">
             <option value="">Select page</option>
-            {(overview?.pages ?? []).map((p: any) => (
+            {(overview?.pages ?? []).map((p) => (
               <option key={p.label} value={p.label}>{p.label}</option>
             ))}
           </select>
@@ -172,7 +174,7 @@ export function UsersPage() {
           >
             Assign
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setAssignUser("")}>Cancel</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setAssignUser("")}>Cancel</Button>
         </div>
       )}
 

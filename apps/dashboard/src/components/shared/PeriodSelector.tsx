@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 const PERIODS = [
   { value: "7d", label: "7D" },
   { value: "30d", label: "30D" },
-  { value: "90d", label: "90D" },
   { value: "all", label: "All" },
 ];
 
@@ -21,6 +20,7 @@ export function PeriodSelector({
     <div className="inline-flex rounded-md border border-zinc-700">
       {items.map((p) => (
         <button
+          type="button"
           key={p.value}
           onClick={() => onChange(p.value)}
           className={cn(

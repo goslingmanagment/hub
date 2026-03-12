@@ -17,6 +17,7 @@ import {
 import type { OnlyMonsterAccount } from "@fansly-connect/onlyfans";
 
 import type { AppContext } from "../bootstrap.ts";
+import { NotFoundError } from "./errors.ts";
 import { buildOnlyFansMetadata, findOnlyFansAccountByUsername } from "./onlyfans.ts";
 
 type FanslyOnboardingContext = Pick<AppContext, "db" | "config"> & {
@@ -81,7 +82,7 @@ export async function onboardFanslyPage(
 ) {
   const model = await findModelBySlug(app.db, input.modelSlug);
   if (!model) {
-    throw new Error(`Model "${input.modelSlug}" does not exist`);
+    throw new NotFoundError(`Model "${input.modelSlug}" does not exist`);
   }
 
   const proxy = input.proxy ?? null;
@@ -141,7 +142,7 @@ export async function onboardOnlyFansPage(
 ) {
   const model = await findModelBySlug(app.db, input.modelSlug);
   if (!model) {
-    throw new Error(`Model "${input.modelSlug}" does not exist`);
+    throw new NotFoundError(`Model "${input.modelSlug}" does not exist`);
   }
 
   const proxy = input.proxy ?? null;
