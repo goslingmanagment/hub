@@ -693,6 +693,361 @@ export const fansSearchResponseSchema = z.object({
   total: z.number().int(),
 });
 
+// --- Phase 4: Dashboard schemas ---
+
+const connectionStatusEnum = z.enum([
+  "active", "stale", "error", "expired", "never_synced", "unverified",
+]);
+
+const syncTriggerScopeEnum = z.enum(["light", "followers", "all"]);
+
+const transactionSortByEnum = z.enum(["occurredAt", "grossAmountMills", "netAmountMills"]);
+
+export const connectionItemSchema = z.object({
+  id: intId,
+  label: z.string(),
+  platform: platformEnum,
+  modelSlug: z.string(),
+  modelName: z.string(),
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+  connectionStatus: connectionStatusEnum,
+  lastLightSyncAt: isoTimestamp.nullable(),
+  lastFollowerSyncAt: isoTimestamp.nullable(),
+  lastSyncError: z.string().nullable(),
+  subscriberCount: z.number().int(),
+  followerCount: z.number().int(),
+});
+
+export const overviewResponseSchema = z.object({
+  counts: z.object({
+    models: z.number().int(),
+    pages: z.number().int(),
+    fans: z.number().int(),
+  }),
+  revenue: z.object({
+    "7d": z.object({
+      revenueMills: mills,
+      adjustmentMills: mills,
+      unclassifiedMills: mills,
+      netEarningsMills: mills,
+    }),
+    "30d": z.object({
+      revenueMills: mills,
+      adjustmentMills: mills,
+      unclassifiedMills: mills,
+      netEarningsMills: mills,
+    }),
+  }),
+  pages: z.array(z.object({
+    id: intId,
+    label: z.string(),
+    platform: platformEnum,
+    modelSlug: z.string(),
+    modelName: z.string(),
+    username: z.string().nullable(),
+    subscriberCount: z.number().int(),
+    followerCount: z.number().int(),
+    revenue7dMills: mills,
+    revenue30dMills: mills,
+    connectionStatus: connectionStatusEnum,
+    lastLightSyncAt: isoTimestamp.nullable(),
+    lastFollowerSyncAt: isoTimestamp.nullable(),
+    lastSyncError: z.string().nullable(),
+  })),
+  setup: z.object({
+    hasPages: z.boolean(),
+    hasFanslyPages: z.boolean(),
+    hasOnlyFansPages: z.boolean(),
+  }),
+});
+
+export const revenueDailyQuerySchema = z.object({
+  period: periodEnum.default("30d"),
+  from: businessDate.optional(),
+  to: businessDate.optional(),
+  groupByType: z.coerce.boolean().default(false),
+});
+
+export const revenueDailyItemSchema = z.object({
+  businessDate: businessDate,
+  netAmountMills: mills,
+  transactionCount: z.number().int(),
+});
+
+export const revenueDailyTypedItemSchema = z.object({
+  businessDate: businessDate,
+  canonicalType: transactionTypeEnum,
+  netAmountMills: mills,
+  transactionCount: z.number().int(),
+});
+
+export const revenueDailyResponseSchema = z.object({
+  series: z.array(z.union([revenueDailyItemSchema, revenueDailyTypedItemSchema])),
+});
+
+export const crossPageTransactionItemSchema = z.object({
+  transactionId: z.string(),
+  rawType: z.union([z.number().int(), z.string()]),
+  canonicalType: transactionTypeEnum,
+  transactionState: transactionStateEnum,
+  amountMills: mills,
+  destinationAmountMills: mills,
+  netAmountMills: mills,
+  occurredAt: isoTimestamp,
+  sourceUpdatedAt: isoTimestamp.nullable(),
+  fan: transactionFanSchema,
+  pageLabel: z.string(),
+  platform: platformEnum,
+});
+
+export const crossPageTransactionListQuerySchema = paginationQuerySchema.extend({
+  pageLabel: z.string().min(1).optional(),
+  type: transactionTypeEnum.optional(),
+  state: transactionStateEnum.optional(),
+  sortBy: transactionSortByEnum.default("occurredAt"),
+  sortDir: sortDirEnum.default("desc"),
+});
+
+export const crossPageTransactionListResponseSchema = z.object({
+  items: z.array(crossPageTransactionItemSchema),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  total: z.number().int(),
+});
+
+export const fanTransactionItemSchema = z.object({
+  transactionId: z.string(),
+  rawType: z.union([z.number().int(), z.string()]),
+  canonicalType: transactionTypeEnum,
+  transactionState: transactionStateEnum,
+  amountMills: mills,
+  destinationAmountMills: mills,
+  netAmountMills: mills,
+  occurredAt: isoTimestamp,
+  sourceUpdatedAt: isoTimestamp.nullable(),
+});
+
+export const fanTransactionListResponseSchema = z.object({
+  items: z.array(fanTransactionItemSchema),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  total: z.number().int(),
+});
+
+export const crossPageFanTransactionItemSchema = fanTransactionItemSchema.extend({
+  pageLabel: z.string(),
+  platform: platformEnum,
+});
+
+export const crossPageFanTransactionListResponseSchema = z.object({
+  items: z.array(crossPageFanTransactionItemSchema),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  total: z.number().int(),
+});
+
+export const createFanNoteBodySchema = z.object({
+  body: z.string().min(1).max(10000),
+});
+
+export const fanNoteResponseSchema = z.object({
+  id: intId,
+  fanId: z.number().int(),
+  platformAccountId: z.number().int(),
+  authorUserId: intId,
+  body: z.string(),
+  createdAt: isoTimestamp,
+});
+
+export const setFanFlagsBodySchema = z.object({
+  flags: z.array(fanFlagEnum),
+});
+
+export const fanFlagsResponseSchema = z.object({
+  flags: z.array(fanFlagSchema),
+});
+
+// Admin schemas
+export const adminCreateUserBodySchema = z.object({
+  username: z.string().min(1).max(100),
+  role: userRoleEnum,
+  password: z.string().min(8).max(256).optional(),
+});
+
+export const adminSetPasswordBodySchema = z.object({
+  password: z.string().min(8).max(256),
+});
+
+export const adminAssignPageBodySchema = z.object({
+  pageLabel: z.string().min(1),
+});
+
+export const adminIssueApiKeyBodySchema = z.object({
+  pageLabel: z.string().min(1).optional(),
+});
+
+export const apiKeyItemSchema = z.object({
+  id: intId,
+  keyPrefix: z.string(),
+  userId: z.number().int(),
+  revokedAt: isoTimestamp.nullable(),
+  createdAt: isoTimestamp,
+  lastUsedAt: isoTimestamp.nullable(),
+});
+
+export const issuedApiKeyResponseSchema = z.object({
+  key: z.string(),
+  keyPrefix: z.string(),
+});
+
+export const syncRunItemSchema = z.object({
+  runId: z.number().int(),
+  platformAccountId: z.number().int(),
+  pageLabel: z.string(),
+  platform: platformEnum,
+  stream: z.string(),
+  trigger: z.string(),
+  status: z.string(),
+  startedAt: isoTimestamp,
+  finishedAt: isoTimestamp.nullable(),
+  errorSummary: z.string().nullable(),
+  stats: z.record(z.string(), z.unknown()),
+});
+
+export const syncRunDetailResponseSchema = z.object({
+  run: syncRunItemSchema,
+  events: z.array(z.object({
+    id: z.number().int(),
+    runId: z.number().int(),
+    platformAccountId: z.number().int(),
+    pageLabel: z.string(),
+    provider: platformEnum,
+    stream: z.string(),
+    eventType: z.string(),
+    severity: z.string(),
+    message: z.string(),
+    details: z.record(z.string(), z.unknown()),
+    emittedAt: isoTimestamp,
+  })),
+  attempts: z.array(z.object({
+    attemptId: z.number().int(),
+    runId: z.number().int(),
+    platformAccountId: z.number().int(),
+    pageLabel: z.string(),
+    provider: platformEnum,
+    stream: z.string(),
+    operation: z.string(),
+    logicalRequestId: z.string(),
+    attemptNumber: z.number().int(),
+    state: z.string(),
+    failureKind: z.string().nullable(),
+    httpStatus: z.number().int().nullable(),
+    retryDelayMs: z.number().int().nullable(),
+    durationMs: z.number().int().nullable(),
+    requestShape: z.record(z.string(), z.unknown()),
+    responseShape: z.record(z.string(), z.unknown()),
+    errorMessage: z.string().nullable(),
+    startedAt: isoTimestamp,
+    finishedAt: isoTimestamp.nullable(),
+  })),
+});
+
+export const syncTriggerBodySchema = z.object({
+  pageLabel: z.string().min(1),
+  scope: syncTriggerScopeEnum,
+});
+
+export const syncTriggerResponseSchema = z.object({
+  accepted: z.literal(true),
+  pageLabel: z.string(),
+  scope: syncTriggerScopeEnum,
+});
+
+export const syncTriggerAllResponseSchema = z.object({
+  accepted: z.literal(true),
+  pagesQueued: z.number().int(),
+});
+
+export const syncRunsQuerySchema = z.object({
+  pageLabel: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(20),
+  since: z.string().optional(),
+});
+
+const fanslyCredentialsSchema = z.object({
+  platform: z.literal("fansly"),
+  session: z.object({
+    authorization: z.string().min(1),
+    fanslyClientId: z.string().optional(),
+    fanslyClientCheck: z.string().optional(),
+    fanslySessionId: z.string().optional(),
+  }),
+  proxy: z.object({
+    url: z.string().min(1),
+    username: z.string().nullable().optional(),
+    password: z.string().nullable().optional(),
+  }).optional(),
+});
+
+const onlyfansCredentialsSchema = z.object({
+  platform: z.literal("onlyfans"),
+  auth: z.object({
+    token: z.string().min(1),
+  }),
+  username: z.string().min(1),
+  proxy: z.object({
+    url: z.string().min(1),
+    username: z.string().nullable().optional(),
+    password: z.string().nullable().optional(),
+  }).optional(),
+});
+
+export const verifyCredentialsBodySchema = z.discriminatedUnion("platform", [
+  fanslyCredentialsSchema,
+  onlyfansCredentialsSchema,
+]);
+
+export const verifyCredentialsResponseSchema = z.object({
+  valid: z.literal(true),
+  platform: platformEnum,
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+});
+
+export const createPageBodySchema = z.discriminatedUnion("platform", [
+  fanslyCredentialsSchema.extend({
+    modelSlug: z.string().min(1),
+    label: z.string().min(1),
+  }),
+  onlyfansCredentialsSchema.extend({
+    modelSlug: z.string().min(1),
+    label: z.string().min(1),
+  }),
+]);
+
+export const createModelBodySchema = z.object({
+  slug: z.string().min(1).max(100),
+  name: z.string().min(1).max(200),
+});
+
+export const createModelResponseSchema = z.object({
+  id: intId,
+  slug: z.string(),
+  name: z.string(),
+});
+
+export const updateCredentialsBodySchema = z.discriminatedUnion("platform", [
+  fanslyCredentialsSchema,
+  onlyfansCredentialsSchema,
+]);
+
+export const verifyPageResponseSchema = z.object({
+  verified: z.boolean(),
+  username: z.string().nullable(),
+  platform: platformEnum,
+});
+
 const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
 const cookieOrBearerSecurity: Array<Record<string, string[]>> = [
   { cookieAuth: [] },
@@ -953,6 +1308,335 @@ export const routeSchemas = {
     querystring: fansSearchQuerySchema,
     response: {
       200: fansSearchResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  // --- Phase 4: Dashboard routes ---
+  overview: {
+    tags: ["dashboard"],
+    summary: "Get agency overview dashboard data",
+    security: cookieOnlySecurity,
+    response: {
+      200: overviewResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  overviewRevenueDaily: {
+    tags: ["dashboard"],
+    summary: "Get agency-wide revenue daily series",
+    security: cookieOnlySecurity,
+    querystring: revenueDailyQuerySchema,
+    response: {
+      200: revenueDailyResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  pageRevenueDaily: {
+    tags: ["dashboard"],
+    summary: "Get daily revenue series for one page",
+    security: cookieOrBearerSecurity,
+    params: pageParamsSchema,
+    querystring: revenueDailyQuerySchema,
+    response: {
+      200: revenueDailyResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  modelRevenueDaily: {
+    tags: ["dashboard"],
+    summary: "Get daily revenue series for one model",
+    security: cookieOnlySecurity,
+    params: modelParamsSchema,
+    querystring: revenueDailyQuerySchema,
+    response: {
+      200: revenueDailyResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  crossPageTransactions: {
+    tags: ["transactions"],
+    summary: "List transactions across all visible pages",
+    security: cookieOnlySecurity,
+    querystring: crossPageTransactionListQuerySchema,
+    response: {
+      200: crossPageTransactionListResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  pageFanTransactions: {
+    tags: ["fans"],
+    summary: "Get fan transaction history on a specific page",
+    security: cookieOrBearerSecurity,
+    params: pageFanParamsSchema,
+    querystring: paginationQuerySchema,
+    response: {
+      200: fanTransactionListResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  crossPageFanTransactions: {
+    tags: ["fans"],
+    summary: "Get cross-page fan transaction history",
+    security: cookieOnlySecurity,
+    params: fanLookupParamsSchema,
+    querystring: paginationQuerySchema,
+    response: {
+      200: crossPageFanTransactionListResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  createFanNote: {
+    tags: ["fans"],
+    summary: "Create a note on a fan for a specific page",
+    security: cookieOrBearerSecurity,
+    params: pageFanParamsSchema,
+    body: createFanNoteBodySchema,
+    response: {
+      200: fanNoteResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  setFanFlags: {
+    tags: ["fans"],
+    summary: "Set flags on a fan",
+    security: cookieOnlySecurity,
+    params: fanLookupParamsSchema,
+    body: setFanFlagsBodySchema,
+    response: {
+      200: fanFlagsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  openApiJson: {
+    tags: ["system"],
+    summary: "Get the OpenAPI specification",
+    response: {
+      200: z.any(),
+    },
+  },
+  // Admin routes
+  adminListUsers: {
+    tags: ["admin"],
+    summary: "List all users",
+    security: cookieOnlySecurity,
+    response: {
+      200: z.array(authUserSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminCreateUser: {
+    tags: ["admin"],
+    summary: "Create a new user",
+    security: cookieOnlySecurity,
+    body: adminCreateUserBodySchema,
+    response: {
+      200: authUserSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminSetPassword: {
+    tags: ["admin"],
+    summary: "Set a user password",
+    security: cookieOnlySecurity,
+    params: z.object({ username: z.string().min(1) }),
+    body: adminSetPasswordBodySchema,
+    response: {
+      200: z.object({ ok: z.literal(true) }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminAssignPage: {
+    tags: ["admin"],
+    summary: "Assign a page to a user",
+    security: cookieOnlySecurity,
+    params: z.object({ username: z.string().min(1) }),
+    body: adminAssignPageBodySchema,
+    response: {
+      200: authUserSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminUnassignPage: {
+    tags: ["admin"],
+    summary: "Unassign a page from a user",
+    security: cookieOnlySecurity,
+    params: z.object({ username: z.string().min(1), pageLabel: z.string().min(1) }),
+    response: {
+      200: z.object({ ok: z.literal(true) }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminListApiKeys: {
+    tags: ["admin"],
+    summary: "List API keys for a user",
+    security: cookieOnlySecurity,
+    params: z.object({ username: z.string().min(1) }),
+    response: {
+      200: z.array(apiKeyItemSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminIssueApiKey: {
+    tags: ["admin"],
+    summary: "Issue an API key for a user",
+    security: cookieOnlySecurity,
+    params: z.object({ username: z.string().min(1) }),
+    body: adminIssueApiKeyBodySchema,
+    response: {
+      200: issuedApiKeyResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminRevokeApiKeys: {
+    tags: ["admin"],
+    summary: "Revoke all API keys for a user",
+    security: cookieOnlySecurity,
+    params: z.object({ username: z.string().min(1) }),
+    response: {
+      200: z.object({ revokedCount: z.number().int() }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminSyncRuns: {
+    tags: ["admin"],
+    summary: "List recent sync runs",
+    security: cookieOnlySecurity,
+    querystring: syncRunsQuerySchema,
+    response: {
+      200: z.array(syncRunItemSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminSyncRunDetail: {
+    tags: ["admin"],
+    summary: "Get sync run detail",
+    security: cookieOnlySecurity,
+    params: z.object({ runId: z.coerce.number().int().positive() }),
+    response: {
+      200: syncRunDetailResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminSyncTrigger: {
+    tags: ["admin"],
+    summary: "Trigger sync for a page",
+    security: cookieOnlySecurity,
+    body: syncTriggerBodySchema,
+    response: {
+      202: syncTriggerResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminSyncTriggerAll: {
+    tags: ["admin"],
+    summary: "Trigger sync for all pages",
+    security: cookieOnlySecurity,
+    response: {
+      202: syncTriggerAllResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminConnections: {
+    tags: ["admin"],
+    summary: "List connection statuses",
+    security: cookieOnlySecurity,
+    response: {
+      200: z.array(connectionItemSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminCreateModel: {
+    tags: ["admin"],
+    summary: "Create a model",
+    security: cookieOnlySecurity,
+    body: createModelBodySchema,
+    response: {
+      200: createModelResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminCreatePage: {
+    tags: ["admin"],
+    summary: "Onboard a new page",
+    security: cookieOnlySecurity,
+    body: createPageBodySchema,
+    response: {
+      200: z.object({ page: assignedPageSchema, verified: z.boolean() }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminVerifyCredentials: {
+    tags: ["admin"],
+    summary: "Verify credentials without persisting",
+    security: cookieOnlySecurity,
+    body: verifyCredentialsBodySchema,
+    response: {
+      200: verifyCredentialsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminVerifyPage: {
+    tags: ["admin"],
+    summary: "Verify stored credentials for a page",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    response: {
+      200: verifyPageResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminUpdateCredentials: {
+    tags: ["admin"],
+    summary: "Update credentials for an existing page",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    body: updateCredentialsBodySchema,
+    response: {
+      200: z.object({ updated: z.boolean(), verified: z.boolean() }),
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,

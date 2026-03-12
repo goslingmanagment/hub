@@ -1,4 +1,4 @@
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
@@ -683,4 +683,37 @@ export async function listRunningSyncRuns(
   `);
 
   return result.rows.map((row) => normalizeRunningSyncRunRow(row));
+}
+
+export async function getLatestSyncRunPerPage(
+  db: Database,
+  pageIds: number[],
+) {
+  if (pageIds.length === 0) {
+    return [];
+  }
+
+  const result = await db.execute<{
+    platformAccountId: number;
+    runId: number;
+    stream: "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+    status: "running" | "success" | "partial" | "failed" | "skipped";
+    startedAt: Date;
+    finishedAt: Date | null;
+    errorSummary: string | null;
+  }>(sql`
+    select distinct on (sr.platform_account_id)
+           sr.platform_account_id as "platformAccountId",
+           sr.id as "runId",
+           sr.stream as "stream",
+           sr.status as "status",
+           sr.started_at as "startedAt",
+           sr.finished_at as "finishedAt",
+           sr.error_summary as "errorSummary"
+    from sync_runs sr
+    where sr.platform_account_id = any(${pageIds})
+    order by sr.platform_account_id, sr.started_at desc, sr.id desc
+  `);
+
+  return result.rows;
 }

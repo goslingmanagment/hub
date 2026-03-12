@@ -1,5 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 
+import type { FanFlagType } from "@fansly-connect/shared";
 import type { Database } from "../client.ts";
 import { fanFlags, fanNotes, fanSummaries } from "../schema.ts";
 
@@ -43,5 +44,55 @@ export async function listFanFlags(db: Database, fanId: number) {
   return db.query.fanFlags.findMany({
     where: eq(fanFlags.fanId, fanId),
     orderBy: (table, { asc }) => [asc(table.createdAt)],
+  });
+}
+
+export async function createFanNote(
+  db: Database,
+  input: {
+    fanId: number;
+    platformAccountId: number;
+    authorUserId: number;
+    body: string;
+  },
+) {
+  const [note] = await db
+    .insert(fanNotes)
+    .values({
+      fanId: input.fanId,
+      platformAccountId: input.platformAccountId,
+      authorUserId: input.authorUserId,
+      body: input.body,
+    })
+    .returning();
+
+  return note;
+}
+
+export async function setFanFlags(
+  db: Database,
+  input: {
+    fanId: number;
+    flags: FanFlagType[];
+    createdByUserId: number;
+  },
+) {
+  return db.transaction(async (tx) => {
+    await tx.delete(fanFlags).where(eq(fanFlags.fanId, input.fanId));
+
+    if (input.flags.length === 0) {
+      return [];
+    }
+
+    return tx
+      .insert(fanFlags)
+      .values(
+        input.flags.map((flag) => ({
+          fanId: input.fanId,
+          flag,
+          createdByUserId: input.createdByUserId,
+        })),
+      )
+      .returning();
   });
 }

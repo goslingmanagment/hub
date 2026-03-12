@@ -615,6 +615,218 @@ export async function listFanPageContexts(
     .orderBy(models.slug, platformAccounts.label);
 }
 
+export async function countDistinctFansForPages(db: Database, pageIds: number[]) {
+  if (pageIds.length === 0) {
+    return 0;
+  }
+
+  const [row] = await db.select({
+    count: sql<number>`count(distinct ${fanPages.fanId})::int`,
+  }).from(fanPages)
+    .where(inArray(fanPages.platformAccountId, pageIds));
+
+  return row?.count ?? 0;
+}
+
+export async function listRevenueDailyForPages(
+  db: Database,
+  input: {
+    pageIds?: number[];
+    fromBusinessDate?: string | null;
+    toBusinessDate?: string | null;
+    groupByType?: boolean;
+  },
+) {
+  const clauses = buildRevenueRollupClauses({
+    pageIds: input.pageIds,
+    fromBusinessDate: input.fromBusinessDate,
+    toBusinessDate: input.toBusinessDate,
+  });
+
+  if (!clauses) {
+    return [];
+  }
+
+  if (input.groupByType) {
+    return db.select({
+      businessDate: dailyRevenue.businessDate,
+      canonicalType: dailyRevenue.canonicalType,
+      netAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.creatorNetAmountMills}), 0)::bigint`,
+      transactionCount: sql<number>`coalesce(sum(${dailyRevenue.transactionCount}), 0)::int`,
+    }).from(dailyRevenue)
+      .where(and(...clauses))
+      .groupBy(dailyRevenue.businessDate, dailyRevenue.canonicalType)
+      .orderBy(dailyRevenue.businessDate, dailyRevenue.canonicalType);
+  }
+
+  return db.select({
+    businessDate: dailyRevenue.businessDate,
+    netAmountMills: sql<bigint>`coalesce(sum(${dailyRevenue.creatorNetAmountMills}), 0)::bigint`,
+    transactionCount: sql<number>`coalesce(sum(${dailyRevenue.transactionCount}), 0)::int`,
+  }).from(dailyRevenue)
+    .where(and(...clauses))
+    .groupBy(dailyRevenue.businessDate)
+    .orderBy(dailyRevenue.businessDate);
+}
+
+export async function listTransactionsForScope(
+  db: Database,
+  input: {
+    pageIds?: number[];
+    pageLabel?: string;
+    canonicalType?: string;
+    transactionState?: string;
+    sortBy?: "occurredAt" | "grossAmountMills" | "netAmountMills";
+    sortDir?: "asc" | "desc";
+    limit: number;
+    offset: number;
+  },
+) {
+  const clauses = buildTransactionScopeClauses({
+    pageIds: input.pageIds,
+    canonicalType: input.canonicalType,
+    transactionState: input.transactionState,
+    excludeExcludedTypes: false,
+  });
+
+  if (!clauses) {
+    return { total: 0, items: [] };
+  }
+
+  if (input.pageLabel) {
+    clauses.push(eq(platformAccounts.label, input.pageLabel));
+  }
+
+  const sortColumn = input.sortBy === "grossAmountMills"
+    ? transactions.grossAmountMills
+    : input.sortBy === "netAmountMills"
+      ? transactions.creatorNetAmountMills
+      : transactions.occurredAt;
+  const sortFn = input.sortDir === "asc" ? asc : desc;
+
+  const [countRow] = await db.select({
+    total: sql<number>`count(*)::int`,
+  }).from(transactions)
+    .innerJoin(platformAccounts, eq(platformAccounts.id, transactions.platformAccountId))
+    .where(and(...clauses));
+
+  const items = await db.select({
+    transactionId: transactions.transactionId,
+    rawType: transactions.rawType,
+    canonicalType: transactions.canonicalType,
+    transactionState: transactions.transactionState,
+    amountMills: transactions.grossAmountMills,
+    destinationAmountMills: transactions.sourceDestinationAmountMills,
+    netAmountMills: transactions.creatorNetAmountMills,
+    walletId: transactions.walletId,
+    correlationId: transactions.correlationId,
+    correlationAccountId: transactions.correlationAccountId,
+    occurredAt: transactions.occurredAt,
+    sourceUpdatedAt: transactions.sourceUpdatedAt,
+    fanPlatformUserId: fans.platformUserId,
+    fanUsername: fans.username,
+    fanDisplayName: fans.displayName,
+    pageLabel: platformAccounts.label,
+    platform: platformAccounts.platform,
+  }).from(transactions)
+    .innerJoin(platformAccounts, eq(platformAccounts.id, transactions.platformAccountId))
+    .leftJoin(fans, eq(fans.id, transactions.fanId))
+    .where(and(...clauses))
+    .orderBy(sortFn(sortColumn), desc(transactions.id))
+    .limit(input.limit)
+    .offset(input.offset);
+
+  return {
+    total: countRow?.total ?? 0,
+    items,
+  };
+}
+
+export async function listFanTransactionsOnPage(
+  db: Database,
+  input: {
+    pageId: number;
+    fanId: number;
+    limit: number;
+    offset: number;
+  },
+) {
+  const clauses = and(
+    eq(transactions.platformAccountId, input.pageId),
+    eq(transactions.fanId, input.fanId),
+  );
+
+  const [countRow] = await db.select({
+    total: sql<number>`count(*)::int`,
+  }).from(transactions).where(clauses);
+
+  const items = await db.select({
+    transactionId: transactions.transactionId,
+    rawType: transactions.rawType,
+    canonicalType: transactions.canonicalType,
+    transactionState: transactions.transactionState,
+    amountMills: transactions.grossAmountMills,
+    destinationAmountMills: transactions.sourceDestinationAmountMills,
+    netAmountMills: transactions.creatorNetAmountMills,
+    occurredAt: transactions.occurredAt,
+    sourceUpdatedAt: transactions.sourceUpdatedAt,
+  }).from(transactions)
+    .where(clauses)
+    .orderBy(desc(transactions.occurredAt), desc(transactions.id))
+    .limit(input.limit)
+    .offset(input.offset);
+
+  return {
+    total: countRow?.total ?? 0,
+    items,
+  };
+}
+
+export async function listFanTransactionsCrossPage(
+  db: Database,
+  input: {
+    fanId: number;
+    pageIds: number[];
+    limit: number;
+    offset: number;
+  },
+) {
+  const clauses = [eq(transactions.fanId, input.fanId)];
+  if (input.pageIds.length > 0) {
+    clauses.push(inArray(transactions.platformAccountId, input.pageIds));
+  }
+
+  const [countRow] = await db.select({
+    total: sql<number>`count(*)::int`,
+  }).from(transactions)
+    .innerJoin(platformAccounts, eq(platformAccounts.id, transactions.platformAccountId))
+    .where(and(...clauses));
+
+  const items = await db.select({
+    transactionId: transactions.transactionId,
+    rawType: transactions.rawType,
+    canonicalType: transactions.canonicalType,
+    transactionState: transactions.transactionState,
+    amountMills: transactions.grossAmountMills,
+    destinationAmountMills: transactions.sourceDestinationAmountMills,
+    netAmountMills: transactions.creatorNetAmountMills,
+    occurredAt: transactions.occurredAt,
+    sourceUpdatedAt: transactions.sourceUpdatedAt,
+    pageLabel: platformAccounts.label,
+    platform: platformAccounts.platform,
+  }).from(transactions)
+    .innerJoin(platformAccounts, eq(platformAccounts.id, transactions.platformAccountId))
+    .where(and(...clauses))
+    .orderBy(desc(transactions.occurredAt), desc(transactions.id))
+    .limit(input.limit)
+    .offset(input.offset);
+
+  return {
+    total: countRow?.total ?? 0,
+    items,
+  };
+}
+
 export async function getPlatformTotalSpendForFan(
   db: Database,
   input: {

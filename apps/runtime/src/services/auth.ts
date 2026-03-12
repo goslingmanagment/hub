@@ -528,8 +528,17 @@ export function requireDashboardUser(principal: AuthPrincipal) {
   }
 }
 
+export function requireOwner(principal: AuthPrincipal) {
+  requireDashboardUser(principal);
+  if (principal.user.role !== "owner") {
+    throw new ForbiddenError("Owner access required");
+  }
+}
+
 export function requireApiKeyUser(principal: AuthPrincipal) {
   if (principal.authMethod !== "api_key") {
     throw new ForbiddenError("API key required");
   }
 }
+
+export { getAuthenticatedUserByUsername };

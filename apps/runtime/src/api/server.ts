@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
@@ -5,9 +8,34 @@ import swaggerUi from "@fastify/swagger-ui";
 import {
   routeSchemas,
 } from "@fansly-connect/contracts";
-import { createLogger } from "@fansly-connect/shared";
+import {
+  countDistinctFansForPages,
+  createFanNote,
+  createModel,
+  findPlatformFan,
+  getLatestSyncRunPerPage,
+  getRevenueBreakdownForScope,
+  getRevenuePageTotals,
+  listFanFlags,
+  listFanPageContexts,
+  listFanTransactionsCrossPage,
+  listFanTransactionsOnPage,
+  listRevenueDailyForPages,
+  listTransactionsForScope,
+  listVisiblePages,
+  setFanFlags,
+} from "@fansly-connect/db";
+import {
+  createLogger,
+  millsToNumber,
+  resolveBusinessDateRangeForPlatform,
+  resolveRevenuePeriodBoundsForPlatform,
+  toMills,
+  type Platform,
+} from "@fansly-connect/shared";
 import type { FastifyReply } from "fastify";
 import Fastify from "fastify";
+import PgBoss from "pg-boss";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import {
   createJsonSchemaTransform,
@@ -20,16 +48,28 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  assignPageToUser,
   authenticateApiKeyToken,
   authenticateSessionToken,
   canAccessPage,
+  createUserAccount,
+  getAuthenticatedUserByUsername,
+  issueChatterApiKey,
+  listApiKeysForUsers,
+  listUsersDetailed,
   loginWithPassword,
   logoutSessionToken,
   requireDashboardUser,
+  requireOwner,
+  revokeUserApiKeys,
   SESSION_COOKIE_NAME,
+  setUserPassword,
+  unassignPageFromUser,
   type AuthPrincipal,
 } from "../services/auth.ts";
-import { AppError, ForbiddenError, UnauthorizedError } from "../services/errors.ts";
+import { listConnectionStatuses, updatePageCredentials } from "../services/connections.ts";
+import { AppError, BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from "../services/errors.ts";
+import { resolvePageContext } from "../services/page-context.ts";
 import {
   getCrossPageFanDetailReport,
   getModelRevenueReport,
@@ -53,6 +93,9 @@ import {
   getSpenderSeries,
   searchVisibleFans,
 } from "../services/spenders.ts";
+import { listStatus, getStatusDetail } from "../services/sync.ts";
+import { refreshPageMetadata } from "../services/sync/shared.ts";
+import { onboardFanslyPage, onboardOnlyFansPage } from "../services/page-onboarding.ts";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -474,6 +517,765 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     return searchVisibleFans(appContext, principal, request.query);
   });
+
+  // --- Phase 4: Dashboard + Admin routes ---
+
+  // pg-boss for enqueuing sync trigger jobs (skip when no DB, e.g. contract generation)
+  let boss: PgBoss | null = null;
+  if (appContext.config.databaseUrl) {
+    boss = new PgBoss({ connectionString: appContext.config.databaseUrl });
+    await boss.start();
+    server.addHook("onClose", async () => {
+      await boss!.stop();
+    });
+  }
+
+  // GET /api/v1/overview
+  server.get("/api/v1/overview", {
+    schema: routeSchemas.overview,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const pageScope = pageScopeFor(principal);
+    const pages = await listVisiblePages(appContext.db, pageScope);
+    const pageIds = pages.map((p) => p.id);
+    const modelSet = new Map<string, { slug: string; name: string }>();
+    for (const p of pages) {
+      modelSet.set(p.modelSlug, { slug: p.modelSlug, name: p.modelName });
+    }
+    const fanCount = await countDistinctFansForPages(appContext.db, pageIds);
+    const connectionStatuses = await listConnectionStatuses(appContext, pageScope);
+    const statusByPageId = new Map(connectionStatuses.map((c) => [c.id, c]));
+
+    // Revenue 7d and 30d
+    const groupedPageIds = new Map<Platform, number[]>();
+    for (const p of pages) {
+      const ids = groupedPageIds.get(p.platform) ?? [];
+      ids.push(p.id);
+      groupedPageIds.set(p.platform, ids);
+    }
+    const now = new Date();
+
+    const rev7d = { revenueMills: 0n, adjustmentMills: 0n, unclassifiedMills: 0n, netEarningsMills: 0n };
+    const rev30d = { revenueMills: 0n, adjustmentMills: 0n, unclassifiedMills: 0n, netEarningsMills: 0n };
+
+    for (const [platform, ids] of groupedPageIds) {
+      const bounds7d = resolveRevenuePeriodBoundsForPlatform(platform, "7d", now);
+      const bounds30d = resolveRevenuePeriodBoundsForPlatform(platform, "30d", now);
+      const [rows7d, rows30d] = await Promise.all([
+        getRevenueBreakdownForScope(appContext.db, { platform, pageIds: ids, period: bounds7d }),
+        getRevenueBreakdownForScope(appContext.db, { platform, pageIds: ids, period: bounds30d }),
+      ]);
+      for (const r of rows7d) {
+        const m = toMills(r.netAmountMills);
+        if (r.bucket === "revenue") rev7d.revenueMills += m;
+        else if (r.bucket === "adjustment") rev7d.adjustmentMills += m;
+        else if (r.bucket === "unclassified") rev7d.unclassifiedMills += m;
+      }
+      rev7d.netEarningsMills = rev7d.revenueMills + rev7d.adjustmentMills + rev7d.unclassifiedMills;
+      for (const r of rows30d) {
+        const m = toMills(r.netAmountMills);
+        if (r.bucket === "revenue") rev30d.revenueMills += m;
+        else if (r.bucket === "adjustment") rev30d.adjustmentMills += m;
+        else if (r.bucket === "unclassified") rev30d.unclassifiedMills += m;
+      }
+      rev30d.netEarningsMills = rev30d.revenueMills + rev30d.adjustmentMills + rev30d.unclassifiedMills;
+    }
+
+    // Per-page revenue
+    const pageTotals7d = new Map<number, bigint>();
+    const pageTotals30d = new Map<number, bigint>();
+    for (const [platform, ids] of groupedPageIds) {
+      const [pt7d, pt30d] = await Promise.all([
+        getRevenuePageTotals(appContext.db, {
+          platform,
+          pageIds: ids,
+          period: resolveRevenuePeriodBoundsForPlatform(platform, "7d", now),
+        }),
+        getRevenuePageTotals(appContext.db, {
+          platform,
+          pageIds: ids,
+          period: resolveRevenuePeriodBoundsForPlatform(platform, "30d", now),
+        }),
+      ]);
+      for (const r of pt7d) pageTotals7d.set(r.pageId, toMills(r.netEarningsMills));
+      for (const r of pt30d) pageTotals30d.set(r.pageId, toMills(r.netEarningsMills));
+    }
+
+    return {
+      counts: {
+        models: modelSet.size,
+        pages: pages.length,
+        fans: fanCount,
+      },
+      revenue: {
+        "7d": {
+          revenueMills: millsToNumber(rev7d.revenueMills),
+          adjustmentMills: millsToNumber(rev7d.adjustmentMills),
+          unclassifiedMills: millsToNumber(rev7d.unclassifiedMills),
+          netEarningsMills: millsToNumber(rev7d.netEarningsMills),
+        },
+        "30d": {
+          revenueMills: millsToNumber(rev30d.revenueMills),
+          adjustmentMills: millsToNumber(rev30d.adjustmentMills),
+          unclassifiedMills: millsToNumber(rev30d.unclassifiedMills),
+          netEarningsMills: millsToNumber(rev30d.netEarningsMills),
+        },
+      },
+      pages: pages.map((p) => {
+        const status = statusByPageId.get(p.id);
+        return {
+          id: p.id,
+          label: p.label,
+          platform: p.platform,
+          modelSlug: p.modelSlug,
+          modelName: p.modelName,
+          username: p.username,
+          subscriberCount: p.subscriberCount,
+          followerCount: p.followerCount,
+          revenue7dMills: millsToNumber(pageTotals7d.get(p.id) ?? 0n),
+          revenue30dMills: millsToNumber(pageTotals30d.get(p.id) ?? 0n),
+          connectionStatus: status?.connectionStatus ?? "unverified",
+          lastLightSyncAt: p.lastLightSyncAt?.toISOString() ?? null,
+          lastFollowerSyncAt: p.lastFollowerSyncAt?.toISOString() ?? null,
+          lastSyncError: status?.lastSyncError ?? null,
+        };
+      }),
+      setup: {
+        hasPages: pages.length > 0,
+        hasFanslyPages: pages.some((p) => p.platform === "fansly"),
+        hasOnlyFansPages: pages.some((p) => p.platform === "onlyfans"),
+      },
+    };
+  });
+
+  // Revenue daily endpoints
+  async function getRevenueDailySeries(
+    pageIds: number[],
+    pages: Array<{ platform: Platform }>,
+    query: { period: string; from?: string; to?: string; groupByType: boolean },
+  ) {
+    const groupedPageIds = new Map<Platform, number[]>();
+    for (let i = 0; i < pages.length; i++) {
+      const ids = groupedPageIds.get(pages[i].platform) ?? [];
+      ids.push(pageIds[i]);
+      groupedPageIds.set(pages[i].platform, ids);
+    }
+
+    const allResults = [];
+    for (const [platform, ids] of groupedPageIds) {
+      const range = resolveBusinessDateRangeForPlatform(
+        platform,
+        query.period as any,
+        new Date(),
+        query.period === "custom" && query.from && query.to
+          ? { from: query.from, to: query.to }
+          : undefined,
+      );
+      const rows = await listRevenueDailyForPages(appContext.db, {
+        pageIds: ids,
+        fromBusinessDate: range.from,
+        toBusinessDate: range.toExclusive,
+        groupByType: query.groupByType,
+      });
+      allResults.push(...rows);
+    }
+
+    return {
+      series: allResults.map((r: any) => ({
+        businessDate: r.businessDate,
+        ...(r.canonicalType ? { canonicalType: r.canonicalType } : {}),
+        netAmountMills: millsToNumber(r.netAmountMills),
+        transactionCount: r.transactionCount,
+      })),
+    };
+  }
+
+  server.get("/api/v1/overview/revenue/daily", {
+    schema: routeSchemas.overviewRevenueDaily,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const pages = await listVisiblePages(appContext.db, pageScopeFor(principal));
+    return getRevenueDailySeries(
+      pages.map((p) => p.id),
+      pages,
+      request.query,
+    );
+  });
+
+  server.get("/api/v1/pages/:pageLabel/revenue/daily", {
+    schema: routeSchemas.pageRevenueDaily,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getRevenueDailySeries([page.id], [page], request.query);
+  });
+
+  server.get("/api/v1/models/:modelSlug/revenue/daily", {
+    schema: routeSchemas.modelRevenueDaily,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const pages = (await listVisiblePages(appContext.db, pageScopeFor(principal)))
+      .filter((p) => p.modelSlug === request.params.modelSlug);
+    if (pages.length === 0) {
+      throw new NotFoundError(`Model "${request.params.modelSlug}" not found`);
+    }
+    return getRevenueDailySeries(pages.map((p) => p.id), pages, request.query);
+  });
+
+  // Cross-page transactions
+  server.get("/api/v1/transactions", {
+    schema: routeSchemas.crossPageTransactions,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const query = request.query;
+    const pageScope = pageScopeFor(principal);
+    const allPages = await listVisiblePages(appContext.db, pageScope);
+    const pageIds = pageScope ?? allPages.map((p) => p.id);
+    const platformByLabel = new Map(allPages.map((p) => [p.label, p.platform]));
+
+    const result = await listTransactionsForScope(appContext.db, {
+      pageIds,
+      pageLabel: query.pageLabel,
+      canonicalType: query.type,
+      transactionState: query.state,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+      limit: query.limit,
+      offset: query.offset,
+    });
+
+    return {
+      items: result.items.map((row) => ({
+        transactionId: row.transactionId,
+        rawType: row.platform === "fansly" && /^-?\d+$/.test(row.rawType)
+          ? Number.parseInt(row.rawType, 10)
+          : row.rawType,
+        canonicalType: row.canonicalType,
+        transactionState: row.transactionState,
+        amountMills: millsToNumber(row.amountMills),
+        destinationAmountMills: millsToNumber(row.destinationAmountMills),
+        netAmountMills: millsToNumber(row.netAmountMills),
+        occurredAt: new Date(row.occurredAt).toISOString(),
+        sourceUpdatedAt: row.sourceUpdatedAt ? new Date(row.sourceUpdatedAt).toISOString() : null,
+        fan: row.fanPlatformUserId
+          ? { platformUserId: row.fanPlatformUserId, username: row.fanUsername, displayName: row.fanDisplayName }
+          : null,
+        pageLabel: row.pageLabel,
+        platform: row.platform,
+      })),
+      limit: query.limit,
+      offset: query.offset,
+      total: result.total,
+    };
+  });
+
+  // Fan transactions on page
+  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/transactions", {
+    schema: routeSchemas.pageFanTransactions,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    const fan = await findPlatformFan(appContext.db, page.platform, request.params.platformUserId);
+    if (!fan) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
+    }
+    const result = await listFanTransactionsOnPage(appContext.db, {
+      pageId: page.id,
+      fanId: fan.id,
+      limit: request.query.limit,
+      offset: request.query.offset,
+    });
+    return {
+      items: result.items.map((row) => ({
+        transactionId: row.transactionId,
+        rawType: page.platform === "fansly" && /^-?\d+$/.test(row.rawType)
+          ? Number.parseInt(row.rawType, 10)
+          : row.rawType,
+        canonicalType: row.canonicalType,
+        transactionState: row.transactionState,
+        amountMills: millsToNumber(row.amountMills),
+        destinationAmountMills: millsToNumber(row.destinationAmountMills),
+        netAmountMills: millsToNumber(row.netAmountMills),
+        occurredAt: new Date(row.occurredAt).toISOString(),
+        sourceUpdatedAt: row.sourceUpdatedAt ? new Date(row.sourceUpdatedAt).toISOString() : null,
+      })),
+      limit: request.query.limit,
+      offset: request.query.offset,
+      total: result.total,
+    };
+  });
+
+  // Cross-page fan transactions
+  server.get("/api/v1/fans/:platform/:platformUserId/transactions", {
+    schema: routeSchemas.crossPageFanTransactions,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const fan = await findPlatformFan(appContext.db, request.params.platform, request.params.platformUserId);
+    if (!fan) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
+    }
+    const fanPages = await listFanPageContexts(appContext.db, fan.id, pageScopeFor(principal));
+    if (fanPages.length === 0) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
+    }
+    const memberPageIds = fanPages.map((p) => p.pageId);
+    const result = await listFanTransactionsCrossPage(appContext.db, {
+      fanId: fan.id,
+      pageIds: memberPageIds,
+      limit: request.query.limit,
+      offset: request.query.offset,
+    });
+    return {
+      items: result.items.map((row) => ({
+        transactionId: row.transactionId,
+        rawType: row.platform === "fansly" && /^-?\d+$/.test(row.rawType)
+          ? Number.parseInt(row.rawType, 10)
+          : row.rawType,
+        canonicalType: row.canonicalType,
+        transactionState: row.transactionState,
+        amountMills: millsToNumber(row.amountMills),
+        destinationAmountMills: millsToNumber(row.destinationAmountMills),
+        netAmountMills: millsToNumber(row.netAmountMills),
+        occurredAt: new Date(row.occurredAt).toISOString(),
+        sourceUpdatedAt: row.sourceUpdatedAt ? new Date(row.sourceUpdatedAt).toISOString() : null,
+        pageLabel: row.pageLabel,
+        platform: row.platform,
+      })),
+      limit: request.query.limit,
+      offset: request.query.offset,
+      total: result.total,
+    };
+  });
+
+  // Create fan note
+  server.post("/api/v1/pages/:pageLabel/fans/:platformUserId/notes", {
+    schema: routeSchemas.createFanNote,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    const fan = await findPlatformFan(appContext.db, page.platform, request.params.platformUserId);
+    if (!fan) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
+    }
+    const fanPageContexts = await listFanPageContexts(appContext.db, fan.id, [page.id]);
+    if (fanPageContexts.length === 0) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found on page "${request.params.pageLabel}"`);
+    }
+    const note = await createFanNote(appContext.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+      authorUserId: principal.user.id,
+      body: request.body.body,
+    });
+    return {
+      id: note.id,
+      fanId: note.fanId,
+      platformAccountId: note.platformAccountId,
+      authorUserId: note.authorUserId!,
+      body: note.body,
+      createdAt: new Date(note.createdAt).toISOString(),
+    };
+  });
+
+  // Set fan flags
+  server.patch("/api/v1/fans/:platform/:platformUserId/flags", {
+    schema: routeSchemas.setFanFlags,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const fan = await findPlatformFan(appContext.db, request.params.platform, request.params.platformUserId);
+    if (!fan) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
+    }
+    const fanPages = await listFanPageContexts(appContext.db, fan.id, pageScopeFor(principal));
+    if (fanPages.length === 0) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
+    }
+    const flagRows = await setFanFlags(appContext.db, {
+      fanId: fan.id,
+      flags: request.body.flags,
+      createdByUserId: principal.user.id,
+    });
+    return {
+      flags: flagRows.map((row) => ({
+        flag: row.flag,
+        createdAt: new Date(row.createdAt).toISOString(),
+        createdByUserId: row.createdByUserId,
+      })),
+    };
+  });
+
+  // OpenAPI JSON
+  server.get("/api/v1/openapi.json", {
+    schema: routeSchemas.openApiJson,
+  }, async () => {
+    return server.swagger();
+  });
+
+  // === Admin routes ===
+  const auditCtx = (principal: AuthPrincipal) => ({
+    source: "api" as const,
+    actorUserId: principal.user.id,
+  });
+
+  // User management
+  server.get("/api/v1/admin/users", {
+    schema: routeSchemas.adminListUsers,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return listUsersDetailed(appContext);
+  });
+
+  server.post("/api/v1/admin/users", {
+    schema: routeSchemas.adminCreateUser,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const user = await createUserAccount(appContext, request.body, auditCtx(principal));
+    return user!;
+  });
+
+  server.patch("/api/v1/admin/users/:username/password", {
+    schema: routeSchemas.adminSetPassword,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    await setUserPassword(appContext, {
+      username: request.params.username,
+      password: request.body.password,
+    }, auditCtx(principal));
+    return { ok: true as const };
+  });
+
+  server.post("/api/v1/admin/users/:username/pages", {
+    schema: routeSchemas.adminAssignPage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    await assignPageToUser(appContext, {
+      username: request.params.username,
+      pageLabel: request.body.pageLabel,
+    }, auditCtx(principal));
+    const user = await getAuthenticatedUserByUsername(appContext, request.params.username);
+    if (!user) {
+      throw new NotFoundError(`User "${request.params.username}" not found`);
+    }
+    return user;
+  });
+
+  server.delete("/api/v1/admin/users/:username/pages/:pageLabel", {
+    schema: routeSchemas.adminUnassignPage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    await unassignPageFromUser(appContext, {
+      username: request.params.username,
+      pageLabel: request.params.pageLabel,
+    }, auditCtx(principal));
+    return { ok: true as const };
+  });
+
+  // API key management
+  server.get("/api/v1/admin/users/:username/api-keys", {
+    schema: routeSchemas.adminListApiKeys,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const keys = await listApiKeysForUsers(appContext, [request.params.username]);
+    return keys.map((k) => ({
+      id: k.id,
+      keyPrefix: k.keyPrefix,
+      userId: k.userId,
+      revokedAt: k.revokedAt?.toISOString() ?? null,
+      createdAt: k.createdAt.toISOString(),
+      lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
+    }));
+  });
+
+  server.post("/api/v1/admin/users/:username/api-keys", {
+    schema: routeSchemas.adminIssueApiKey,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return issueChatterApiKey(appContext, {
+      username: request.params.username,
+      pageLabel: request.body.pageLabel,
+    }, auditCtx(principal));
+  });
+
+  server.delete("/api/v1/admin/users/:username/api-keys", {
+    schema: routeSchemas.adminRevokeApiKeys,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const revoked = await revokeUserApiKeys(appContext, {
+      username: request.params.username,
+    }, auditCtx(principal));
+    return { revokedCount: revoked.length };
+  });
+
+  // Sync management
+  server.get("/api/v1/admin/sync/runs", {
+    schema: routeSchemas.adminSyncRuns,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const query = request.query;
+    const runs = await listStatus(appContext, {
+      pageLabel: query.pageLabel,
+      limit: query.limit,
+      since: query.since ? new Date(query.since) : undefined,
+    });
+    return runs.map((r) => ({
+      ...r,
+      startedAt: r.startedAt.toISOString(),
+      finishedAt: r.finishedAt?.toISOString() ?? null,
+    }));
+  });
+
+  server.get("/api/v1/admin/sync/runs/:runId", {
+    schema: routeSchemas.adminSyncRunDetail,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    try {
+      const detail = await getStatusDetail(appContext, request.params.runId);
+      return {
+        run: {
+          ...detail.run,
+          startedAt: detail.run.startedAt.toISOString(),
+          finishedAt: detail.run.finishedAt?.toISOString() ?? null,
+        },
+        events: detail.events.map((e) => ({
+          ...e,
+          emittedAt: e.emittedAt.toISOString(),
+        })),
+        attempts: detail.attempts.map((a) => ({
+          ...a,
+          startedAt: a.startedAt.toISOString(),
+          finishedAt: a.finishedAt?.toISOString() ?? null,
+        })),
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("was not found")) {
+        throw new NotFoundError(`Sync run ${request.params.runId} not found`);
+      }
+      throw error;
+    }
+  });
+
+  server.post("/api/v1/admin/sync/trigger", {
+    schema: routeSchemas.adminSyncTrigger,
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const { pageLabel, scope } = request.body;
+    await getPageSummary(appContext, pageLabel);
+    if (!boss) throw new Error("Job queue not available");
+    await boss.send("sync.trigger", { pageLabel, scope });
+    reply.code(202);
+    return { accepted: true as const, pageLabel, scope };
+  });
+
+  server.post("/api/v1/admin/sync/trigger-all", {
+    schema: routeSchemas.adminSyncTriggerAll,
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    if (!boss) throw new Error("Job queue not available");
+    const pages = await listVisiblePages(appContext.db);
+    for (const page of pages) {
+      await boss.send("sync.trigger", { pageLabel: page.label, scope: "all" as const });
+    }
+    reply.code(202);
+    return { accepted: true as const, pagesQueued: pages.length };
+  });
+
+  // Connection management
+  server.get("/api/v1/admin/connections", {
+    schema: routeSchemas.adminConnections,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return listConnectionStatuses(appContext, pageScopeFor(principal));
+  });
+
+  server.post("/api/v1/admin/models", {
+    schema: routeSchemas.adminCreateModel,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const model = await createModel(appContext.db, request.body);
+    return { id: model.id, slug: model.slug, name: model.name };
+  });
+
+  server.post("/api/v1/admin/pages", {
+    schema: routeSchemas.adminCreatePage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const body = request.body;
+    if (body.platform === "fansly") {
+      const result = await onboardFanslyPage(appContext, {
+        modelSlug: body.modelSlug,
+        label: body.label,
+        session: body.session,
+        proxy: body.proxy ?? null,
+      });
+      const page = await getPageSummary(appContext, body.label);
+      return {
+        page: {
+          id: page.id,
+          label: page.label,
+          platform: page.platform,
+          username: page.username,
+          displayName: page.displayName,
+          followerCount: page.followerCount,
+          subscriberCount: page.subscriberCount,
+          lastLightSyncAt: page.lastLightSyncAt?.toISOString() ?? null,
+          lastFollowerSyncAt: page.lastFollowerSyncAt?.toISOString() ?? null,
+          modelSlug: page.modelSlug,
+          modelName: page.modelName,
+        },
+        verified: true,
+      };
+    } else {
+      await onboardOnlyFansPage(appContext, {
+        modelSlug: body.modelSlug,
+        label: body.label,
+        auth: body.auth,
+        username: body.username,
+        proxy: body.proxy ?? null,
+      });
+      const page = await getPageSummary(appContext, body.label);
+      return {
+        page: {
+          id: page.id,
+          label: page.label,
+          platform: page.platform,
+          username: page.username,
+          displayName: page.displayName,
+          followerCount: page.followerCount,
+          subscriberCount: page.subscriberCount,
+          lastLightSyncAt: page.lastLightSyncAt?.toISOString() ?? null,
+          lastFollowerSyncAt: page.lastFollowerSyncAt?.toISOString() ?? null,
+          modelSlug: page.modelSlug,
+          modelName: page.modelName,
+        },
+        verified: true,
+      };
+    }
+  });
+
+  server.post("/api/v1/admin/credentials/verify", {
+    schema: routeSchemas.adminVerifyCredentials,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const body = request.body;
+    try {
+      if (body.platform === "fansly") {
+        const result = await appContext.adapter.verifySession({
+          session: body.session,
+          proxy: body.proxy ?? null,
+        });
+        return {
+          valid: true as const,
+          platform: "fansly" as const,
+          username: result.parsed.account.username,
+          displayName: result.parsed.account.displayName,
+        };
+      } else {
+        const { findOnlyFansAccountByUsername } = await import("../services/onlyfans.ts");
+        const context = { auth: body.auth, proxy: body.proxy ?? null };
+        const account = await findOnlyFansAccountByUsername(
+          appContext.onlyFansAdapter,
+          context,
+          body.username,
+        );
+        return {
+          valid: true as const,
+          platform: "onlyfans" as const,
+          username: account.username,
+          displayName: account.name ?? null,
+        };
+      }
+    } catch (error) {
+      throw new BadRequestError(
+        `Credential verification failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+  });
+
+  server.post("/api/v1/admin/pages/:pageLabel/verify", {
+    schema: routeSchemas.adminVerifyPage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    try {
+      const pageContext = await resolvePageContext(appContext, request.params.pageLabel);
+      if (pageContext.platform === "fansly") {
+        await refreshPageMetadata(appContext, pageContext, "light");
+      } else {
+        await refreshPageMetadata(appContext, pageContext, "light");
+      }
+      return {
+        verified: true,
+        username: pageContext.page.username,
+        platform: pageContext.platform,
+      };
+    } catch (error) {
+      throw new BadRequestError(
+        `Page verification failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+  });
+
+  server.patch("/api/v1/admin/pages/:pageLabel/credentials", {
+    schema: routeSchemas.adminUpdateCredentials,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return updatePageCredentials(appContext, request.params.pageLabel, request.body as any);
+  });
+
+  // SPA static serving in production
+  const dashboardDist = resolve(import.meta.dirname ?? ".", "../../dashboard/dist");
+  if (existsSync(dashboardDist)) {
+    const fastifyStatic = (await import("@fastify/static")).default;
+    await server.register(fastifyStatic, {
+      root: dashboardDist,
+      prefix: "/",
+      wildcard: false,
+    });
+
+    server.setNotFoundHandler((request, reply) => {
+      if (request.url.startsWith("/api/") || request.url.startsWith("/documentation")) {
+        reply.code(404).send({
+          error: "not_found",
+          message: "Not found",
+          statusCode: 404,
+        });
+        return;
+      }
+      reply.sendFile("index.html");
+    });
+  }
 
   return server;
 }
