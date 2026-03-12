@@ -19,6 +19,8 @@ import type {
   CrossPageFanDetailResponse,
   CrossPageFanTransactionListResponse,
   CrossPageTransactionListResponse,
+  FollowerListResponse,
+  SubscriberListResponse,
   FanFlagsResponse,
   FanNoteResponse,
   FansSearchResponse,
@@ -69,6 +71,8 @@ export const keys = {
     ["fanTransactions", platform, id, query] as const,
   fansSearch: (query: string) => ["fansSearch", query] as const,
   spenders: (query: string) => ["spenders", query] as const,
+  pageSubscribers: (label: string, query: string) => ["pageSubscribers", label, query] as const,
+  pageFollowers: (label: string, query: string) => ["pageFollowers", label, query] as const,
   spenderSeries: (platform: string, id: string, query: string) =>
     ["spenderSeries", platform, id, query] as const,
   adminUsers: () => ["adminUsers"] as const,
@@ -158,6 +162,25 @@ export function useModelRevenueDaily(slug: string, query: Record<string, string>
   return useQuery({
     queryKey: keys.modelRevenue(slug, qs),
     queryFn: () => api.get<RevenueDailyResponse>(`/api/v1/models/${slug}/revenue/daily?${qs}`),
+    staleTime: 30_000,
+  });
+}
+
+// --- Page Subscribers & Followers ---
+export function usePageSubscribers(label: string, query: Record<string, string>) {
+  const qs = new URLSearchParams(query).toString();
+  return useQuery({
+    queryKey: keys.pageSubscribers(label, qs),
+    queryFn: () => api.get<SubscriberListResponse>(`/api/v1/pages/${label}/subscribers?${qs}`),
+    staleTime: 30_000,
+  });
+}
+
+export function usePageFollowers(label: string, query: Record<string, string>) {
+  const qs = new URLSearchParams(query).toString();
+  return useQuery({
+    queryKey: keys.pageFollowers(label, qs),
+    queryFn: () => api.get<FollowerListResponse>(`/api/v1/pages/${label}/followers?${qs}`),
     staleTime: 30_000,
   });
 }

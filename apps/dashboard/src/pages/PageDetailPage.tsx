@@ -1,7 +1,11 @@
 import { useState } from "react";
-import type { CrossPageTransactionItem } from "@fansly-connect/contracts";
+import type {
+  CrossPageTransactionItem,
+  FollowerListResponse,
+  SubscriberListResponse,
+} from "@fansly-connect/contracts";
 import { useParams } from "react-router";
-import { usePageRevenueDaily, useTransactions } from "@/api/queries";
+import { usePageRevenueDaily, useTransactions, usePageSubscribers, usePageFollowers } from "@/api/queries";
 import { Card, CardTitle, CardContent } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/MoneyCell";
@@ -20,12 +24,26 @@ import {
   CartesianGrid,
 } from "recharts";
 
+type Tab = "revenue" | "transactions" | "subscribers" | "followers";
+type SubscriberItem = SubscriberListResponse["items"][number];
+type FollowerItem = FollowerListResponse["items"][number];
+
 export function PageDetailPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
   const [period, setPeriod] = useState("30d");
-  const [tab, setTab] = useState<"revenue" | "transactions">("revenue");
+  const [tab, setTab] = useState<Tab>("revenue");
+
+  // --- Transaction pagination ---
   const [txnOffset, setTxnOffset] = useState(0);
   const txnLimit = 50;
+
+  // --- Subscriber pagination ---
+  const [subOffset, setSubOffset] = useState(0);
+  const subLimit = 50;
+
+  // --- Follower pagination ---
+  const [folOffset, setFolOffset] = useState(0);
+  const folLimit = 50;
 
   const { data: revenue, isLoading: revLoading } = usePageRevenueDaily(
     pageLabel!,
@@ -34,6 +52,16 @@ export function PageDetailPage() {
 
   const { data: txns, isLoading: txnLoading } = useTransactions(
     { pageLabel: pageLabel!, limit: String(txnLimit), offset: String(txnOffset), sortBy: "occurredAt", sortDir: "desc" },
+  );
+
+  const { data: subs, isLoading: subLoading } = usePageSubscribers(
+    pageLabel!,
+    { limit: String(subLimit), offset: String(subOffset) },
+  );
+
+  const { data: followers, isLoading: folLoading } = usePageFollowers(
+    pageLabel!,
+    { limit: String(folLimit), offset: String(folOffset) },
   );
 
   const chartData = (revenue?.series ?? []).map((s) => ({
@@ -50,23 +78,41 @@ export function PageDetailPage() {
     { key: "state", header: "State", render: (r) => <span className="text-zinc-400">{r.transactionState}</span> },
   ];
 
+  const subColumns: Column<SubscriberItem>[] = [
+    { key: "username", header: "Username", render: (r) => <span className="font-medium text-zinc-100">{r.username ?? r.platformUserId}</span> },
+    { key: "displayName", header: "Display Name", render: (r) => <span className="text-zinc-300">{r.displayName ?? "—"}</span> },
+    { key: "tier", header: "Tier", render: (r) => <span className="text-zinc-300">{r.subscriptionTierName ?? "—"}</span> },
+    { key: "endsAt", header: "Expires", render: (r) => r.endsAt ? new Date(r.endsAt).toLocaleDateString() : "—" },
+    { key: "autoRenew", header: "Auto-Renew", render: (r) => r.autoRenew ? "Yes" : r.autoRenew === false ? "No" : "—" },
+  ];
+
+  const folColumns: Column<FollowerItem>[] = [
+    { key: "username", header: "Username", render: (r) => <span className="font-medium text-zinc-100">{r.username ?? r.platformUserId}</span> },
+    { key: "displayName", header: "Display Name", render: (r) => <span className="text-zinc-300">{r.displayName ?? "—"}</span> },
+    { key: "followedAt", header: "Followed", render: (r) => new Date(r.followedAt).toLocaleDateString() },
+  ];
+
+  const tabs: { key: Tab; label: string }[] = [
+    { key: "revenue", label: "Revenue" },
+    { key: "transactions", label: "Transactions" },
+    { key: "subscribers", label: `Subscribers${subs ? ` (${subs.total})` : ""}` },
+    { key: "followers", label: `Followers${followers ? ` (${followers.total})` : ""}` },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-zinc-100">{pageLabel}</h1>
         <div className="flex gap-2">
-          <button
-            onClick={() => setTab("revenue")}
-            className={`px-3 py-1 text-sm rounded ${tab === "revenue" ? "bg-zinc-700 text-white" : "text-zinc-400"}`}
-          >
-            Revenue
-          </button>
-          <button
-            onClick={() => setTab("transactions")}
-            className={`px-3 py-1 text-sm rounded ${tab === "transactions" ? "bg-zinc-700 text-white" : "text-zinc-400"}`}
-          >
-            Transactions
-          </button>
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-3 py-1 text-sm rounded ${tab === t.key ? "bg-zinc-700 text-white" : "text-zinc-400"}`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -113,6 +159,44 @@ export function PageDetailPage() {
                 {txnOffset + 1}–{txnOffset + (txns?.items?.length ?? 0)} of {txns?.total ?? "?"}
               </span>
               <Button variant="outline" size="sm" disabled={(txns?.items?.length ?? 0) < txnLimit} onClick={() => setTxnOffset(txnOffset + txnLimit)}>
+                Next
+              </Button>
+            </div>
+          </>
+        )
+      )}
+
+      {tab === "subscribers" && (
+        subLoading ? <SkeletonTable /> : (
+          <>
+            <DataTable columns={subColumns} data={subs?.items ?? []} emptyMessage="No active subscribers" />
+            <div className="flex justify-between items-center">
+              <Button variant="outline" size="sm" disabled={subOffset === 0} onClick={() => setSubOffset(Math.max(0, subOffset - subLimit))}>
+                Previous
+              </Button>
+              <span className="text-xs text-zinc-500">
+                {subOffset + 1}–{subOffset + (subs?.items?.length ?? 0)} of {subs?.total ?? "?"}
+              </span>
+              <Button variant="outline" size="sm" disabled={(subs?.items?.length ?? 0) < subLimit} onClick={() => setSubOffset(subOffset + subLimit)}>
+                Next
+              </Button>
+            </div>
+          </>
+        )
+      )}
+
+      {tab === "followers" && (
+        folLoading ? <SkeletonTable /> : (
+          <>
+            <DataTable columns={folColumns} data={followers?.items ?? []} emptyMessage="No followers" />
+            <div className="flex justify-between items-center">
+              <Button variant="outline" size="sm" disabled={folOffset === 0} onClick={() => setFolOffset(Math.max(0, folOffset - folLimit))}>
+                Previous
+              </Button>
+              <span className="text-xs text-zinc-500">
+                {folOffset + 1}–{folOffset + (followers?.items?.length ?? 0)} of {followers?.total ?? "?"}
+              </span>
+              <Button variant="outline" size="sm" disabled={(followers?.items?.length ?? 0) < folLimit} onClick={() => setFolOffset(folOffset + folLimit)}>
                 Next
               </Button>
             </div>

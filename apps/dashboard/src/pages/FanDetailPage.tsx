@@ -22,7 +22,9 @@ type FanFlagOption = (typeof FLAG_OPTIONS)[number];
 export function FanDetailPage() {
   const { platform, platformUserId } = useParams<{ platform: string; platformUserId: string }>();
   const { data: fanDetail, isLoading } = useFanDetail(platform!, platformUserId!);
-  const { data: txns, isLoading: txnLoading } = useFanTransactions(platform!, platformUserId!, { limit: "50" });
+  const [txnOffset, setTxnOffset] = useState(0);
+  const txnLimit = 50;
+  const { data: txns, isLoading: txnLoading } = useFanTransactions(platform!, platformUserId!, { limit: String(txnLimit), offset: String(txnOffset) });
   const createNote = useCreateFanNote();
   const setFlags = useSetFanFlags();
   const isOwner = useAuthStore((s) => s.isOwner);
@@ -106,7 +108,20 @@ export function FanDetailPage() {
       <div>
         <h2 className="mb-2 text-sm font-medium text-zinc-400">Transactions</h2>
         {txnLoading ? <SkeletonTable rows={5} cols={5} /> : (
-          <DataTable columns={txnColumns} data={txns?.items ?? []} />
+          <>
+            <DataTable columns={txnColumns} data={txns?.items ?? []} />
+            <div className="mt-2 flex justify-between items-center">
+              <Button variant="outline" size="sm" disabled={txnOffset === 0} onClick={() => setTxnOffset(Math.max(0, txnOffset - txnLimit))}>
+                Previous
+              </Button>
+              <span className="text-xs text-zinc-500">
+                {txnOffset + 1}–{txnOffset + (txns?.items?.length ?? 0)} of {txns?.total ?? "?"}
+              </span>
+              <Button variant="outline" size="sm" disabled={(txns?.items?.length ?? 0) < txnLimit} onClick={() => setTxnOffset(txnOffset + txnLimit)}>
+                Next
+              </Button>
+            </div>
+          </>
         )}
       </div>
 

@@ -7,6 +7,7 @@ import { MoneyCell } from "@/components/shared/MoneyCell";
 import { PlatformIcon } from "@/components/shared/PlatformIcon";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { SkeletonTable } from "@/components/shared/SkeletonTable";
+import { Button } from "@/components/ui/button";
 
 export function SpendersPage() {
   const navigate = useNavigate();
@@ -15,8 +16,10 @@ export function SpendersPage() {
   const [scope, setScope] = useState("agency");
   const [platform, setPlatform] = useState("fansly");
   const [pageLabel, setPageLabel] = useState("");
+  const [offset, setOffset] = useState(0);
+  const limit = 50;
 
-  const query: Record<string, string> = { period, limit: "50" };
+  const query: Record<string, string> = { scope, period, limit: String(limit), offset: String(offset) };
   if (scope === "agency") {
     query.platform = platform;
   } else if (scope === "page" && pageLabel) {
@@ -25,7 +28,7 @@ export function SpendersPage() {
 
   const { data, isLoading } = useSpenders(query);
   const rows = (data?.items ?? []).map((item, index) => ({
-    _rank: index + 1,
+    _rank: offset + index + 1,
     platform: item.fan.platform,
     platformUserId: item.fan.platformUserId,
     username: item.fan.username,
@@ -47,7 +50,7 @@ export function SpendersPage() {
         <h1 className="text-lg font-semibold text-zinc-100">Top Spenders</h1>
         <PeriodSelector
           value={period}
-          onChange={setPeriod}
+          onChange={(v) => { setPeriod(v); setOffset(0); }}
           options={[
             { value: "7d", label: "7D" },
             { value: "30d", label: "30D" },
@@ -59,7 +62,7 @@ export function SpendersPage() {
       <div className="flex gap-3">
         <select
           value={scope}
-          onChange={(e) => setScope(e.target.value)}
+          onChange={(e) => { setScope(e.target.value); setOffset(0); }}
           className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100"
         >
           <option value="agency">Agency</option>
@@ -68,7 +71,7 @@ export function SpendersPage() {
         {scope === "agency" && (
           <select
             value={platform}
-            onChange={(e) => setPlatform(e.target.value)}
+            onChange={(e) => { setPlatform(e.target.value); setOffset(0); }}
             className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100"
           >
             <option value="fansly">Fansly</option>
@@ -78,7 +81,7 @@ export function SpendersPage() {
         {scope === "page" && (
           <select
             value={pageLabel}
-            onChange={(e) => setPageLabel(e.target.value)}
+            onChange={(e) => { setPageLabel(e.target.value); setOffset(0); }}
             className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100"
           >
             <option value="">Select page</option>
@@ -89,11 +92,24 @@ export function SpendersPage() {
         )}
       </div>
       {isLoading ? <SkeletonTable /> : (
-        <DataTable
-          columns={columns}
-          data={rows}
-          onRowClick={(r) => navigate(`/spenders/${r.platform}/${r.platformUserId}`)}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={rows}
+            onRowClick={(r) => navigate(`/spenders/${r.platform}/${r.platformUserId}`)}
+          />
+          <div className="flex justify-between items-center">
+            <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>
+              Previous
+            </Button>
+            <span className="text-xs text-zinc-500">
+              {offset + 1}–{offset + (data?.items?.length ?? 0)} of {data?.total ?? "?"}
+            </span>
+            <Button variant="outline" size="sm" disabled={(data?.items?.length ?? 0) < limit} onClick={() => setOffset(offset + limit)}>
+              Next
+            </Button>
+          </div>
+        </>
       )}
     </div>
   );
