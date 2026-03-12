@@ -107,6 +107,107 @@ describe("adapter hardening", () => {
     });
   });
 
+  it("serializes Fansly requests from different categories with the global delay", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T12:00:00.000Z"));
+
+    const adapter = new FanslyAdapter({
+      baseUrl: "http://127.0.0.1:1",
+      defaultDelayMs: 0,
+      globalDelayMs: 1_000,
+    });
+
+    const completionTimes: number[] = [];
+    const waitedMs: number[] = [];
+    const firstWait = (adapter as unknown as {
+      waitForRateLimit(category: string, minDelayMs: number): Promise<number>;
+    }).waitForRateLimit("account", 0).then((waited) => {
+      waitedMs.push(waited);
+      completionTimes.push(Date.now());
+    });
+    const secondWait = (adapter as unknown as {
+      waitForRateLimit(category: string, minDelayMs: number): Promise<number>;
+    }).waitForRateLimit("transactions", 0).then((waited) => {
+      waitedMs.push(waited);
+      completionTimes.push(Date.now());
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.all([firstWait, secondWait]);
+
+    expect(waitedMs).toEqual([0, 1_000]);
+    expect(completionTimes).toEqual([
+      new Date("2026-03-10T12:00:00.000Z").getTime(),
+      new Date("2026-03-10T12:00:01.000Z").getTime(),
+    ]);
+  });
+
+  it("keeps Fansly same-category pacing and reports combined category plus global wait", async () => {
+    const adapter = new FanslyAdapter({
+      baseUrl: "http://127.0.0.1:1",
+      defaultDelayMs: 1_000,
+      globalDelayMs: 1_500,
+    });
+
+    const completionTimes: number[] = [];
+    const waitedMs: number[] = [];
+    const firstWait = (adapter as unknown as {
+      waitForRateLimit(category: string, minDelayMs: number): Promise<number>;
+    }).waitForRateLimit("account", 1_000).then((waited) => {
+      waitedMs.push(waited);
+      completionTimes.push(Date.now());
+    });
+    const secondWait = (adapter as unknown as {
+      waitForRateLimit(category: string, minDelayMs: number): Promise<number>;
+    }).waitForRateLimit("account", 1_000).then((waited) => {
+      waitedMs.push(waited);
+      completionTimes.push(Date.now());
+    });
+
+    await Promise.all([firstWait, secondWait]);
+
+    expect(waitedMs[0]).toBe(0);
+    expect(waitedMs[1]).toBeGreaterThan(1_000);
+    expect(completionTimes[1]! - completionTimes[0]!).toBeGreaterThanOrEqual(1_400);
+  });
+
+  it("serializes different Fansly session tokens behind the single global clock", async () => {
+    await withJsonServer({
+      success: true,
+      response: {
+        account: {
+          id: "acct-1",
+          username: "lana",
+          displayName: "Lana",
+          followCount: 0,
+          subscriberCount: 0,
+        },
+      },
+    }, async (baseUrl, requestTimes) => {
+      const adapter = new FanslyAdapter({
+        baseUrl,
+        defaultDelayMs: 0,
+        globalDelayMs: 1_000,
+      });
+
+      await Promise.all([
+        adapter.getAccountMe({
+          session: {
+            authorization: "token-a",
+          },
+        }),
+        adapter.getAccountMe({
+          session: {
+            authorization: "token-b",
+          },
+        }),
+      ]);
+
+      expect(requestTimes).toHaveLength(2);
+      expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(950);
+    });
+  });
+
   it("serializes OnlyFans same-category waits one second apart and reuses proxy agents", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-10T12:00:00.000Z"));
@@ -211,6 +312,111 @@ describe("adapter hardening", () => {
     expect(JSON.stringify(events)).not.toContain("acct-secret-123");
     expect(JSON.stringify(events)).not.toContain("raw-follow-cursor");
     expect(JSON.stringify(events)).not.toContain("super-secret-token");
+  });
+
+  it("fails Fansly 429 responses without retrying", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    let requestCount = 0;
+
+    await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
+      requestCount += 1;
+      response.statusCode = 429;
+      response.setHeader("content-type", "application/json");
+      response.setHeader("retry-after", "0.001");
+      response.end(JSON.stringify({
+        success: false,
+        error: {
+          message: "rate limited",
+        },
+      }));
+    }, async (baseUrl) => {
+      const adapter = new FanslyAdapter({
+        baseUrl,
+        defaultDelayMs: 0,
+        globalDelayMs: 0,
+      });
+
+      await expect(adapter.getAccountMe({
+        session: {
+          authorization: "token",
+        },
+        requestObserver: {
+          async onRequestEvent(event: HttpRequestEvent) {
+            events.push(JSON.parse(JSON.stringify(event)) as Record<string, unknown>);
+          },
+        },
+      })).rejects.toMatchObject({
+        name: "FanslyApiError",
+        status: 429,
+      });
+    });
+
+    expect(requestCount).toBe(1);
+    expect(events.map((event) => event.state)).toEqual(["started", "failed"]);
+  });
+
+  it("retries Fansly 5xx responses and succeeds on the next attempt", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    let requestCount = 0;
+
+    await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
+      requestCount += 1;
+      response.setHeader("content-type", "application/json");
+      if (requestCount === 1) {
+        response.statusCode = 500;
+        response.setHeader("retry-after", "0.001");
+        response.end(JSON.stringify({
+          success: false,
+          error: {
+            message: "server exploded",
+          },
+        }));
+        return;
+      }
+
+      response.end(JSON.stringify({
+        success: true,
+        response: {
+          account: {
+            id: "acct-1",
+            username: "lana",
+            displayName: "Lana",
+            followCount: 0,
+            subscriberCount: 0,
+          },
+        },
+      }));
+    }, async (baseUrl) => {
+      const adapter = new FanslyAdapter({
+        baseUrl,
+        defaultDelayMs: 0,
+        globalDelayMs: 0,
+      });
+
+      await adapter.getAccountMe({
+        session: {
+          authorization: "token",
+        },
+        requestObserver: {
+          async onRequestEvent(event: HttpRequestEvent) {
+            events.push(JSON.parse(JSON.stringify(event)) as Record<string, unknown>);
+          },
+        },
+      });
+    });
+
+    expect(requestCount).toBe(2);
+    expect(events.map((event) => [event.state, event.attemptNumber])).toEqual([
+      ["started", 1],
+      ["retry", 1],
+      ["started", 2],
+      ["success", 2],
+    ]);
+    expect(events[1]).toMatchObject({
+      state: "retry",
+      httpStatus: 500,
+      retryDelayMs: 1,
+    });
   });
 
   it("emits retry and success observer events for OnlyFans cursor pagination without leaking secrets", async () => {

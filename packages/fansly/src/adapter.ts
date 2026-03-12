@@ -22,6 +22,7 @@ import type {
 interface AdapterOptions {
   baseUrl: string;
   defaultDelayMs?: number;
+  globalDelayMs?: number;
 }
 
 type ApiEnvelope<T> = {
@@ -57,6 +58,8 @@ export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
   private readonly rateLimitChains = new Map<string, Promise<void>>();
   private readonly proxyAgents = new Map<string, ProxyAgent>();
+  private globalRequestTimestamp: number | null = null;
+  private globalRateLimitChain: Promise<void> | null = null;
 
   constructor(private readonly options: AdapterOptions) {}
 
@@ -349,7 +352,7 @@ export class FanslyAdapter {
           };
         }
 
-        if ([429, 500, 502, 503, 504].includes(response.status) && executionContext.retriesRemaining > 0) {
+        if ([500, 502, 503, 504].includes(response.status) && executionContext.retriesRemaining > 0) {
           const retryAfterSeconds = Number(response.headers.get("retry-after") ?? "0");
           return {
             kind: "retry",
@@ -455,34 +458,67 @@ export class FanslyAdapter {
   }
 
   private async waitForRateLimit(category: string, minDelayMs: number) {
-    const previous = this.rateLimitChains.get(category) ?? Promise.resolve();
+    const categoryGate = this.enterRateLimitChain(this.rateLimitChains.get(category) ?? Promise.resolve());
+    this.rateLimitChains.set(category, categoryGate.chain);
+
+    await categoryGate.previous;
+    try {
+      const categoryWaitMs = await this.waitForMinimumDelay(
+        this.requestTimestamps.get(category),
+        minDelayMs,
+      );
+      const globalGate = this.enterRateLimitChain(this.globalRateLimitChain ?? Promise.resolve());
+      this.globalRateLimitChain = globalGate.chain;
+
+      await globalGate.previous;
+      try {
+        const globalWaitMs = await this.waitForMinimumDelay(
+          this.globalRequestTimestamp,
+          this.options.globalDelayMs ?? 1000,
+        );
+        const startedAt = Date.now();
+        this.requestTimestamps.set(category, startedAt);
+        this.globalRequestTimestamp = startedAt;
+        return categoryWaitMs + globalWaitMs;
+      } finally {
+        globalGate.release();
+        if (this.globalRateLimitChain === globalGate.chain) {
+          this.globalRateLimitChain = null;
+        }
+      }
+    } finally {
+      categoryGate.release();
+      if (this.rateLimitChains.get(category) === categoryGate.chain) {
+        this.rateLimitChains.delete(category);
+      }
+    }
+  }
+
+  private enterRateLimitChain(previous: Promise<void>) {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const chain = previous.then(() => gate);
-    this.rateLimitChains.set(category, chain);
+    return {
+      previous,
+      chain: previous.then(() => gate),
+      release,
+    };
+  }
 
-    await previous;
-    try {
-      const lastStartedAt = this.requestTimestamps.get(category);
-      const now = Date.now();
-      let waitedMs = 0;
-      if (lastStartedAt !== undefined) {
-        const elapsed = now - lastStartedAt;
-        if (elapsed < minDelayMs) {
-          waitedMs = minDelayMs - elapsed;
-          await delay(waitedMs);
-        }
-      }
-      this.requestTimestamps.set(category, Date.now());
-      return waitedMs;
-    } finally {
-      release();
-      if (this.rateLimitChains.get(category) === chain) {
-        this.rateLimitChains.delete(category);
-      }
+  private async waitForMinimumDelay(lastStartedAt: number | null | undefined, minDelayMs: number) {
+    if (lastStartedAt === null || lastStartedAt === undefined || minDelayMs <= 0) {
+      return 0;
     }
+
+    const elapsed = Date.now() - lastStartedAt;
+    if (elapsed >= minDelayMs) {
+      return 0;
+    }
+
+    const waitedMs = minDelayMs - elapsed;
+    await delay(waitedMs);
+    return waitedMs;
   }
 }
 
