@@ -7,6 +7,7 @@ import { DataTable, type Column } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/MoneyCell";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { SkeletonTable } from "@/components/shared/SkeletonTable";
+import { Button } from "@/components/ui/button";
 import { formatBusinessDate } from "@/lib/date";
 import { TRANSACTION_TYPE_LABELS } from "@/lib/constants";
 import {
@@ -23,6 +24,8 @@ export function PageDetailPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
   const [period, setPeriod] = useState("30d");
   const [tab, setTab] = useState<"revenue" | "transactions">("revenue");
+  const [txnOffset, setTxnOffset] = useState(0);
+  const txnLimit = 50;
 
   const { data: revenue, isLoading: revLoading } = usePageRevenueDaily(
     pageLabel!,
@@ -30,7 +33,7 @@ export function PageDetailPage() {
   );
 
   const { data: txns, isLoading: txnLoading } = useTransactions(
-    { pageLabel: pageLabel!, limit: "50", sortBy: "occurredAt", sortDir: "desc" },
+    { pageLabel: pageLabel!, limit: String(txnLimit), offset: String(txnOffset), sortBy: "occurredAt", sortDir: "desc" },
   );
 
   const chartData = (revenue?.series ?? []).map((s) => ({
@@ -100,7 +103,20 @@ export function PageDetailPage() {
 
       {tab === "transactions" && (
         txnLoading ? <SkeletonTable /> : (
-          <DataTable columns={txnColumns} data={txns?.items ?? []} />
+          <>
+            <DataTable columns={txnColumns} data={txns?.items ?? []} />
+            <div className="flex justify-between items-center">
+              <Button variant="outline" size="sm" disabled={txnOffset === 0} onClick={() => setTxnOffset(Math.max(0, txnOffset - txnLimit))}>
+                Previous
+              </Button>
+              <span className="text-xs text-zinc-500">
+                {txnOffset + 1}–{txnOffset + (txns?.items?.length ?? 0)} of {txns?.total ?? "?"}
+              </span>
+              <Button variant="outline" size="sm" disabled={(txns?.items?.length ?? 0) < txnLimit} onClick={() => setTxnOffset(txnOffset + txnLimit)}>
+                Next
+              </Button>
+            </div>
+          </>
         )
       )}
     </div>
