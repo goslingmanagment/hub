@@ -1,6 +1,3 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
@@ -1375,29 +1372,6 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
     return updatePageCredentials(appContext, request.params.pageLabel, request.body as any);
   });
-
-  // SPA static serving in production
-  const dashboardDist = resolve(import.meta.dirname ?? ".", "../../../dashboard/dist");
-  if (existsSync(dashboardDist)) {
-    const fastifyStatic = (await import("@fastify/static")).default;
-    await server.register(fastifyStatic, {
-      root: dashboardDist,
-      prefix: "/",
-      wildcard: false,
-    });
-
-    server.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith("/api/") || request.url.startsWith("/documentation")) {
-        reply.code(404).send({
-          error: "not_found",
-          message: "Not found",
-          statusCode: 404,
-        });
-        return;
-      }
-      reply.sendFile("index.html");
-    });
-  }
 
   return server;
 }

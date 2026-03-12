@@ -11,8 +11,7 @@
     "db:generate": "drizzle-kit generate --config=packages/db/drizzle.config.ts",
     "db:migrate": "node --import tsx/esm packages/db/src/migrate.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p apps/dashboard/tsconfig.json",
-    "dev:dashboard": "cd apps/dashboard && npx vite",
+    "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "dev:db": "docker compose up -d postgres"
   },
@@ -27,7 +26,6 @@
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
-    "@fastify/static": "^9.0.0",
     "@fastify/swagger": "^9.7.0",
     "@fastify/swagger-ui": "^5.2.5",
     "argon2": "^0.44.0",

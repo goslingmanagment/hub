@@ -12,6 +12,5 @@ COPY apps ./apps
 COPY packages ./packages
 
 RUN pnpm install --frozen-lockfile
-RUN cd apps/dashboard && npx vite build
 
 CMD ["pnpm", "worker"]
