@@ -17,7 +17,11 @@ drafts/
 # Generated/local documentation artifacts
 docs/.DS_Store
 docs/code-review-*.md
+docs/architecture-review-2026-03-10.md
+docs/architecture-review-claude-2026-03-10.md
 docs/spenders-architecture.md
 docs/user-guide*.md
 docs/user-guide*.html
+docs/database-visualization.md
+docs/database-visualization.html
 *.sql.gz
