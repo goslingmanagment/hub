@@ -42,7 +42,7 @@ export async function createAppContext(): Promise<AppContext> {
   const adapter = new FanslyAdapter({
     baseUrl: config.fanslyBaseUrl,
     defaultDelayMs: 1000,
-    globalDelayMs: 1000,
+    globalDelayMs: 1500,
   });
   const onlyFansAdapter = new OnlyFansAdapter({
     baseUrl: config.onlyMonsterBaseUrl,

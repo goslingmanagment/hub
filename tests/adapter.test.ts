@@ -114,7 +114,6 @@ describe("adapter hardening", () => {
     const adapter = new FanslyAdapter({
       baseUrl: "http://127.0.0.1:1",
       defaultDelayMs: 0,
-      globalDelayMs: 1_000,
     });
 
     const completionTimes: number[] = [];
@@ -132,13 +131,13 @@ describe("adapter hardening", () => {
       completionTimes.push(Date.now());
     });
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_500);
     await Promise.all([firstWait, secondWait]);
 
-    expect(waitedMs).toEqual([0, 1_000]);
+    expect(waitedMs).toEqual([0, 1_500]);
     expect(completionTimes).toEqual([
       new Date("2026-03-10T12:00:00.000Z").getTime(),
-      new Date("2026-03-10T12:00:01.000Z").getTime(),
+      new Date("2026-03-10T12:00:01.500Z").getTime(),
     ]);
   });
 
@@ -187,7 +186,6 @@ describe("adapter hardening", () => {
       const adapter = new FanslyAdapter({
         baseUrl,
         defaultDelayMs: 0,
-        globalDelayMs: 1_000,
       });
 
       await Promise.all([
@@ -204,7 +202,7 @@ describe("adapter hardening", () => {
       ]);
 
       expect(requestTimes).toHaveLength(2);
-      expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(950);
+      expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(1_450);
     });
   });
 

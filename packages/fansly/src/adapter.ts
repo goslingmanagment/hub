@@ -474,7 +474,7 @@ export class FanslyAdapter {
       try {
         const globalWaitMs = await this.waitForMinimumDelay(
           this.globalRequestTimestamp,
-          this.options.globalDelayMs ?? 1000,
+          this.options.globalDelayMs ?? 1500,
         );
         const startedAt = Date.now();
         this.requestTimestamps.set(category, startedAt);
