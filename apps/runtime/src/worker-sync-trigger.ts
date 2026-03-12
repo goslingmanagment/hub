@@ -1,13 +1,9 @@
 import type { AppContext } from "./bootstrap.ts";
 import { runAllSync, runFollowerSync, runLightSync } from "./services/sync.ts";
-
-export type SyncTriggerScope = "light" | "followers" | "all";
+import type { SyncTriggerPayload } from "./services/sync-queue.ts";
 
 export interface SyncTriggerJob {
-  data: {
-    pageLabel: string;
-    scope: SyncTriggerScope;
-  };
+  data: SyncTriggerPayload;
 }
 
 export async function processSyncTriggerBatch(

@@ -6,7 +6,10 @@ type StartedTestDatabase = NonNullable<Awaited<ReturnType<typeof startTestDataba
 export function createTestAppContext(
   testDb: StartedTestDatabase,
   overrides?: {
+    adapter?: AppContext["adapter"];
+    databaseUrl?: string;
     logger?: StartedTestDatabase["logger"];
+    onlyFansAdapter?: AppContext["onlyFansAdapter"];
     sessionTtlDays?: number;
   },
 ) {
@@ -15,7 +18,7 @@ export function createTestAppContext(
     pool: testDb.pool,
     logger: overrides?.logger ?? testDb.logger,
     config: {
-      databaseUrl: "",
+      databaseUrl: overrides?.databaseUrl ?? "",
       encryptionKey: Buffer.alloc(32, 7),
       encryptionKeyVersion: 1,
       logLevel: "silent",
@@ -30,8 +33,8 @@ export function createTestAppContext(
       transactionRescanCapDays: 30,
       syncObservabilityRetentionDays: 30,
     },
-    adapter: {} as AppContext["adapter"],
-    onlyFansAdapter: {} as AppContext["onlyFansAdapter"],
+    adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
+    onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as AppContext["onlyFansAdapter"]),
     async close() {},
   } satisfies AppContext;
 }

@@ -1,6 +1,60 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const cliMocks = vi.hoisted(() => {
+  const bossBehavior = {
+    sendError: null as Error | null,
+  };
+  const bossInstances: Array<{
+    createQueue: ReturnType<typeof vi.fn>;
+    send: ReturnType<typeof vi.fn>;
+    start: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
+  }> = [];
+
+  class PgBossMock {
+    start = vi.fn(async () => {});
+    createQueue = vi.fn(async () => {});
+    send = vi.fn(async () => {
+      if (bossBehavior.sendError) {
+        throw bossBehavior.sendError;
+      }
+    });
+    stop = vi.fn(async () => {});
+
+    constructor() {
+      bossInstances.push(this);
+    }
+  }
+
+  return {
+    PgBossMock,
+    bossBehavior,
+    bossInstances,
+    createAppContext: vi.fn(),
+    onboardFanslyPage: vi.fn(),
+    onboardOnlyFansPage: vi.fn(),
+  };
+});
+
+vi.mock("pg-boss", () => ({
+  default: cliMocks.PgBossMock,
+}));
+
+vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
+  createAppContext: cliMocks.createAppContext,
+}));
+
+vi.mock("../apps/runtime/src/services/page-onboarding.ts", () => ({
+  onboardFanslyPage: cliMocks.onboardFanslyPage,
+  onboardOnlyFansPage: cliMocks.onboardOnlyFansPage,
+}));
 
 import { buildProgram } from "../apps/runtime/src/cli.ts";
+import { SYNC_TRIGGER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   renderStatusDetail,
   renderWatchEventLine,
@@ -23,7 +77,48 @@ function createProgramHarness() {
   };
 }
 
+async function createTempJsonFile(name: string, contents: Record<string, unknown>) {
+  const directory = await mkdtemp(path.join(tmpdir(), "cli-test-"));
+  const filePath = path.join(directory, name);
+  await writeFile(filePath, JSON.stringify(contents), "utf8");
+
+  return {
+    directory,
+    filePath,
+  };
+}
+
 describe("CLI parsing", () => {
+  const cleanupDirectories = new Set<string>();
+
+  beforeEach(() => {
+    cliMocks.bossBehavior.sendError = null;
+    cliMocks.bossInstances.length = 0;
+    cliMocks.createAppContext.mockReset();
+    cliMocks.onboardFanslyPage.mockReset();
+    cliMocks.onboardOnlyFansPage.mockReset();
+
+    cliMocks.createAppContext.mockResolvedValue({
+      config: {
+        databaseUrl: "postgres://postgres:postgres@127.0.0.1:5432/testdb",
+      },
+      db: {},
+      pool: {},
+      logger: {},
+      adapter: {},
+      onlyFansAdapter: {},
+      close: vi.fn(async () => {}),
+    });
+  });
+
+  afterEach(async () => {
+    for (const directory of cleanupDirectories) {
+      await rm(directory, { recursive: true, force: true });
+    }
+    cleanupDirectories.clear();
+    vi.restoreAllMocks();
+  });
+
   it("documents sync --page and rejects sync --account", async () => {
     const helpProgram = buildProgram();
     const syncCommand = helpProgram.commands.find((command) => command.name() === "sync");
@@ -81,6 +176,140 @@ describe("CLI parsing", () => {
     const revenueHelp = revenueCommand?.helpInformation();
     expect(revenueHelp).toContain("--slug <slug>");
     expect(revenueHelp).toContain("--period <period>");
+  });
+
+  it("queues an initial full sync after adding a Fansly page", async () => {
+    const tempFile = await createTempJsonFile("fansly-session.json", {
+      authorization: "token",
+    });
+    cleanupDirectories.add(tempFile.directory);
+    cliMocks.onboardFanslyPage.mockResolvedValue({
+      page: {
+        id: 101,
+        label: "lora-main",
+      },
+    });
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "page",
+      "add",
+      "fansly",
+      "--model",
+      "lora",
+      "--label",
+      "lora-main",
+      "--session-file",
+      tempFile.filePath,
+    ], { from: "user" });
+
+    expect(cliMocks.onboardFanslyPage).toHaveBeenCalledWith(expect.anything(), {
+      modelSlug: "lora",
+      label: "lora-main",
+      session: {
+        authorization: "token",
+      },
+      proxy: null,
+    });
+
+    const boss = cliMocks.bossInstances[0];
+    expect(boss).toBeDefined();
+    expect(boss.start).toHaveBeenCalledTimes(1);
+    expect(boss.createQueue).toHaveBeenCalledWith(SYNC_TRIGGER_QUEUE);
+    expect(boss.send).toHaveBeenCalledWith(SYNC_TRIGGER_QUEUE, {
+      pageLabel: "lora-main",
+      scope: "all",
+    });
+    expect(boss.stop).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith("Created Fansly page lora-main (101)");
+    expect(logSpy).toHaveBeenCalledWith("Queued initial full sync for lora-main");
+  });
+
+  it("queues an initial full sync after adding an OnlyFans page", async () => {
+    const tempFile = await createTempJsonFile("onlyfans-token.json", {
+      token: "om-token",
+    });
+    cleanupDirectories.add(tempFile.directory);
+    cliMocks.onboardOnlyFansPage.mockResolvedValue({
+      page: {
+        id: 202,
+        label: "lora-of",
+      },
+    });
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "page",
+      "add",
+      "onlyfans",
+      "--model",
+      "lora",
+      "--label",
+      "lora-of",
+      "--token-file",
+      tempFile.filePath,
+      "--username",
+      "lora_onlyfans",
+    ], { from: "user" });
+
+    expect(cliMocks.onboardOnlyFansPage).toHaveBeenCalledWith(expect.anything(), {
+      modelSlug: "lora",
+      label: "lora-of",
+      auth: {
+        token: "om-token",
+      },
+      username: "lora_onlyfans",
+      proxy: null,
+    });
+
+    const boss = cliMocks.bossInstances[0];
+    expect(boss).toBeDefined();
+    expect(boss.start).toHaveBeenCalledTimes(1);
+    expect(boss.createQueue).toHaveBeenCalledWith(SYNC_TRIGGER_QUEUE);
+    expect(boss.send).toHaveBeenCalledWith(SYNC_TRIGGER_QUEUE, {
+      pageLabel: "lora-of",
+      scope: "all",
+    });
+    expect(boss.stop).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith("Created OnlyFans page lora-of (202)");
+    expect(logSpy).toHaveBeenCalledWith("Queued initial full sync for lora-of");
+  });
+
+  it("surfaces enqueue failures after the page has been created", async () => {
+    const tempFile = await createTempJsonFile("fansly-session.json", {
+      authorization: "token",
+    });
+    cleanupDirectories.add(tempFile.directory);
+    cliMocks.onboardFanslyPage.mockResolvedValue({
+      page: {
+        id: 303,
+        label: "failed-page",
+      },
+    });
+    cliMocks.bossBehavior.sendError = new Error("queue down");
+
+    const program = buildProgram();
+
+    await expect(program.parseAsync([
+      "page",
+      "add",
+      "fansly",
+      "--model",
+      "lora",
+      "--label",
+      "failed-page",
+      "--session-file",
+      tempFile.filePath,
+    ], { from: "user" })).rejects.toThrow(
+      'Page "failed-page" was created, but the automatic sync could not be queued: queue down',
+    );
+
+    const boss = cliMocks.bossInstances[0];
+    expect(boss.stop).toHaveBeenCalledTimes(1);
   });
 
   it("renders detailed status and both watch output paths", () => {
@@ -259,12 +488,11 @@ describe("CLI parsing", () => {
     }, new Date("2026-03-10T10:00:20.000Z"));
     const nonTty = renderWatchEventLine(events[0]!);
 
-    expect(detail).toContain("Started: 2026-03-10T10:00:00.000Z");
+    expect(detail).toContain("Run 13 lana light");
     expect(detail).toContain("Finished: -");
-    expect(detail).toContain("Duration: -");
-    expect(detail).toContain("Request Attempts:");
-    expect(tty).toContain("Sync Watch 2026-03-10T10:00:20.000Z");
-    expect(tty).toContain("Recent Events");
-    expect(nonTty).toContain("- run=13 page=lana");
+    expect(tty).toContain("- [warn] lana/light phase_started Still running");
+    expect(nonTty).toContain(
+      "- run=13 page=lana stream=light event=phase_started severity=warn Still running",
+    );
   });
 });

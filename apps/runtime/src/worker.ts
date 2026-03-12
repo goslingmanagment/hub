@@ -1,6 +1,7 @@
 import PgBoss from "pg-boss";
 
 import { createAppContext } from "./bootstrap.ts";
+import { ensureQueueCreated, SYNC_TRIGGER_QUEUE } from "./services/sync-queue.ts";
 import { scheduleExistingPages } from "./services/sync.ts";
 import { processSyncTriggerBatch, type SyncTriggerJob } from "./worker-sync-trigger.ts";
 
@@ -11,10 +12,11 @@ async function main() {
   });
 
   await boss.start();
+  await ensureQueueCreated(boss, SYNC_TRIGGER_QUEUE);
   await scheduleExistingPages(app, boss);
 
   // Handle on-demand sync triggers from the API
-  await boss.work("sync.trigger", { batchSize: 10 }, async (jobs) => {
+  await boss.work(SYNC_TRIGGER_QUEUE, { batchSize: 10 }, async (jobs) => {
     await processSyncTriggerBatch(app, jobs as SyncTriggerJob[]);
   });
 

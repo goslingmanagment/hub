@@ -70,7 +70,14 @@ import {
   type AuthPrincipal,
 } from "../services/auth.ts";
 import { listConnectionStatuses, updatePageCredentials } from "../services/connections.ts";
-import { AppError, BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from "../services/errors.ts";
+import {
+  AppError,
+  BadRequestError,
+  ForbiddenError,
+  NotFoundError,
+  ServiceUnavailableError,
+  UnauthorizedError,
+} from "../services/errors.ts";
 import { resolvePageContext } from "../services/page-context.ts";
 import {
   getCrossPageFanDetailReport,
@@ -95,6 +102,12 @@ import {
   getSpenderSeries,
   searchVisibleFans,
 } from "../services/spenders.ts";
+import {
+  enqueueInitialFullSync,
+  enqueueSyncTriggerJob,
+  ensureQueueCreated,
+  SYNC_TRIGGER_QUEUE,
+} from "../services/sync-queue.ts";
 import { listStatus, getStatusDetail } from "../services/sync.ts";
 import { refreshPageMetadata } from "../services/sync/shared.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "../services/page-onboarding.ts";
@@ -524,9 +537,11 @@ export async function buildApiServer(appContext: AppContext) {
 
   // pg-boss for enqueuing sync trigger jobs (skip when no DB, e.g. contract generation)
   let boss: PgBoss | null = null;
+  const createdQueues = new Set<string>();
   if (appContext.config.databaseUrl) {
     boss = new PgBoss({ connectionString: appContext.config.databaseUrl });
     await boss.start();
+    await ensureQueueCreated(boss, SYNC_TRIGGER_QUEUE, createdQueues);
     server.addHook("onClose", async () => {
       await boss!.stop();
     });
@@ -1154,7 +1169,7 @@ export async function buildApiServer(appContext: AppContext) {
     const { pageLabel, scope } = request.body;
     await getPageSummary(appContext, pageLabel);
     if (!boss) throw new Error("Job queue not available");
-    await boss.send("sync.trigger", { pageLabel, scope });
+    await enqueueSyncTriggerJob(boss, { pageLabel, scope }, createdQueues);
     reply.code(202);
     return { accepted: true as const, pageLabel, scope };
   });
@@ -1167,7 +1182,7 @@ export async function buildApiServer(appContext: AppContext) {
     if (!boss) throw new Error("Job queue not available");
     const pages = await listVisiblePages(appContext.db);
     for (const page of pages) {
-      await boss.send("sync.trigger", { pageLabel: page.label, scope: "all" as const });
+      await enqueueSyncTriggerJob(boss, { pageLabel: page.label, scope: "all" }, createdQueues);
     }
     reply.code(202);
     return { accepted: true as const, pagesQueued: pages.length };
@@ -1198,12 +1213,21 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
     const body = request.body;
     if (body.platform === "fansly") {
-      const result = await onboardFanslyPage(appContext, {
+      await onboardFanslyPage(appContext, {
         modelSlug: body.modelSlug,
         label: body.label,
         session: body.session,
         proxy: body.proxy ?? null,
       });
+      if (!boss) throw new Error("Job queue not available");
+      try {
+        await enqueueInitialFullSync(boss, body.label, createdQueues);
+      } catch (error) {
+        request.log.error({ err: error, pageLabel: body.label }, "Failed to queue initial sync for created page");
+        throw new ServiceUnavailableError(
+          `Page "${body.label}" was created, but the automatic sync could not be queued`,
+        );
+      }
       const page = await getPageSummary(appContext, body.label);
       return {
         page: {
@@ -1229,6 +1253,15 @@ export async function buildApiServer(appContext: AppContext) {
         username: body.username,
         proxy: body.proxy ?? null,
       });
+      if (!boss) throw new Error("Job queue not available");
+      try {
+        await enqueueInitialFullSync(boss, body.label, createdQueues);
+      } catch (error) {
+        request.log.error({ err: error, pageLabel: body.label }, "Failed to queue initial sync for created page");
+        throw new ServiceUnavailableError(
+          `Page "${body.label}" was created, but the automatic sync could not be queued`,
+        );
+      }
       const page = await getPageSummary(appContext, body.label);
       return {
         page: {

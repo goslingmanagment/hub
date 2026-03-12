@@ -38,3 +38,9 @@ export class ConflictError extends AppError {
     super(message, 409, "conflict");
   }
 }
+
+export class ServiceUnavailableError extends AppError {
+  constructor(message = "Service unavailable") {
+    super(message, 503, "service_unavailable");
+  }
+}

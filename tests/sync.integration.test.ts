@@ -37,6 +37,7 @@ import type {
   OnlyMonsterTransaction,
 } from "@fansly-connect/onlyfans";
 import { encryptJson } from "@fansly-connect/shared";
+import PgBoss from "pg-boss";
 
 import {
   listFans,
@@ -51,6 +52,11 @@ import {
   scheduleExistingPages,
 } from "../apps/runtime/src/services/sync.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import {
+  followerQueueName,
+  lightQueueName,
+  RAW_PAYLOAD_CLEANUP_QUEUE,
+} from "../apps/runtime/src/services/sync-queue.ts";
 import { applyTestMigrations, startTestDatabase, seedFanslyPage } from "./helpers/db.ts";
 import { OnlyMonsterApiError } from "../packages/onlyfans/src/errors.ts";
 
@@ -743,6 +749,7 @@ describe("sync integration", () => {
     if (!testDb) {
       return;
     }
+    await testDb.pool.query("drop schema if exists pgboss cascade");
     await testDb.pool.query(`
       truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
                auth_sessions, user_page_assignments, users, fan_username_aliases,
@@ -2813,16 +2820,20 @@ describe("sync integration", () => {
     const { page: fanslyPage } = await seedFanslyPage(testDb.db, testEncryptionKey);
     await seedOnlyFansPage(testDb, "worker-existing-of");
 
+    const createdQueues: string[] = [];
     const schedules: string[] = [];
     const workers: string[] = [];
     const boss = {
+      async createQueue(name: string) {
+        createdQueues.push(name);
+      },
       async schedule(name: string) {
         schedules.push(name);
       },
       async work(name: string) {
         workers.push(name);
       },
-    };
+    } as unknown as Parameters<typeof scheduleExistingPages>[1];
 
     const app = createTestApp(testDb, createUnusedFanslyAdapter(), {
       onlyFansAdapter: {} as AppContext["onlyFansAdapter"],
@@ -2830,6 +2841,10 @@ describe("sync integration", () => {
 
     const scheduler = await scheduleExistingPages(app, boss);
 
+    expect(createdQueues).toContain(lightQueueName(fanslyPage));
+    expect(createdQueues).toContain(followerQueueName(fanslyPage));
+    expect(createdQueues).toContain("onlyfans.sync.light.worker-existing-of");
+    expect(createdQueues).toContain(RAW_PAYLOAD_CLEANUP_QUEUE);
     expect(schedules).toContain(`fansly.sync.light.${fanslyPage.label}`);
     expect(schedules).toContain(`fansly.sync.followers.${fanslyPage.label}`);
     expect(schedules).toContain("onlyfans.sync.light.worker-existing-of");
@@ -2841,9 +2856,75 @@ describe("sync integration", () => {
     await seedOnlyFansPage(testDb, "worker-new-of");
     await scheduler.discoverPages();
 
+    expect(createdQueues.filter((name) => name === lightQueueName(fanslyPage))).toHaveLength(1);
     expect(schedules.filter((name) => name === `fansly.sync.light.${fanslyPage.label}`)).toHaveLength(1);
+    expect(createdQueues.filter((name) => name === "onlyfans.sync.light.worker-new-of")).toHaveLength(1);
     expect(schedules.filter((name) => name === "onlyfans.sync.light.worker-new-of")).toHaveLength(1);
     expect(workers.filter((name) => name === "onlyfans.sync.light.worker-new-of")).toHaveLength(1);
+  });
+
+  it("creates missing pg-boss queues before scheduling existing pages on worker restart", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const workerApp = createTestApp(testDb, createUnusedFanslyAdapter(), {
+      onlyFansAdapter: {} as AppContext["onlyFansAdapter"],
+    });
+
+    const firstBoss = new PgBoss({ connectionString: testDb.connectionString });
+    await firstBoss.start();
+    const scheduler = await scheduleExistingPages(workerApp, firstBoss);
+    await scheduler.discoverPages();
+    await firstBoss.stop();
+
+    const { page: page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+
+    const restartedBoss = new PgBoss({ connectionString: testDb.connectionString });
+    await restartedBoss.start();
+
+    try {
+      await expect(scheduleExistingPages(workerApp, restartedBoss)).resolves.toBeDefined();
+
+      const queueRows = await testDb.pool.query<{
+        name: string;
+      }>(`
+        select name
+        from pgboss.queue
+        where name in ($1, $2, $3)
+        order by name asc
+      `, [
+        lightQueueName(page),
+        followerQueueName(page),
+        RAW_PAYLOAD_CLEANUP_QUEUE,
+      ]);
+      const scheduleRows = await testDb.pool.query<{
+        name: string;
+      }>(`
+        select name
+        from pgboss.schedule
+        where name in ($1, $2, $3)
+        order by name asc
+      `, [
+        lightQueueName(page),
+        followerQueueName(page),
+        RAW_PAYLOAD_CLEANUP_QUEUE,
+      ]);
+
+      expect(queueRows.rows.map((row) => row.name)).toEqual([
+        RAW_PAYLOAD_CLEANUP_QUEUE,
+        followerQueueName(page),
+        lightQueueName(page),
+      ]);
+      expect(scheduleRows.rows.map((row) => row.name)).toEqual([
+        RAW_PAYLOAD_CLEANUP_QUEUE,
+        followerQueueName(page),
+        lightQueueName(page),
+      ]);
+    } finally {
+      await restartedBoss.stop();
+    }
   });
 
   it("backfills existing Fansly gross revenue when the gross migration runs", async (context) => {

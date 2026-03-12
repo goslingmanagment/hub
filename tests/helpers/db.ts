@@ -50,6 +50,7 @@ export async function startTestDatabase(input?: {
 
     return {
       container,
+      connectionString,
       pool,
       db,
       logger: createLogger("silent"),

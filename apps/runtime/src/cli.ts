@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 import { Command } from "commander";
+import PgBoss from "pg-boss";
 
 import {
   createModel,
@@ -44,6 +45,7 @@ import {
   runLightSync,
 } from "./services/sync.ts";
 import { resolvePageContext } from "./services/page-context.ts";
+import { enqueueInitialFullSync } from "./services/sync-queue.ts";
 import {
   buildStatusRows,
   listStalledRuns,
@@ -191,6 +193,28 @@ function auditContext() {
   };
 }
 
+function describeError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function queueInitialFullSyncAfterPageCreate(
+  databaseUrl: string,
+  pageLabel: string,
+) {
+  const boss = new PgBoss({ connectionString: databaseUrl });
+
+  try {
+    await boss.start();
+    await enqueueInitialFullSync(boss, pageLabel);
+  } catch (error) {
+    throw new Error(
+      `Page "${pageLabel}" was created, but the automatic sync could not be queued: ${describeError(error)}`,
+    );
+  } finally {
+    await boss.stop().catch(() => undefined);
+  }
+}
+
 const revenueLabels: Record<TransactionType, string> = {
   subscription: "Subscriptions",
   tip: "Tips",
@@ -334,8 +358,10 @@ export function buildProgram() {
           session,
           proxy,
         });
+        await queueInitialFullSyncAfterPageCreate(app.config.databaseUrl, created.label);
 
         console.log(`Created Fansly page ${created.label} (${created.id})`);
+        console.log(`Queued initial full sync for ${created.label}`);
       } finally {
         await app.close();
       }
@@ -369,8 +395,10 @@ export function buildProgram() {
           username: options.username,
           proxy,
         });
+        await queueInitialFullSyncAfterPageCreate(app.config.databaseUrl, created.label);
 
         console.log(`Created OnlyFans page ${created.label} (${created.id})`);
+        console.log(`Queued initial full sync for ${created.label}`);
       } finally {
         await app.close();
       }

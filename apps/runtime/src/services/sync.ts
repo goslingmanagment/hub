@@ -20,9 +20,16 @@ import {
 import { FANSLY_MAPPER_VERSION } from "@fansly-connect/fansly";
 import { ONLYMONSTER_MAPPER_VERSION } from "@fansly-connect/onlyfans";
 import { resolveRevenuePeriodBoundsForPlatform } from "@fansly-connect/shared";
+import type PgBoss from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext, type ResolvedPageContext } from "./page-context.ts";
+import {
+  ensureQueueCreated,
+  followerQueueName,
+  lightQueueName,
+  RAW_PAYLOAD_CLEANUP_QUEUE,
+} from "./sync-queue.ts";
 import { normalizeSyncError } from "./sync/errors.ts";
 import { runFollowerSyncUnlocked } from "./sync/followers.ts";
 import {
@@ -50,13 +57,7 @@ type SyncCommandResult = {
   errors: string[];
 };
 
-function lightQueueName(page: { label: string; platform: "fansly" | "onlyfans" }) {
-  return `${page.platform}.sync.light.${page.label}`;
-}
-
-function followerQueueName(page: { label: string }) {
-  return `fansly.sync.followers.${page.label}`;
-}
+type ScheduledQueueBoss = Pick<PgBoss, "createQueue" | "schedule" | "work">;
 
 async function withResolvedPageLock<T>(
   app: AppContext,
@@ -659,10 +660,8 @@ async function runWorkerSync(
   }
 }
 
-export async function scheduleExistingPages(app: AppContext, boss: {
-  schedule: (...args: any[]) => Promise<unknown>;
-  work: (...args: any[]) => Promise<unknown>;
-}) {
+export async function scheduleExistingPages(app: AppContext, boss: ScheduledQueueBoss) {
+  const createdQueues = new Set<string>();
   const scheduledQueues = new Set<string>();
   const workerQueues = new Set<string>();
 
@@ -670,8 +669,10 @@ export async function scheduleExistingPages(app: AppContext, boss: {
     queueName: string,
     cron: string,
     data: Record<string, unknown> | undefined,
-    worker: ((job: { data?: { label: string } }) => Promise<void>) | (() => Promise<void>),
+    worker: (jobs: Array<{ data?: { label: string } }>) => Promise<void>,
   ) => {
+    await ensureQueueCreated(boss, queueName, createdQueues);
+
     if (!scheduledQueues.has(queueName)) {
       if (data) {
         await boss.schedule(queueName, cron, data);
@@ -681,7 +682,7 @@ export async function scheduleExistingPages(app: AppContext, boss: {
       scheduledQueues.add(queueName);
     }
     if (!workerQueues.has(queueName)) {
-      await boss.work(queueName, worker);
+      await boss.work(queueName, { batchSize: 1 }, worker);
       workerQueues.add(queueName);
     }
   };
@@ -690,8 +691,8 @@ export async function scheduleExistingPages(app: AppContext, boss: {
     const pages = await listPlatformAccounts(app.db);
     for (const page of pages) {
       const lightQueue = lightQueueName(page);
-      await ensureScheduledWork(lightQueue, "0 * * * *", { label: page.label }, async (job) => {
-        const label = (job.data as { label: string }).label;
+      await ensureScheduledWork(lightQueue, "0 * * * *", { label: page.label }, async (jobs) => {
+        const label = (jobs[0]?.data as { label: string }).label;
         await runWorkerSync(app, {
           label,
           stream: "light",
@@ -705,8 +706,8 @@ export async function scheduleExistingPages(app: AppContext, boss: {
           followerQueue,
           "0 */12 * * *",
           { label: page.label },
-          async (job) => {
-            const label = (job.data as { label: string }).label;
+          async (jobs) => {
+            const label = (jobs[0]?.data as { label: string }).label;
             await runWorkerSync(app, {
               label,
               stream: "followers",
@@ -719,7 +720,7 @@ export async function scheduleExistingPages(app: AppContext, boss: {
   };
 
   await discoverPages();
-  await ensureScheduledWork("fansly.raw-payload-cleanup", "0 2 * * *", undefined, async () => {
+  await ensureScheduledWork(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *", undefined, async () => {
     await deleteExpiredRawPayloads(app.db, new Date());
     await deleteExpiredSyncObservability(
       app.db,

@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -17,8 +19,10 @@ import {
   upsertPageSubscription,
   upsertTransaction,
 } from "@fansly-connect/db";
+import PgBoss from "pg-boss";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
@@ -28,6 +32,8 @@ import {
   unassignPageFromUser,
 } from "../apps/runtime/src/services/auth.ts";
 import { getModelRevenueReport, getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
+import { SYNC_TRIGGER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
+import { processSyncTriggerBatch, type SyncTriggerJob } from "../apps/runtime/src/worker-sync-trigger.ts";
 import { startTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
@@ -189,10 +195,110 @@ function sessionCookieFrom(response: { headers: Record<string, string | string[]
   return value.split(";")[0]!;
 }
 
+function createAutoSyncFanslyAdapter(input: {
+  accountId: string;
+  username: string;
+  displayName: string | null;
+}): AppContext["adapter"] {
+  const accountMe = {
+    account: {
+      id: input.accountId,
+      username: input.username,
+      displayName: input.displayName,
+      createdAt: 1_772_157_317_000,
+      followCount: 0,
+      subscriberCount: 0,
+      earningsWallet: null,
+      walls: [],
+      subscriptionTiers: [],
+    },
+  };
+
+  return {
+    async verifySession() {
+      return {
+        parsed: accountMe,
+        raw: accountMe,
+      };
+    },
+    async getAccountMe() {
+      return {
+        parsed: accountMe,
+        raw: accountMe,
+      };
+    },
+    async getAccountsByIdsPage() {
+      return {
+        parsed: [],
+        raw: [],
+      };
+    },
+    async getTransactionsPage() {
+      return {
+        total: 0,
+        items: [],
+        offset: 0,
+        done: true,
+        raw: {
+          total: 0,
+          data: [],
+        },
+      };
+    },
+    async getSubscribersPage() {
+      return {
+        total: 0,
+        items: [],
+        offset: 0,
+        done: true,
+        raw: {
+          stats: {
+            totalActive: 0,
+            totalExpired: 0,
+            total: 0,
+          },
+          subscriptions: [],
+        },
+      };
+    },
+    async getFollowersPage() {
+      return {
+        total: 0,
+        items: [],
+        offset: 0,
+        done: true,
+        accounts: [],
+        raw: {
+          followers: [],
+          aggregationData: {
+            accounts: [],
+          },
+        },
+      };
+    },
+    async close() {},
+  } as AppContext["adapter"];
+}
+
+async function waitForCondition(check: () => Promise<boolean>, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (await check()) {
+      return;
+    }
+
+    await sleep(100);
+  }
+
+  throw new Error(`Condition was not met within ${timeoutMs}ms`);
+}
+
 describe("api integration", () => {
   let testDb: Awaited<ReturnType<typeof startTestDatabase>> | null = null;
   let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
   let fixture: Awaited<ReturnType<typeof seedPhase2Fixture>> | null = null;
+  let workerBoss: PgBoss | null = null;
 
   beforeAll(async () => {
     try {
@@ -218,6 +324,7 @@ describe("api integration", () => {
       return;
     }
 
+    await testDb.pool.query("drop schema if exists pgboss cascade");
     await testDb.pool.query(`
       truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
                auth_sessions, user_page_assignments, users, fan_username_aliases,
@@ -259,6 +366,10 @@ describe("api integration", () => {
   });
 
   afterEach(async () => {
+    if (workerBoss) {
+      await workerBoss.stop();
+      workerBoss = null;
+    }
     if (server) {
       await server.close();
       server = null;
@@ -2035,6 +2146,161 @@ describe("api integration", () => {
       message: 'Model "missing-model" does not exist',
       statusCode: 404,
     });
+  });
+
+  it("auto-queues and processes an initial full sync after page creation", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const activeTestDb = testDb;
+    await server.close();
+    const appContext = createTestAppContext(activeTestDb, {
+      databaseUrl: activeTestDb.connectionString,
+      adapter: createAutoSyncFanslyAdapter({
+        accountId: "acct-auto-sync",
+        username: "auto_sync_user",
+        displayName: "Auto Sync User",
+      }),
+    });
+    server = await buildApiServer(appContext);
+    await server.ready();
+
+    workerBoss = new PgBoss({ connectionString: activeTestDb.connectionString });
+    await workerBoss.start();
+    await workerBoss.work(SYNC_TRIGGER_QUEUE, { batchSize: 10 }, async (jobs) => {
+      await processSyncTriggerBatch(appContext, jobs as SyncTriggerJob[]);
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/pages",
+      headers: { cookie },
+      payload: {
+        platform: "fansly",
+        modelSlug: "lana-model",
+        label: "auto-sync-page",
+        session: {
+          authorization: "token",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      page: {
+        label: "auto-sync-page",
+        platform: "fansly",
+        username: "auto_sync_user",
+      },
+      verified: true,
+    });
+
+    await waitForCondition(async () => {
+      const rows = await activeTestDb.pool.query<{ count: string }>(`
+        select count(*)::text as count
+        from sync_runs sr
+        join platform_accounts pa on pa.id = sr.platform_account_id
+        where pa.label = 'auto-sync-page'
+      `);
+      return rows.rows[0]?.count === "2";
+    });
+
+    const syncRunRows = await activeTestDb.pool.query<{
+      stream: string;
+      status: string;
+      trigger: string;
+    }>(`
+      select sr.stream, sr.status, sr.trigger
+      from sync_runs sr
+      join platform_accounts pa on pa.id = sr.platform_account_id
+      where pa.label = 'auto-sync-page'
+      order by sr.stream asc
+    `);
+
+    expect(syncRunRows.rows).toEqual([
+      {
+        stream: "light",
+        status: "success",
+        trigger: "api",
+      },
+      {
+        stream: "followers",
+        status: "success",
+        trigger: "api",
+      },
+    ]);
+  });
+
+  it("returns 503 when page creation succeeds but the initial sync cannot be queued", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const activeTestDb = testDb;
+    await server.close();
+    const appContext = createTestAppContext(activeTestDb, {
+      databaseUrl: activeTestDb.connectionString,
+      adapter: createAutoSyncFanslyAdapter({
+        accountId: "acct-enqueue-fail",
+        username: "enqueue_fail_user",
+        displayName: "Enqueue Fail User",
+      }),
+    });
+    server = await buildApiServer(appContext);
+    await server.ready();
+
+    await activeTestDb.pool.query("drop schema pgboss cascade");
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/pages",
+      headers: { cookie },
+      payload: {
+        platform: "fansly",
+        modelSlug: "lana-model",
+        label: "enqueue-fail-page",
+        session: {
+          authorization: "token",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      error: "service_unavailable",
+      message: 'Page "enqueue-fail-page" was created, but the automatic sync could not be queued',
+      statusCode: 503,
+    });
+
+    const pageRows = await activeTestDb.pool.query<{ count: string }>(`
+      select count(*)::text as count
+      from platform_accounts
+      where label = 'enqueue-fail-page'
+    `);
+    expect(pageRows.rows[0]?.count).toBe("1");
   });
 
   it("uses the latest light sync run for connection health", async (context) => {

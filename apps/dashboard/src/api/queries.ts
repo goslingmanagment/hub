@@ -407,7 +407,7 @@ export function useAdminCreatePage() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: CreatePageBody) => api.post<AdminCreatePageResponse>("/api/v1/admin/pages", input),
-    onSuccess: () => {
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: keys.adminConnections() });
       queryClient.invalidateQueries({ queryKey: keys.overview() });
     },
