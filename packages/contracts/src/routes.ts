@@ -405,6 +405,7 @@ export const subscriberItemSchema = z.object({
   endsAt: isoTimestamp.nullable(),
   autoRenew: z.boolean().nullable(),
   subscriptionTierName: z.string().nullable(),
+  startedAt: isoTimestamp.nullable(),
 });
 
 export const subscriberDailyItemSchema = z.object({
@@ -741,12 +742,16 @@ export const overviewResponseSchema = z.object({
       adjustmentMills: mills,
       unclassifiedMills: mills,
       netEarningsMills: mills,
+      previousNetEarningsMills: mills,
+      deltaPct: z.number().nullable(),
     }),
     "30d": z.object({
       revenueMills: mills,
       adjustmentMills: mills,
       unclassifiedMills: mills,
       netEarningsMills: mills,
+      previousNetEarningsMills: mills,
+      deltaPct: z.number().nullable(),
     }),
   }),
   pages: z.array(z.object({
@@ -1185,7 +1190,9 @@ export const routeSchemas = {
     summary: "List current subscribers for one page",
     security: cookieOrBearerSecurity,
     params: pageParamsSchema,
-    querystring: paginationQuerySchema,
+    querystring: paginationQuerySchema.extend({
+      expiringWithinDays: z.coerce.number().int().min(1).max(90).optional(),
+    }),
     response: {
       200: subscriberListResponseSchema,
       401: errorResponseSchema,

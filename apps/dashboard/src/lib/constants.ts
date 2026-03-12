@@ -4,14 +4,13 @@ export const PLATFORM_LABELS: Record<string, string> = {
 };
 
 export const TRANSACTION_TYPE_LABELS: Record<string, string> = {
-  subscription_new: "New Sub",
-  subscription_renew: "Renewal",
+  subscription: "Subscription",
   tip: "Tip",
-  message: "Message",
-  post_unlock: "Post Unlock",
+  message_purchase: "Message",
+  post_purchase: "Post Unlock",
   stream_tip: "Stream Tip",
-  referral: "Referral",
   chargeback: "Chargeback",
+  refund: "Refund",
   payout_reversal: "Payout Reversal",
   other: "Other",
 };

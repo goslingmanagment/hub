@@ -591,13 +591,14 @@ export async function getPageTransactionsReport(
 export async function getPageSubscribersReport(
   app: AppContext,
   pageLabel: string,
-  input: Pick<TransactionListQuery, "limit" | "offset">,
+  input: Pick<TransactionListQuery, "limit" | "offset"> & { expiringWithinDays?: number },
 ): Promise<SubscriberListResponse> {
   const page = await getPageSummary(app, pageLabel);
   const rows = await listSubscribersForPage(app.db, {
     pageId: page.id,
     limit: input.limit,
     offset: input.offset,
+    expiringWithinDays: input.expiringWithinDays,
   });
 
   return {
@@ -610,6 +611,7 @@ export async function getPageSubscribersReport(
       endsAt: serializeTimestamp(row.endsAt),
       autoRenew: row.autoRenew,
       subscriptionTierName: row.subscriptionTierName,
+      startedAt: serializeTimestamp(row.sourceCreatedAt),
     })),
     limit: input.limit,
     offset: input.offset,

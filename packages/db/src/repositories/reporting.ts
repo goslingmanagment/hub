@@ -334,12 +334,22 @@ export async function listSubscribersForPage(
     pageId: number;
     limit: number;
     offset: number;
+    expiringWithinDays?: number;
   },
 ) {
-  const clauses = and(
+  const conditions = [
     eq(pageSubscriptions.platformAccountId, input.pageId),
     eq(pageSubscriptions.isCurrent, true),
-  );
+  ];
+
+  if (input.expiringWithinDays != null) {
+    const now = new Date();
+    const cutoff = new Date(now.getTime() + input.expiringWithinDays * 86_400_000);
+    conditions.push(gte(pageSubscriptions.endsAt, now));
+    conditions.push(lt(pageSubscriptions.endsAt, cutoff));
+  }
+
+  const clauses = and(...conditions);
 
   const [countRow] = await db.select({
     total: sql<number>`count(*)::int`,
@@ -352,6 +362,7 @@ export async function listSubscribersForPage(
     endsAt: pageSubscriptions.endsAt,
     autoRenew: pageSubscriptions.autoRenew,
     subscriptionTierName: pageSubscriptions.subscriptionTierName,
+    sourceCreatedAt: pageSubscriptions.sourceCreatedAt,
     platformUserId: fans.platformUserId,
     username: fans.username,
     displayName: fans.displayName,

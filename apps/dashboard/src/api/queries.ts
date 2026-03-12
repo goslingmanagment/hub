@@ -19,7 +19,10 @@ import type {
   CrossPageFanDetailResponse,
   CrossPageFanTransactionListResponse,
   CrossPageTransactionListResponse,
+  FollowerDailyResponse,
   FollowerListResponse,
+  PageRevenueResponse,
+  SubscriberDailyResponse,
   SubscriberListResponse,
   FanFlagsResponse,
   FanNoteResponse,
@@ -71,8 +74,11 @@ export const keys = {
     ["fanTransactions", platform, id, query] as const,
   fansSearch: (query: string) => ["fansSearch", query] as const,
   spenders: (query: string) => ["spenders", query] as const,
+  pageRevenueWindow: (label: string, query: string) => ["pageRevenueWindow", label, query] as const,
   pageSubscribers: (label: string, query: string) => ["pageSubscribers", label, query] as const,
   pageFollowers: (label: string, query: string) => ["pageFollowers", label, query] as const,
+  pageSubscribersDaily: (label: string, query: string) => ["pageSubscribersDaily", label, query] as const,
+  pageFollowersDaily: (label: string, query: string) => ["pageFollowersDaily", label, query] as const,
   spenderSeries: (platform: string, id: string, query: string) =>
     ["spenderSeries", platform, id, query] as const,
   adminUsers: () => ["adminUsers"] as const,
@@ -181,6 +187,33 @@ export function usePageFollowers(label: string, query: Record<string, string>) {
   return useQuery({
     queryKey: keys.pageFollowers(label, qs),
     queryFn: () => api.get<FollowerListResponse>(`/api/v1/pages/${label}/followers?${qs}`),
+    staleTime: 30_000,
+  });
+}
+
+export function usePageRevenueWindow(label: string, query: Record<string, string>) {
+  const qs = new URLSearchParams(query).toString();
+  return useQuery({
+    queryKey: keys.pageRevenueWindow(label, qs),
+    queryFn: () => api.get<PageRevenueResponse>(`/api/v1/pages/${label}/revenue?${qs}`),
+    staleTime: 30_000,
+  });
+}
+
+export function usePageSubscribersDaily(label: string, query: Record<string, string>) {
+  const qs = new URLSearchParams(query).toString();
+  return useQuery({
+    queryKey: keys.pageSubscribersDaily(label, qs),
+    queryFn: () => api.get<SubscriberDailyResponse>(`/api/v1/pages/${label}/subscribers/daily?${qs}`),
+    staleTime: 30_000,
+  });
+}
+
+export function usePageFollowersDaily(label: string, query: Record<string, string>) {
+  const qs = new URLSearchParams(query).toString();
+  return useQuery({
+    queryKey: keys.pageFollowersDaily(label, qs),
+    queryFn: () => api.get<FollowerDailyResponse>(`/api/v1/pages/${label}/followers/daily?${qs}`),
     staleTime: 30_000,
   });
 }

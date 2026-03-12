@@ -30,6 +30,7 @@ import {
   createLogger,
   millsToNumber,
   resolveBusinessDateRangeForPlatform,
+  resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
   toMills,
   type Period,
@@ -575,13 +576,19 @@ export async function buildApiServer(appContext: AppContext) {
 
     const rev7d = { revenueMills: 0n, adjustmentMills: 0n, unclassifiedMills: 0n, netEarningsMills: 0n };
     const rev30d = { revenueMills: 0n, adjustmentMills: 0n, unclassifiedMills: 0n, netEarningsMills: 0n };
+    const prevRev7d = { netEarningsMills: 0n };
+    const prevRev30d = { netEarningsMills: 0n };
 
     for (const [platform, ids] of groupedPageIds) {
       const bounds7d = resolveRevenuePeriodBoundsForPlatform(platform, "7d", now);
       const bounds30d = resolveRevenuePeriodBoundsForPlatform(platform, "30d", now);
-      const [rows7d, rows30d] = await Promise.all([
+      const compBounds7d = resolveRevenueComparisonPeriodBoundsForPlatform(platform, "7d", now);
+      const compBounds30d = resolveRevenueComparisonPeriodBoundsForPlatform(platform, "30d", now);
+      const [rows7d, rows30d, compRows7d, compRows30d] = await Promise.all([
         getRevenueBreakdownForScope(appContext.db, { platform, pageIds: ids, period: bounds7d }),
         getRevenueBreakdownForScope(appContext.db, { platform, pageIds: ids, period: bounds30d }),
+        compBounds7d ? getRevenueBreakdownForScope(appContext.db, { platform, pageIds: ids, period: compBounds7d }) : Promise.resolve([]),
+        compBounds30d ? getRevenueBreakdownForScope(appContext.db, { platform, pageIds: ids, period: compBounds30d }) : Promise.resolve([]),
       ]);
       for (const r of rows7d) {
         const m = toMills(r.netAmountMills);
@@ -597,6 +604,17 @@ export async function buildApiServer(appContext: AppContext) {
         else if (r.bucket === "unclassified") rev30d.unclassifiedMills += m;
       }
       rev30d.netEarningsMills = rev30d.revenueMills + rev30d.adjustmentMills + rev30d.unclassifiedMills;
+      for (const r of compRows7d) {
+        prevRev7d.netEarningsMills += toMills(r.netAmountMills);
+      }
+      for (const r of compRows30d) {
+        prevRev30d.netEarningsMills += toMills(r.netAmountMills);
+      }
+    }
+
+    function computeDeltaPct(current: bigint, previous: bigint): number | null {
+      if (previous === 0n) return null;
+      return Number(((current - previous) * 10000n) / (previous < 0n ? -previous : previous)) / 100;
     }
 
     // Per-page revenue
@@ -631,12 +649,16 @@ export async function buildApiServer(appContext: AppContext) {
           adjustmentMills: millsToNumber(rev7d.adjustmentMills),
           unclassifiedMills: millsToNumber(rev7d.unclassifiedMills),
           netEarningsMills: millsToNumber(rev7d.netEarningsMills),
+          previousNetEarningsMills: millsToNumber(prevRev7d.netEarningsMills),
+          deltaPct: computeDeltaPct(rev7d.netEarningsMills, prevRev7d.netEarningsMills),
         },
         "30d": {
           revenueMills: millsToNumber(rev30d.revenueMills),
           adjustmentMills: millsToNumber(rev30d.adjustmentMills),
           unclassifiedMills: millsToNumber(rev30d.unclassifiedMills),
           netEarningsMills: millsToNumber(rev30d.netEarningsMills),
+          previousNetEarningsMills: millsToNumber(prevRev30d.netEarningsMills),
+          deltaPct: computeDeltaPct(rev30d.netEarningsMills, prevRev30d.netEarningsMills),
         },
       },
       pages: pages.map((p) => {
