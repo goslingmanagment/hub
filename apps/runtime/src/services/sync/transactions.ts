@@ -8,13 +8,13 @@ import {
   upsertFanPage,
   upsertFans,
   upsertTransaction,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import {
   FANSLY_MAPPER_VERSION,
   mapFanslyTransactionState,
   mapFanslyTransactionType,
-} from "@fansly-connect/fansly";
-import { calculateGrossMillsFromNet, toMills } from "@fansly-connect/shared";
+} from "@agency_hub_core/fansly";
+import { calculateGrossMillsFromNet, toMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { prepareHydratedFans } from "./fan-hydration.ts";
@@ -133,6 +133,7 @@ async function syncTransactionsIncremental(
   let olderThanBoundaryPages = 0;
   let firstPageOlderThanBoundaryItems = 0;
   const collectedItems: Awaited<ReturnType<AppContext["adapter"]["getTransactionsPage"]>>["items"] = [];
+  let providerReportedTotal: number | null = null;
 
   while (true) {
     const page = await app.adapter.getTransactionsPage(
@@ -140,6 +141,7 @@ async function syncTransactionsIncremental(
       { after, limit: 100, offset },
     );
     pageCount += 1;
+    providerReportedTotal ??= page.total ?? null;
 
     await persistRawPayload(app.db, {
       platformAccountId: input.platformAccountId,
@@ -334,6 +336,19 @@ async function syncTransactionsIncremental(
     });
   }
 
+  if (providerReportedTotal !== null && providerReportedTotal !== processed) {
+    await input.telemetry.addAnomaly({
+      code: "transactions_total_mismatch",
+      severity: "warn",
+      message: "Provider-reported transaction total differed from the fetched transaction rows",
+      details: {
+        providerReportedTotal,
+        fetchedRows: processed,
+        pageCount,
+      },
+    });
+  }
+
   return { processed, newestSeenAt };
 }
 
@@ -369,6 +384,7 @@ async function syncTransactionsBackfill(
   let oldestSeenAt: Date | null = null;
   let newestSeenAt = state.newestSeenAt ? new Date(state.newestSeenAt) : null;
   let currentRunProcessed = 0;
+  let providerReportedTotal: number | null = null;
 
   await input.telemetry.addNote(
     existingState
@@ -408,6 +424,7 @@ async function syncTransactionsBackfill(
           offset: state.offset,
         },
       );
+      providerReportedTotal ??= page.total ?? null;
 
       if (
         state.transactionPages === 0 &&
@@ -623,6 +640,19 @@ async function syncTransactionsBackfill(
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
     snapshotEnd: snapshotEnd.toISOString(),
   });
+
+  if (providerReportedTotal !== null && state.processedTransactions !== providerReportedTotal) {
+    await input.telemetry.addAnomaly({
+      code: "transactions_total_mismatch",
+      severity: "warn",
+      message: "Provider-reported transaction total differed from the fetched transaction rows",
+      details: {
+        providerReportedTotal,
+        fetchedRows: state.processedTransactions,
+        pageCount: state.transactionPages,
+      },
+    });
+  }
 
   return {
     processed: currentRunProcessed,

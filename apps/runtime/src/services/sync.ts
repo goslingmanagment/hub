@@ -16,10 +16,10 @@ import {
   listSyncRunEvents,
   listTopFansForPage,
   startSyncRun,
-} from "@fansly-connect/db";
-import { FANSLY_MAPPER_VERSION } from "@fansly-connect/fansly";
-import { ONLYMONSTER_MAPPER_VERSION } from "@fansly-connect/onlyfans";
-import { resolveRevenuePeriodBoundsForPlatform } from "@fansly-connect/shared";
+} from "@agency_hub_core/db";
+import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
+import { ONLYMONSTER_MAPPER_VERSION } from "@agency_hub_core/onlyfans";
+import { resolveRevenuePeriodBoundsForPlatform } from "@agency_hub_core/shared";
 import type PgBoss from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -186,6 +186,21 @@ async function runLightSyncUnlocked(
           syncRunId: run.id,
           telemetry,
         });
+        const subscriberStats = stats.subscribers as { totalActive?: number } | undefined;
+        if (
+          typeof subscriberStats?.totalActive === "number" &&
+          accountMe.parsed.account.subscriberCount !== subscriberStats.totalActive
+        ) {
+          await telemetry.addAnomaly({
+            code: "subscriber_count_mismatch",
+            severity: "warn",
+            message: "Account metadata subscriber count differed from the synced active subscriptions",
+            details: {
+              accountMeSubscriberCount: accountMe.parsed.account.subscriberCount,
+              syncedActiveSubscribers: subscriberStats.totalActive,
+            },
+          });
+        }
       } catch (error) {
         const failure = normalizeSyncError(error, {
           endpoint: "subscribers",

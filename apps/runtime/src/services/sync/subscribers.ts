@@ -6,13 +6,13 @@ import {
   upsertCheckpoint,
   upsertFanPage,
   upsertPageSubscription,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import {
   FANSLY_MAPPER_VERSION,
   mapFanslySubscriptionStatus,
-} from "@fansly-connect/fansly";
+} from "@agency_hub_core/fansly";
 import { sql } from "drizzle-orm";
-import { toMills } from "@fansly-connect/shared";
+import { toMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { hydrateFans } from "./fan-hydration.ts";
@@ -35,6 +35,7 @@ export async function syncSubscribers(
   const items: Awaited<ReturnType<AppContext["adapter"]["getSubscribersPage"]>>["items"] = [];
   let stats: { totalActive: number; totalExpired: number; total: number } | null = null;
   let pageCount = 0;
+  let providerReportedTotal: number | null = null;
 
   while (true) {
     const page = await app.adapter.getSubscribersPage(
@@ -42,6 +43,7 @@ export async function syncSubscribers(
       { limit: 100, offset, status: "3,4" },
     );
     pageCount += 1;
+    providerReportedTotal ??= page.total ?? null;
 
     items.push(...page.items);
     stats = stats ?? {
@@ -163,6 +165,19 @@ export async function syncSubscribers(
     processedSubscribers: items.length,
     activeSubscribers: activeIds.length,
   });
+
+  if (providerReportedTotal !== null && providerReportedTotal !== items.length) {
+    await input.telemetry.addAnomaly({
+      code: "subscribers_total_mismatch",
+      severity: "warn",
+      message: "Provider-reported subscriber total differed from the fetched subscription rows",
+      details: {
+        providerReportedTotal,
+        fetchedRows: items.length,
+        pageCount,
+      },
+    });
+  }
 
   return {
     processed: items.length,

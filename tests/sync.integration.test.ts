@@ -23,20 +23,20 @@ import {
   transactions,
   updatePageMetadata,
   upsertTransaction,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import type {
   FanslyAccount,
   FanslyAccountMeResponse,
   FanslySubscriber,
   FanslyEarningsTransaction,
   FanslyFollower,
-} from "@fansly-connect/fansly";
+} from "@agency_hub_core/fansly";
 import type {
   OnlyMonsterAccount,
   OnlyMonsterChargeback,
   OnlyMonsterTransaction,
-} from "@fansly-connect/onlyfans";
-import { encryptJson } from "@fansly-connect/shared";
+} from "@agency_hub_core/onlyfans";
+import { encryptJson } from "@agency_hub_core/shared";
 import PgBoss from "pg-boss";
 
 import {
@@ -1544,6 +1544,128 @@ describe("sync integration", () => {
       "subscribers: Subscriber sync returned zero rows; refusing to clear existing current subscriptions",
     );
     expect(currentSubscriptions.rows[0]?.count).toBe(subscribersFixture.length);
+  });
+
+  it("records anomalies when provider totals disagree with fetched rows", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const accountMeFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/account_me.json"), "utf8"),
+    ).data.response as FanslyAccountMeResponse;
+    const baseTransaction = JSON.parse(
+      await readFile(path.resolve("reference/responses/earnings_transactions.json"), "utf8"),
+    ).data.response.data[0] as FanslyEarningsTransaction;
+    const subscribersFixture = JSON.parse(
+      await readFile(path.resolve("reference/responses/subscribers.json"), "utf8"),
+    ).data.response.subscriptions.slice(0, 4) as FanslySubscriber[];
+
+    const transactionsFixture = Array.from({ length: 111 }, (_, index) => buildTransaction(baseTransaction, {
+      transactionId: `mismatch-${index}`,
+      correlationId: `mismatch-${index}`,
+      createdAt: baseTransaction.createdAt - index,
+      updatedAt: baseTransaction.updatedAt ? baseTransaction.updatedAt - index : null,
+    }));
+
+    const adapter = new FakeFanslyAdapter({
+      accountMe: {
+        ...accountMeFixture,
+        account: {
+          ...accountMeFixture.account,
+          subscriberCount: 5,
+        },
+      },
+      transactions: transactionsFixture,
+      subscribers: subscribersFixture,
+      followers: [],
+    });
+    const { page } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const app = createTestApp(testDb, adapter);
+
+    vi.spyOn(adapter, "getTransactionsPage").mockImplementation(async (context, params) => {
+      const limit = params.limit ?? 100;
+      const offset = params.offset ?? 0;
+      const items = transactionsFixture.slice(offset, offset + limit);
+      await emitFakeRequest(context, {
+        operation: "earnings_transactions",
+        endpointTemplate: "/account/wallets/earnings/transactions",
+        requestMetadata: {
+          after: params.after?.toISOString() ?? null,
+          before: params.before?.toISOString() ?? null,
+          limit,
+          offset,
+        },
+        responseMetadata: {
+          returnedItems: items.length,
+          total: 121,
+          done: items.length < limit,
+        },
+        pagination: {
+          offset,
+          limit,
+        },
+      });
+      return {
+        total: 121,
+        items,
+        offset,
+        done: items.length < limit,
+        raw: {
+          total: 121,
+          data: items,
+        },
+      };
+    });
+
+    vi.spyOn(adapter, "getSubscribersPage").mockImplementation(async (context, params) => {
+      const limit = params.limit ?? 100;
+      const offset = params.offset ?? 0;
+      const items = subscribersFixture.slice(offset, offset + limit);
+      await emitFakeRequest(context, {
+        operation: "subscribers",
+        endpointTemplate: "/subscribers",
+        requestMetadata: {
+          limit,
+          offset,
+        },
+        responseMetadata: {
+          returnedItems: items.length,
+          total: 13,
+          done: true,
+        },
+        pagination: {
+          offset,
+          limit,
+        },
+      });
+      return {
+        total: 13,
+        items,
+        offset,
+        done: true,
+        raw: {
+          stats: {
+            totalActive: 5,
+            totalExpired: 8,
+            total: 13,
+          },
+          subscriptions: items,
+        },
+      };
+    });
+
+    const result = await runLightSync(app, page.label);
+    const anomalyCodes = (result.stats.anomalies as Array<{ code: string }>).map((entry) => entry.code);
+
+    expect(result.status).toBe("success");
+    expect(result.stats.health).toBe("degraded");
+    expect(anomalyCodes).toEqual(expect.arrayContaining([
+      "transactions_total_mismatch",
+      "subscribers_total_mismatch",
+      "subscriber_count_mismatch",
+    ]));
   });
 
   it("records skipped runs when a sync overlaps the page lock", async (context) => {
