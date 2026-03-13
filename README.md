@@ -77,6 +77,8 @@ pnpm dev:db
 pnpm db:migrate
 ```
 
+Migrations are not applied automatically on startup. If you point the API or worker at a new or reused local Postgres volume, run `pnpm db:migrate` against that exact `DATABASE_URL` before starting runtime processes.
+
 6. Add a model:
 
 ```bash
@@ -368,6 +370,8 @@ The worker schedules jobs for Fansly pages that already exist in the database wh
 - daily raw payload cleanup
 
 If you add a new page while the worker is already running, restart the worker so that page gets scheduled.
+
+The API, worker, and CLI now fail fast when the runtime database is missing the latest migration or when `sync_runs.stats` does not match the expected `jsonb NOT NULL DEFAULT '{}'` shape. Fix the drift with `pnpm db:migrate` against the same `DATABASE_URL` the process uses.
 
 OnlyFans scheduling is intentionally deferred in this milestone. Use `pnpm cli sync --page <label>` manually for OF pages.
 

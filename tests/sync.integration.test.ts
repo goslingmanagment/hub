@@ -1376,8 +1376,17 @@ describe("sync integration", () => {
       where sync_run_id = ${result.runId}
       order by id asc
     `);
-    const runRow = await testDb.pool.query(`
-      select stats->>'health' as health
+    const runRow = await testDb.pool.query<{
+      health: string;
+      requestTotals: {
+        totalAttempts: number;
+        byOperation: Record<string, {
+          attempts: number;
+        }>;
+      };
+    }>(`
+      select stats->>'health' as health,
+             stats->'requestTotals' as "requestTotals"
       from sync_runs
       where id = ${result.runId}
     `);
@@ -1395,6 +1404,8 @@ describe("sync integration", () => {
     expect(result.status).toBe("success");
     expect(result.stats.health).toBe("degraded");
     expect(runRow.rows[0]?.health).toBe("degraded");
+    expect(runRow.rows[0]?.requestTotals.totalAttempts).toBeGreaterThan(0);
+    expect(runRow.rows[0]?.requestTotals.byOperation.account_lookup?.attempts).toBeGreaterThan(0);
     expect(attemptRows.rows.map((row: { operation: string }) => row.operation)).toEqual(
       expect.arrayContaining(["account_me", "earnings_transactions", "subscribers", "account_lookup"]),
     );

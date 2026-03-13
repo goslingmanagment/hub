@@ -73,6 +73,13 @@ export async function applyTestMigrations(
     through?: string;
   },
 ) {
+  await pool.query(`
+    create table if not exists schema_migrations (
+      id text primary key,
+      applied_at timestamptz not null default now()
+    )
+  `);
+
   const migrationsDir = path.resolve("packages/db/migrations");
   const files = (await readdir(migrationsDir))
     .filter((file) => file.endsWith(".sql"))
@@ -95,6 +102,7 @@ export async function applyTestMigrations(
     await pool.query("begin");
     try {
       await pool.query(migration);
+      await pool.query("insert into schema_migrations (id) values ($1)", [file]);
       await pool.query("commit");
     } catch (error) {
       await pool.query("rollback");

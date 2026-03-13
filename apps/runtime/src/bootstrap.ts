@@ -1,4 +1,4 @@
-import { createDb, createPool, type Database } from "@fansly-connect/db";
+import { assertRuntimeSchemaReady, createDb, createPool, type Database } from "@fansly-connect/db";
 import { FanslyAdapter } from "@fansly-connect/fansly";
 import { OnlyFansAdapter } from "@fansly-connect/onlyfans";
 import type {
@@ -38,29 +38,36 @@ export async function createAppContext(): Promise<AppContext> {
   const config = loadConfig();
   const logger = createLogger(config.logLevel);
   const pool = createPool(config.databaseUrl);
-  const db = createDb(pool);
-  const adapter = new FanslyAdapter({
-    baseUrl: config.fanslyBaseUrl,
-    defaultDelayMs: 1000,
-    globalDelayMs: 1500,
-    accountLookupDelayMs: config.fanslyAccountLookupDelayMs,
-  });
-  const onlyFansAdapter = new OnlyFansAdapter({
-    baseUrl: config.onlyMonsterBaseUrl,
-    defaultDelayMs: 1000,
-  });
+  try {
+    await assertRuntimeSchemaReady(pool);
 
-  return {
-    config,
-    logger,
-    pool,
-    db,
-    adapter,
-    onlyFansAdapter,
-    async close() {
-      await adapter.close?.();
-      await onlyFansAdapter.close();
-      await pool.end();
-    },
-  };
+    const db = createDb(pool);
+    const adapter = new FanslyAdapter({
+      baseUrl: config.fanslyBaseUrl,
+      defaultDelayMs: 1000,
+      globalDelayMs: 1500,
+      accountLookupDelayMs: config.fanslyAccountLookupDelayMs,
+    });
+    const onlyFansAdapter = new OnlyFansAdapter({
+      baseUrl: config.onlyMonsterBaseUrl,
+      defaultDelayMs: 1000,
+    });
+
+    return {
+      config,
+      logger,
+      pool,
+      db,
+      adapter,
+      onlyFansAdapter,
+      async close() {
+        await adapter.close?.();
+        await onlyFansAdapter.close();
+        await pool.end();
+      },
+    };
+  } catch (error) {
+    await pool.end().catch(() => undefined);
+    throw error;
+  }
 }
