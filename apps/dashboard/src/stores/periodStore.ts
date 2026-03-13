@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type PeriodOption = "today" | "7d" | "30d" | "custom";
+export type PeriodOption = "today" | "7d" | "30d" | "all" | "custom";
 
 interface PeriodState {
   period: PeriodOption;

@@ -1,5 +1,6 @@
-import { useParams } from "react-router";
+import { useParams, useNavigate } from "react-router";
 import { useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import {
   usePageFanDetail,
   usePageFanTransactions,
@@ -18,10 +19,12 @@ const PAGE_SIZE = 50;
 
 export function FanProfilePage() {
   const { pageLabel, platform, platformUserId } = useParams();
+  const navigate = useNavigate();
   const [txOffset, setTxOffset] = useState(0);
   const [noteBody, setNoteBody] = useState("");
   const { period } = usePeriodStore();
-  const spenderPeriod = period === "today" || period === "7d" || period === "30d" ? period : "30d";
+  const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
+  const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   const { data, isLoading } = usePageFanDetail(pageLabel!, platformUserId!);
   const { data: spenderDetail } = useSpenderDetail(platform!, platformUserId!, {
@@ -110,6 +113,16 @@ export function FanProfilePage() {
 
   return (
     <div>
+      {/* Back button */}
+      <button
+        type="button"
+        onClick={() => navigate(-1)}
+        className="mb-4 flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-text-secondary transition-colors hover:bg-hover hover:text-text-primary"
+      >
+        <ArrowLeft size={14} />
+        Back
+      </button>
+
       {/* Header */}
       <div className="mb-6 flex items-center gap-4">
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-hover text-2xl font-bold text-text-secondary">

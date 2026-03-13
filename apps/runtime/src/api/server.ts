@@ -107,6 +107,7 @@ import {
   ensureQueueCreated,
   SYNC_TRIGGER_QUEUE,
 } from "../services/sync-queue.ts";
+import { sql } from "drizzle-orm";
 import { listStatus, getStatusDetail } from "../services/sync.ts";
 import { refreshPageMetadata } from "../services/sync/shared.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "../services/page-onboarding.ts";
@@ -1394,6 +1395,168 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return updatePageCredentials(appContext, request.params.pageLabel, request.body as any);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Admin: logs, queue, db stats, incidents
+  // ---------------------------------------------------------------------------
+
+  server.get("/api/v1/admin/logs", {
+    schema: { tags: ["admin"] },
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const query = request.query as { severity?: string; limit?: string };
+    const limit = Math.min(parseInt(query.limit || "100", 10) || 100, 500);
+    const severity = query.severity;
+
+    const rows = severity
+      ? (await appContext.db.execute(sql`
+          SELECT e.id, e.sync_run_id as "syncRunId",
+                 e.provider, e.stream, e.event_type as "eventType",
+                 e.severity, e.message, e.details,
+                 e.emitted_at as "emittedAt",
+                 pa.label as "pageLabel"
+          FROM sync_run_events e
+          INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
+          INNER JOIN platform_accounts pa ON pa.id = e.platform_account_id
+          WHERE e.severity = ${severity}
+          ORDER BY e.emitted_at DESC
+          LIMIT ${limit}
+        `)).rows
+      : (await appContext.db.execute(sql`
+          SELECT e.id, e.sync_run_id as "syncRunId",
+                 e.provider, e.stream, e.event_type as "eventType",
+                 e.severity, e.message, e.details,
+                 e.emitted_at as "emittedAt",
+                 pa.label as "pageLabel"
+          FROM sync_run_events e
+          INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
+          INNER JOIN platform_accounts pa ON pa.id = e.platform_account_id
+          ORDER BY e.emitted_at DESC
+          LIMIT ${limit}
+        `)).rows;
+
+    return rows.map((r: any) => ({
+      ...r,
+      emittedAt: r.emittedAt instanceof Date ? r.emittedAt.toISOString() : r.emittedAt,
+    }));
+  });
+
+  server.get("/api/v1/admin/queue/jobs", {
+    schema: { tags: ["admin"] },
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const query = request.query as { state?: string; name?: string; limit?: string };
+    const limit = Math.min(parseInt(query.limit || "50", 10) || 50, 200);
+    const state = query.state;
+    const name = query.name;
+
+    let condition = sql`true`;
+    if (state) condition = sql`${condition} AND state = ${state}`;
+    if (name) condition = sql`${condition} AND name = ${name}`;
+
+    const rows = (await appContext.db.execute(sql`
+      SELECT id, name, state, data, createdon as "createdOn",
+             startedon as "startedOn", completedon as "completedOn",
+             output, retrylimit as "retryLimit", retrycount as "retryCount"
+      FROM pgboss.job
+      WHERE ${condition}
+      ORDER BY createdon DESC
+      LIMIT ${limit}
+    `)).rows;
+
+    return rows.map((r: any) => ({
+      ...r,
+      createdOn: r.createdOn instanceof Date ? r.createdOn.toISOString() : r.createdOn,
+      startedOn: r.startedOn instanceof Date ? r.startedOn.toISOString() : r.startedOn,
+      completedOn: r.completedOn instanceof Date ? r.completedOn.toISOString() : r.completedOn,
+    }));
+  });
+
+  server.get("/api/v1/admin/db/stats", {
+    schema: { tags: ["admin"] },
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const tableRows = (await appContext.db.execute(sql`
+      SELECT schemaname as "schema", relname as "table",
+             n_live_tup::int as "rowEstimate",
+             pg_total_relation_size(schemaname || '.' || relname)::bigint as "totalBytes",
+             pg_indexes_size(schemaname || '.' || relname)::bigint as "indexBytes"
+      FROM pg_stat_user_tables
+      WHERE schemaname = 'public'
+      ORDER BY pg_total_relation_size(schemaname || '.' || relname) DESC
+    `)).rows;
+
+    const tables = tableRows.map((r: any) => ({
+      ...r,
+      totalBytes: typeof r.totalBytes === "string" ? Number(r.totalBytes) : r.totalBytes,
+      indexBytes: typeof r.indexBytes === "string" ? Number(r.indexBytes) : r.indexBytes,
+    }));
+
+    let migrations: any[] = [];
+    try {
+      const migrationRows = (await appContext.db.execute(sql`
+        SELECT id, hash, created_at as "createdAt"
+        FROM drizzle.__drizzle_migrations
+        ORDER BY created_at ASC
+      `)).rows;
+      migrations = migrationRows.map((r: any) => ({
+        ...r,
+        createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
+      }));
+    } catch {
+      // migrations table may not exist
+    }
+
+    return { tables, migrations };
+  });
+
+  server.get("/api/v1/admin/incidents", {
+    schema: { tags: ["admin"] },
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const query = request.query as { severity?: string; code?: string; limit?: string };
+    const limit = Math.min(parseInt(query.limit || "100", 10) || 100, 500);
+    const severity = query.severity;
+    const code = query.code;
+
+    let condition = sql`(e.severity IN ('warn', 'error') OR e.event_type = 'anomaly')`;
+    if (severity) condition = sql`${condition} AND e.severity = ${severity}`;
+    if (code) condition = sql`${condition} AND e.details->>'code' = ${code}`;
+
+    const items = (await appContext.db.execute(sql`
+      SELECT e.id, e.sync_run_id as "syncRunId",
+             e.provider, e.stream, e.event_type as "eventType",
+             e.severity, e.message, e.details,
+             e.emitted_at as "emittedAt",
+             pa.label as "pageLabel"
+      FROM sync_run_events e
+      INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
+      INNER JOIN platform_accounts pa ON pa.id = e.platform_account_id
+      WHERE ${condition}
+      ORDER BY e.emitted_at DESC
+      LIMIT ${limit}
+    `)).rows.map((r: any) => ({
+      ...r,
+      emittedAt: r.emittedAt instanceof Date ? r.emittedAt.toISOString() : r.emittedAt,
+    }));
+
+    const summary = (await appContext.db.execute(sql`
+      SELECT e.details->>'code' as "code", e.severity, count(*)::int as "count"
+      FROM sync_run_events e
+      WHERE (e.severity IN ('warn', 'error') OR e.event_type = 'anomaly')
+        AND e.emitted_at > now() - interval '7 days'
+      GROUP BY e.details->>'code', e.severity
+      ORDER BY count DESC
+      LIMIT 20
+    `)).rows;
+
+    return { summary, items };
   });
 
   // SPA static file serving (production only)

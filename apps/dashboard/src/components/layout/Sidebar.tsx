@@ -1,5 +1,6 @@
-import { NavLink, useLocation } from "react-router";
-import { BarChart3, Settings, Users, Heart } from "lucide-react";
+import { NavLink, useLocation, Link } from "react-router";
+import { BarChart3, Settings, Users, Heart, Terminal, RefreshCw, ListTodo, Database, AlertTriangle, Code2, ChevronDown } from "lucide-react";
+import { useState } from "react";
 import { useOverview } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 
@@ -7,9 +8,18 @@ interface SidebarProps {
   user: { username: string; role: string };
 }
 
+const devLinks = [
+  { to: "/dev/log", label: "Log", icon: Terminal },
+  { to: "/dev/sync-status", label: "Sync Status", icon: RefreshCw },
+  { to: "/dev/queue", label: "Queue", icon: ListTodo },
+  { to: "/dev/db-stats", label: "DB Stats", icon: Database },
+  { to: "/dev/incidents", label: "Incidents", icon: AlertTriangle },
+] as const;
+
 export function Sidebar({ user }: SidebarProps) {
   const { data } = useOverview();
   const location = useLocation();
+  const [devOpen, setDevOpen] = useState(() => location.pathname.startsWith("/dev"));
 
   type PageItem = NonNullable<typeof data>["pages"][number];
   const modelPages = new Map<string, { modelName: string; pages: PageItem[] }>();
@@ -30,9 +40,9 @@ export function Sidebar({ user }: SidebarProps) {
 
   return (
     <nav className="w-[248px] bg-card border-r border-border flex flex-col fixed top-0 bottom-0 z-20">
-      <div className="px-[22px] py-[22px] text-[17px] font-bold text-text-primary border-b border-border tracking-[-0.03em]">
+      <Link to="/" className="block px-[22px] py-[22px] text-[17px] font-bold text-text-primary border-b border-border tracking-[-0.03em]">
         <span className="text-accent">Agency</span>Hub
-      </div>
+      </Link>
 
       <div className="flex-1 p-3 overflow-y-auto">
         <NavLink
@@ -107,7 +117,41 @@ export function Sidebar({ user }: SidebarProps) {
       </div>
 
       {user.role === "owner" && (
-        <div className="p-3 border-t border-border">
+        <div className="p-3 border-t border-border space-y-0.5">
+          <button
+            type="button"
+            onClick={() => setDevOpen((o) => !o)}
+            className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              location.pathname.startsWith("/dev")
+                ? "bg-hover text-text-primary font-semibold"
+                : "text-text-secondary hover:bg-hover hover:text-text-primary"
+            }`}
+          >
+            <Code2 size={16} />
+            Dev
+            <ChevronDown
+              size={14}
+              className={`ml-auto text-text-muted transition-transform ${devOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+          {devOpen && (
+            <div className="ml-4 space-y-0.5">
+              {devLinks.map(({ to, label, icon: Icon }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  className={({ isActive }) =>
+                    `flex items-center gap-2 px-3 py-1.5 text-[13px] rounded-md transition-colors ${
+                      isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
+                    }`
+                  }
+                >
+                  <Icon size={13} />
+                  {label}
+                </NavLink>
+              ))}
+            </div>
+          )}
           <NavLink
             to="/settings"
             className={({ isActive }) =>

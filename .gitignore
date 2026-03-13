@@ -11,6 +11,7 @@ dist
 .testcontainers.properties
 tmp
 .sessions/
+.lilly2-session.json
 drafts/
 .om-token
 

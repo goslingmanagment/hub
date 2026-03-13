@@ -50,7 +50,7 @@ export function PageDetailPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
   const navigate = useNavigate();
   const { period } = usePeriodStore();
-  const selectedPeriod = period === "today" || period === "7d" || period === "30d" ? period : "30d";
+  const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
 
   const { data: overview, isLoading: overviewLoading } = useOverview();
   const page = overview?.pages.find((p: { label: string }) => p.label === pageLabel);
@@ -77,10 +77,11 @@ export function PageDetailPage() {
     limit: PAGE_SIZE,
     offset: txOffset,
   });
+  const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
   const { data: spenders } = useSpenders({
     scope: "page",
     pageLabel,
-    period: selectedPeriod,
+    period: spenderPeriod,
     limit: PAGE_SIZE,
     offset: spendersOffset,
     sortBy: "creatorNetAmountMills",
@@ -120,7 +121,9 @@ export function PageDetailPage() {
     ? "Today"
     : selectedPeriod === "7d"
       ? "7 Days"
-      : "30 Days";
+      : selectedPeriod === "all"
+        ? "All Time"
+        : "30 Days";
 
   function breakdownAmount(canonicalType: string): number {
     if (!selectedRevenue?.breakdown) return 0;

@@ -8,6 +8,11 @@ import { SubscribersPage } from "./pages/SubscribersPage";
 import { FollowersPage } from "./pages/FollowersPage";
 import { FanProfilePage } from "./pages/FanProfilePage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { LogPage } from "./pages/dev/LogPage";
+import { SyncStatusPage } from "./pages/dev/SyncStatusPage";
+import { QueuePage } from "./pages/dev/QueuePage";
+import { DbStatsPage } from "./pages/dev/DbStatsPage";
+import { IncidentsPage } from "./pages/dev/IncidentsPage";
 
 export function App() {
   return (
@@ -27,6 +32,11 @@ export function App() {
             </OwnerRoute>
           )}
         />
+        <Route path="dev/log" element={<OwnerRoute><LogPage /></OwnerRoute>} />
+        <Route path="dev/sync-status" element={<OwnerRoute><SyncStatusPage /></OwnerRoute>} />
+        <Route path="dev/queue" element={<OwnerRoute><QueuePage /></OwnerRoute>} />
+        <Route path="dev/db-stats" element={<OwnerRoute><DbStatsPage /></OwnerRoute>} />
+        <Route path="dev/incidents" element={<OwnerRoute><IncidentsPage /></OwnerRoute>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

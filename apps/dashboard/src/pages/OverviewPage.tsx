@@ -1,7 +1,15 @@
 import { useNavigate } from "react-router";
-import { useOverview } from "@/api/queries";
+import { useOverview, useOverviewRevenue } from "@/api/queries";
 import { CONNECTION_STATUS_COLORS, PLATFORM_COLORS } from "@/lib/constants";
 import { formatUsdFromMills } from "@fansly-connect/shared";
+import { usePeriodStore } from "@/stores/periodStore";
+
+const PERIOD_LABELS: Record<string, string> = {
+  today: "Today",
+  "7d": "7 Days",
+  "30d": "30 Days",
+  all: "All Time",
+};
 
 interface OverviewPage {
   id: number;
@@ -12,9 +20,6 @@ interface OverviewPage {
   username: string;
   subscriberCount: number;
   followerCount: number;
-  revenueTodayMills: number;
-  revenue7dMills: number;
-  revenue30dMills: number;
   newSubscribersToday: number;
   connectionStatus: string;
   lastLightSyncAt: string | null;
@@ -43,7 +48,11 @@ function groupByModel(pages: OverviewPage[]): ModelGroup[] {
 
 export function OverviewPage() {
   const navigate = useNavigate();
+  const { period } = usePeriodStore();
+  const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
+
   const { data, isLoading } = useOverview();
+  const { data: revenueData } = useOverviewRevenue(selectedPeriod);
 
   if (isLoading || !data) {
     return (
@@ -56,11 +65,18 @@ export function OverviewPage() {
   const pages = (data.pages ?? []) as OverviewPage[];
   const groups = groupByModel(pages);
 
-  const totalToday = pages.reduce((sum, p) => sum + (p.revenueTodayMills ?? 0), 0);
-  const total7d = pages.reduce((sum, p) => sum + (p.revenue7dMills ?? 0), 0);
-  const total30d = pages.reduce((sum, p) => sum + (p.revenue30dMills ?? 0), 0);
+  const revenueByPageId = new Map<number, number>();
+  if (revenueData?.pages) {
+    for (const rp of revenueData.pages) {
+      revenueByPageId.set(rp.pageId, rp.netEarningsMills);
+    }
+  }
+
+  const totalRevenue = revenueData?.netEarningsMills ?? 0;
   const totalSubs = pages.reduce((sum, p) => sum + (p.subscriberCount ?? 0), 0);
   const totalNewSubs = pages.reduce((sum, p) => sum + (p.newSubscribersToday ?? 0), 0);
+
+  const periodLabel = PERIOD_LABELS[selectedPeriod] ?? "30 Days";
 
   return (
     <div>
@@ -71,13 +87,7 @@ export function OverviewPage() {
               Page
             </th>
             <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Today
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              7 Days
-            </th>
-            <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              30 Days
+              {periodLabel}
             </th>
             <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
               Subs
@@ -92,18 +102,17 @@ export function OverviewPage() {
         </thead>
         <tbody>
           {groups.map((group) => (
-            <ModelGroupRows key={group.modelSlug} group={group} navigate={navigate} />
+            <ModelGroupRows
+              key={group.modelSlug}
+              group={group}
+              navigate={navigate}
+              revenueByPageId={revenueByPageId}
+            />
           ))}
           <tr className="border-t-2 border-border bg-hover-alt">
             <td className="px-4 py-3 text-[15px] font-bold text-text-primary">Agency Total</td>
             <td className="px-4 py-3 text-right tabular-nums text-lg font-bold text-text-primary">
-              {formatUsdFromMills(totalToday)}
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[17px] font-bold text-text-primary">
-              {formatUsdFromMills(total7d)}
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[17px] font-bold text-text-primary">
-              {formatUsdFromMills(total30d)}
+              {formatUsdFromMills(totalRevenue)}
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-text-primary">
               {totalSubs.toLocaleString()}
@@ -122,14 +131,16 @@ export function OverviewPage() {
 function ModelGroupRows({
   group,
   navigate,
+  revenueByPageId,
 }: {
   group: ModelGroup;
   navigate: ReturnType<typeof useNavigate>;
+  revenueByPageId: Map<number, number>;
 }) {
   return (
     <>
       <tr>
-        <td colSpan={7} className="px-4 pt-4 pb-2">
+        <td colSpan={5} className="px-4 pt-4 pb-2">
           <span className="text-accent font-bold">{group.modelName}</span>
           <span className="ml-2 text-text-muted text-xs">
             {group.pages.length} {group.pages.length === 1 ? "page" : "pages"}
@@ -143,6 +154,7 @@ function ModelGroupRows({
           dot: "#a8a29e",
           label: page.connectionStatus,
         };
+        const pageRevenue = revenueByPageId.get(page.id) ?? 0;
 
         return (
           <tr
@@ -164,13 +176,7 @@ function ModelGroupRows({
               </div>
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-lg font-bold text-text-primary">
-              {formatUsdFromMills(page.revenueTodayMills ?? 0)}
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
-              {formatUsdFromMills(page.revenue7dMills ?? 0)}
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
-              {formatUsdFromMills(page.revenue30dMills ?? 0)}
+              {formatUsdFromMills(pageRevenue)}
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
               {(page.subscriberCount ?? 0).toLocaleString()}

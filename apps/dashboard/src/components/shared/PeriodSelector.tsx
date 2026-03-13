@@ -4,6 +4,7 @@ const options: { key: PeriodOption; label: string }[] = [
   { key: "today", label: "Today" },
   { key: "7d", label: "7D" },
   { key: "30d", label: "30D" },
+  { key: "all", label: "All" },
 ];
 
 export function PeriodSelector() {

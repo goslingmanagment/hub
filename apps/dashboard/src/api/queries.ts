@@ -344,3 +344,47 @@ export function useAdminUpdateCredentials(pageLabel: string) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "connections"] }),
   });
 }
+
+// Dev — Logs
+export function useAdminLogs(params: { severity?: string; limit?: number } = {}) {
+  return useQuery({
+    queryKey: ["admin", "logs", params],
+    queryFn: () => api.get<any[]>(`/api/v1/admin/logs${qs(params)}`),
+    refetchInterval: 10_000,
+  });
+}
+
+// Dev — Sync Run Detail
+export function useAdminSyncRunDetail(runId: number) {
+  return useQuery({
+    queryKey: ["admin", "syncRunDetail", runId],
+    queryFn: () => api.get<any>(`/api/v1/admin/sync/runs/${runId}`),
+    enabled: runId > 0,
+  });
+}
+
+// Dev — Queue Jobs
+export function useAdminQueueJobs(params: { state?: string; limit?: number } = {}) {
+  return useQuery({
+    queryKey: ["admin", "queue", "jobs", params],
+    queryFn: () => api.get<any[]>(`/api/v1/admin/queue/jobs${qs(params)}`),
+    refetchInterval: 10_000,
+  });
+}
+
+// Dev — DB Stats
+export function useAdminDbStats() {
+  return useQuery({
+    queryKey: ["admin", "db", "stats"],
+    queryFn: () => api.get<{ tables: any[]; migrations: any[] }>("/api/v1/admin/db/stats"),
+  });
+}
+
+// Dev — Incidents
+export function useAdminIncidents(params: { severity?: string; code?: string; limit?: number } = {}) {
+  return useQuery({
+    queryKey: ["admin", "incidents", params],
+    queryFn: () => api.get<{ summary: any[]; items: any[] }>(`/api/v1/admin/incidents${qs(params)}`),
+    refetchInterval: 30_000,
+  });
+}

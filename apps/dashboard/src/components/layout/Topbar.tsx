@@ -141,6 +141,24 @@ function buildBreadcrumbs(
 
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
 
+  if (parts[0] === "dev") {
+    const devLabels: Record<string, string> = {
+      log: "Log",
+      "sync-status": "Sync Status",
+      queue: "Queue",
+      "db-stats": "DB Stats",
+      incidents: "Incidents",
+    };
+    const crumbs: { label: string; href?: string }[] = [
+      { label: "Overview", href: "/" },
+      parts[1] ? { label: "Dev", href: "/dev/log" } : { label: "Dev" },
+    ];
+    if (parts[1] && devLabels[parts[1]]) {
+      crumbs.push({ label: devLabels[parts[1]] });
+    }
+    return crumbs;
+  }
+
   if (parts[0] === "pages" && parts[1]) {
     const pageLabel = parts[1];
     const page = overview?.pages.find((item) => item.label === pageLabel);
