@@ -33,7 +33,7 @@ const bootstrapMocks = vi.hoisted(() => {
       fanslyBaseUrl: "https://example.invalid",
       onlyMonsterBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
-      fanslyAccountLookupDelayMs: 2500,
+      fanslyGlobalDelayMs: 2500,
       followerPageDelayMs: 0,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
@@ -95,6 +95,10 @@ describe("bootstrap", () => {
       "postgres://postgres:postgres@127.0.0.1:5432/fansly_connect_test",
     );
     expect(bootstrapMocks.assertRuntimeSchemaReady).toHaveBeenCalledWith(bootstrapMocks.pool);
+    expect(bootstrapMocks.FanslyAdapter).toHaveBeenCalledWith({
+      baseUrl: "https://example.invalid",
+      globalDelayMs: 2500,
+    });
     expect(app.db).toBe(bootstrapMocks.db);
     expect(app.adapter).toBe(bootstrapMocks.adapter);
     const onlyFansCloseSpy = vi.spyOn(app.onlyFansAdapter, "close");

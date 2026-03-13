@@ -12,7 +12,8 @@ const envSchema = z.object({
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
   ONLYMONSTER_BASE_URL: z.string().url().default("https://omapi.onlymonster.ai"),
   SYNC_HTTP_TRACE_FILE: z.string().min(1).optional(),
-  FANSLY_ACCOUNT_LOOKUP_DELAY_MS: z.coerce.number().int().positive().default(2500),
+  FANSLY_GLOBAL_DELAY_MS: z.coerce.number().int().positive().optional(),
+  FANSLY_ACCOUNT_LOOKUP_DELAY_MS: z.coerce.number().int().positive().optional(),
   FOLLOWER_PAGE_DELAY_MS: z.coerce.number().int().positive().default(5000),
   TRANSACTION_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
   TRANSACTION_RESCAN_CAP_DAYS: z.coerce.number().int().positive().default(30),
@@ -31,6 +32,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error("APP_ENCRYPTION_KEY must decode to exactly 32 bytes");
   }
 
+  const fanslyGlobalDelayMs =
+    parsed.FANSLY_GLOBAL_DELAY_MS ??
+    parsed.FANSLY_ACCOUNT_LOOKUP_DELAY_MS ??
+    2500;
+
   return {
     databaseUrl: parsed.DATABASE_URL,
     encryptionKey,
@@ -42,7 +48,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     fanslyBaseUrl: parsed.FANSLY_BASE_URL,
     onlyMonsterBaseUrl: parsed.ONLYMONSTER_BASE_URL,
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
-    fanslyAccountLookupDelayMs: parsed.FANSLY_ACCOUNT_LOOKUP_DELAY_MS,
+    fanslyGlobalDelayMs,
     followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,
     transactionLookbackDays: parsed.TRANSACTION_LOOKBACK_DAYS,
     transactionRescanCapDays: parsed.TRANSACTION_RESCAN_CAP_DAYS,

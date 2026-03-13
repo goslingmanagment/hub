@@ -44,9 +44,7 @@ export async function createAppContext(): Promise<AppContext> {
     const db = createDb(pool);
     const adapter = new FanslyAdapter({
       baseUrl: config.fanslyBaseUrl,
-      defaultDelayMs: 1000,
-      globalDelayMs: 1500,
-      accountLookupDelayMs: config.fanslyAccountLookupDelayMs,
+      globalDelayMs: config.fanslyGlobalDelayMs,
     });
     const onlyFansAdapter = new OnlyFansAdapter({
       baseUrl: config.onlyMonsterBaseUrl,

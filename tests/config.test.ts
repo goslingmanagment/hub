@@ -22,18 +22,37 @@ afterAll(() => {
 });
 
 describe("config", () => {
-  it("defaults Fansly account lookup delay to 2500ms", () => {
+  it("defaults Fansly global delay to 2500ms", () => {
     const config = loadConfig(baseEnv);
 
-    expect(config.fanslyAccountLookupDelayMs).toBe(2500);
+    expect(config.fanslyGlobalDelayMs).toBe(2500);
   });
 
-  it("accepts an explicit Fansly account lookup delay override", () => {
+  it("accepts an explicit Fansly global delay override", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      FANSLY_GLOBAL_DELAY_MS: "3000",
+    });
+
+    expect(config.fanslyGlobalDelayMs).toBe(3000);
+  });
+
+  it("falls back to the deprecated account lookup delay alias when the global var is unset", () => {
     const config = loadConfig({
       ...baseEnv,
       FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "3000",
     });
 
-    expect(config.fanslyAccountLookupDelayMs).toBe(3000);
+    expect(config.fanslyGlobalDelayMs).toBe(3000);
+  });
+
+  it("prefers FANSLY_GLOBAL_DELAY_MS over the deprecated alias when both are set", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      FANSLY_GLOBAL_DELAY_MS: "3000",
+      FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "3500",
+    });
+
+    expect(config.fanslyGlobalDelayMs).toBe(3000);
   });
 });

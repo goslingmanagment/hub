@@ -27,9 +27,7 @@ import type {
 
 interface AdapterOptions {
   baseUrl: string;
-  defaultDelayMs?: number;
   globalDelayMs?: number;
-  accountLookupDelayMs?: number;
 }
 
 type ApiEnvelope<T> = {
@@ -97,7 +95,6 @@ export class FanslyAdapter {
       endpointTemplate: "/account",
       query: { ids: ids.join(",") },
       category: "account",
-      minDelayMs: this.options.accountLookupDelayMs,
       requestShape: {
         idsCount: ids.length,
       },
@@ -294,7 +291,7 @@ export class FanslyAdapter {
 
     const url = `${this.options.baseUrl}${pathname}?${query.toString()}`;
     const retries = options.retries ?? 3;
-    const minDelayMs = options.minDelayMs ?? this.options.defaultDelayMs ?? 1000;
+    const minDelayMs = options.minDelayMs ?? 0;
     const requestId = `${options.operation}:${randomUUID()}`;
 
     return executeObservedRequest({
@@ -515,7 +512,7 @@ export class FanslyAdapter {
       try {
         const globalWaitMs = await this.waitForMinimumDelay(
           this.globalRequestTimestamp,
-          this.options.globalDelayMs ?? 1500,
+          this.options.globalDelayMs ?? 2500,
         );
         const startedAt = Date.now();
         this.requestTimestamps.set(category, startedAt);

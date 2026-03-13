@@ -86,7 +86,6 @@ describe("adapter hardening", () => {
       const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
       const adapter = new FanslyAdapter({
         baseUrl,
-        defaultDelayMs: 0,
       });
       const proxy = {
         url: "http://proxy.example:8080",
@@ -123,7 +122,6 @@ describe("adapter hardening", () => {
   it("builds proxy cache keys without exposing raw credentials", () => {
     const fanslyAdapter = new FanslyAdapter({
       baseUrl: "http://127.0.0.1:1",
-      defaultDelayMs: 0,
     });
     const onlyFansAdapter = new OnlyFansAdapter({
       baseUrl: "http://127.0.0.1:1",
@@ -146,13 +144,12 @@ describe("adapter hardening", () => {
     expect(onlyFansKey).toBe(fanslyKey);
   });
 
-  it("serializes Fansly requests from different categories with the global delay", async () => {
+  it("serializes Fansly requests from different categories with the default global delay", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-10T12:00:00.000Z"));
 
     const adapter = new FanslyAdapter({
       baseUrl: "http://127.0.0.1:1",
-      defaultDelayMs: 0,
     });
 
     const completionTimes: number[] = [];
@@ -170,80 +167,144 @@ describe("adapter hardening", () => {
       completionTimes.push(Date.now());
     });
 
-    await vi.advanceTimersByTimeAsync(1_500);
+    await vi.advanceTimersByTimeAsync(2_500);
     await Promise.all([firstWait, secondWait]);
 
-    expect(waitedMs).toEqual([0, 1_500]);
+    expect(waitedMs).toEqual([0, 2_500]);
     expect(completionTimes).toEqual([
       new Date("2026-03-10T12:00:00.000Z").getTime(),
-      new Date("2026-03-10T12:00:01.500Z").getTime(),
+      new Date("2026-03-10T12:00:02.500Z").getTime(),
     ]);
   });
 
-  it("keeps Fansly same-category pacing and reports combined category plus global wait", async () => {
+  it("keeps follower-specific pacing above the host-global delay", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T12:00:00.000Z"));
+
     const adapter = new FanslyAdapter({
       baseUrl: "http://127.0.0.1:1",
-      defaultDelayMs: 1_000,
-      globalDelayMs: 1_500,
     });
 
     const completionTimes: number[] = [];
     const waitedMs: number[] = [];
     const firstWait = (adapter as unknown as {
       waitForRateLimit(category: string, minDelayMs: number): Promise<number>;
-    }).waitForRateLimit("account", 1_000).then((waited) => {
+    }).waitForRateLimit("followers", 5_000).then((waited) => {
       waitedMs.push(waited);
       completionTimes.push(Date.now());
     });
     const secondWait = (adapter as unknown as {
       waitForRateLimit(category: string, minDelayMs: number): Promise<number>;
-    }).waitForRateLimit("account", 1_000).then((waited) => {
+    }).waitForRateLimit("followers", 5_000).then((waited) => {
       waitedMs.push(waited);
       completionTimes.push(Date.now());
     });
 
+    await vi.advanceTimersByTimeAsync(5_000);
     await Promise.all([firstWait, secondWait]);
 
-    expect(waitedMs[0]).toBe(0);
-    expect(waitedMs[1]).toBeGreaterThan(1_000);
-    expect(completionTimes[1]! - completionTimes[0]!).toBeGreaterThanOrEqual(1_400);
-  });
+    expect(waitedMs).toEqual([0, 5_000]);
+    expect(completionTimes).toEqual([
+      new Date("2026-03-10T12:00:00.000Z").getTime(),
+      new Date("2026-03-10T12:00:05.000Z").getTime(),
+    ]);
+  }, 10_000);
 
-  it("paces Fansly account lookup requests with the dedicated lookup delay", async () => {
-    await withJsonServer({
-      success: true,
-      response: [
-        {
-          id: "fan-1",
-          username: "fan_0001",
-          displayName: "Fan 0001",
-          createdAt: 1770000000000,
+  it("avoids retries when earnings transactions and account lookups alternate under the host-global floor", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    let requestCount = 0;
+    let lastRequestAt: number | null = null;
+
+    const ran = await withServer((request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
+      requestCount += 1;
+      response.setHeader("content-type", "application/json");
+
+      if (lastRequestAt !== null) {
+        const intervalMs = Date.now() - lastRequestAt;
+        if (intervalMs < 2_500) {
+          response.statusCode = 429;
+          response.setHeader("retry-after", "0.001");
+          response.end(JSON.stringify({
+            success: false,
+            error: {
+              message: "rate limited",
+            },
+          }));
+          lastRequestAt = Date.now();
+          return;
+        }
+      }
+
+      lastRequestAt = Date.now();
+
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (url.pathname === "/account/wallets/earnings/transactions") {
+        response.end(JSON.stringify({
+          success: true,
+          response: {
+            total: 0,
+            data: [],
+          },
+        }));
+        return;
+      }
+
+      if (url.pathname === "/account") {
+        const ids = (url.searchParams.get("ids") ?? "")
+          .split(",")
+          .filter(Boolean);
+        response.end(JSON.stringify({
+          success: true,
+          response: ids.map((id) => ({
+            id,
+            username: `fan_${id}`,
+            displayName: `Fan ${id}`,
+            createdAt: 1770000000000,
+          })),
+        }));
+        return;
+      }
+
+      response.statusCode = 404;
+      response.end(JSON.stringify({
+        success: false,
+        error: {
+          message: "not found",
         },
-      ],
+      }));
     }, async (baseUrl, requestTimes) => {
       const adapter = new FanslyAdapter({
         baseUrl,
-        defaultDelayMs: 1_000,
-        globalDelayMs: 1_500,
-        accountLookupDelayMs: 2_500,
       });
+      const context = {
+        session: {
+          authorization: "token",
+        },
+        requestObserver: {
+          async onRequestEvent(event: HttpRequestEvent) {
+            events.push(JSON.parse(JSON.stringify(event)) as Record<string, unknown>);
+          },
+        },
+      };
 
-      await adapter.getAccountsByIdsPage({
-        session: {
-          authorization: "token",
-        },
-      }, ["fan-1"]);
-      await adapter.getAccountsByIdsPage({
-        session: {
-          authorization: "token",
-        },
-      }, ["fan-2"]);
+      await adapter.getTransactionsPage(context, { limit: 1, offset: 0 });
+      await adapter.getAccountsByIdsPage(context, ["fan-1"]);
+      await adapter.getTransactionsPage(context, { limit: 1, offset: 1 });
+      await adapter.getAccountsByIdsPage(context, ["fan-2"]);
       await adapter.close();
 
-      expect(requestTimes).toHaveLength(2);
+      expect(requestTimes).toHaveLength(4);
       expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(2_500);
+      expect(requestTimes[2]! - requestTimes[1]!).toBeGreaterThanOrEqual(2_500);
+      expect(requestTimes[3]! - requestTimes[2]!).toBeGreaterThanOrEqual(2_500);
     });
-  });
+    if (!ran) {
+      return;
+    }
+
+    expect(requestCount).toBe(4);
+    expect(events.some((event) => event.state === "retry")).toBe(false);
+  }, 15_000);
 
   it("serializes different Fansly session tokens behind the single global clock", async () => {
     await withJsonServer({
@@ -260,7 +321,6 @@ describe("adapter hardening", () => {
     }, async (baseUrl, requestTimes) => {
       const adapter = new FanslyAdapter({
         baseUrl,
-        defaultDelayMs: 0,
       });
 
       await Promise.all([
@@ -277,7 +337,7 @@ describe("adapter hardening", () => {
       ]);
 
       expect(requestTimes).toHaveLength(2);
-      expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(1_450);
+      expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(2_450);
     });
   });
 
@@ -347,7 +407,6 @@ describe("adapter hardening", () => {
     }, async (baseUrl) => {
       const adapter = new FanslyAdapter({
         baseUrl,
-        defaultDelayMs: 0,
       });
 
       await adapter.getFollowersPage({
@@ -393,7 +452,6 @@ describe("adapter hardening", () => {
   it("rotates the Fansly direct dispatcher when a fresh connection is required", async () => {
     const adapter = new FanslyAdapter({
       baseUrl: "http://127.0.0.1:1",
-      defaultDelayMs: 0,
       globalDelayMs: 0,
     });
 
@@ -453,7 +511,6 @@ describe("adapter hardening", () => {
     }, async (baseUrl) => {
       const adapter = new FanslyAdapter({
         baseUrl,
-        defaultDelayMs: 0,
         globalDelayMs: 0,
       });
 
@@ -526,7 +583,6 @@ describe("adapter hardening", () => {
     }, async (baseUrl) => {
       const adapter = new FanslyAdapter({
         baseUrl,
-        defaultDelayMs: 0,
         globalDelayMs: 0,
       });
 
