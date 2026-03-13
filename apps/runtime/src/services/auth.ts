@@ -22,19 +22,21 @@ import {
   touchAuthSession,
   unassignUserFromPage,
   updateUserPasswordHash,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import {
   randomToken,
   sha256Hex,
   userRoles,
   type UserRole,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from "./errors.ts";
-import { findPageSummaryByLabel } from "@fansly-connect/db";
+import { findPageSummaryByLabel } from "@agency_hub_core/db";
 
-export const SESSION_COOKIE_NAME = "fc_session";
+export const SESSION_COOKIE_NAME = "agency_hub_core_session";
+const API_KEY_PREFIX = "agency_hub_core_";
+const API_KEY_DISPLAY_LENGTH = 10;
 
 interface AuditContext {
   source: string;
@@ -314,8 +316,9 @@ export async function issueChatterApiKey(
     await revokeApiKeysForUser(app.db, user.id, "rotated");
   }
 
-  const rawKey = `fc_${randomToken(24)}`;
-  const keyPrefix = rawKey.slice(0, 15);
+  const tokenBody = randomToken(24);
+  const rawKey = `${API_KEY_PREFIX}${tokenBody}`;
+  const keyPrefix = `${API_KEY_PREFIX}${tokenBody.slice(0, API_KEY_DISPLAY_LENGTH)}`;
   await createApiKey(app.db, {
     userId: user.id,
     keyPrefix,

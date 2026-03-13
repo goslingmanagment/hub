@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createFanslyPage, createModel } from "@fansly-connect/db";
+import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import { startTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -103,7 +103,7 @@ describe("CLI admin flows", () => {
     consoleSpy.mockRestore();
 
     expect(logs.some((line) => line.includes("Created user dima"))).toBe(true);
-    expect(logs.some((line) => line.startsWith("fc_"))).toBe(true);
+    expect(logs.some((line) => line.startsWith("agency_hub_core_"))).toBe(true);
     expect(logs.some((line) => line.includes("Revoked 1 API key(s) for anton"))).toBe(true);
 
     const keyRows = await testDb.pool.query(`
