@@ -167,13 +167,13 @@ describe("adapter hardening", () => {
       completionTimes.push(Date.now());
     });
 
-    await vi.advanceTimersByTimeAsync(2_500);
+    await vi.advanceTimersByTimeAsync(2_600);
     await Promise.all([firstWait, secondWait]);
 
-    expect(waitedMs).toEqual([0, 2_500]);
+    expect(waitedMs).toEqual([0, 2_600]);
     expect(completionTimes).toEqual([
       new Date("2026-03-10T12:00:00.000Z").getTime(),
-      new Date("2026-03-10T12:00:02.500Z").getTime(),
+      new Date("2026-03-10T12:00:02.600Z").getTime(),
     ]);
   });
 

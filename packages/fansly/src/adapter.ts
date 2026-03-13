@@ -46,6 +46,7 @@ type RequestResult<T> = {
 };
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const GLOBAL_DELAY_SAFETY_MARGIN_MS = 100;
 
 export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
@@ -510,9 +511,13 @@ export class FanslyAdapter {
 
       await globalGate.previous;
       try {
+        const configuredGlobalDelayMs = this.options.globalDelayMs ?? 2500;
+        const effectiveGlobalDelayMs = configuredGlobalDelayMs > 0
+          ? configuredGlobalDelayMs + GLOBAL_DELAY_SAFETY_MARGIN_MS
+          : 0;
         const globalWaitMs = await this.waitForMinimumDelay(
           this.globalRequestTimestamp,
-          this.options.globalDelayMs ?? 2500,
+          effectiveGlobalDelayMs,
         );
         const startedAt = Date.now();
         this.requestTimestamps.set(category, startedAt);
