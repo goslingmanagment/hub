@@ -1,0 +1,126 @@
+import { NavLink, useLocation } from "react-router";
+import { BarChart3, Settings, Users, Heart } from "lucide-react";
+import { useOverview } from "@/api/queries";
+import { PlatformBadge } from "@/components/shared/PlatformBadge";
+
+interface SidebarProps {
+  user: { username: string; role: string };
+}
+
+export function Sidebar({ user }: SidebarProps) {
+  const { data } = useOverview();
+  const location = useLocation();
+
+  type PageItem = NonNullable<typeof data>["pages"][number];
+  const modelPages = new Map<string, { modelName: string; pages: PageItem[] }>();
+  if (data) {
+    for (const page of data.pages) {
+      const existing = modelPages.get(page.modelSlug);
+      if (existing) {
+        existing.pages.push(page);
+      } else {
+        modelPages.set(page.modelSlug, { modelName: page.modelName, pages: [page] });
+      }
+    }
+  }
+
+  function isPageActive(pageLabel: string) {
+    return location.pathname.startsWith(`/pages/${pageLabel}`);
+  }
+
+  return (
+    <nav className="w-[248px] bg-card border-r border-border flex flex-col fixed top-0 bottom-0 z-20">
+      <div className="px-[22px] py-[22px] text-[17px] font-bold text-text-primary border-b border-border tracking-[-0.03em]">
+        <span className="text-accent">Agency</span>Hub
+      </div>
+
+      <div className="flex-1 p-3 overflow-y-auto">
+        <NavLink
+          to="/"
+          end
+          className={({ isActive }) =>
+            `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
+            }`
+          }
+        >
+          <BarChart3 size={16} />
+          Overview
+        </NavLink>
+
+        {modelPages.size > 0 && (
+          <div className="mt-4 px-3.5 pb-2 text-[11px] font-semibold text-text-muted uppercase tracking-[0.1em]">
+            Models
+          </div>
+        )}
+
+        {[...modelPages.entries()].map(([slug, { modelName, pages }]) => (
+          <div key={slug}>
+            <div className="px-3.5 py-2 text-[13px] text-text-secondary flex items-center gap-2 mt-1 font-semibold">
+              <span className="text-accent">{modelName}</span>
+              <span className="text-[12px] text-text-muted font-normal">{pages.length} {pages.length === 1 ? "page" : "pages"}</span>
+            </div>
+            {pages.map((page) => {
+              const active = isPageActive(page.label);
+              return (
+                <div key={page.id}>
+                  <NavLink
+                    to={`/pages/${page.label}`}
+                    className={`px-3.5 py-2 pl-9 text-[13px] rounded-md transition-colors flex items-center gap-2 font-[450] ${
+                      active ? "bg-active-bg text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
+                    }`}
+                  >
+                    {page.label}
+                    <PlatformBadge platform={page.platform} />
+                  </NavLink>
+                  {active && (
+                    <div className="ml-9 mt-0.5">
+                      <NavLink
+                        to={`/pages/${page.label}/subscribers`}
+                        className={({ isActive }) =>
+                          `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
+                            isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
+                          }`
+                        }
+                      >
+                        <Users size={12} /> Subscribers
+                      </NavLink>
+                      {page.platform === "fansly" && (
+                        <NavLink
+                          to={`/pages/${page.label}/followers`}
+                          className={({ isActive }) =>
+                            `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
+                              isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
+                            }`
+                          }
+                        >
+                          <Heart size={12} /> Followers
+                        </NavLink>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      {user.role === "owner" && (
+        <div className="p-3 border-t border-border">
+          <NavLink
+            to="/settings"
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
+              }`
+            }
+          >
+            <Settings size={16} />
+            Settings
+          </NavLink>
+        </div>
+      )}
+    </nav>
+  );
+}

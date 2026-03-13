@@ -20,6 +20,7 @@ import {
   listFanTransactionsOnPage,
   listRevenueDailyForPages,
   listTransactionsForScope,
+  listSubscriberDailyForPage,
   listVisiblePages,
   setFanFlags,
 } from "@fansly-connect/db";
@@ -614,11 +615,17 @@ export async function buildApiServer(appContext: AppContext) {
       return Number(((current - previous) * 10000n) / (previous < 0n ? -previous : previous)) / 100;
     }
 
-    // Per-page revenue
+    // Per-page revenue (today, 7d, 30d)
+    const pageTotalsToday = new Map<number, bigint>();
     const pageTotals7d = new Map<number, bigint>();
     const pageTotals30d = new Map<number, bigint>();
     for (const [platform, ids] of groupedPageIds) {
-      const [pt7d, pt30d] = await Promise.all([
+      const [ptToday, pt7d, pt30d] = await Promise.all([
+        getRevenuePageTotals(appContext.db, {
+          platform,
+          pageIds: ids,
+          period: resolveRevenuePeriodBoundsForPlatform(platform, "today", now),
+        }),
         getRevenuePageTotals(appContext.db, {
           platform,
           pageIds: ids,
@@ -630,8 +637,22 @@ export async function buildApiServer(appContext: AppContext) {
           period: resolveRevenuePeriodBoundsForPlatform(platform, "30d", now),
         }),
       ]);
+      for (const r of ptToday) pageTotalsToday.set(r.pageId, toMills(r.netEarningsMills));
       for (const r of pt7d) pageTotals7d.set(r.pageId, toMills(r.netEarningsMills));
       for (const r of pt30d) pageTotals30d.set(r.pageId, toMills(r.netEarningsMills));
+    }
+
+    // Per-page new subscribers today
+    const pageNewSubsToday = new Map<number, number>();
+    const todayBusinessDate = resolveBusinessDateRangeForPlatform("fansly", "today", now);
+    for (const p of pages) {
+      const items = await listSubscriberDailyForPage(appContext.db, {
+        pageId: p.id,
+        fromBusinessDate: todayBusinessDate.from,
+        toBusinessDate: todayBusinessDate.toExclusive,
+      });
+      const count = items.reduce((sum, item) => sum + item.newSubscribers, 0);
+      pageNewSubsToday.set(p.id, count);
     }
 
     return {
@@ -669,8 +690,10 @@ export async function buildApiServer(appContext: AppContext) {
           username: p.username,
           subscriberCount: p.subscriberCount,
           followerCount: p.followerCount,
+          revenueTodayMills: millsToNumber(pageTotalsToday.get(p.id) ?? 0n),
           revenue7dMills: millsToNumber(pageTotals7d.get(p.id) ?? 0n),
           revenue30dMills: millsToNumber(pageTotals30d.get(p.id) ?? 0n),
+          newSubscribersToday: pageNewSubsToday.get(p.id) ?? 0,
           connectionStatus: status?.connectionStatus ?? "unverified",
           lastLightSyncAt: p.lastLightSyncAt?.toISOString() ?? null,
           lastFollowerSyncAt: p.lastFollowerSyncAt?.toISOString() ?? null,
@@ -1372,6 +1395,21 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
     return updatePageCredentials(appContext, request.params.pageLabel, request.body as any);
   });
+
+  // SPA static file serving (production only)
+  const { existsSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+  const dashboardDist = resolve(import.meta.dirname, "../../dashboard/dist");
+  if (existsSync(dashboardDist)) {
+    const fastifyStatic = (await import("@fastify/static")).default;
+    await server.register(fastifyStatic, { root: dashboardDist, prefix: "/", wildcard: false });
+    server.setNotFoundHandler((req, reply) => {
+      if (!req.url.startsWith("/api/") && !req.url.startsWith("/documentation")) {
+        return reply.sendFile("index.html");
+      }
+      reply.status(404).send({ error: "Not Found", message: "Route not found", statusCode: 404 });
+    });
+  }
 
   return server;
 }

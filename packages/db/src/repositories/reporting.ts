@@ -334,7 +334,10 @@ export async function listSubscribersForPage(
     pageId: number;
     limit: number;
     offset: number;
+    query?: string;
     expiringWithinDays?: number;
+    startedWithinHours?: number;
+    autoRenew?: boolean;
   },
 ) {
   const conditions = [
@@ -342,11 +345,35 @@ export async function listSubscribersForPage(
     eq(pageSubscriptions.isCurrent, true),
   ];
 
+  if (input.query) {
+    const pattern = `%${input.query}%`;
+    conditions.push(or(
+      ilike(fans.platformUserId, pattern),
+      ilike(sql`coalesce(${fans.username}, '')`, pattern),
+      ilike(sql`coalesce(${fans.displayName}, '')`, pattern),
+      sql`exists (
+        select 1
+        from ${fanUsernameAliases} fua
+        where fua.fan_id = ${fans.id}
+          and fua.username ilike ${pattern}
+      )`,
+    )!);
+  }
+
   if (input.expiringWithinDays != null) {
     const now = new Date();
     const cutoff = new Date(now.getTime() + input.expiringWithinDays * 86_400_000);
     conditions.push(gte(pageSubscriptions.endsAt, now));
     conditions.push(lt(pageSubscriptions.endsAt, cutoff));
+  }
+
+  if (input.startedWithinHours != null) {
+    const cutoff = new Date(Date.now() - input.startedWithinHours * 60 * 60 * 1000);
+    conditions.push(gte(pageSubscriptions.sourceCreatedAt, cutoff));
+  }
+
+  if (input.autoRenew != null) {
+    conditions.push(eq(pageSubscriptions.autoRenew, input.autoRenew));
   }
 
   const clauses = and(...conditions);
@@ -410,18 +437,42 @@ export async function listFollowersForPage(
     pageId: number;
     limit: number;
     offset: number;
+    query?: string;
+    followedWithinHours?: number;
   },
 ) {
-  const clauses = and(
+  const clauses = [
     eq(pageFollows.platformAccountId, input.pageId),
     eq(pageFollows.isActive, true),
-  );
+  ];
+
+  if (input.query) {
+    const pattern = `%${input.query}%`;
+    clauses.push(or(
+      ilike(fans.platformUserId, pattern),
+      ilike(sql`coalesce(${fans.username}, '')`, pattern),
+      ilike(sql`coalesce(${fans.displayName}, '')`, pattern),
+      sql`exists (
+        select 1
+        from ${fanUsernameAliases} fua
+        where fua.fan_id = ${fans.id}
+          and fua.username ilike ${pattern}
+      )`,
+    )!);
+  }
+
+  if (input.followedWithinHours != null) {
+    const cutoff = new Date(Date.now() - input.followedWithinHours * 60 * 60 * 1000);
+    clauses.push(gte(pageFollows.followedAt, cutoff));
+  }
+
+  const whereClause = and(...clauses);
 
   const [countRow] = await db.select({
     total: sql<number>`count(*)::int`,
   }).from(pageFollows)
     .innerJoin(fans, eq(fans.id, pageFollows.fanId))
-    .where(clauses);
+    .where(whereClause);
 
   const items = await db.select({
     platformUserId: fans.platformUserId,
@@ -430,7 +481,7 @@ export async function listFollowersForPage(
     followedAt: pageFollows.followedAt,
   }).from(pageFollows)
     .innerJoin(fans, eq(fans.id, pageFollows.fanId))
-    .where(clauses)
+    .where(whereClause)
     .orderBy(desc(pageFollows.followedAt), desc(pageFollows.id))
     .limit(input.limit)
     .offset(input.offset);

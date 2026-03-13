@@ -859,6 +859,10 @@ export interface paths {
                 query?: {
                     limit?: number;
                     offset?: number;
+                    query?: string;
+                    expiringWithinDays?: number;
+                    startedWithinHours?: number;
+                    autoRenew?: boolean;
                 };
                 header?: never;
                 path: {
@@ -897,6 +901,7 @@ export interface paths {
                                 endsAt: string | null;
                                 autoRenew: boolean | null;
                                 subscriptionTierName: string | null;
+                                startedAt: string | null;
                             }[];
                             limit: number;
                             offset: number;
@@ -1067,6 +1072,8 @@ export interface paths {
                 query?: {
                     limit?: number;
                     offset?: number;
+                    query?: string;
+                    followedWithinHours?: number;
                 };
                 header?: never;
                 path: {
@@ -2323,7 +2330,8 @@ export interface paths {
                     platform?: "fansly" | "onlyfans";
                     limit?: number;
                     offset?: number;
-                    query: string;
+                    query?: string;
+                    q?: string;
                 };
                 header?: never;
                 path?: never;
@@ -2485,12 +2493,16 @@ export interface paths {
                                     adjustmentMills: number;
                                     unclassifiedMills: number;
                                     netEarningsMills: number;
+                                    previousNetEarningsMills: number;
+                                    deltaPct: number | null;
                                 };
                                 "30d": {
                                     revenueMills: number;
                                     adjustmentMills: number;
                                     unclassifiedMills: number;
                                     netEarningsMills: number;
+                                    previousNetEarningsMills: number;
+                                    deltaPct: number | null;
                                 };
                             };
                             pages: {
@@ -2503,8 +2515,10 @@ export interface paths {
                                 username: string | null;
                                 subscriberCount: number;
                                 followerCount: number;
+                                revenueTodayMills: number;
                                 revenue7dMills: number;
                                 revenue30dMills: number;
+                                newSubscribersToday: number;
                                 /** @enum {string} */
                                 connectionStatus: "active" | "stale" | "error" | "expired" | "never_synced" | "unverified";
                                 lastLightSyncAt: string | null;
@@ -2584,17 +2598,13 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            series: ({
+                            series: {
                                 businessDate: string;
                                 netAmountMills: number;
                                 transactionCount: number;
-                            } | {
-                                businessDate: string;
                                 /** @enum {string} */
-                                canonicalType: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
-                                netAmountMills: number;
-                                transactionCount: number;
-                            })[];
+                                canonicalType?: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
+                            }[];
                         };
                     };
                 };
@@ -2665,17 +2675,13 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            series: ({
+                            series: {
                                 businessDate: string;
                                 netAmountMills: number;
                                 transactionCount: number;
-                            } | {
-                                businessDate: string;
                                 /** @enum {string} */
-                                canonicalType: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
-                                netAmountMills: number;
-                                transactionCount: number;
-                            })[];
+                                canonicalType?: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
+                            }[];
                         };
                     };
                 };
@@ -2759,17 +2765,13 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            series: ({
+                            series: {
                                 businessDate: string;
                                 netAmountMills: number;
                                 transactionCount: number;
-                            } | {
-                                businessDate: string;
                                 /** @enum {string} */
-                                canonicalType: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
-                                netAmountMills: number;
-                                transactionCount: number;
-                            })[];
+                                canonicalType?: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
+                            }[];
                         };
                     };
                 };

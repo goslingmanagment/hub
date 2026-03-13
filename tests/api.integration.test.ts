@@ -2356,6 +2356,249 @@ describe("api integration", () => {
     ]));
   });
 
+  it("applies server-side subscriber and follower filters before pagination", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date();
+    const recentFollowAt = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const recentSubscriberAt = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    const expiringAt = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+
+    const [freshFan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-002",
+      username: "freshfan",
+      displayName: "Fresh Fan",
+    }]);
+    await upsertFanPage(testDb.db, {
+      fanId: freshFan.id,
+      platformAccountId: fixture.lanaPage.id,
+      isFollower: true,
+      followerSince: recentFollowAt,
+      isSubscriber: true,
+      subscriberSince: recentSubscriberAt,
+      subscriptionExpiresAt: expiringAt,
+      autoRenew: false,
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: freshFan.id,
+      platformFollowId: "follow-lana-2",
+      followedAt: recentFollowAt,
+    });
+    await upsertPageSubscription(testDb.db, {
+      platformSubscriptionId: "sub-lana-2",
+      platformAccountId: fixture.lanaPage.id,
+      fanId: freshFan.id,
+      rawStatus: 3,
+      canonicalStatus: "active",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: false,
+      sourceCreatedAt: recentSubscriberAt,
+      endsAt: expiringAt,
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const subscriberSearch = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/subscribers?query=fresh&limit=50",
+      headers: { cookie },
+    });
+    expect(subscriberSearch.statusCode).toBe(200);
+    expect(subscriberSearch.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-002",
+      }),
+    ]);
+
+    const subscriberRecent = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/subscribers?startedWithinHours=24&limit=50",
+      headers: { cookie },
+    });
+    expect(subscriberRecent.statusCode).toBe(200);
+    expect(subscriberRecent.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-002",
+      }),
+    ]);
+
+    const subscriberExpiring = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/subscribers?expiringWithinDays=7&limit=50",
+      headers: { cookie },
+    });
+    expect(subscriberExpiring.statusCode).toBe(200);
+    expect(subscriberExpiring.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-002",
+      }),
+    ]);
+
+    const subscriberNoRenew = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/subscribers?autoRenew=false&limit=50",
+      headers: { cookie },
+    });
+    expect(subscriberNoRenew.statusCode).toBe(200);
+    expect(subscriberNoRenew.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-002",
+      }),
+    ]);
+
+    const followerSearch = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/followers?query=fresh&limit=50",
+      headers: { cookie },
+    });
+    expect(followerSearch.statusCode).toBe(200);
+    expect(followerSearch.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-002",
+      }),
+    ]);
+
+    const followerRecent = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/followers?followedWithinHours=24&limit=50",
+      headers: { cookie },
+    });
+    expect(followerRecent.statusCode).toBe(200);
+    expect(followerRecent.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-002",
+      }),
+    ]);
+  });
+
+  it("returns sync runs as a bare array for admin clients", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const run = await startSyncRun(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      stream: "light",
+      trigger: "worker",
+    });
+    await finishSyncRun(testDb.db, run.id, {
+      status: "success",
+      stats: { synced: 1 },
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/sync/runs?limit=1",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([
+      expect.objectContaining({
+        runId: run.id,
+        pageLabel: "lana",
+        stream: "light",
+      }),
+    ]);
+  });
+
+  it("rejects owner-only admin endpoints for team leads", async (context) => {
+    if (!server) {
+      context.skip();
+      return;
+    }
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "lead",
+        password: "lead-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/connections",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("updates stored page credentials via PATCH for owners", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const activeTestDb = testDb;
+    await server.close();
+    const appContext = createTestAppContext(activeTestDb, {
+      adapter: createAutoSyncFanslyAdapter({
+        accountId: "acct-lana",
+        username: "lana_page",
+        displayName: "Lana",
+      }),
+    });
+    server = await buildApiServer(appContext);
+    await server.ready();
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/pages/lana/credentials",
+      headers: { cookie },
+      payload: {
+        platform: "fansly",
+        session: {
+          authorization: "updated-token",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      updated: true,
+      verified: true,
+    });
+  });
+
   it("serves follower and subscriber daily series plus swagger security schemes", async (context) => {
     if (!testDb || !server) {
       context.skip();

@@ -4,6 +4,7 @@ import {
   type FanListQuery,
   type FanListResponse,
   type FollowerDailyResponse,
+  type FollowerListQuery,
   type FollowerListResponse,
   type ModelListItem,
   type ModelRevenueResponse,
@@ -11,6 +12,7 @@ import {
   type PageFanDetailResponse,
   type PageRevenueResponse,
   type SubscriberDailyResponse,
+  type SubscriberListQuery,
   type SubscriberListResponse,
   type TransactionListQuery,
   type TransactionListResponse,
@@ -591,14 +593,17 @@ export async function getPageTransactionsReport(
 export async function getPageSubscribersReport(
   app: AppContext,
   pageLabel: string,
-  input: Pick<TransactionListQuery, "limit" | "offset"> & { expiringWithinDays?: number },
+  input: SubscriberListQuery,
 ): Promise<SubscriberListResponse> {
   const page = await getPageSummary(app, pageLabel);
   const rows = await listSubscribersForPage(app.db, {
     pageId: page.id,
     limit: input.limit,
     offset: input.offset,
+    query: input.query,
     expiringWithinDays: input.expiringWithinDays,
+    startedWithinHours: input.startedWithinHours,
+    autoRenew: input.autoRenew,
   });
 
   return {
@@ -646,13 +651,15 @@ export async function getPageSubscribersDailyReport(
 export async function getPageFollowersReport(
   app: AppContext,
   pageLabel: string,
-  input: Pick<TransactionListQuery, "limit" | "offset">,
+  input: FollowerListQuery,
 ): Promise<FollowerListResponse> {
   const page = await getPageSummary(app, pageLabel);
   const rows = await listFollowersForPage(app.db, {
     pageId: page.id,
     limit: input.limit,
     offset: input.offset,
+    query: input.query,
+    followedWithinHours: input.followedWithinHours,
   });
 
   return {

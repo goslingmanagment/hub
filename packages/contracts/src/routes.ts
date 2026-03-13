@@ -45,6 +45,19 @@ const spenderSortByEnum = z.enum([
   "displayName",
 ]);
 const fanSearchMatchKindEnum = z.enum(["platformUserId", "username", "alias", "displayName"]);
+const queryBooleanSchema = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+
+  return value;
+}, z.boolean());
 
 export const errorResponseSchema = z.object({
   error: z.string(),
@@ -130,6 +143,18 @@ export const transactionListQuerySchema = paginationQuerySchema.extend({
 
 export const fanListQuerySchema = paginationQuerySchema.extend({
   query: z.string().min(1).optional(),
+});
+
+export const subscriberListQuerySchema = paginationQuerySchema.extend({
+  query: z.string().min(1).optional(),
+  expiringWithinDays: z.coerce.number().int().min(1).max(90).optional(),
+  startedWithinHours: z.coerce.number().int().min(1).max(24 * 30).optional(),
+  autoRenew: queryBooleanSchema.optional(),
+});
+
+export const followerListQuerySchema = paginationQuerySchema.extend({
+  query: z.string().min(1).optional(),
+  followedWithinHours: z.coerce.number().int().min(1).max(24 * 30).optional(),
 });
 
 const spenderScopeFieldsSchema = z.object({
@@ -763,8 +788,10 @@ export const overviewResponseSchema = z.object({
     username: z.string().nullable(),
     subscriberCount: z.number().int(),
     followerCount: z.number().int(),
+    revenueTodayMills: mills,
     revenue7dMills: mills,
     revenue30dMills: mills,
+    newSubscribersToday: z.number().int(),
     connectionStatus: connectionStatusEnum,
     lastLightSyncAt: isoTimestamp.nullable(),
     lastFollowerSyncAt: isoTimestamp.nullable(),
@@ -781,7 +808,7 @@ export const revenueDailyQuerySchema = z.object({
   period: periodEnum.default("30d"),
   from: businessDate.optional(),
   to: businessDate.optional(),
-  groupByType: z.coerce.boolean().default(false),
+  groupByType: queryBooleanSchema.default(false),
 });
 
 export const revenueDailyItemSchema = z.object({
@@ -1190,9 +1217,7 @@ export const routeSchemas = {
     summary: "List current subscribers for one page",
     security: cookieOrBearerSecurity,
     params: pageParamsSchema,
-    querystring: paginationQuerySchema.extend({
-      expiringWithinDays: z.coerce.number().int().min(1).max(90).optional(),
-    }),
+    querystring: subscriberListQuerySchema,
     response: {
       200: subscriberListResponseSchema,
       401: errorResponseSchema,
@@ -1218,7 +1243,7 @@ export const routeSchemas = {
     summary: "List active followers for one page",
     security: cookieOrBearerSecurity,
     params: pageParamsSchema,
-    querystring: paginationQuerySchema,
+    querystring: followerListQuerySchema,
     response: {
       200: followerListResponseSchema,
       401: errorResponseSchema,
@@ -1683,6 +1708,7 @@ export type FanListQuery = z.infer<typeof fanListQuerySchema>;
 export type FanListResponse = z.infer<typeof fanListResponseSchema>;
 export type FanLookupParams = z.infer<typeof fanLookupParamsSchema>;
 export type FollowerDailyResponse = z.infer<typeof followerDailyResponseSchema>;
+export type FollowerListQuery = z.infer<typeof followerListQuerySchema>;
 export type FollowerListResponse = z.infer<typeof followerListResponseSchema>;
 export type LoginBody = z.infer<typeof loginBodySchema>;
 export type ModelListItem = z.infer<typeof modelListItemSchema>;
@@ -1701,6 +1727,7 @@ export type RevenueDailyItem = z.infer<typeof revenueDailyItemSchema>;
 export type RevenueDailyTypedItem = z.infer<typeof revenueDailyTypedItemSchema>;
 export type RevenueDailyResponse = z.infer<typeof revenueDailyResponseSchema>;
 export type SubscriberDailyResponse = z.infer<typeof subscriberDailyResponseSchema>;
+export type SubscriberListQuery = z.infer<typeof subscriberListQuerySchema>;
 export type SubscriberListResponse = z.infer<typeof subscriberListResponseSchema>;
 export type TransactionListQuery = z.infer<typeof transactionListQuerySchema>;
 export type TransactionListResponse = z.infer<typeof transactionListResponseSchema>;
