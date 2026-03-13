@@ -29,6 +29,7 @@ interface AdapterOptions {
   baseUrl: string;
   defaultDelayMs?: number;
   globalDelayMs?: number;
+  accountLookupDelayMs?: number;
 }
 
 type ApiEnvelope<T> = {
@@ -96,6 +97,7 @@ export class FanslyAdapter {
       endpointTemplate: "/account",
       query: { ids: ids.join(",") },
       category: "account",
+      minDelayMs: this.options.accountLookupDelayMs,
       requestShape: {
         idsCount: ids.length,
       },

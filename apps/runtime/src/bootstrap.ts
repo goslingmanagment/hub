@@ -43,6 +43,7 @@ export async function createAppContext(): Promise<AppContext> {
     baseUrl: config.fanslyBaseUrl,
     defaultDelayMs: 1000,
     globalDelayMs: 1500,
+    accountLookupDelayMs: config.fanslyAccountLookupDelayMs,
   });
   const onlyFansAdapter = new OnlyFansAdapter({
     baseUrl: config.onlyMonsterBaseUrl,

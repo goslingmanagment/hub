@@ -209,6 +209,42 @@ describe("adapter hardening", () => {
     expect(completionTimes[1]! - completionTimes[0]!).toBeGreaterThanOrEqual(1_400);
   });
 
+  it("paces Fansly account lookup requests with the dedicated lookup delay", async () => {
+    await withJsonServer({
+      success: true,
+      response: [
+        {
+          id: "fan-1",
+          username: "fan_0001",
+          displayName: "Fan 0001",
+          createdAt: 1770000000000,
+        },
+      ],
+    }, async (baseUrl, requestTimes) => {
+      const adapter = new FanslyAdapter({
+        baseUrl,
+        defaultDelayMs: 1_000,
+        globalDelayMs: 1_500,
+        accountLookupDelayMs: 2_000,
+      });
+
+      await adapter.getAccountsByIdsPage({
+        session: {
+          authorization: "token",
+        },
+      }, ["fan-1"]);
+      await adapter.getAccountsByIdsPage({
+        session: {
+          authorization: "token",
+        },
+      }, ["fan-2"]);
+      await adapter.close();
+
+      expect(requestTimes).toHaveLength(2);
+      expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(2_000);
+    });
+  });
+
   it("serializes different Fansly session tokens behind the single global clock", async () => {
     await withJsonServer({
       success: true,
