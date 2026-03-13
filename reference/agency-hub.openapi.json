@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Fansly Connect API",
+    "title": "Agency Hub Core API",
     "version": "2.0.0",
     "description": "Phase 2 authenticated API"
   },
@@ -10,7 +10,7 @@
       "cookieAuth": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "fc_session"
+        "name": "agency_hub_core_session"
       },
       "bearerAuth": {
         "type": "http",
@@ -13935,6 +13935,54 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/logs": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/queue/jobs": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/db/stats": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/incidents": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
           }
         }
       }
