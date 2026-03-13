@@ -28,7 +28,7 @@ export function createTestAppContext(
       fanslyBaseUrl: "https://example.invalid",
       onlyMonsterBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
-      fanslyAccountLookupDelayMs: 2000,
+      fanslyAccountLookupDelayMs: 2500,
       followerPageDelayMs: 0,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,

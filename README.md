@@ -164,7 +164,7 @@ Configuration is loaded from environment variables and validated at startup.
 | `LOG_LEVEL` | No | Logger level. Defaults to `info`. |
 | `FANSLY_BASE_URL` | No | Fansly API base URL. Defaults to `https://apiv3.fansly.com/api/v1`. |
 | `ONLYMONSTER_BASE_URL` | No | OnlyMonster API base URL. Defaults to `https://omapi.onlymonster.ai`. |
-| `FANSLY_ACCOUNT_LOOKUP_DELAY_MS` | No | Minimum delay between Fansly `account_lookup` requests. Defaults to `2000`. |
+| `FANSLY_ACCOUNT_LOOKUP_DELAY_MS` | No | Minimum delay between Fansly `account_lookup` requests. Defaults to `2500`. |
 | `FOLLOWER_PAGE_DELAY_MS` | No | Delay between follower pages. Defaults to `5000`. |
 | `TRANSACTION_LOOKBACK_DAYS` | No | Backfill window applied to transaction checkpoint resyncs. Defaults to `7`. |
 | `TRANSACTION_RESCAN_CAP_DAYS` | No | Maximum age of pending-aware transaction rescans before the start cursor is clamped. Defaults to `30`. |

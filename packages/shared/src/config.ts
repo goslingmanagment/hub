@@ -12,7 +12,7 @@ const envSchema = z.object({
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
   ONLYMONSTER_BASE_URL: z.string().url().default("https://omapi.onlymonster.ai"),
   SYNC_HTTP_TRACE_FILE: z.string().min(1).optional(),
-  FANSLY_ACCOUNT_LOOKUP_DELAY_MS: z.coerce.number().int().positive().default(2000),
+  FANSLY_ACCOUNT_LOOKUP_DELAY_MS: z.coerce.number().int().positive().default(2500),
   FOLLOWER_PAGE_DELAY_MS: z.coerce.number().int().positive().default(5000),
   TRANSACTION_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
   TRANSACTION_RESCAN_CAP_DAYS: z.coerce.number().int().positive().default(30),

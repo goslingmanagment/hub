@@ -20,7 +20,7 @@ async function main() {
       fanslyBaseUrl: "https://apiv3.fansly.com/api/v1",
       onlyMonsterBaseUrl: "https://omapi.onlymonster.ai",
       syncHttpTraceFile: null,
-      fanslyAccountLookupDelayMs: 2000,
+      fanslyAccountLookupDelayMs: 2500,
       followerPageDelayMs: 5000,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,

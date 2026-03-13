@@ -22,18 +22,18 @@ afterAll(() => {
 });
 
 describe("config", () => {
-  it("defaults Fansly account lookup delay to 2000ms", () => {
+  it("defaults Fansly account lookup delay to 2500ms", () => {
     const config = loadConfig(baseEnv);
 
-    expect(config.fanslyAccountLookupDelayMs).toBe(2000);
+    expect(config.fanslyAccountLookupDelayMs).toBe(2500);
   });
 
   it("accepts an explicit Fansly account lookup delay override", () => {
     const config = loadConfig({
       ...baseEnv,
-      FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "2500",
+      FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "3000",
     });
 
-    expect(config.fanslyAccountLookupDelayMs).toBe(2500);
+    expect(config.fanslyAccountLookupDelayMs).toBe(3000);
   });
 });

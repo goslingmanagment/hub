@@ -225,7 +225,7 @@ describe("adapter hardening", () => {
         baseUrl,
         defaultDelayMs: 1_000,
         globalDelayMs: 1_500,
-        accountLookupDelayMs: 2_000,
+        accountLookupDelayMs: 2_500,
       });
 
       await adapter.getAccountsByIdsPage({
@@ -241,7 +241,7 @@ describe("adapter hardening", () => {
       await adapter.close();
 
       expect(requestTimes).toHaveLength(2);
-      expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(2_000);
+      expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(2_500);
     });
   });
 
