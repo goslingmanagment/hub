@@ -18,7 +18,7 @@ import {
   upsertPageFollow,
   upsertPageSubscription,
   upsertTransaction,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import PgBoss from "pg-boss";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -2208,13 +2208,19 @@ describe("api integration", () => {
     });
 
     await waitForCondition(async () => {
-      const rows = await activeTestDb.pool.query<{ count: string }>(`
-        select count(*)::text as count
+      const rows = await activeTestDb.pool.query<{
+        stream: string;
+        status: string;
+      }>(`
+        select sr.stream, sr.status
         from sync_runs sr
         join platform_accounts pa on pa.id = sr.platform_account_id
         where pa.label = 'auto-sync-page'
+        order by sr.stream asc
       `);
-      return rows.rows[0]?.count === "2";
+
+      return rows.rows.length === 2
+        && rows.rows.every((row) => row.status === "success");
     });
 
     const syncRunRows = await activeTestDb.pool.query<{
