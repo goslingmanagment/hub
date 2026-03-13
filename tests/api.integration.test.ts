@@ -2599,6 +2599,65 @@ describe("api integration", () => {
     });
   });
 
+  it("normalizes inline proxy credentials when updating page credentials via PATCH", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const activeTestDb = testDb;
+    await server.close();
+    const appContext = createTestAppContext(activeTestDb, {
+      adapter: createAutoSyncFanslyAdapter({
+        accountId: "acct-lana",
+        username: "lana_page",
+        displayName: "Lana",
+      }),
+    });
+    server = await buildApiServer(appContext);
+    await server.ready();
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/pages/lana/credentials",
+      headers: { cookie },
+      payload: {
+        platform: "fansly",
+        session: {
+          authorization: "updated-token",
+        },
+        proxy: {
+          url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const proxyRows = await activeTestDb.pool.query(`
+      select url, encrypted_auth is not null as has_encrypted_auth
+      from platform_account_proxies
+      where platform_account_id = (
+        select id from platform_accounts where label = 'lana'
+      )
+    `);
+
+    expect(proxyRows.rows[0]).toEqual({
+      url: "socks5://127.0.0.1:1080",
+      has_encrypted_auth: true,
+    });
+  });
+
   it("serves follower and subscriber daily series plus swagger security schemes", async (context) => {
     if (!testDb || !server) {
       context.skip();

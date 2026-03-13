@@ -181,6 +181,15 @@ export async function storeProxyConfig(
   return proxy;
 }
 
+export async function deleteProxyConfig(
+  db: Database,
+  platformAccountId: number,
+) {
+  await db
+    .delete(platformAccountProxies)
+    .where(eq(platformAccountProxies.platformAccountId, platformAccountId));
+}
+
 export async function findPageByLabel(db: Database, label: string) {
   const page = await db.query.platformAccounts.findFirst({
     where: eq(platformAccounts.label, label),
@@ -235,9 +244,12 @@ export async function listPageSummaries(db: Database) {
            pa.follower_count,
            pa.subscriber_count,
            pa.last_light_sync_at,
-           pa.last_follower_sync_at
+           pa.last_follower_sync_at,
+           pap.url as proxy_url,
+           (pap.encrypted_auth is not null) as proxy_has_auth
     from platform_accounts pa
     join models m on m.id = pa.model_id
+    left join platform_account_proxies pap on pap.platform_account_id = pa.id
     order by m.slug asc, pa.label asc
   `);
 }

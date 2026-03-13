@@ -213,7 +213,7 @@ Supported flags:
 - `--model <slug>`
 - `--label <label>`
 - `--session-file <file>`
-- `--proxy-url <url>`
+- `--proxy-url <url>` (`http://`, `https://`, and `socks5://` supported)
 - `--proxy-username <username>`
 - `--proxy-password <password>`
 
@@ -235,7 +235,7 @@ Supported flags:
 - `--label <label>`
 - `--username <username>`
 - `--token-file <file>`
-- `--proxy-url <url>`
+- `--proxy-url <url>` (`http://`, `https://`, and `socks5://` supported)
 - `--proxy-username <username>`
 - `--proxy-password <password>`
 
@@ -249,10 +249,28 @@ pnpm cli page verify --page lora-main
 
 ### `page list`
 
-List tracked pages with current snapshot counts and last sync timestamps.
+List tracked pages with current snapshot counts, last sync timestamps, and masked proxy state.
 
 ```bash
 pnpm cli page list
+```
+
+### `page set-proxy`
+
+Verify the stored page credentials through a new proxy and persist the proxy only if verification succeeds.
+
+```bash
+pnpm cli page set-proxy \
+  --page lora-main \
+  --proxy-url socks5://proxy-user:proxy-pass@127.0.0.1:1080
+```
+
+### `page remove-proxy`
+
+Remove the stored proxy assignment for an existing page.
+
+```bash
+pnpm cli page remove-proxy --page lora-main
 ```
 
 ### `sync`

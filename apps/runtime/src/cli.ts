@@ -8,8 +8,10 @@ import {
   createModel,
 } from "@fansly-connect/db";
 import {
+  formatMaskedProxyUrl,
   formatUsdFromMills,
   parsePeriod,
+  redactSensitiveText,
   toMills,
   type TransactionType,
   type UserRole,
@@ -17,6 +19,7 @@ import {
 
 import { createAppContext } from "./bootstrap.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
+import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import {
   assignPageToUser,
   createUserAccount,
@@ -118,6 +121,20 @@ function printRows(headers: string[], rows: Array<unknown[]>) {
   }
 }
 
+function buildProxyInput(options: {
+  proxyUrl?: string;
+  proxyUsername?: string;
+  proxyPassword?: string;
+}) {
+  return options.proxyUrl
+    ? {
+      url: options.proxyUrl,
+      username: options.proxyUsername ?? null,
+      password: options.proxyPassword ?? null,
+    }
+    : null;
+}
+
 async function watchStatus(
   options: {
     page?: string;
@@ -194,7 +211,7 @@ function auditContext() {
 }
 
 function describeError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  return redactSensitiveText(error instanceof Error ? error.message : String(error));
 }
 
 async function queueInitialFullSyncAfterPageCreate(
@@ -345,13 +362,7 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         const session = await loadFanslySessionBundleFromFile(options.sessionFile);
-        const proxy = options.proxyUrl
-          ? {
-            url: options.proxyUrl,
-            username: options.proxyUsername ?? null,
-            password: options.proxyPassword ?? null,
-          }
-          : null;
+        const proxy = buildProxyInput(options);
         const { page: created } = await onboardFanslyPage(app, {
           modelSlug: options.model,
           label: options.label,
@@ -380,13 +391,7 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         const auth = await loadOnlyMonsterTokenBundleFromFile(options.tokenFile);
-        const proxy = options.proxyUrl
-          ? {
-            url: options.proxyUrl,
-            username: options.proxyUsername ?? null,
-            password: options.proxyPassword ?? null,
-          }
-          : null;
+        const proxy = buildProxyInput(options);
 
         const { page: created } = await onboardOnlyFansPage(app, {
           modelSlug: options.model,
@@ -420,6 +425,7 @@ export function buildProgram() {
             "subscriber_count",
             "last_light_sync_at",
             "last_follower_sync_at",
+            "proxy",
           ],
           rows.map((row) => [
             row.platform,
@@ -430,8 +436,43 @@ export function buildProgram() {
             row.subscriber_count,
             row.last_light_sync_at,
             row.last_follower_sync_at,
+            typeof row.proxy_url === "string"
+              ? formatMaskedProxyUrl({
+                url: row.proxy_url,
+                hasAuth: Boolean(row.proxy_has_auth),
+              })
+              : null,
           ]),
         );
+      } finally {
+        await app.close();
+      }
+    });
+
+  page
+    .command("set-proxy")
+    .requiredOption("--page <label>")
+    .requiredOption("--proxy-url <url>")
+    .option("--proxy-username <username>")
+    .option("--proxy-password <password>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        await setPageProxy(app, options.page, buildProxyInput(options)!);
+        console.log(`Updated proxy for page ${options.page}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  page
+    .command("remove-proxy")
+    .requiredOption("--page <label>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        await removePageProxy(app, options.page);
+        console.log(`Removed proxy for page ${options.page}`);
       } finally {
         await app.close();
       }
@@ -906,7 +947,7 @@ const isMain = process.argv[1]
 if (isMain) {
   const program = buildProgram();
   program.parseAsync(process.argv).catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(redactSensitiveText(error instanceof Error ? error.message : String(error)));
     process.exitCode = 1;
   });
 }

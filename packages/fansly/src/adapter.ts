@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fetch, type Dispatcher } from "undici";
 
 import {
+  buildProxyDispatcherCacheKey,
   classifyTransportError,
   createProxyRequestDispatcher,
   createRequestDispatcher,
@@ -457,7 +458,7 @@ export class FanslyAdapter {
       return cached;
     }
 
-    const agent = createProxyRequestDispatcher(cacheKey);
+    const agent = createProxyRequestDispatcher(proxy);
     this.proxyAgents.set(cacheKey, agent);
     return agent;
   }
@@ -472,7 +473,7 @@ export class FanslyAdapter {
 
     const cacheKey = this.buildProxyCacheKey(proxy);
     const previous = this.proxyAgents.get(cacheKey);
-    const replacement = createProxyRequestDispatcher(cacheKey);
+    const replacement = createProxyRequestDispatcher(proxy);
     this.proxyAgents.set(cacheKey, replacement);
     if (previous) {
       this.retireDispatcher(previous);
@@ -492,13 +493,7 @@ export class FanslyAdapter {
   }
 
   private buildProxyCacheKey(proxy: ProxyConfig) {
-    const proxyUrl = new URL(proxy.url);
-    if (proxy.username && proxy.password) {
-      proxyUrl.username = proxy.username;
-      proxyUrl.password = proxy.password;
-    }
-
-    return proxyUrl.toString();
+    return buildProxyDispatcherCacheKey(proxy);
   }
 
   private async waitForRateLimit(category: string, minDelayMs: number) {

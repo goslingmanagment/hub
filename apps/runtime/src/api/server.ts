@@ -27,6 +27,7 @@ import {
 import {
   createLogger,
   millsToNumber,
+  redactSensitiveText,
   resolveBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
@@ -1360,7 +1361,7 @@ export async function buildApiServer(appContext: AppContext) {
       }
     } catch (error) {
       throw new BadRequestError(
-        `Credential verification failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        `Credential verification failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`,
       );
     }
   });
@@ -1384,7 +1385,7 @@ export async function buildApiServer(appContext: AppContext) {
       };
     } catch (error) {
       throw new BadRequestError(
-        `Page verification failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        `Page verification failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`,
       );
     }
   });

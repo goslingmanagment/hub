@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import {
+  normalizeProxyConfig,
   decryptJson,
   encryptJson,
   type FanslySessionBundle,
@@ -9,6 +10,7 @@ import {
   type StoredPlatformCredentialBundle,
 } from "@fansly-connect/shared";
 import {
+  deleteProxyConfig,
   findPageByLabel,
   storePlatformCredentials,
   storeProxyConfig,
@@ -84,7 +86,7 @@ export async function loadOnlyMonsterTokenBundleFromFile(filePath: string) {
 }
 
 export async function saveEncryptedCredentials(
-  app: AppContext,
+  app: Pick<AppContext, "config" | "db">,
   platformAccountId: number,
   credentials: StoredPlatformCredentialBundle,
 ) {
@@ -101,16 +103,17 @@ export async function saveEncryptedCredentials(
 }
 
 export async function saveProxy(
-  app: AppContext,
+  app: Pick<AppContext, "config" | "db">,
   platformAccountId: number,
   proxy: ProxyConfig,
 ) {
-  const encryptedAuth = proxy.username || proxy.password
+  const normalized = normalizeProxyConfig(proxy);
+  const encryptedAuth = normalized.username || normalized.password
     ? JSON.stringify(
       encryptJson(
         {
-          username: proxy.username ?? null,
-          password: proxy.password ?? null,
+          username: normalized.username ?? null,
+          password: normalized.password ?? null,
         },
         app.config.encryptionKey,
         app.config.encryptionKeyVersion,
@@ -119,9 +122,38 @@ export async function saveProxy(
     : null;
 
   await storeProxyConfig(app.db, platformAccountId, {
-    url: proxy.url,
+    url: normalized.url,
     encryptedAuth,
     keyVersion: encryptedAuth ? app.config.encryptionKeyVersion : null,
+  });
+}
+
+export async function removeProxy(
+  app: Pick<AppContext, "db">,
+  platformAccountId: number,
+) {
+  await deleteProxyConfig(app.db, platformAccountId);
+}
+
+function resolveStoredProxy(
+  app: AppContext,
+  storedProxy: NonNullable<Awaited<ReturnType<typeof findPageByLabel>>>["proxy"],
+) {
+  if (!storedProxy) {
+    return null;
+  }
+
+  const auth = storedProxy.encryptedAuth
+    ? decryptJson<{ username: string | null; password: string | null }>(
+      storedProxy.encryptedAuth,
+      app.config.encryptionKey,
+    )
+    : null;
+
+  return normalizeProxyConfig({
+    url: storedProxy.url,
+    username: auth?.username ?? null,
+    password: auth?.password ?? null,
   });
 }
 
@@ -141,21 +173,7 @@ export async function resolvePageContext(app: AppContext, label: string) {
     app.config.encryptionKey,
   );
 
-  let proxy: ProxyConfig | null = null;
-  if (stored.proxy) {
-    const auth = stored.proxy.encryptedAuth
-      ? decryptJson<{ username: string | null; password: string | null }>(
-        stored.proxy.encryptedAuth,
-        app.config.encryptionKey,
-      )
-      : null;
-
-    proxy = {
-      url: stored.proxy.url,
-      username: auth?.username ?? null,
-      password: auth?.password ?? null,
-    };
-  }
+  const proxy = resolveStoredProxy(app, stored.proxy);
 
   if (stored.page.platform === "fansly") {
     const session = isStoredPlatformCredentialBundle(decrypted)

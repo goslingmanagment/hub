@@ -1,3 +1,5 @@
+import { redactSensitiveText } from "@fansly-connect/shared";
+
 const MAX_SYNC_ERROR_SUMMARY_CHARS = 1024;
 
 export interface PersistedSyncError {
@@ -65,10 +67,10 @@ function extractErrorType(error: unknown) {
 
 function extractErrorMessage(error: unknown) {
   if (error instanceof Error) {
-    return error.message;
+    return redactSensitiveText(error.message);
   }
 
-  return String(error);
+  return redactSensitiveText(String(error));
 }
 
 function extractErrorCode(error: unknown) {

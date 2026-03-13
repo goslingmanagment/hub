@@ -3,11 +3,11 @@ import {
   createFanslyPage,
   findModelBySlug,
   storePlatformCredentials,
-  storeProxyConfig,
   updatePageMetadata,
 } from "@fansly-connect/db";
 import {
   encryptJson,
+  normalizeProxyConfig,
   toMills,
   type FanslySessionBundle,
   type OnlyMonsterTokenBundle,
@@ -19,6 +19,7 @@ import type { OnlyMonsterAccount } from "@fansly-connect/onlyfans";
 import type { AppContext } from "../bootstrap.ts";
 import { NotFoundError } from "./errors.ts";
 import { buildOnlyFansMetadata, findOnlyFansAccountByUsername } from "./onlyfans.ts";
+import { saveProxy } from "./page-context.ts";
 
 type FanslyOnboardingContext = Pick<AppContext, "db" | "config"> & {
   adapter: Pick<AppContext["adapter"], "verifySession">;
@@ -42,8 +43,7 @@ function encryptCredentials(
 }
 
 async function storeProxyIfPresent(
-  app: Pick<AppContext, "config">,
-  db: AppContext["db"],
+  app: Pick<AppContext, "config" | "db">,
   platformAccountId: number,
   proxy: ProxyConfig | null,
 ) {
@@ -51,24 +51,7 @@ async function storeProxyIfPresent(
     return;
   }
 
-  const encryptedAuth = proxy.username || proxy.password
-    ? JSON.stringify(
-      encryptJson(
-        {
-          username: proxy.username ?? null,
-          password: proxy.password ?? null,
-        },
-        app.config.encryptionKey,
-        app.config.encryptionKeyVersion,
-      ),
-    )
-    : null;
-
-  await storeProxyConfig(db, platformAccountId, {
-    url: proxy.url,
-    encryptedAuth,
-    keyVersion: encryptedAuth ? app.config.encryptionKeyVersion : null,
-  });
+  await saveProxy(app, platformAccountId, proxy);
 }
 
 export async function onboardFanslyPage(
@@ -85,7 +68,7 @@ export async function onboardFanslyPage(
     throw new NotFoundError(`Model "${input.modelSlug}" does not exist`);
   }
 
-  const proxy = input.proxy ?? null;
+  const proxy = input.proxy ? normalizeProxyConfig(input.proxy) : null;
   const verification = await app.adapter.verifySession({
     session: input.session,
     proxy,
@@ -108,7 +91,7 @@ export async function onboardFanslyPage(
       keyVersion: app.config.encryptionKeyVersion,
     });
 
-    await storeProxyIfPresent(app, dbTx, created.id, proxy);
+    await storeProxyIfPresent({ ...app, db: dbTx }, created.id, proxy);
 
     await updatePageMetadata(dbTx, created.id, {
       platformAccountIdValue: verified.account.id,
@@ -145,7 +128,7 @@ export async function onboardOnlyFansPage(
     throw new NotFoundError(`Model "${input.modelSlug}" does not exist`);
   }
 
-  const proxy = input.proxy ?? null;
+  const proxy = input.proxy ? normalizeProxyConfig(input.proxy) : null;
   const lookupContext = {
     auth: input.auth,
     proxy,
@@ -174,7 +157,7 @@ export async function onboardOnlyFansPage(
       keyVersion: app.config.encryptionKeyVersion,
     });
 
-    await storeProxyIfPresent(app, dbTx, created.id, proxy);
+    await storeProxyIfPresent({ ...app, db: dbTx }, created.id, proxy);
 
     await updatePageMetadata(dbTx, created.id, {
       platformAccountIdValue: verified.platform_account_id,

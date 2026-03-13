@@ -4,6 +4,7 @@ export * from "./http-client.ts";
 export * from "./http-request.ts";
 export * from "./logger.ts";
 export * from "./money.ts";
+export * from "./proxy.ts";
 export * from "./snowflake.ts";
 export * from "./time.ts";
 export * from "./types.ts";

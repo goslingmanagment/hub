@@ -35,8 +35,11 @@ const cliMocks = vi.hoisted(() => {
     bossBehavior,
     bossInstances,
     createAppContext: vi.fn(),
+    listPages: vi.fn(),
     onboardFanslyPage: vi.fn(),
     onboardOnlyFansPage: vi.fn(),
+    removePageProxy: vi.fn(),
+    setPageProxy: vi.fn(),
   };
 });
 
@@ -52,6 +55,22 @@ vi.mock("../apps/runtime/src/services/page-onboarding.ts", () => ({
   onboardFanslyPage: cliMocks.onboardFanslyPage,
   onboardOnlyFansPage: cliMocks.onboardOnlyFansPage,
 }));
+
+vi.mock("../apps/runtime/src/services/page-proxies.ts", () => ({
+  setPageProxy: cliMocks.setPageProxy,
+  removePageProxy: cliMocks.removePageProxy,
+}));
+
+vi.mock("../apps/runtime/src/services/sync.ts", async () => {
+  const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync.ts")>(
+    "../apps/runtime/src/services/sync.ts",
+  );
+
+  return {
+    ...actual,
+    listPages: cliMocks.listPages,
+  };
+});
 
 import { buildProgram } from "../apps/runtime/src/cli.ts";
 import { SYNC_TRIGGER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
@@ -95,8 +114,11 @@ describe("CLI parsing", () => {
     cliMocks.bossBehavior.sendError = null;
     cliMocks.bossInstances.length = 0;
     cliMocks.createAppContext.mockReset();
+    cliMocks.listPages.mockReset();
     cliMocks.onboardFanslyPage.mockReset();
     cliMocks.onboardOnlyFansPage.mockReset();
+    cliMocks.removePageProxy.mockReset();
+    cliMocks.setPageProxy.mockReset();
 
     cliMocks.createAppContext.mockResolvedValue({
       config: {
@@ -109,6 +131,9 @@ describe("CLI parsing", () => {
       onlyFansAdapter: {},
       close: vi.fn(async () => {}),
     });
+    cliMocks.listPages.mockResolvedValue([]);
+    cliMocks.removePageProxy.mockResolvedValue(undefined);
+    cliMocks.setPageProxy.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -176,6 +201,19 @@ describe("CLI parsing", () => {
     const revenueHelp = revenueCommand?.helpInformation();
     expect(revenueHelp).toContain("--slug <slug>");
     expect(revenueHelp).toContain("--period <period>");
+  });
+
+  it("documents page proxy management commands", () => {
+    const helpProgram = buildProgram();
+    const pageCommand = helpProgram.commands.find((command) => command.name() === "page");
+    expect(pageCommand).toBeDefined();
+
+    const setProxyCommand = pageCommand?.commands.find((command) => command.name() === "set-proxy");
+    expect(setProxyCommand?.helpInformation()).toContain("--proxy-url <url>");
+    expect(setProxyCommand?.helpInformation()).toContain("--page <label>");
+
+    const removeProxyCommand = pageCommand?.commands.find((command) => command.name() === "remove-proxy");
+    expect(removeProxyCommand?.helpInformation()).toContain("--page <label>");
   });
 
   it("queues an initial full sync after adding a Fansly page", async () => {
@@ -310,6 +348,74 @@ describe("CLI parsing", () => {
 
     const boss = cliMocks.bossInstances[0];
     expect(boss.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets a proxy on an existing page", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "page",
+      "set-proxy",
+      "--page",
+      "lora-main",
+      "--proxy-url",
+      "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    ], { from: "user" });
+
+    expect(cliMocks.setPageProxy).toHaveBeenCalledWith(expect.anything(), "lora-main", {
+      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+      username: null,
+      password: null,
+    });
+    expect(logSpy).toHaveBeenCalledWith("Updated proxy for page lora-main");
+  });
+
+  it("removes a proxy from an existing page", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "page",
+      "remove-proxy",
+      "--page",
+      "lora-main",
+    ], { from: "user" });
+
+    expect(cliMocks.removePageProxy).toHaveBeenCalledWith(expect.anything(), "lora-main");
+    expect(logSpy).toHaveBeenCalledWith("Removed proxy for page lora-main");
+  });
+
+  it("shows masked proxy state in page list output", async () => {
+    cliMocks.listPages.mockResolvedValue([{
+      platform: "fansly",
+      model: "lora",
+      label: "lora-main",
+      username: "lora",
+      follower_count: 42,
+      subscriber_count: 7,
+      last_light_sync_at: "2026-03-10T10:00:00.000Z",
+      last_follower_sync_at: "2026-03-10T11:00:00.000Z",
+      proxy_url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+      proxy_has_auth: false,
+    }]);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "page",
+      "list",
+    ], { from: "user" });
+
+    expect(logSpy).toHaveBeenNthCalledWith(
+      1,
+      "platform\tmodel\tlabel\tusername\tfollower_count\tsubscriber_count\tlast_light_sync_at\tlast_follower_sync_at\tproxy",
+    );
+    expect(logSpy).toHaveBeenNthCalledWith(
+      2,
+      "fansly\tlora\tlora-main\tlora\t42\t7\t2026-03-10T10:00:00.000Z\t2026-03-10T11:00:00.000Z\tsocks5://127.0.0.1:1080 (auth)",
+    );
   });
 
   it("renders detailed status and both watch output paths", () => {

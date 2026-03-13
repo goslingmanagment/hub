@@ -1,12 +1,20 @@
 import { inspect } from "node:util";
 
-import { Agent, ProxyAgent } from "undici";
+import { Agent, ProxyAgent, buildConnector } from "undici";
+import { SocksClient } from "socks";
+
+import type { ProxyConfig } from "./types.ts";
+import {
+  normalizeProxyConfigWithMetadata,
+  redactSensitiveText,
+} from "./proxy.ts";
 
 const DISPATCHER_CONNECTIONS = 1;
 const DISPATCHER_KEEP_ALIVE_TIMEOUT_MS = 10_000;
 const DISPATCHER_KEEP_ALIVE_MAX_TIMEOUT_MS = 60_000;
 const DISPATCHER_KEEP_ALIVE_TIMEOUT_THRESHOLD_MS = 250;
 const HTTP_RETRY_BASE_DELAY_MS = 5_000;
+const CONNECT_TIMEOUT_MS = 10_000;
 
 const TIMEOUT_ERROR_NAMES = new Set([
   "AbortError",
@@ -32,9 +40,72 @@ export function createRequestDispatcher() {
   return new Agent(buildDispatcherOptions());
 }
 
-export function createProxyRequestDispatcher(proxyUrl: string) {
+function buildProxyAuthToken(proxy: {
+  username?: string | null;
+  password?: string | null;
+}) {
+  if (proxy.username === null && proxy.password === null) {
+    return null;
+  }
+
+  return `Basic ${Buffer.from(`${proxy.username ?? ""}:${proxy.password ?? ""}`).toString("base64")}`;
+}
+
+function createSocksProxyDispatcher(proxy: ProxyConfig) {
+  const normalized = normalizeProxyConfigWithMetadata(proxy);
+  const tlsConnector = buildConnector({
+    timeout: CONNECT_TIMEOUT_MS,
+    keepAliveInitialDelay: DISPATCHER_KEEP_ALIVE_TIMEOUT_MS,
+  });
+
+  return new Agent({
+    ...buildDispatcherOptions(),
+    connect: (options, callback) => {
+      SocksClient.createConnection({
+        command: "connect",
+        timeout: CONNECT_TIMEOUT_MS,
+        set_tcp_nodelay: true,
+        proxy: {
+          host: normalized.hostname,
+          port: normalized.port,
+          type: 5,
+          userId: normalized.hasAuth ? (normalized.username ?? "") : undefined,
+          password: normalized.hasAuth ? (normalized.password ?? "") : undefined,
+        },
+        destination: {
+          host: options.hostname,
+          port: Number.parseInt(options.port, 10),
+        },
+      }).then(({ socket }) => {
+        socket.setKeepAlive(true, DISPATCHER_KEEP_ALIVE_TIMEOUT_MS);
+        socket.setNoDelay(true);
+
+        if (options.protocol !== "https:") {
+          callback(null, socket);
+          return;
+        }
+
+        tlsConnector({
+          ...options,
+          servername: options.servername ?? options.hostname,
+          httpSocket: socket,
+        }, callback);
+      }).catch((error: unknown) => {
+        callback(error instanceof Error ? error : new Error(String(error)), null);
+      });
+    },
+  });
+}
+
+export function createProxyRequestDispatcher(proxy: ProxyConfig) {
+  const normalized = normalizeProxyConfigWithMetadata(proxy);
+  if (normalized.protocol === "socks5:") {
+    return createSocksProxyDispatcher(normalized);
+  }
+
   return new ProxyAgent({
-    uri: proxyUrl,
+    uri: normalized.url,
+    token: buildProxyAuthToken(normalized) ?? undefined,
     ...buildDispatcherOptions(),
   });
 }
@@ -50,9 +121,9 @@ export function classifyTransportError(error: unknown): "timeout" | "transport" 
 }
 
 export function formatObservedError(error: unknown) {
-  return Array.from(iterateErrorChain(error))
+  return redactSensitiveText(Array.from(iterateErrorChain(error))
     .map((cause, index) => `${index === 0 ? "" : `cause(${index}): `}${formatErrorCause(cause)}`)
-    .join(" | ");
+    .join(" | "));
 }
 
 export function parseRetryAfterDelayMs(retryAfterHeader: string | null, now = Date.now()) {
@@ -84,15 +155,15 @@ export function resolveRetryDelayMs(retryAfterHeader: string | null, attemptNumb
 function formatErrorCause(error: unknown) {
   if (error instanceof Error) {
     const metadata = extractErrorMetadata(error);
-    const summary = `${error.name}: ${error.message || "(no message)"}`;
+    const summary = redactSensitiveText(`${error.name}: ${error.message || "(no message)"}`);
     return metadata.length > 0 ? `${summary} (${metadata.join(", ")})` : summary;
   }
 
   if (typeof error === "string") {
-    return error;
+    return redactSensitiveText(error);
   }
 
-  return inspect(error, { depth: 2, breakLength: Infinity });
+  return redactSensitiveText(inspect(error, { depth: 2, breakLength: Infinity }));
 }
 
 function extractErrorMetadata(error: Error) {

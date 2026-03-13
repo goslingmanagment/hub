@@ -1,9 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  encryptJson,
+  type StoredPlatformCredentialBundle,
+} from "@fansly-connect/shared";
+import {
   createOnlyFansPage,
   createFanslyPage,
   createModel,
+  deleteProxyConfig,
   getFollowersForPage,
   recalculateFanPageSpend,
   rebuildRevenueRollups,
@@ -20,6 +25,9 @@ import type { FanslyAccountMeResponse } from "@fansly-connect/fansly";
 import type { OnlyMonsterAccount } from "@fansly-connect/onlyfans";
 
 import { onboardFanslyPage, onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboarding.ts";
+import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
+import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
+import { createTestAppContext } from "./helpers/runtime.ts";
 import { startTestDatabase } from "./helpers/db.ts";
 
 describe("db write safety", () => {
@@ -343,6 +351,185 @@ describe("db write safety", () => {
       credentials_count: 0,
       proxies_count: 0,
     });
+  });
+
+  it("strips inline proxy credentials from stored URLs and encrypts auth separately", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "proxy-model",
+      name: "Proxy Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-page",
+    });
+
+    await saveProxy(createTestAppContext(testDb), page.id, {
+      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    });
+
+    const proxyRows = await testDb.pool.query(`
+      select url, encrypted_auth is not null as has_encrypted_auth
+      from platform_account_proxies
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(proxyRows.rows[0]).toEqual({
+      url: "socks5://127.0.0.1:1080",
+      has_encrypted_auth: true,
+    });
+  });
+
+  it("verifies credentials before saving a proxy on an existing page", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "verify-proxy-model",
+      name: "Verify Proxy Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "verify-proxy-page",
+    });
+
+    const encryptedSession = JSON.stringify(
+      encryptJson<StoredPlatformCredentialBundle>(
+        {
+          platform: "fansly",
+          session: {
+            authorization: "token",
+          },
+        },
+        encryptionKey,
+        1,
+      ),
+    );
+    await storeFanslySession(testDb.db, page.id, encryptedSession, 1);
+
+    let verifyCallCount = 0;
+    let verifiedProxy: Record<string, unknown> | null = null;
+    const app = createTestAppContext(testDb, {
+      adapter: {
+        async verifySession(contextInput: { proxy?: Record<string, unknown> | null }) {
+          verifyCallCount += 1;
+          verifiedProxy = contextInput.proxy ?? null;
+          return {
+            parsed: {
+              account: {
+                id: "acct-1",
+                username: "lana",
+                displayName: "Lana",
+                followCount: 0,
+                subscriberCount: 0,
+              },
+            },
+            raw: null,
+          };
+        },
+      } as never,
+    });
+
+    await setPageProxy(app, page.label, {
+      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    });
+
+    const proxyRows = await testDb.pool.query(`
+      select url, encrypted_auth is not null as has_encrypted_auth
+      from platform_account_proxies
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(verifyCallCount).toBe(1);
+    expect(verifiedProxy).toEqual({
+      url: "socks5://127.0.0.1:1080",
+      username: "proxy-user",
+      password: "proxy-pass",
+    });
+    expect(proxyRows.rows[0]).toEqual({
+      url: "socks5://127.0.0.1:1080",
+      has_encrypted_auth: true,
+    });
+  });
+
+  it("resolves legacy inline-auth proxy URLs when loading page context", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "legacy-proxy-model",
+      name: "Legacy Proxy Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "legacy-proxy-page",
+    });
+
+    const encryptedSession = JSON.stringify(
+      encryptJson<StoredPlatformCredentialBundle>(
+        {
+          platform: "fansly",
+          session: {
+            authorization: "token",
+          },
+        },
+        encryptionKey,
+        1,
+      ),
+    );
+    await storeFanslySession(testDb.db, page.id, encryptedSession, 1);
+    await storeProxyConfig(testDb.db, page.id, {
+      url: "socks5://legacy-user:legacy-pass@127.0.0.1:1080",
+      encryptedAuth: null,
+      keyVersion: null,
+    });
+
+    const contextResult = await resolvePageContext(createTestAppContext(testDb), page.label);
+
+    expect(contextResult.proxy).toEqual({
+      url: "socks5://127.0.0.1:1080",
+      username: "legacy-user",
+      password: "legacy-pass",
+    });
+  });
+
+  it("deletes proxy rows when a page proxy is removed", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "delete-proxy-model",
+      name: "Delete Proxy Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "delete-proxy-page",
+    });
+
+    await storeProxyConfig(testDb.db, page.id, {
+      url: "http://proxy.example:8080",
+      encryptedAuth: "auth",
+      keyVersion: 1,
+    });
+    await deleteProxyConfig(testDb.db, page.id);
+
+    const proxyRows = await testDb.pool.query(`
+      select count(*)::int as count
+      from platform_account_proxies
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(proxyRows.rows[0]?.count).toBe(0);
   });
 
   it("verifies OnlyMonster account access before persisting an OnlyFans page", async (context) => {

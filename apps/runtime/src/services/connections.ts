@@ -3,10 +3,10 @@ import {
   listVisiblePages,
   findPageByLabel,
   storePlatformCredentials,
-  storeProxyConfig,
 } from "@fansly-connect/db";
 import {
   encryptJson,
+  normalizeProxyConfig,
   type FanslySessionBundle,
   type OnlyMonsterTokenBundle,
   type ProxyConfig,
@@ -16,6 +16,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, NotFoundError } from "./errors.ts";
 import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
+import { saveProxy } from "./page-context.ts";
 
 export type ConnectionStatus =
   | "active"
@@ -140,6 +141,8 @@ export async function updatePageCredentials(
     throw new NotFoundError(`Page "${pageLabel}" not found`);
   }
 
+  const proxy = body.proxy ? normalizeProxyConfig(body.proxy) : null;
+
   if (stored.page.platform !== body.platform) {
     throw new BadRequestError(
       `Platform mismatch: page is ${stored.page.platform}, credentials are for ${body.platform}`,
@@ -150,12 +153,12 @@ export async function updatePageCredentials(
   if (body.platform === "fansly") {
     await app.adapter.verifySession({
       session: body.session,
-      proxy: body.proxy ?? null,
+      proxy,
     });
   } else {
     const context = {
       auth: body.auth,
-      proxy: body.proxy ?? null,
+      proxy,
       requestObserver: null,
     };
     await findOnlyFansAccountByUsername(app.onlyFansAdapter, context, body.username);
@@ -178,25 +181,8 @@ export async function updatePageCredentials(
   });
 
   // Save proxy if provided
-  if (body.proxy) {
-    const encryptedAuth = body.proxy.username || body.proxy.password
-      ? JSON.stringify(
-        encryptJson(
-          {
-            username: body.proxy.username ?? null,
-            password: body.proxy.password ?? null,
-          },
-          app.config.encryptionKey,
-          app.config.encryptionKeyVersion,
-        ),
-      )
-      : null;
-
-    await storeProxyConfig(app.db, stored.page.id, {
-      url: body.proxy.url,
-      encryptedAuth,
-      keyVersion: encryptedAuth ? app.config.encryptionKeyVersion : null,
-    });
+  if (proxy) {
+    await saveProxy(app, stored.page.id, proxy);
   }
 
   return { updated: true, verified: true };

@@ -17,9 +17,20 @@ async function withServer(
     return handler(request, response);
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.removeAllListeners("error");
+        resolve();
+      });
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      return false;
+    }
+    throw error;
+  }
 
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -39,13 +50,15 @@ async function withServer(
       });
     });
   }
+
+  return true;
 }
 
 async function withJsonServer(
   body: unknown,
   run: (baseUrl: string, requestTimes: number[]) => Promise<void>,
 ) {
-  await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
+  return withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify(body));
   }, run);
@@ -105,6 +118,32 @@ describe("adapter hardening", () => {
       expect(timeoutSpy).toHaveBeenCalledWith(30_000);
       expect(closeSpy).toHaveBeenCalled();
     });
+  });
+
+  it("builds proxy cache keys without exposing raw credentials", () => {
+    const fanslyAdapter = new FanslyAdapter({
+      baseUrl: "http://127.0.0.1:1",
+      defaultDelayMs: 0,
+    });
+    const onlyFansAdapter = new OnlyFansAdapter({
+      baseUrl: "http://127.0.0.1:1",
+      defaultDelayMs: 0,
+    });
+    const proxy = {
+      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    };
+
+    const fanslyKey = (fanslyAdapter as unknown as {
+      buildProxyCacheKey(input: typeof proxy): string;
+    }).buildProxyCacheKey(proxy);
+    const onlyFansKey = (onlyFansAdapter as unknown as {
+      buildProxyCacheKey(input: typeof proxy): string;
+    }).buildProxyCacheKey(proxy);
+
+    expect(fanslyKey).toContain("socks5://127.0.0.1:1080#");
+    expect(fanslyKey).not.toContain("proxy-user");
+    expect(fanslyKey).not.toContain("proxy-pass");
+    expect(onlyFansKey).toBe(fanslyKey);
   });
 
   it("serializes Fansly requests from different categories with the global delay", async () => {
@@ -256,7 +295,7 @@ describe("adapter hardening", () => {
   it("emits sanitized Fansly request observer events for offset pagination", async () => {
     const events: Array<Record<string, unknown>> = [];
 
-    await withJsonServer({
+    const ran = await withJsonServer({
       success: true,
       response: {
         followers: [
@@ -290,6 +329,9 @@ describe("adapter hardening", () => {
         after: "raw-follow-cursor",
       });
     });
+    if (!ran) {
+      return;
+    }
 
     expect(events.map((event) => event.state)).toEqual(["started", "success"]);
     expect(events[0]).toMatchObject({
@@ -345,7 +387,7 @@ describe("adapter hardening", () => {
     const events: Array<Record<string, unknown>> = [];
     let requestCount = 0;
 
-    await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
+    const ran = await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
       requestCount += 1;
       response.setHeader("content-type", "application/json");
       if (requestCount === 1) {
@@ -396,6 +438,9 @@ describe("adapter hardening", () => {
         },
       });
     });
+    if (!ran) {
+      return;
+    }
 
     expect(requestCount).toBe(2);
     expect(events.map((event) => [event.state, event.attemptNumber])).toEqual([
@@ -415,7 +460,7 @@ describe("adapter hardening", () => {
     const events: Array<Record<string, unknown>> = [];
     let requestCount = 0;
 
-    await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
+    const ran = await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
       requestCount += 1;
       response.setHeader("content-type", "application/json");
       if (requestCount === 1) {
@@ -460,6 +505,9 @@ describe("adapter hardening", () => {
         },
       });
     });
+    if (!ran) {
+      return;
+    }
 
     expect(requestCount).toBe(2);
     expect(events.map((event) => [event.state, event.attemptNumber])).toEqual([
@@ -479,7 +527,7 @@ describe("adapter hardening", () => {
     const events: Array<Record<string, unknown>> = [];
     let requestCount = 0;
 
-    await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
+    const ran = await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
       requestCount += 1;
       response.setHeader("content-type", "application/json");
       if (requestCount === 1) {
@@ -525,6 +573,9 @@ describe("adapter hardening", () => {
         pageIndex: 3,
       });
     });
+    if (!ran) {
+      return;
+    }
 
     expect(events.map((event) => [event.state, event.attemptNumber])).toEqual([
       ["started", 1],

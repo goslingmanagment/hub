@@ -13,6 +13,7 @@ import type {
   SyncHealth,
   SyncTelemetryEventSeverity,
 } from "@fansly-connect/shared";
+import { redactSensitiveText } from "@fansly-connect/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
@@ -86,7 +87,7 @@ function iso(value: Date | null | undefined) {
 }
 
 function stringifyError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  return redactSensitiveText(error instanceof Error ? error.message : String(error));
 }
 
 function normalizeSeverity(severity?: SyncTelemetryEventSeverity) {
