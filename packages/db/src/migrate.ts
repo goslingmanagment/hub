@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
-import { loadConfig } from "@fansly-connect/shared";
+import { loadConfig } from "@agency_hub_core/shared";
 
 import { createPool } from "./client.ts";
 

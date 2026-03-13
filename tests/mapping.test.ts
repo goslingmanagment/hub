@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   mapFanslyTransactionState,
   mapFanslyTransactionType,
-} from "@fansly-connect/fansly";
+} from "@agency_hub_core/fansly";
 import {
   getTransactionClassification,
   transactionTypesByReportingBucket,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 import {
   mapOnlyMonsterTransactionState,
   mapOnlyMonsterTransactionType,

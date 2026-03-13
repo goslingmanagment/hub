@@ -1,4 +1,4 @@
-import type { FanslySessionBundle, HttpRequestObserver, ProxyConfig } from "@fansly-connect/shared";
+import type { FanslySessionBundle, HttpRequestObserver, ProxyConfig } from "@agency_hub_core/shared";
 
 export interface FanslyRequestContext {
   session: FanslySessionBundle;

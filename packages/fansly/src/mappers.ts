@@ -1,4 +1,4 @@
-import type { TransactionState, TransactionType } from "@fansly-connect/shared";
+import type { TransactionState, TransactionType } from "@agency_hub_core/shared";
 
 export const FANSLY_MAPPER_VERSION = "fansly-phase1-v4";
 

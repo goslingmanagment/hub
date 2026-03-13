@@ -8,13 +8,13 @@ import {
   type OnlyMonsterTokenBundle,
   type ProxyConfig,
   type StoredPlatformCredentialBundle,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 import {
   deleteProxyConfig,
   findPageByLabel,
   storePlatformCredentials,
   storeProxyConfig,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 

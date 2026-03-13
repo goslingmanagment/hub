@@ -1,6 +1,6 @@
-import { assertRuntimeSchemaReady, createDb, createPool, type Database } from "@fansly-connect/db";
-import { FanslyAdapter } from "@fansly-connect/fansly";
-import { OnlyFansAdapter } from "@fansly-connect/onlyfans";
+import { assertRuntimeSchemaReady, createDb, createPool, type Database } from "@agency_hub_core/db";
+import { FanslyAdapter } from "@agency_hub_core/fansly";
+import { OnlyFansAdapter } from "@agency_hub_core/onlyfans";
 import type {
   FanslyAccount,
   FanslyAccountMeResponse,
@@ -8,8 +8,8 @@ import type {
   FanslyFollower,
   FanslyRequestContext,
   FanslySubscriber,
-} from "@fansly-connect/fansly";
-import { createLogger, loadConfig } from "@fansly-connect/shared";
+} from "@agency_hub_core/fansly";
+import { createLogger, loadConfig } from "@agency_hub_core/shared";
 
 import type { ProviderAdapter } from "./services/provider.ts";
 

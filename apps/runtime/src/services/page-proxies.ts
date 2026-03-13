@@ -1,5 +1,5 @@
-import { findPageByLabel } from "@fansly-connect/db";
-import { normalizeProxyConfig, type ProxyConfig } from "@fansly-connect/shared";
+import { findPageByLabel } from "@agency_hub_core/db";
+import { normalizeProxyConfig, type ProxyConfig } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { NotFoundError } from "./errors.ts";

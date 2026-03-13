@@ -112,19 +112,19 @@ importers:
 
   apps/runtime:
     dependencies:
-      '@fansly-connect/contracts':
+      '@agency_hub_core/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@fansly-connect/db':
+      '@agency_hub_core/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@fansly-connect/fansly':
+      '@agency_hub_core/fansly':
         specifier: workspace:*
         version: link:../../packages/fansly
-      '@fansly-connect/onlyfans':
+      '@agency_hub_core/onlyfans':
         specifier: workspace:*
         version: link:../../packages/onlyfans
-      '@fansly-connect/shared':
+      '@agency_hub_core/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@fastify/cookie':
@@ -166,7 +166,7 @@ importers:
 
   packages/contracts:
     dependencies:
-      '@fansly-connect/shared':
+      '@agency_hub_core/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -175,7 +175,7 @@ importers:
 
   packages/db:
     dependencies:
-      '@fansly-connect/shared':
+      '@agency_hub_core/shared':
         specifier: workspace:*
         version: link:../shared
       drizzle-orm:
@@ -187,7 +187,7 @@ importers:
 
   packages/fansly:
     dependencies:
-      '@fansly-connect/shared':
+      '@agency_hub_core/shared':
         specifier: workspace:*
         version: link:../shared
       undici:
@@ -196,7 +196,7 @@ importers:
 
   packages/onlyfans:
     dependencies:
-      '@fansly-connect/shared':
+      '@agency_hub_core/shared':
         specifier: workspace:*
         version: link:../shared
       undici:

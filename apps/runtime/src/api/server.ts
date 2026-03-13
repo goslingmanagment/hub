@@ -5,7 +5,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import {
   routeSchemas,
   type RevenueDailyTypedItem,
-} from "@fansly-connect/contracts";
+} from "@agency_hub_core/contracts";
 import {
   countDistinctFansForPages,
   createFanNote,
@@ -23,7 +23,7 @@ import {
   listSubscriberDailyForPage,
   listVisiblePages,
   setFanFlags,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import {
   createLogger,
   millsToNumber,
@@ -34,7 +34,7 @@ import {
   toMills,
   type Period,
   type Platform,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 import type { FastifyReply } from "fastify";
 import Fastify from "fastify";
 import PgBoss from "pg-boss";
@@ -169,7 +169,7 @@ export async function buildApiServer(appContext: AppContext) {
     openapi: {
       openapi: "3.1.0",
       info: {
-        title: "Fansly Connect API",
+        title: "Agency Hub Core API",
         version: "2.0.0",
         description: "Phase 2 authenticated API",
       },

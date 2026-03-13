@@ -8,9 +8,9 @@ import {
   upsertFanPage,
   upsertFans,
   upsertPageFollow,
-} from "@fansly-connect/db";
-import { FANSLY_MAPPER_VERSION } from "@fansly-connect/fansly";
-import { fanslyFollowIdToDate } from "@fansly-connect/shared";
+} from "@agency_hub_core/db";
+import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
+import { fanslyFollowIdToDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { ResolvedFanslyPageContext } from "../page-context.ts";

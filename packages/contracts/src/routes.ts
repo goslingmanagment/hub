@@ -9,7 +9,7 @@ import {
   transactionStates,
   transactionTypes,
   userRoles,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 import { z } from "zod";
 
 const intId = z.number().int().positive();

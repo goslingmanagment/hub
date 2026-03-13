@@ -1,4 +1,4 @@
-import { redactSensitiveText } from "@fansly-connect/shared";
+import { redactSensitiveText } from "@agency_hub_core/shared";
 
 const MAX_SYNC_ERROR_SUMMARY_CHARS = 1024;
 

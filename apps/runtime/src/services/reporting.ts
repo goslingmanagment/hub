@@ -16,7 +16,7 @@ import {
   type SubscriberListResponse,
   type TransactionListQuery,
   type TransactionListResponse,
-} from "@fansly-connect/contracts";
+} from "@agency_hub_core/contracts";
 import {
   findFanOnPage,
   findPageSummaryByLabel,
@@ -39,7 +39,7 @@ import {
   listFanFlags,
   listFanNotesForPages,
   listFanSummariesForPages,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import {
   millsToNumber,
   resolveBusinessDateRangeForPlatform,
@@ -49,7 +49,7 @@ import {
   type PeriodBounds,
   type Period,
   type Platform,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { NotFoundError } from "./errors.ts";

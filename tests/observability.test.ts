@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import * as dbRepo from "@fansly-connect/db";
+import * as dbRepo from "@agency_hub_core/db";
 
 import { SyncRunTelemetry } from "../apps/runtime/src/services/sync/observability.ts";
 

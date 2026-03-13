@@ -14,7 +14,7 @@ import {
   timestamp,
   unique,
 } from "drizzle-orm/pg-core";
-import { fanFlagTypes, userRoles } from "@fansly-connect/shared";
+import { fanFlagTypes, userRoles } from "@agency_hub_core/shared";
 
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
 export const syncRunStatusEnum = pgEnum("sync_run_status", [

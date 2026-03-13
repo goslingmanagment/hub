@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { HttpRequestEvent } from "@fansly-connect/shared";
+import type { HttpRequestEvent } from "@agency_hub_core/shared";
 
 import { FanslyAdapter } from "../packages/fansly/src/adapter.ts";
 import { OnlyFansAdapter } from "../packages/onlyfans/src/adapter.ts";

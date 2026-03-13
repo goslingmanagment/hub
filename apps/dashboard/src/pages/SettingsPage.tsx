@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
-import type { AdminCreateUserBody, AuthUser, ConnectionItem, VerifyCredentialsBody } from "@fansly-connect/contracts";
-import { userRoles } from "@fansly-connect/shared";
+import type { AdminCreateUserBody, AuthUser, ConnectionItem, VerifyCredentialsBody } from "@agency_hub_core/contracts";
+import { userRoles } from "@agency_hub_core/shared";
 import {
   useAdminConnections,
   useAdminCreateUser,

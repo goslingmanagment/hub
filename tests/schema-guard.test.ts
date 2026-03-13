@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { assertRuntimeSchemaReady } from "@fansly-connect/db";
+import { assertRuntimeSchemaReady } from "@agency_hub_core/db";
 
 import { startTestDatabase } from "./helpers/db.ts";
 

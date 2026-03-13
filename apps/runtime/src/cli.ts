@@ -6,7 +6,7 @@ import PgBoss from "pg-boss";
 
 import {
   createModel,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import {
   formatMaskedProxyUrl,
   formatUsdFromMills,
@@ -15,7 +15,7 @@ import {
   toMills,
   type TransactionType,
   type UserRole,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";

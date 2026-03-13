@@ -1,12 +1,12 @@
 {
-  "name": "@fansly-connect/fansly",
+  "name": "@agency_hub_core/fansly",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@fansly-connect/shared": "workspace:*",
+    "@agency_hub_core/shared": "workspace:*",
     "undici": "^7.16.0"
   }
 }

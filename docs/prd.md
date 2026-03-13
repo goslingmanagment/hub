@@ -171,7 +171,7 @@ Firefox extension. AI assistant for chatters on Fansly. Working MVP already exis
 
 Phases are sequential where noted; parallel execution where no dependency exists.
 
-1. **Fansly Connect** — schema, platform adapter, transaction sync (hourly), follower sync (12h delta), CLI for manual ops
+1. **Agency Hub Core** — schema, platform adapter, transaction sync (hourly), follower sync (12h delta), CLI for manual ops
 2. **API + Auth** — Fastify server, dashboard auth (cookie sessions), ChatMuse auth (API keys), data endpoints *(depends on 1)*
 3. **OnlyFans Connect** — OnlyMonster adapter, chatter metrics sync, unified transaction taxonomy *(depends on 2)*
 4. **Dashboard** — React SPA: revenue overview, per-model/per-page drill-down, subscribers/followers, expiring subs. Fan profiles are optional and should ship only together with a clear CRM workflow, not as a default top-level section *(depends on 2 + 3; ships with both platforms from day one)*

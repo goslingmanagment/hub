@@ -1,5 +1,5 @@
 {
-  "name": "@fansly-connect/dashboard",
+  "name": "@agency_hub_core/dashboard",
   "private": true,
   "type": "module",
   "scripts": {

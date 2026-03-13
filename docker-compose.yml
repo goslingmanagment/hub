@@ -3,7 +3,7 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_DB: fansly_connect
+      POSTGRES_DB: agency_hub_core
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
@@ -11,14 +11,14 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d fansly_connect"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agency_hub_core"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   api:
     build: .
-    image: fansly-connect/runtime:local
+    image: agency_hub_core/runtime:local
     command: ["pnpm", "api"]
     ports:
       - "3000:3000"
@@ -28,7 +28,7 @@ services:
         condition: service_healthy
 
   worker:
-    image: fansly-connect/runtime:local
+    image: agency_hub_core/runtime:local
     env_file: .env
     depends_on:
       postgres:

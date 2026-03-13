@@ -1,5 +1,5 @@
-import { upsertFans } from "@fansly-connect/db";
-import type { UpsertFanInput } from "@fansly-connect/db";
+import { upsertFans } from "@agency_hub_core/db";
+import type { UpsertFanInput } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { SyncRunTelemetry } from "./observability.ts";

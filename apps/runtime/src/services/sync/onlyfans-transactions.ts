@@ -9,7 +9,7 @@ import {
   upsertFanPage,
   upsertFans,
   upsertTransaction,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import {
   ONLYMONSTER_MAPPER_VERSION,
   mapOnlyMonsterTransactionState,
@@ -17,13 +17,13 @@ import {
   OnlyMonsterApiError,
   type OnlyMonsterChargeback,
   type OnlyMonsterTransaction,
-} from "@fansly-connect/onlyfans";
+} from "@agency_hub_core/onlyfans";
 import {
   calculateNetMillsFromGross,
   dollarsToMills,
   startOfBusinessDay,
   UTC_TIME_ZONE,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";

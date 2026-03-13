@@ -1,4 +1,4 @@
-import { formatUsdFromMills } from "@fansly-connect/shared";
+import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 const variantClasses = {
   primary: "text-text-primary font-bold text-lg",

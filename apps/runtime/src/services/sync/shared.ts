@@ -2,10 +2,10 @@ import {
   type Database,
   insertRawPayload,
   updatePageMetadata,
-} from "@fansly-connect/db";
-import { FANSLY_MAPPER_VERSION } from "@fansly-connect/fansly";
-import { ONLYMONSTER_MAPPER_VERSION } from "@fansly-connect/onlyfans";
-import { toMills } from "@fansly-connect/shared";
+} from "@agency_hub_core/db";
+import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
+import { ONLYMONSTER_MAPPER_VERSION } from "@agency_hub_core/onlyfans";
+import { toMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {

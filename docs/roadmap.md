@@ -3,7 +3,7 @@
 ## Dependency Graph
 
 ```
-Phase 1: Fansly Connect
+Phase 1: Agency Hub Core
   └─► Phase 2: API + Auth
        ├─► Phase 3: OnlyFans Connect
        │    └─► Phase 4: Dashboard ──────────────┐
@@ -22,7 +22,7 @@ Phase 5 runs after Phase 2 and can ship independently of Phases 3, 6, and 7.
 
 ---
 
-## Phase 1: Fansly Connect
+## Phase 1: Agency Hub Core
 
 The agency can add models and Fansly pages, sync all financial and audience data, and verify correctness from the command line.
 

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
-import type { UserRole } from "@fansly-connect/shared";
+import type { UserRole } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import {

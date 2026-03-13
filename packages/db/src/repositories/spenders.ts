@@ -7,7 +7,7 @@ import {
   type Platform,
   type TransactionType,
   UTC_TIME_ZONE,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import {
   dailyRevenue,

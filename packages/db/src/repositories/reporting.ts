@@ -7,7 +7,7 @@ import {
   toBusinessDate,
   type PeriodBounds,
   type Platform,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import {
   dailyRevenue,

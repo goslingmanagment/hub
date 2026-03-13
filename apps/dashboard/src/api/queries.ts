@@ -25,7 +25,7 @@ import type {
   FanFlagsResponse,
   FanListResponse,
   VerifyCredentialsBody,
-} from "@fansly-connect/contracts";
+} from "@agency_hub_core/contracts";
 import { api } from "./client";
 
 function qs(params: Record<string, string | number | boolean | undefined>): string {

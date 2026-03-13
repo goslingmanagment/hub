@@ -2,8 +2,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
 
-import { createDb, createFanslyPage, createModel, createPool, storeFanslySession } from "@fansly-connect/db";
-import { createLogger, encryptJson, type FanslySessionBundle } from "@fansly-connect/shared";
+import { createDb, createFanslyPage, createModel, createPool, storeFanslySession } from "@agency_hub_core/db";
+import { createLogger, encryptJson, type FanslySessionBundle } from "@agency_hub_core/shared";
 import { GenericContainer } from "testcontainers";
 
 const DATABASE_READY_TIMEOUT_MS = 10_000;

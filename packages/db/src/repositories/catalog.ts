@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 
-import type { Platform, ProxyConfig } from "@fansly-connect/shared";
+import type { Platform, ProxyConfig } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import {

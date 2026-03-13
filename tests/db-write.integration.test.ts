@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   encryptJson,
   type StoredPlatformCredentialBundle,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 import {
   createOnlyFansPage,
   createFanslyPage,
@@ -20,9 +20,9 @@ import {
   upsertPageFollow,
   upsertPageSubscription,
   upsertTransaction,
-} from "@fansly-connect/db";
-import type { FanslyAccountMeResponse } from "@fansly-connect/fansly";
-import type { OnlyMonsterAccount } from "@fansly-connect/onlyfans";
+} from "@agency_hub_core/db";
+import type { FanslyAccountMeResponse } from "@agency_hub_core/fansly";
+import type { OnlyMonsterAccount } from "@agency_hub_core/onlyfans";
 
 import { onboardFanslyPage, onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboarding.ts";
 import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";

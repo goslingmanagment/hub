@@ -1,12 +1,12 @@
 {
-  "name": "@fansly-connect/db",
+  "name": "@agency_hub_core/db",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@fansly-connect/shared": "workspace:*",
+    "@agency_hub_core/shared": "workspace:*",
     "drizzle-orm": "^0.44.5",
     "pg": "^8.16.3"
   }

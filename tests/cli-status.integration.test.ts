@@ -8,7 +8,7 @@ import {
   insertSyncRequestAttempt,
   insertSyncRunEvent,
   startSyncRun,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 
 import { getStatusDetail, getStatusWatchSnapshot } from "../apps/runtime/src/services/sync.ts";
 import { startTestDatabase } from "./helpers/db.ts";

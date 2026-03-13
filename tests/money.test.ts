@@ -12,7 +12,7 @@ import {
   resolvePeriodBounds,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 
 describe("money helpers", () => {
   it("formats mills without floating point drift", () => {

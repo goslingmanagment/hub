@@ -15,7 +15,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { usePeriodStore } from "@/stores/periodStore";
-import { formatUsdFromMills } from "@fansly-connect/shared";
+import { formatUsdFromMills } from "@agency_hub_core/shared";
 import {
   formatDate,
   formatDateTime,

@@ -1,5 +1,5 @@
 {
-  "name": "@fansly-connect/shared",
+  "name": "@agency_hub_core/shared",
   "private": true,
   "type": "module",
   "exports": {

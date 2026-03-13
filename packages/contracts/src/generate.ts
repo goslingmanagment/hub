@@ -3,7 +3,7 @@ import path from "node:path";
 
 import openapiTS, { astToString } from "openapi-typescript";
 
-import { createLogger } from "@fansly-connect/shared";
+import { createLogger } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../../../apps/runtime/src/api/server.ts";
 

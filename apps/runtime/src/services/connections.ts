@@ -3,7 +3,7 @@ import {
   listVisiblePages,
   findPageByLabel,
   storePlatformCredentials,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import {
   encryptJson,
   normalizeProxyConfig,
@@ -11,7 +11,7 @@ import {
   type OnlyMonsterTokenBundle,
   type ProxyConfig,
   type StoredPlatformCredentialBundle,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, NotFoundError } from "./errors.ts";

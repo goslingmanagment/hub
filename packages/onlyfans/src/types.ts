@@ -1,4 +1,4 @@
-import type { HttpRequestObserver, OnlyMonsterTokenBundle, ProxyConfig } from "@fansly-connect/shared";
+import type { HttpRequestObserver, OnlyMonsterTokenBundle, ProxyConfig } from "@agency_hub_core/shared";
 
 export interface OnlyFansRequestContext {
   auth: OnlyMonsterTokenBundle;

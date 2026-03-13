@@ -12,7 +12,7 @@ import {
   formatObservedError,
   resolveRetryDelayMs,
   type ProxyConfig,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 
 import { OnlyMonsterApiError } from "./errors.ts";
 import type {

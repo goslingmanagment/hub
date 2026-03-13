@@ -13,7 +13,7 @@ import {
   resolveRetryDelayMs,
   type FanslySessionBundle,
   type ProxyConfig,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 
 import { FanslyApiError } from "./errors.ts";
 import type {

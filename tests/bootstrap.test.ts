@@ -23,7 +23,7 @@ const bootstrapMocks = vi.hoisted(() => {
     db,
     FanslyAdapter: vi.fn(() => adapter),
     loadConfig: vi.fn(() => ({
-      databaseUrl: "postgres://postgres:postgres@127.0.0.1:5432/fansly_connect_test",
+      databaseUrl: "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
       encryptionKey: Buffer.alloc(32, 7),
       encryptionKeyVersion: 1,
       logLevel: "silent",
@@ -45,8 +45,8 @@ const bootstrapMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@fansly-connect/db", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@fansly-connect/db")>();
+vi.mock("@agency_hub_core/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@agency_hub_core/db")>();
   return {
     ...actual,
     assertRuntimeSchemaReady: bootstrapMocks.assertRuntimeSchemaReady,
@@ -55,8 +55,8 @@ vi.mock("@fansly-connect/db", async (importOriginal) => {
   };
 });
 
-vi.mock("@fansly-connect/shared", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@fansly-connect/shared")>();
+vi.mock("@agency_hub_core/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@agency_hub_core/shared")>();
   return {
     ...actual,
     createLogger: bootstrapMocks.createLogger,
@@ -64,16 +64,16 @@ vi.mock("@fansly-connect/shared", async (importOriginal) => {
   };
 });
 
-vi.mock("@fansly-connect/fansly", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@fansly-connect/fansly")>();
+vi.mock("@agency_hub_core/fansly", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@agency_hub_core/fansly")>();
   return {
     ...actual,
     FanslyAdapter: bootstrapMocks.FanslyAdapter,
   };
 });
 
-vi.mock("@fansly-connect/onlyfans", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@fansly-connect/onlyfans")>();
+vi.mock("@agency_hub_core/onlyfans", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@agency_hub_core/onlyfans")>();
   return {
     ...actual,
     OnlyFansAdapter: bootstrapMocks.OnlyFansAdapter,
@@ -92,7 +92,7 @@ describe("bootstrap", () => {
     const app = await createAppContext();
 
     expect(bootstrapMocks.createPool).toHaveBeenCalledWith(
-      "postgres://postgres:postgres@127.0.0.1:5432/fansly_connect_test",
+      "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
     );
     expect(bootstrapMocks.assertRuntimeSchemaReady).toHaveBeenCalledWith(bootstrapMocks.pool);
     expect(bootstrapMocks.FanslyAdapter).toHaveBeenCalledWith({

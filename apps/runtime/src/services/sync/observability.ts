@@ -6,14 +6,14 @@ import {
   finishSyncRun,
   insertSyncRequestAttempt,
   insertSyncRunEvent,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import type {
   HttpRequestEvent,
   HttpRequestObserver,
   SyncHealth,
   SyncTelemetryEventSeverity,
-} from "@fansly-connect/shared";
-import { redactSensitiveText } from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
+import { redactSensitiveText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {

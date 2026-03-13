@@ -1,4 +1,4 @@
-import { formatUsdFromMills as sharedFormatUsd } from "@fansly-connect/shared";
+import { formatUsdFromMills as sharedFormatUsd } from "@agency_hub_core/shared";
 
 export function formatMills(mills: number): string {
   return sharedFormatUsd(mills);

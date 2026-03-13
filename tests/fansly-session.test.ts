@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { FanslyAdapter } from "@fansly-connect/fansly";
+import { FanslyAdapter } from "@agency_hub_core/fansly";
 
 import {
   loadOnlyMonsterTokenBundleFromFile,

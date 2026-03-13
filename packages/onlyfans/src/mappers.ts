@@ -1,4 +1,4 @@
-import type { TransactionState, TransactionType } from "@fansly-connect/shared";
+import type { TransactionState, TransactionType } from "@agency_hub_core/shared";
 
 export const ONLYMONSTER_MAPPER_VERSION = "onlymonster-phase3-v1";
 

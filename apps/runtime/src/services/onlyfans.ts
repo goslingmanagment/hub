@@ -1,9 +1,9 @@
-import { dollarsToMills, millsToNumber } from "@fansly-connect/shared";
+import { dollarsToMills, millsToNumber } from "@agency_hub_core/shared";
 import type {
   OnlyFansAdapter,
   OnlyFansRequestContext,
   OnlyMonsterAccount,
-} from "@fansly-connect/onlyfans";
+} from "@agency_hub_core/onlyfans";
 
 export function buildOnlyFansMetadata(account: OnlyMonsterAccount) {
   return {

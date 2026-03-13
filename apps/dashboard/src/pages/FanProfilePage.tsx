@@ -9,7 +9,7 @@ import {
 } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
 import { Pagination } from "@/components/shared/Pagination";
-import { formatUsdFromMills } from "@fansly-connect/shared";
+import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, transactionTypeLabel } from "@/lib/format";
 import { usePeriodStore } from "@/stores/periodStore";
 import { toast } from "sonner";

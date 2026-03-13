@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router";
 import { useOverview, useOverviewRevenue } from "@/api/queries";
 import { CONNECTION_STATUS_COLORS, PLATFORM_COLORS } from "@/lib/constants";
-import { formatUsdFromMills } from "@fansly-connect/shared";
+import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
 
 const PERIOD_LABELS: Record<string, string> = {

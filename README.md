@@ -1,4 +1,4 @@
-# Fansly Connect
+# Agency Hub Core
 
 CLI-first page-to-PostgreSQL sync pipeline for the current Fansly + OnlyFans milestone.
 

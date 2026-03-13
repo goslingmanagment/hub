@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 
-import type { FanFlagType } from "@fansly-connect/shared";
+import type { FanFlagType } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { fanFlags, fanNotes, fanSummaries } from "../schema.ts";
 

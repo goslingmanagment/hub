@@ -9,7 +9,7 @@ import type {
   SpenderListResponse,
   SpenderSeriesQuery,
   SpenderSeriesResponse,
-} from "@fansly-connect/contracts";
+} from "@agency_hub_core/contracts";
 import {
   findPageSummaryByLabel,
   findVisibleFanByIdentity,
@@ -29,7 +29,7 @@ import {
   type RankedSpenderRow,
   type SpenderSortBy,
   type SpenderWindowMetricRow,
-} from "@fansly-connect/db";
+} from "@agency_hub_core/db";
 import {
   millsToNumber,
   nextBusinessDate,
@@ -42,7 +42,7 @@ import {
   toBusinessDate,
   type Platform,
   type SpenderPeriod,
-} from "@fansly-connect/shared";
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";

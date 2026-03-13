@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { loadConfig } from "@fansly-connect/shared";
+import { loadConfig } from "@agency_hub_core/shared";
 
 const baseEnv = {
-  DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/fansly_connect_test",
+  DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
   APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
 } satisfies NodeJS.ProcessEnv;
 const originalDotenvQuiet = process.env.DOTENV_CONFIG_QUIET;
