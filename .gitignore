@@ -25,3 +25,9 @@ docs/user-guide*.html
 docs/database-visualization.md
 docs/database-visualization.html
 *.sql.gz
+
+# Local mockup/reference artifacts
+mockup.html
+docs/dashboard-mockup.html
+docs/design-ref-overview.jpg
+docs/design-ref-page-detail.jpg
