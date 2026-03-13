@@ -72,10 +72,7 @@ function createSocksProxyDispatcher(proxy: ProxyConfig) {
           userId: normalized.hasAuth ? (normalized.username ?? "") : undefined,
           password: normalized.hasAuth ? (normalized.password ?? "") : undefined,
         },
-        destination: {
-          host: options.hostname,
-          port: Number.parseInt(options.port, 10),
-        },
+        destination: resolveSocksDestination(options),
       }).then(({ socket }) => {
         socket.setKeepAlive(true, DISPATCHER_KEEP_ALIVE_TIMEOUT_MS);
         socket.setNoDelay(true);
@@ -95,6 +92,32 @@ function createSocksProxyDispatcher(proxy: ProxyConfig) {
       });
     },
   });
+}
+
+function resolveSocksDestination(options: Parameters<ReturnType<typeof buildConnector>>[0]) {
+  const explicitPort = options.port.length > 0 ? Number.parseInt(options.port, 10) : Number.NaN;
+  if (Number.isFinite(explicitPort)) {
+    return {
+      host: options.hostname,
+      port: explicitPort,
+    };
+  }
+
+  return {
+    host: options.hostname,
+    port: defaultPortForProtocol(options.protocol),
+  };
+}
+
+function defaultPortForProtocol(protocol: string) {
+  switch (protocol) {
+    case "http:":
+      return 80;
+    case "https:":
+      return 443;
+    default:
+      throw new Error(`Unsupported protocol for SOCKS destination: ${protocol}`);
+  }
 }
 
 export function createProxyRequestDispatcher(proxy: ProxyConfig) {

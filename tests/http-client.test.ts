@@ -1,7 +1,8 @@
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import net, { type Server as NetServer, type Socket } from "node:net";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   classifyTransportError,
@@ -11,6 +12,13 @@ import {
   parseRetryAfterDelayMs,
   resolveRetryDelayMs,
 } from "../packages/shared/src/http-client.ts";
+
+const require = createRequire(import.meta.url);
+const { SocksClient } = require("../packages/shared/node_modules/socks/build/index.js") as {
+  SocksClient: {
+    createConnection: (...args: unknown[]) => Promise<unknown>;
+  };
+};
 
 async function listen(server: NetServer) {
   try {
@@ -285,6 +293,10 @@ async function createSocks5Proxy(expectedAuth: { username: string; password: str
 }
 
 describe("shared http client helpers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("formats nested undici causes with socket metadata", () => {
     const socketError = Object.assign(new Error("other side closed"), {
       name: "SocketError",
@@ -376,5 +388,29 @@ describe("shared http client helpers", () => {
       await closeServer(proxy.server);
       await closeServer(target.server);
     }
+  });
+
+  it("uses the default HTTPS port for SOCKS destinations when the URL omits it", async () => {
+    const createConnectionSpy = vi.spyOn(SocksClient, "createConnection").mockRejectedValue(new Error("stop"));
+    const dispatcher = createProxyRequestDispatcher({
+      url: "socks5://socks-user:socks-pass@127.0.0.1:1080",
+    });
+
+    try {
+      await expect(fetch("https://apiv3.fansly.com/api/v1/account/me", {
+        dispatcher,
+      } as RequestInit & { dispatcher: typeof dispatcher })).rejects.toThrow("fetch failed");
+    } finally {
+      await dispatcher.close();
+    }
+
+    expect(createConnectionSpy).toHaveBeenCalledTimes(1);
+    expect(createConnectionSpy.mock.calls[0]?.[0]).toMatchObject({
+      command: "connect",
+      destination: {
+        host: "apiv3.fansly.com",
+        port: 443,
+      },
+    });
   });
 });
