@@ -9,6 +9,7 @@ export default defineConfig({
       "@fansly-connect/shared": path.resolve("packages/shared/src/index.ts"),
       "@fansly-connect/db": path.resolve("packages/db/src/index.ts"),
       "@fansly-connect/fansly": path.resolve("packages/fansly/src/index.ts"),
+      "@fansly-connect/onlyfans": path.resolve("packages/onlyfans/src/index.ts"),
     },
   },
   test: {

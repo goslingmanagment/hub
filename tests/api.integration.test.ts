@@ -2366,6 +2366,30 @@ describe("api integration", () => {
     const recentFollowAt = new Date(now.getTime() - 2 * 60 * 60 * 1000);
     const recentSubscriberAt = new Date(now.getTime() - 3 * 60 * 60 * 1000);
     const expiringAt = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+    const nonExpiringAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const [existingFan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-001",
+    }]);
+
+    await upsertPageSubscription(testDb.db, {
+      platformSubscriptionId: "sub-lana-1",
+      platformAccountId: fixture.lanaPage.id,
+      fanId: existingFan.id,
+      rawStatus: 3,
+      canonicalStatus: "active",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: true,
+      sourceCreatedAt: new Date("2026-03-01T12:00:00.000Z"),
+      endsAt: nonExpiringAt,
+    });
+    await upsertFanPage(testDb.db, {
+      fanId: existingFan.id,
+      platformAccountId: fixture.lanaPage.id,
+      subscriptionExpiresAt: nonExpiringAt,
+      autoRenew: true,
+    });
 
     const [freshFan] = await upsertFans(testDb.db, [{
       platform: "fansly",
