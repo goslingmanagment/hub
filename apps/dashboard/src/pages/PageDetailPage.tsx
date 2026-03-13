@@ -10,6 +10,7 @@ import {
   usePageSubscribersDaily,
 } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
+import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
 import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
@@ -18,7 +19,6 @@ import { formatUsdFromMills } from "@fansly-connect/shared";
 import {
   formatDate,
   formatDateTime,
-  formatDelta,
   transactionTypeLabel,
   daysRemaining,
   formatRelativeTime,
@@ -36,11 +36,6 @@ import {
 type TabKey = "transactions" | "spenders" | "followers";
 
 const PAGE_SIZE = 50;
-const directionColors = {
-  up: "text-green",
-  down: "text-danger",
-  neutral: "text-text-muted",
-} as const;
 
 function isRecent(iso: string | null) {
   return iso ? Date.now() - new Date(iso).getTime() < 86_400_000 : false;
@@ -55,10 +50,6 @@ export function PageDetailPage() {
   const { data: overview, isLoading: overviewLoading } = useOverview();
   const page = overview?.pages.find((p: { label: string }) => p.label === pageLabel);
 
-  const { data: revToday } = usePageRevenue(pageLabel!, "today");
-  const { data: rev7d } = usePageRevenue(pageLabel!, "7d");
-  const { data: rev30d } = usePageRevenue(pageLabel!, "30d");
-  const { data: revAll } = usePageRevenue(pageLabel!, "all");
   const { data: selectedRevenue } = usePageRevenue(pageLabel!, selectedPeriod);
 
   const isFansly = page?.platform === "fansly";
@@ -167,41 +158,36 @@ export function PageDetailPage() {
 
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div className="bg-card border border-border rounded-xl p-5">
-          <h2 className="text-[12px] text-text-muted uppercase tracking-wider font-semibold mb-4">
-            Revenue
-          </h2>
-          <div className="grid grid-cols-2 gap-4">
-            {[
-              { label: "Today", data: revToday, accent: true },
-              { label: "7 Days", data: rev7d },
-              { label: "30 Days", data: rev30d },
-            ].map(({ label, data, accent }) => (
-              <div key={label}>
-                <div className="text-[12px] text-text-muted mb-1">{label}</div>
-                <div className={`text-[22px] font-bold tabular-nums ${accent ? "text-accent" : "text-text-primary"}`}>
-                  {formatUsdFromMills(data?.netEarningsMills ?? 0)}
-                </div>
-                {data?.comparison?.deltaPct != null && (
-                  <span
-                    className={`text-[12px] font-semibold ${directionColors[formatDelta(data.comparison.deltaPct).direction]}`}
-                  >
-                    {formatDelta(data.comparison.deltaPct).text}
-                  </span>
-                )}
-              </div>
-            ))}
-
+          <div className="mb-4 flex items-baseline justify-between">
+            <h2 className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
+              Revenue
+            </h2>
+            <span className="rounded-full bg-hover-alt px-2.5 py-1 text-[11px] font-semibold text-accent">
+              {selectedPeriodLabel}
+            </span>
+          </div>
+          <div className="flex h-[150px] flex-col justify-between rounded-xl border border-border-light bg-hover-alt/30 p-4">
             <div>
-              <div className="text-[12px] text-text-muted mb-1">All Time</div>
-              <div className="text-[22px] font-bold tabular-nums text-text-primary">
-                {formatUsdFromMills(revAll?.netEarningsMills ?? 0)}
+              <div className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
+                Net Revenue
               </div>
-              {revAll?.from && (
-                <span className="text-[12px] text-text-muted">
-                  Since {formatDate(revAll.from, { includeYear: true })}
-                </span>
-              )}
+              <div className="mt-2 text-[34px] font-extrabold tabular-nums text-accent">
+                {formatUsdFromMills(selectedRevenue?.netEarningsMills ?? 0)}
+              </div>
             </div>
+
+            {selectedPeriod === "all" ? (
+              <span className="text-[12px] text-text-muted">
+                {selectedRevenue?.from
+                  ? `Since ${formatDate(selectedRevenue.from, { includeYear: true })}`
+                  : "All time total"}
+              </span>
+            ) : (
+              <div className="flex items-center gap-2">
+                <DeltaIndicator pct={selectedRevenue?.comparison?.deltaPct ?? null} />
+                <span className="text-[12px] text-text-muted">vs previous period</span>
+              </div>
+            )}
           </div>
         </div>
 
