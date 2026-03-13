@@ -312,19 +312,64 @@ describe("adapter hardening", () => {
     expect(JSON.stringify(events)).not.toContain("super-secret-token");
   });
 
-  it("fails Fansly 429 responses without retrying", async () => {
+  it("rotates the Fansly direct dispatcher when a fresh connection is required", async () => {
+    const adapter = new FanslyAdapter({
+      baseUrl: "http://127.0.0.1:1",
+      defaultDelayMs: 0,
+      globalDelayMs: 0,
+    });
+
+    const initialDispatcher = (adapter as unknown as {
+      directDispatcher: { close(): Promise<void> };
+      resetDispatcher(input?: undefined): void;
+    }).directDispatcher;
+    const closeSpy = vi.spyOn(initialDispatcher, "close");
+
+    (adapter as unknown as {
+      directDispatcher: { close(): Promise<void> };
+      resetDispatcher(input?: undefined): void;
+    }).resetDispatcher();
+
+    const rotatedDispatcher = (adapter as unknown as {
+      directDispatcher: { close(): Promise<void> };
+    }).directDispatcher;
+
+    expect(rotatedDispatcher).not.toBe(initialDispatcher);
+
+    await adapter.close();
+
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("retries Fansly 429 responses and respects retry-after", async () => {
     const events: Array<Record<string, unknown>> = [];
     let requestCount = 0;
 
     await withServer((_request: IncomingMessage, response: ServerResponse<IncomingMessage>) => {
       requestCount += 1;
-      response.statusCode = 429;
       response.setHeader("content-type", "application/json");
-      response.setHeader("retry-after", "0.001");
+      if (requestCount === 1) {
+        response.statusCode = 429;
+        response.setHeader("retry-after", "0.001");
+        response.end(JSON.stringify({
+          success: false,
+          error: {
+            message: "rate limited",
+          },
+        }));
+        return;
+      }
+
       response.end(JSON.stringify({
-        success: false,
-        error: {
-          message: "rate limited",
+        success: true,
+        response: {
+          account: {
+            id: "acct-1",
+            username: "lana",
+            displayName: "Lana",
+            followCount: 0,
+            subscriberCount: 0,
+          },
         },
       }));
     }, async (baseUrl) => {
@@ -343,14 +388,27 @@ describe("adapter hardening", () => {
             events.push(JSON.parse(JSON.stringify(event)) as Record<string, unknown>);
           },
         },
-      })).rejects.toMatchObject({
-        name: "FanslyApiError",
-        status: 429,
+      })).resolves.toMatchObject({
+        parsed: {
+          account: {
+            id: "acct-1",
+          },
+        },
       });
     });
 
-    expect(requestCount).toBe(1);
-    expect(events.map((event) => event.state)).toEqual(["started", "failed"]);
+    expect(requestCount).toBe(2);
+    expect(events.map((event) => [event.state, event.attemptNumber])).toEqual([
+      ["started", 1],
+      ["retry", 1],
+      ["started", 2],
+      ["success", 2],
+    ]);
+    expect(events[1]).toMatchObject({
+      state: "retry",
+      httpStatus: 429,
+      retryDelayMs: 1,
+    });
   });
 
   it("retries Fansly 5xx responses and succeeds on the next attempt", async () => {

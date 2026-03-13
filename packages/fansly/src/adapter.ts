@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { fetch, ProxyAgent } from "undici";
+import { fetch, type Dispatcher } from "undici";
 
 import {
+  classifyTransportError,
+  createProxyRequestDispatcher,
+  createRequestDispatcher,
   executeObservedRequest,
+  formatObservedError,
+  resolveRetryDelayMs,
   type FanslySessionBundle,
   type ProxyConfig,
 } from "@fansly-connect/shared";
@@ -42,30 +47,28 @@ type RequestResult<T> = {
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
-function classifyTransportError(error: unknown) {
-  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-    return "timeout" as const;
-  }
-
-  return "transport" as const;
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
   private readonly rateLimitChains = new Map<string, Promise<void>>();
-  private readonly proxyAgents = new Map<string, ProxyAgent>();
+  private readonly proxyAgents = new Map<string, Dispatcher>();
+  private readonly retiringDispatchers = new Set<Promise<void>>();
+  private directDispatcher: Dispatcher = createRequestDispatcher();
   private globalRequestTimestamp: number | null = null;
   private globalRateLimitChain: Promise<void> | null = null;
 
   constructor(private readonly options: AdapterOptions) {}
 
   async close() {
-    await Promise.all(Array.from(this.proxyAgents.values(), (agent) => agent.close()));
+    const activeDispatchers = [this.directDispatcher, ...this.proxyAgents.values()];
+    const retiredDispatchers = Array.from(this.retiringDispatchers);
+
     this.proxyAgents.clear();
+    this.retiringDispatchers.clear();
+
+    await Promise.all([
+      ...activeDispatchers.map((dispatcher) => dispatcher.close().catch(() => undefined)),
+      ...retiredDispatchers,
+    ]);
   }
 
   async getAccountMe(context: FanslyRequestContext) {
@@ -306,7 +309,7 @@ export class FanslyAdapter {
           method: "GET",
           headers: this.buildHeaders(context.session),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-          dispatcher: context.proxy ? this.buildProxyDispatcher(context.proxy) : undefined,
+          dispatcher: this.getDispatcher(context.proxy),
         });
         const text = await response.text();
         return {
@@ -317,12 +320,16 @@ export class FanslyAdapter {
       },
       onTransportError: (error, executionContext) => {
         const failureKind = classifyTransportError(error);
+        if (failureKind === "transport") {
+          this.resetDispatcher(context.proxy);
+        }
+
         if (executionContext.retriesRemaining > 0) {
           return {
             kind: "retry",
             failureKind,
             retryDelayMs: retryDelayMs(executionContext.attemptNumber),
-            errorMessage: errorMessage(error),
+            errorMessage: formatObservedError(error),
             error,
           };
         }
@@ -330,7 +337,7 @@ export class FanslyAdapter {
         return {
           kind: "failed",
           failureKind,
-          errorMessage: errorMessage(error),
+          errorMessage: formatObservedError(error),
           error,
         };
       },
@@ -352,15 +359,15 @@ export class FanslyAdapter {
           };
         }
 
-        if ([500, 502, 503, 504].includes(response.status) && executionContext.retriesRemaining > 0) {
-          const retryAfterSeconds = Number(response.headers.get("retry-after") ?? "0");
+        if ([429, 500, 502, 503, 504].includes(response.status) && executionContext.retriesRemaining > 0) {
           return {
             kind: "retry",
             failureKind: "http",
             httpStatus: response.status,
-            retryDelayMs: retryAfterSeconds > 0
-              ? retryAfterSeconds * 1000
-              : retryDelayMs(executionContext.attemptNumber),
+            retryDelayMs: resolveRetryDelayMs(
+              response.headers.get("retry-after"),
+              executionContext.attemptNumber,
+            ),
             errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
           };
         }
@@ -439,22 +446,59 @@ export class FanslyAdapter {
     return headers;
   }
 
+  private getDispatcher(proxy?: ProxyConfig | null) {
+    return proxy ? this.buildProxyDispatcher(proxy) : this.directDispatcher;
+  }
+
   private buildProxyDispatcher(proxy: ProxyConfig) {
+    const cacheKey = this.buildProxyCacheKey(proxy);
+    const cached = this.proxyAgents.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const agent = createProxyRequestDispatcher(cacheKey);
+    this.proxyAgents.set(cacheKey, agent);
+    return agent;
+  }
+
+  private resetDispatcher(proxy?: ProxyConfig | null) {
+    if (!proxy) {
+      const previous = this.directDispatcher;
+      this.directDispatcher = createRequestDispatcher();
+      this.retireDispatcher(previous);
+      return;
+    }
+
+    const cacheKey = this.buildProxyCacheKey(proxy);
+    const previous = this.proxyAgents.get(cacheKey);
+    const replacement = createProxyRequestDispatcher(cacheKey);
+    this.proxyAgents.set(cacheKey, replacement);
+    if (previous) {
+      this.retireDispatcher(previous);
+    }
+  }
+
+  private retireDispatcher(dispatcher: Dispatcher) {
+    let closePromise!: Promise<void>;
+    closePromise = dispatcher
+      .close()
+      .catch(() => undefined)
+      .then(() => undefined)
+      .finally(() => {
+        this.retiringDispatchers.delete(closePromise);
+      });
+    this.retiringDispatchers.add(closePromise);
+  }
+
+  private buildProxyCacheKey(proxy: ProxyConfig) {
     const proxyUrl = new URL(proxy.url);
     if (proxy.username && proxy.password) {
       proxyUrl.username = proxy.username;
       proxyUrl.password = proxy.password;
     }
 
-    const cacheKey = proxyUrl.toString();
-    const cached = this.proxyAgents.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
-    const agent = new ProxyAgent(cacheKey);
-    this.proxyAgents.set(cacheKey, agent);
-    return agent;
+    return proxyUrl.toString();
   }
 
   private async waitForRateLimit(category: string, minDelayMs: number) {
