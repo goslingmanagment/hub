@@ -28,10 +28,14 @@ import { onboardFanslyPage, onboardOnlyFansPage } from "../apps/runtime/src/serv
 import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
-import { startTestDatabase } from "./helpers/db.ts";
+import {
+  resetIntegrationDatabase,
+  startIntegrationTestDatabase,
+  type StartedTestDatabase,
+} from "./helpers/db.ts";
 
 describe("db write safety", () => {
-  let testDb: Awaited<ReturnType<typeof startTestDatabase>> | null = null;
+  let testDb: StartedTestDatabase | null = null;
   const encryptionKey = Buffer.alloc(32, 7);
 
   function createOnboardingApp(
@@ -128,13 +132,7 @@ describe("db write safety", () => {
   }
 
   beforeAll(async () => {
-    try {
-      testDb = await startTestDatabase();
-    } catch (error) {
-      console.warn(
-        `Skipping integration tests: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    testDb = await startIntegrationTestDatabase();
   });
 
   afterAll(async () => {
@@ -147,17 +145,7 @@ describe("db write safety", () => {
     if (!testDb) {
       return;
     }
-    await testDb.pool.query(`
-      truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
-               auth_sessions, user_page_assignments, users, fan_username_aliases,
-               spender_projection_watermarks, spender_lifetime_page, spender_daily_facts,
-               daily_revenue,
-               daily_followers, daily_subscribers, transactions, page_subscriptions,
-               page_follows, fan_pages, fans, raw_payloads, sync_checkpoints,
-               sync_runs, platform_account_proxies, platform_account_credentials,
-               platform_accounts, models
-      restart identity cascade
-    `);
+    await resetIntegrationDatabase(testDb.pool);
   });
 
   it("returns a friendly error for duplicate model slugs", async (context) => {

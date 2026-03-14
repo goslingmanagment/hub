@@ -4,47 +4,17 @@ import net, { type Server as NetServer, type Socket } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  classifyTransportError,
-  createProxyRequestDispatcher,
-  exponentialRetryDelayMs,
-  formatObservedError,
-  parseRetryAfterDelayMs,
-  resolveRetryDelayMs,
-} from "../packages/shared/src/http-client.ts";
+import { buildProxyDispatcherCacheKey } from "../packages/shared/src/proxy.ts";
+import { listenOnLoopback } from "./helpers/network.ts";
 
-const require = createRequire(import.meta.url);
-const { SocksClient } = require("../packages/shared/node_modules/socks/build/index.js") as {
-  SocksClient: {
-    createConnection: (...args: unknown[]) => Promise<unknown>;
-  };
-};
+const sharedHttpClientRequire = createRequire(new URL("../packages/shared/src/http-client.ts", import.meta.url));
 
-async function listen(server: NetServer) {
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.removeAllListeners("error");
-        resolve();
-      });
-    });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EPERM") {
-      return null;
-    }
-    throw error;
-  }
+async function loadHttpClientModule() {
+  return import("../packages/shared/src/http-client.ts");
+}
 
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected TCP address");
-  }
-
-  return {
-    host: "127.0.0.1",
-    port: address.port,
-  };
+async function listen(server: NetServer, purpose: string) {
+  return listenOnLoopback(server, purpose);
 }
 
 async function closeServer(server: NetServer) {
@@ -112,7 +82,7 @@ async function createTargetServer() {
     response.end(JSON.stringify({ ok: true }));
   });
 
-  const address = await listen(server);
+  const address = await listen(server, "HTTP target server tests");
   if (!address) {
     await closeServer(server).catch(() => undefined);
     return null;
@@ -189,7 +159,7 @@ async function createHttpConnectProxy(expectedAuthorization: string) {
     clientSocket.on("error", destroyPair);
   });
 
-  const address = await listen(server);
+  const address = await listen(server, "HTTP CONNECT proxy tests");
   if (!address) {
     await closeServer(server).catch(() => undefined);
     return null;
@@ -281,7 +251,7 @@ async function createSocks5Proxy(expectedAuth: { username: string; password: str
     }
   });
 
-  const address = await listen(server);
+  const address = await listen(server, "SOCKS5 proxy tests");
   if (!address) {
     await closeServer(server).catch(() => undefined);
     return null;
@@ -295,9 +265,11 @@ async function createSocks5Proxy(expectedAuth: { username: string; password: str
 describe("shared http client helpers", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.resetModules();
   });
 
-  it("formats nested undici causes with socket metadata", () => {
+  it("formats nested undici causes with socket metadata", async () => {
+    const { formatObservedError } = await loadHttpClientModule();
     const socketError = Object.assign(new Error("other side closed"), {
       name: "SocketError",
       code: "UND_ERR_SOCKET",
@@ -314,13 +286,15 @@ describe("shared http client helpers", () => {
     expect(formatObservedError(error)).toContain("socket={remoteAddress=203.0.113.10, remotePort=443}");
   });
 
-  it("redacts inline proxy credentials from formatted errors", () => {
+  it("redacts inline proxy credentials from formatted errors", async () => {
+    const { formatObservedError } = await loadHttpClientModule();
     const error = new Error("Proxy connect failed for socks5://user:pass@127.0.0.1:1080");
     expect(formatObservedError(error)).toContain("socks5://127.0.0.1:1080 (auth)");
     expect(formatObservedError(error)).not.toContain("user:pass");
   });
 
-  it("detects timeout errors through the nested cause chain", () => {
+  it("detects timeout errors through the nested cause chain", async () => {
+    const { classifyTransportError } = await loadHttpClientModule();
     const timeoutError = Object.assign(new Error("connect timed out"), {
       name: "ConnectTimeoutError",
       code: "UND_ERR_CONNECT_TIMEOUT",
@@ -330,20 +304,36 @@ describe("shared http client helpers", () => {
     expect(classifyTransportError(error)).toBe("timeout");
   });
 
-  it("parses retry-after seconds and http-date values", () => {
+  it("parses retry-after seconds and http-date values", async () => {
+    const { parseRetryAfterDelayMs } = await loadHttpClientModule();
     const now = Date.parse("2026-03-13T00:00:00.000Z");
 
     expect(parseRetryAfterDelayMs("0.001", now)).toBe(1);
     expect(parseRetryAfterDelayMs("Fri, 13 Mar 2026 00:00:05 GMT", now)).toBe(5_000);
   });
 
-  it("falls back to exponential retry delays when retry-after is absent", () => {
+  it("falls back to exponential retry delays when retry-after is absent", async () => {
+    const {
+      exponentialRetryDelayMs,
+      resolveRetryDelayMs,
+    } = await loadHttpClientModule();
     expect(exponentialRetryDelayMs(1)).toBe(5_000);
     expect(exponentialRetryDelayMs(2)).toBe(10_000);
     expect(resolveRetryDelayMs(null, 3)).toBe(20_000);
   });
 
+  it("builds proxy cache keys without exposing raw credentials", () => {
+    const key = buildProxyDispatcherCacheKey({
+      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    });
+
+    expect(key).toContain("socks5://127.0.0.1:1080#");
+    expect(key).not.toContain("proxy-user");
+    expect(key).not.toContain("proxy-pass");
+  });
+
   it("dispatches requests through an HTTP proxy", async () => {
+    const { createProxyRequestDispatcher } = await loadHttpClientModule();
     const target = await createTargetServer();
     const proxy = await createHttpConnectProxy("Basic dXNlcjpwYXNz");
     if (!target || !proxy) {
@@ -367,6 +357,7 @@ describe("shared http client helpers", () => {
   });
 
   it("dispatches requests through a SOCKS5 proxy", async () => {
+    const { createProxyRequestDispatcher } = await loadHttpClientModule();
     const target = await createTargetServer();
     const proxy = await createSocks5Proxy({
       username: "socks-user",
@@ -391,7 +382,13 @@ describe("shared http client helpers", () => {
   });
 
   it("uses the default HTTPS port for SOCKS destinations when the URL omits it", async () => {
+    const { SocksClient } = sharedHttpClientRequire("socks") as {
+      SocksClient: {
+        createConnection: (...args: unknown[]) => Promise<unknown>;
+      };
+    };
     const createConnectionSpy = vi.spyOn(SocksClient, "createConnection").mockRejectedValue(new Error("stop"));
+    const { createProxyRequestDispatcher } = await loadHttpClientModule();
     const dispatcher = createProxyRequestDispatcher({
       url: "socks5://socks-user:socks-pass@127.0.0.1:1080",
     });

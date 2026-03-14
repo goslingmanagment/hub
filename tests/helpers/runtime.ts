@@ -1,7 +1,5 @@
 import type { AppContext } from "../../apps/runtime/src/bootstrap.ts";
-import type { startTestDatabase } from "./db.ts";
-
-type StartedTestDatabase = NonNullable<Awaited<ReturnType<typeof startTestDatabase>>>;
+import type { StartedTestDatabase } from "./db.ts";
 
 export function createTestAppContext(
   testDb: StartedTestDatabase,

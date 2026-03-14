@@ -2,7 +2,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
-import { startTestDatabase } from "./helpers/db.ts";
+import {
+  resetIntegrationDatabase,
+  startIntegrationTestDatabase,
+  type StartedTestDatabase,
+} from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 async function loadCliProgram(appContext: ReturnType<typeof createTestAppContext>) {
@@ -23,16 +27,10 @@ async function loadCliProgram(appContext: ReturnType<typeof createTestAppContext
 }
 
 describe("CLI admin flows", () => {
-  let testDb: Awaited<ReturnType<typeof startTestDatabase>> | null = null;
+  let testDb: StartedTestDatabase | null = null;
 
   beforeAll(async () => {
-    try {
-      testDb = await startTestDatabase();
-    } catch (error) {
-      console.warn(
-        `Skipping integration tests: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    testDb = await startIntegrationTestDatabase();
   });
 
   afterAll(async () => {
@@ -48,15 +46,7 @@ describe("CLI admin flows", () => {
       return;
     }
 
-    await testDb.pool.query(`
-      truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
-               auth_sessions, user_page_assignments, users, daily_revenue,
-               daily_followers, daily_subscribers, transactions, page_subscriptions,
-               page_follows, fan_pages, fans, raw_payloads, sync_checkpoints,
-               sync_runs, platform_account_proxies, platform_account_credentials,
-               platform_accounts, models
-      restart identity cascade
-    `);
+    await resetIntegrationDatabase(testDb.pool);
 
     const model = await createModel(testDb.db, {
       slug: "lana-model",

@@ -57,10 +57,15 @@ import {
   lightQueueName,
   RAW_PAYLOAD_CLEANUP_QUEUE,
 } from "../apps/runtime/src/services/sync-queue.ts";
-import { applyTestMigrations, startTestDatabase, seedFanslyPage } from "./helpers/db.ts";
+import {
+  applyTestMigrations,
+  resetIntegrationDatabase,
+  seedFanslyPage,
+  startIntegrationTestDatabase,
+  type StartedTestDatabase,
+} from "./helpers/db.ts";
 import { OnlyMonsterApiError } from "../packages/onlyfans/src/errors.ts";
 
-type StartedTestDatabase = NonNullable<Awaited<ReturnType<typeof startTestDatabase>>>;
 const testEncryptionKey = Buffer.alloc(32, 7);
 let fakeRequestSequence = 0;
 
@@ -726,18 +731,12 @@ function createUnusedFanslyAdapter() {
 }
 
 describe("sync integration", () => {
-  let testDb: Awaited<ReturnType<typeof startTestDatabase>> | null = null;
+  let testDb: StartedTestDatabase | null = null;
   const expectedRevenueNetTotal = 238392n;
   const expectedRevenueGrossTotal = 297990n;
 
   beforeAll(async () => {
-    try {
-      testDb = await startTestDatabase();
-    } catch (error) {
-      console.warn(
-        `Skipping integration tests: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    testDb = await startIntegrationTestDatabase();
   });
 
   afterAll(async () => {
@@ -750,18 +749,7 @@ describe("sync integration", () => {
     if (!testDb) {
       return;
     }
-    await testDb.pool.query("drop schema if exists pgboss cascade");
-    await testDb.pool.query(`
-      truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
-               auth_sessions, user_page_assignments, users, fan_username_aliases,
-               spender_projection_watermarks, spender_lifetime_page, spender_daily_facts,
-               daily_revenue,
-               daily_followers, daily_subscribers, transactions, page_subscriptions,
-               page_follows, fan_pages, fans, raw_payloads, sync_checkpoints,
-               sync_runs, platform_account_proxies, platform_account_credentials,
-               platform_accounts, models
-      restart identity cascade
-    `);
+    await resetIntegrationDatabase(testDb.pool);
   });
 
   it("syncs idempotently and rebuilds rollups", async (context) => {
@@ -3064,11 +3052,10 @@ describe("sync integration", () => {
   it("backfills existing Fansly gross revenue when the gross migration runs", async (context) => {
     let legacyDb: StartedTestDatabase | null = null;
 
-    try {
-      legacyDb = await startTestDatabase({
-        through: "0010_spenders_domain_foundation.sql",
-      });
-    } catch (error) {
+    legacyDb = await startIntegrationTestDatabase({
+      through: "0010_spenders_domain_foundation.sql",
+    });
+    if (!legacyDb) {
       context.skip();
       return;
     }
@@ -3227,11 +3214,10 @@ describe("sync integration", () => {
   it("re-buckets existing Fansly business dates to UTC when the UTC migration runs", async (context) => {
     let legacyDb: StartedTestDatabase | null = null;
 
-    try {
-      legacyDb = await startTestDatabase({
-        through: "0011_fansly_gross_backfill.sql",
-      });
-    } catch (error) {
+    legacyDb = await startIntegrationTestDatabase({
+      through: "0011_fansly_gross_backfill.sql",
+    });
+    if (!legacyDb) {
       context.skip();
       return;
     }
@@ -3499,11 +3485,10 @@ describe("sync integration", () => {
   it("backfills existing OnlyFans net revenue when the commission migration runs", async (context) => {
     let legacyDb: StartedTestDatabase | null = null;
 
-    try {
-      legacyDb = await startTestDatabase({
-        through: "0006_onlymonster_raw_transaction_fields.sql",
-      });
-    } catch (error) {
+    legacyDb = await startIntegrationTestDatabase({
+      through: "0006_onlymonster_raw_transaction_fields.sql",
+    });
+    if (!legacyDb) {
       context.skip();
       return;
     }
@@ -3641,11 +3626,10 @@ describe("sync integration", () => {
   it("backfills existing OnlyFans net revenue when the cent-rounding migration runs", async (context) => {
     let legacyDb: StartedTestDatabase | null = null;
 
-    try {
-      legacyDb = await startTestDatabase({
-        through: "0008_onlyfans_utc_business_dates.sql",
-      });
-    } catch (error) {
+    legacyDb = await startIntegrationTestDatabase({
+      through: "0008_onlyfans_utc_business_dates.sql",
+    });
+    if (!legacyDb) {
       context.skip();
       return;
     }

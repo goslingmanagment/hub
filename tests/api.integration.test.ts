@@ -34,10 +34,14 @@ import {
 import { getModelRevenueReport, getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
 import { SYNC_TRIGGER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import { processSyncTriggerBatch, type SyncTriggerJob } from "../apps/runtime/src/worker-sync-trigger.ts";
-import { startTestDatabase } from "./helpers/db.ts";
+import {
+  resetIntegrationDatabase,
+  startIntegrationTestDatabase,
+  type StartedTestDatabase,
+} from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-async function seedPhase2Fixture(testDb: NonNullable<Awaited<ReturnType<typeof startTestDatabase>>>) {
+async function seedPhase2Fixture(testDb: StartedTestDatabase) {
   const lanaModel = await createModel(testDb.db, {
     slug: "lana-model",
     name: "Lana Model",
@@ -295,19 +299,13 @@ async function waitForCondition(check: () => Promise<boolean>, timeoutMs = 5_000
 }
 
 describe("api integration", () => {
-  let testDb: Awaited<ReturnType<typeof startTestDatabase>> | null = null;
+  let testDb: StartedTestDatabase | null = null;
   let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
   let fixture: Awaited<ReturnType<typeof seedPhase2Fixture>> | null = null;
   let workerBoss: PgBoss | null = null;
 
   beforeAll(async () => {
-    try {
-      testDb = await startTestDatabase();
-    } catch (error) {
-      console.warn(
-        `Skipping integration tests: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    testDb = await startIntegrationTestDatabase();
   });
 
   afterAll(async () => {
@@ -324,18 +322,7 @@ describe("api integration", () => {
       return;
     }
 
-    await testDb.pool.query("drop schema if exists pgboss cascade");
-    await testDb.pool.query(`
-      truncate fan_flags, fan_summaries, fan_notes, audit_events, api_keys,
-               auth_sessions, user_page_assignments, users, fan_username_aliases,
-               spender_projection_watermarks, spender_lifetime_page, spender_daily_facts,
-               daily_revenue,
-               daily_followers, daily_subscribers, transactions, page_subscriptions,
-               page_follows, fan_pages, fans, raw_payloads, sync_checkpoints,
-               sync_runs, platform_account_proxies, platform_account_credentials,
-               platform_accounts, models
-      restart identity cascade
-    `);
+    await resetIntegrationDatabase(testDb.pool);
 
     const appContext = createTestAppContext(testDb);
     fixture = await seedPhase2Fixture(testDb);
@@ -2362,7 +2349,125 @@ describe("api integration", () => {
     ]));
   });
 
-  it("applies server-side subscriber and follower filters before pagination", async (context) => {
+  it("applies subscriber and follower query filters before pagination", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date();
+    const freshFollowedAt = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const distractorFollowedAt = new Date(now.getTime() - 1 * 60 * 60 * 1000);
+    const freshStartedAt = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    const distractorStartedAt = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    const freshEndsAt = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+    const distractorEndsAt = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000);
+    const [distractorFan, freshFan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-101",
+      username: "alpha",
+      displayName: "Alpha Fan",
+    }, {
+      platform: "fansly",
+      platformUserId: "fan-102",
+      username: "freshfan",
+      displayName: "Fresh Fan",
+    }]);
+
+    await upsertFanPage(testDb.db, {
+      fanId: distractorFan.id,
+      platformAccountId: fixture.lanaPage.id,
+      isFollower: true,
+      followerSince: distractorFollowedAt,
+      isSubscriber: true,
+      subscriberSince: distractorStartedAt,
+      subscriptionExpiresAt: distractorEndsAt,
+      autoRenew: true,
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: distractorFan.id,
+      platformFollowId: "follow-lana-alpha",
+      followedAt: distractorFollowedAt,
+    });
+    await upsertPageSubscription(testDb.db, {
+      platformSubscriptionId: "sub-lana-alpha",
+      platformAccountId: fixture.lanaPage.id,
+      fanId: distractorFan.id,
+      rawStatus: 3,
+      canonicalStatus: "active",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: true,
+      sourceCreatedAt: distractorStartedAt,
+      endsAt: distractorEndsAt,
+    });
+
+    await upsertFanPage(testDb.db, {
+      fanId: freshFan.id,
+      platformAccountId: fixture.lanaPage.id,
+      isFollower: true,
+      followerSince: freshFollowedAt,
+      isSubscriber: true,
+      subscriberSince: freshStartedAt,
+      subscriptionExpiresAt: freshEndsAt,
+      autoRenew: false,
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: freshFan.id,
+      platformFollowId: "follow-lana-fresh",
+      followedAt: freshFollowedAt,
+    });
+    await upsertPageSubscription(testDb.db, {
+      platformSubscriptionId: "sub-lana-fresh",
+      platformAccountId: fixture.lanaPage.id,
+      fanId: freshFan.id,
+      rawStatus: 3,
+      canonicalStatus: "active",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: false,
+      sourceCreatedAt: freshStartedAt,
+      endsAt: freshEndsAt,
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const subscriberSearch = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/subscribers?query=fresh&limit=1",
+      headers: { cookie },
+    });
+    expect(subscriberSearch.statusCode).toBe(200);
+    expect(subscriberSearch.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-102",
+      }),
+    ]);
+
+    const followerSearch = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/followers?query=fresh&limit=1",
+      headers: { cookie },
+    });
+    expect(followerSearch.statusCode).toBe(200);
+    expect(followerSearch.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-102",
+      }),
+    ]);
+  });
+
+  it("applies subscriber and follower date-window filters", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -2370,14 +2475,32 @@ describe("api integration", () => {
 
     const now = new Date();
     const recentFollowAt = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const oldFollowAt = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const recentSubscriberAt = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    const oldSubscriberAt = new Date(now.getTime() - 72 * 60 * 60 * 1000);
     const expiringAt = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
     const nonExpiringAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    const [existingFan] = await upsertFans(testDb.db, [{
+    const [existingFan, oldFan, freshFan] = await upsertFans(testDb.db, [{
       platform: "fansly",
       platformUserId: "fan-001",
+    }, {
+      platform: "fansly",
+      platformUserId: "fan-201",
+      username: "stalefan",
+      displayName: "Stale Fan",
+    }, {
+      platform: "fansly",
+      platformUserId: "fan-202",
+      username: "freshfan",
+      displayName: "Fresh Fan",
     }]);
 
+    await upsertFanPage(testDb.db, {
+      fanId: existingFan.id,
+      platformAccountId: fixture.lanaPage.id,
+      subscriptionExpiresAt: nonExpiringAt,
+      autoRenew: true,
+    });
     await upsertPageSubscription(testDb.db, {
       platformSubscriptionId: "sub-lana-1",
       platformAccountId: fixture.lanaPage.id,
@@ -2387,22 +2510,39 @@ describe("api integration", () => {
       priceMills: 5000n,
       renewPriceMills: 5000n,
       autoRenew: true,
-      sourceCreatedAt: new Date("2026-03-01T12:00:00.000Z"),
+      sourceCreatedAt: oldSubscriberAt,
       endsAt: nonExpiringAt,
     });
+
     await upsertFanPage(testDb.db, {
-      fanId: existingFan.id,
+      fanId: oldFan.id,
       platformAccountId: fixture.lanaPage.id,
+      isFollower: true,
+      followerSince: oldFollowAt,
+      isSubscriber: true,
+      subscriberSince: oldSubscriberAt,
       subscriptionExpiresAt: nonExpiringAt,
       autoRenew: true,
     });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: oldFan.id,
+      platformFollowId: "follow-lana-stale",
+      followedAt: oldFollowAt,
+    });
+    await upsertPageSubscription(testDb.db, {
+      platformSubscriptionId: "sub-lana-stale",
+      platformAccountId: fixture.lanaPage.id,
+      fanId: oldFan.id,
+      rawStatus: 3,
+      canonicalStatus: "active",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: true,
+      sourceCreatedAt: oldSubscriberAt,
+      endsAt: nonExpiringAt,
+    });
 
-    const [freshFan] = await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: "fan-002",
-      username: "freshfan",
-      displayName: "Fresh Fan",
-    }]);
     await upsertFanPage(testDb.db, {
       fanId: freshFan.id,
       platformAccountId: fixture.lanaPage.id,
@@ -2416,11 +2556,11 @@ describe("api integration", () => {
     await upsertPageFollow(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
       fanId: freshFan.id,
-      platformFollowId: "follow-lana-2",
+      platformFollowId: "follow-lana-recent",
       followedAt: recentFollowAt,
     });
     await upsertPageSubscription(testDb.db, {
-      platformSubscriptionId: "sub-lana-2",
+      platformSubscriptionId: "sub-lana-recent",
       platformAccountId: fixture.lanaPage.id,
       fanId: freshFan.id,
       rawStatus: 3,
@@ -2442,18 +2582,6 @@ describe("api integration", () => {
     });
     const cookie = sessionCookieFrom(login);
 
-    const subscriberSearch = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/subscribers?query=fresh&limit=50",
-      headers: { cookie },
-    });
-    expect(subscriberSearch.statusCode).toBe(200);
-    expect(subscriberSearch.json().items).toEqual([
-      expect.objectContaining({
-        platformUserId: "fan-002",
-      }),
-    ]);
-
     const subscriberRecent = await server.inject({
       method: "GET",
       url: "/api/v1/pages/lana/subscribers?startedWithinHours=24&limit=50",
@@ -2462,7 +2590,7 @@ describe("api integration", () => {
     expect(subscriberRecent.statusCode).toBe(200);
     expect(subscriberRecent.json().items).toEqual([
       expect.objectContaining({
-        platformUserId: "fan-002",
+        platformUserId: "fan-202",
       }),
     ]);
 
@@ -2474,7 +2602,7 @@ describe("api integration", () => {
     expect(subscriberExpiring.statusCode).toBe(200);
     expect(subscriberExpiring.json().items).toEqual([
       expect.objectContaining({
-        platformUserId: "fan-002",
+        platformUserId: "fan-202",
       }),
     ]);
 
@@ -2486,19 +2614,7 @@ describe("api integration", () => {
     expect(subscriberNoRenew.statusCode).toBe(200);
     expect(subscriberNoRenew.json().items).toEqual([
       expect.objectContaining({
-        platformUserId: "fan-002",
-      }),
-    ]);
-
-    const followerSearch = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/followers?query=fresh&limit=50",
-      headers: { cookie },
-    });
-    expect(followerSearch.statusCode).toBe(200);
-    expect(followerSearch.json().items).toEqual([
-      expect.objectContaining({
-        platformUserId: "fan-002",
+        platformUserId: "fan-202",
       }),
     ]);
 
@@ -2510,7 +2626,7 @@ describe("api integration", () => {
     expect(followerRecent.statusCode).toBe(200);
     expect(followerRecent.json().items).toEqual([
       expect.objectContaining({
-        platformUserId: "fan-002",
+        platformUserId: "fan-202",
       }),
     ]);
   });

@@ -6,6 +6,8 @@ import { createDb, createFanslyPage, createModel, createPool, storeFanslySession
 import { createLogger, encryptJson, type FanslySessionBundle } from "@agency_hub_core/shared";
 import { GenericContainer } from "testcontainers";
 
+import { acquireTestPrerequisite } from "./prerequisites.ts";
+
 const DATABASE_READY_TIMEOUT_MS = 10_000;
 const DATABASE_READY_POLL_MS = 100;
 
@@ -64,6 +66,43 @@ export async function startTestDatabase(input?: {
     await container.stop().catch(() => undefined);
     throw error;
   }
+}
+
+export type StartedTestDatabase = Awaited<ReturnType<typeof startTestDatabase>>;
+
+export async function startIntegrationTestDatabase(input?: {
+  from?: string;
+  through?: string;
+}) {
+  return acquireTestPrerequisite(
+    () => startTestDatabase(input),
+    {
+      prerequisite: "Docker-backed Postgres for integration tests",
+      reason: "These tests use Testcontainers and require local Docker access.",
+    },
+  );
+}
+
+export async function resetIntegrationDatabase(pool: ReturnType<typeof createPool>) {
+  await pool.query("drop schema if exists pgboss cascade");
+
+  const tableRows = await pool.query<{ quoted_name: string }>(`
+    select quote_ident(tablename) as quoted_name
+    from pg_tables
+    where schemaname = 'public'
+      and tablename <> 'schema_migrations'
+    order by tablename asc
+  `);
+
+  const tableNames = tableRows.rows
+    .map((row) => row.quoted_name)
+    .filter((name): name is string => typeof name === "string" && name.length > 0);
+
+  if (tableNames.length === 0) {
+    return;
+  }
+
+  await pool.query(`truncate ${tableNames.join(", ")} restart identity cascade`);
 }
 
 export async function applyTestMigrations(
