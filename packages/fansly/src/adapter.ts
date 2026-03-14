@@ -304,7 +304,7 @@ export class FanslyAdapter {
       pagination: options.pagination ?? null,
       requestMetadata: options.requestShape ?? {},
       retries,
-      waitForRateLimit: () => this.waitForRateLimit(options.category, minDelayMs),
+      waitForRateLimit: () => this.waitForRateLimit(context, options.category, minDelayMs),
       execute: async () => {
         const response = await fetch(url, {
           method: "GET",
@@ -496,7 +496,18 @@ export class FanslyAdapter {
     return buildProxyDispatcherCacheKey(proxy);
   }
 
-  private async waitForRateLimit(category: string, minDelayMs: number) {
+  private async waitForRateLimit(
+    context: FanslyRequestContext,
+    category: string,
+    minDelayMs: number,
+  ) {
+    await context.rateLimitWaiter?.([
+      { provider: "fansly", scope: "global", egressKey: "global" },
+      ...(category === "followers" && minDelayMs > 0
+        ? [{ provider: "fansly", scope: "followers_page", egressKey: "global" } as const]
+        : []),
+    ]);
+
     const categoryGate = this.enterRateLimitChain(this.rateLimitChains.get(category) ?? Promise.resolve());
     this.rateLimitChains.set(category, categoryGate.chain);
 

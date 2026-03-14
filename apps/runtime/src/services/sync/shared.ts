@@ -17,6 +17,7 @@ import { buildOnlyFansMetadata, getOnlyMonsterAccountId } from "../onlyfans.ts";
 import type { NormalizedSyncError } from "./errors.ts";
 import { SyncPayloadPersistenceError } from "./errors.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
+import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -108,26 +109,29 @@ export function trimFanslyFollowerPayload(raw: unknown) {
 export function refreshPageMetadata(
   app: AppContext,
   pageContext: ResolvedFanslyPageContext,
-  syncType: "light" | "followers",
+  syncType?: "light" | "followers",
   telemetry?: SyncRunTelemetry,
 ): ReturnType<AppContext["adapter"]["getAccountMe"]>;
 export function refreshPageMetadata(
   app: AppContext,
   pageContext: ResolvedOnlyFansPageContext,
-  syncType: "light" | "followers",
+  syncType?: "light" | "followers",
   telemetry?: SyncRunTelemetry,
 ): ReturnType<AppContext["onlyFansAdapter"]["getAccount"]>;
 export async function refreshPageMetadata(
   app: AppContext,
   pageContext: ResolvedPageContext,
-  syncType: "light" | "followers",
+  syncType?: "light" | "followers",
   telemetry?: SyncRunTelemetry,
 ) {
+  const rateLimitWaiter = createSyncRateLimitWaiter(app);
+
   if (pageContext.platform === "fansly") {
     const accountMe = await app.adapter.getAccountMe({
       session: pageContext.session,
       proxy: pageContext.proxy,
       requestObserver: telemetry?.getRequestObserver() ?? null,
+      rateLimitWaiter,
     });
 
     await updatePageMetadata(app.db, pageContext.page.id, {
@@ -141,7 +145,7 @@ export async function refreshPageMetadata(
         walls: accountMe.parsed.account.walls ?? [],
         subscriptionTiers: accountMe.parsed.account.subscriptionTiers ?? [],
       },
-      syncType,
+      ...(syncType ? { syncType } : {}),
     });
 
     return accountMe;
@@ -152,6 +156,7 @@ export async function refreshPageMetadata(
       auth: pageContext.auth,
       proxy: pageContext.proxy,
       requestObserver: telemetry?.getRequestObserver() ?? null,
+      rateLimitWaiter,
     },
     getOnlyMonsterAccountId(pageContext.page.metadata),
   );
@@ -160,12 +165,12 @@ export async function refreshPageMetadata(
     platformAccountIdValue: account.parsed.account.platform_account_id,
     username: account.parsed.account.username,
     displayName: account.parsed.account.name,
-    followerCount: 0,
-    subscriberCount: 0,
-    earningsBalanceMills: 0n,
-    metadata: buildOnlyFansMetadata(account.parsed.account),
-    syncType,
-  });
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: buildOnlyFansMetadata(account.parsed.account),
+      ...(syncType ? { syncType } : {}),
+    });
 
   return account;
 }

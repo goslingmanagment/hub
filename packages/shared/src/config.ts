@@ -15,6 +15,19 @@ const envSchema = z.object({
   FANSLY_GLOBAL_DELAY_MS: z.coerce.number().int().positive().optional(),
   FANSLY_ACCOUNT_LOOKUP_DELAY_MS: z.coerce.number().int().positive().optional(),
   FOLLOWER_PAGE_DELAY_MS: z.coerce.number().int().positive().default(5000),
+  SYNC_SHARED_RATE_LIMIT_ENABLED: z.preprocess((value) => {
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true") {
+        return true;
+      }
+      if (normalized === "false") {
+        return false;
+      }
+    }
+
+    return value;
+  }, z.boolean().default(false)),
   TRANSACTION_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
   TRANSACTION_RESCAN_CAP_DAYS: z.coerce.number().int().positive().default(30),
   SYNC_OBSERVABILITY_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
@@ -50,6 +63,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
     fanslyGlobalDelayMs,
     followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,
+    syncSharedRateLimitEnabled: parsed.SYNC_SHARED_RATE_LIMIT_ENABLED,
     transactionLookbackDays: parsed.TRANSACTION_LOOKBACK_DAYS,
     transactionRescanCapDays: parsed.TRANSACTION_RESCAN_CAP_DAYS,
     syncObservabilityRetentionDays: parsed.SYNC_OBSERVABILITY_RETENTION_DAYS,

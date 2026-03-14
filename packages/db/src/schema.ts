@@ -14,6 +14,7 @@ import {
   timestamp,
   unique,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { fanFlagTypes, userRoles } from "@agency_hub_core/shared";
 
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
@@ -30,6 +31,20 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "transactions",
   "subscribers",
   "cleanup",
+  "followers_reconcile",
+]);
+export const syncTargetStatusEnum = pgEnum("sync_target_status", [
+  "active",
+  "paused",
+  "auth_failed",
+  "disabled",
+]);
+export const syncRequestReasonEnum = pgEnum("sync_request_reason", [
+  "scheduled",
+  "manual",
+  "onboarding",
+  "recovery",
+  "anomaly",
 ]);
 export const syncRequestAttemptStateEnum = pgEnum("sync_request_attempt_state", [
   "started",
@@ -258,6 +273,79 @@ export const syncCheckpoints = pgTable(
   }),
 );
 
+export const syncStreamState = pgTable(
+  "sync_stream_state",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    stream: syncStreamEnum("stream").notNull(),
+    status: syncTargetStatusEnum("status").default("active").notNull(),
+    cadenceSeconds: integer("cadence_seconds").notNull(),
+    slotOffsetSeconds: integer("slot_offset_seconds").notNull(),
+    nextDueAt: timestamp("next_due_at", { withTimezone: true }).notNull(),
+    basePriority: integer("base_priority").notNull(),
+    effectivePriority: integer("effective_priority").notNull(),
+    pendingReason: syncRequestReasonEnum("pending_reason").default("scheduled").notNull(),
+    desiredRevision: bigint("desired_revision", { mode: "number" }).default(0).notNull(),
+    satisfiedRevision: bigint("satisfied_revision", { mode: "number" }).default(0).notNull(),
+    desiredAt: timestamp("desired_at", { withTimezone: true }),
+    requestPayload: jsonb("request_payload").$type<Record<string, unknown> | null>(),
+    backoffUntil: timestamp("backoff_until", { withTimezone: true })
+      .default(sql`'-infinity'::timestamptz`)
+      .notNull(),
+    lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
+    lastStartedAt: timestamp("last_started_at", { withTimezone: true }),
+    lastFinishedAt: timestamp("last_finished_at", { withTimezone: true }),
+    lastSucceededAt: timestamp("last_succeeded_at", { withTimezone: true }),
+    lastFailedAt: timestamp("last_failed_at", { withTimezone: true }),
+    consecutiveFailures: integer("consecutive_failures").default(0).notNull(),
+    lastErrorCode: text("last_error_code"),
+    lastErrorSummary: text("last_error_summary"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "sync_stream_state_pkey",
+      columns: [table.platformAccountId, table.stream],
+    }),
+    dueIdx: index("sync_stream_state_due_idx").on(table.nextDueAt, table.platformAccountId),
+    pendingIdx: index("sync_stream_state_pending_idx").on(
+      table.effectivePriority,
+      table.desiredAt,
+      table.platformAccountId,
+      table.stream,
+    ),
+    backoffIdx: index("sync_stream_state_backoff_idx").on(
+      table.backoffUntil,
+      table.platformAccountId,
+    ),
+    freshnessIdx: index("sync_stream_state_freshness_idx").on(
+      table.stream,
+      table.lastSucceededAt,
+    ),
+  }),
+);
+
+export const syncProviderRateLimits = pgTable(
+  "sync_provider_rate_limits",
+  {
+    provider: platformEnum("provider").notNull(),
+    scope: text("scope").notNull(),
+    egressKey: text("egress_key").notNull(),
+    minSpacingMs: integer("min_spacing_ms").notNull(),
+    nextAvailableAt: timestamp("next_available_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "sync_provider_rate_limits_pkey",
+      columns: [table.provider, table.scope, table.egressKey],
+    }),
+  }),
+);
+
 export const rawPayloads = pgTable(
   "raw_payloads",
   {
@@ -362,6 +450,7 @@ export const pageFollows = pgTable(
     followedAt: timestamp("followed_at", { withTimezone: true }).notNull(),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSeenGeneration: bigint("last_seen_generation", { mode: "number" }),
     isActive: boolean("is_active").default(true).notNull(),
   },
   (table) => ({
@@ -370,6 +459,10 @@ export const pageFollows = pgTable(
       table.platformFollowId,
     ),
     fanIdx: index("page_follows_fan_idx").on(table.fanId),
+    generationIdx: index("page_follows_generation_idx").on(
+      table.platformAccountId,
+      table.lastSeenGeneration,
+    ),
   }),
 );
 
@@ -401,10 +494,15 @@ export const pageSubscriptions = pgTable(
     sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true }),
     endsAt: timestamp("ends_at", { withTimezone: true }),
     isCurrent: boolean("is_current").default(true).notNull(),
+    lastSeenGeneration: bigint("last_seen_generation", { mode: "number" }),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     accountIdx: index("page_subscriptions_account_idx").on(table.platformAccountId, table.endsAt),
+    generationIdx: index("page_subscriptions_generation_idx").on(
+      table.platformAccountId,
+      table.lastSeenGeneration,
+    ),
   }),
 );
 

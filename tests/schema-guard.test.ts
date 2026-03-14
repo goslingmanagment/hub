@@ -26,7 +26,7 @@ describe("runtime schema guard", () => {
 
     try {
       await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
-        "missing latest migration 0013_sync_observability.sql",
+        "missing latest migration 0014_sync_control_plane.sql",
       );
     } finally {
       await testDb.stop();

@@ -39,6 +39,8 @@ const cliMocks = vi.hoisted(() => {
     listPages: vi.fn(),
     onboardFanslyPage: vi.fn(),
     onboardOnlyFansPage: vi.fn(),
+    requestPageSync: vi.fn(),
+    waitForRequestedSyncRevisions: vi.fn(),
     removePageProxy: vi.fn(),
     setPageProxy: vi.fn(),
   };
@@ -62,6 +64,11 @@ vi.mock("../apps/runtime/src/services/page-proxies.ts", () => ({
   removePageProxy: cliMocks.removePageProxy,
 }));
 
+vi.mock("../apps/runtime/src/services/sync-control.ts", () => ({
+  requestPageSync: cliMocks.requestPageSync,
+  waitForRequestedSyncRevisions: cliMocks.waitForRequestedSyncRevisions,
+}));
+
 vi.mock("../apps/runtime/src/services/sync.ts", async () => {
   const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync.ts")>(
     "../apps/runtime/src/services/sync.ts",
@@ -74,7 +81,6 @@ vi.mock("../apps/runtime/src/services/sync.ts", async () => {
 });
 
 import { buildProgram } from "../apps/runtime/src/cli.ts";
-import { SYNC_TRIGGER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   renderStatusDetail,
   renderWatchEventLine,
@@ -118,6 +124,8 @@ describe("CLI parsing", () => {
     cliMocks.listPages.mockReset();
     cliMocks.onboardFanslyPage.mockReset();
     cliMocks.onboardOnlyFansPage.mockReset();
+    cliMocks.requestPageSync.mockReset();
+    cliMocks.waitForRequestedSyncRevisions.mockReset();
     cliMocks.removePageProxy.mockReset();
     cliMocks.setPageProxy.mockReset();
 
@@ -133,6 +141,12 @@ describe("CLI parsing", () => {
       close: vi.fn(async () => {}),
     });
     cliMocks.listPages.mockResolvedValue([]);
+    cliMocks.requestPageSync.mockResolvedValue({
+      page: { id: 1, label: "page" },
+      revisions: [],
+      wakeupId: "job-1",
+    });
+    cliMocks.waitForRequestedSyncRevisions.mockResolvedValue(undefined);
     cliMocks.removePageProxy.mockResolvedValue(undefined);
     cliMocks.setPageProxy.mockResolvedValue(undefined);
   });
@@ -256,10 +270,10 @@ describe("CLI parsing", () => {
     const boss = cliMocks.bossInstances[0];
     expect(boss).toBeDefined();
     expect(boss.start).toHaveBeenCalledTimes(1);
-    expect(boss.createQueue).toHaveBeenCalledWith(SYNC_TRIGGER_QUEUE);
-    expect(boss.send).toHaveBeenCalledWith(SYNC_TRIGGER_QUEUE, {
+    expect(cliMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), boss, {
       pageLabel: "lora-main",
       scope: "all",
+      reason: "onboarding",
     });
     expect(boss.stop).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith("Created Fansly page lora-main (101)");
@@ -308,10 +322,10 @@ describe("CLI parsing", () => {
     const boss = cliMocks.bossInstances[0];
     expect(boss).toBeDefined();
     expect(boss.start).toHaveBeenCalledTimes(1);
-    expect(boss.createQueue).toHaveBeenCalledWith(SYNC_TRIGGER_QUEUE);
-    expect(boss.send).toHaveBeenCalledWith(SYNC_TRIGGER_QUEUE, {
+    expect(cliMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), boss, {
       pageLabel: "lora-of",
       scope: "all",
+      reason: "onboarding",
     });
     expect(boss.stop).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith("Created OnlyFans page lora-of (202)");
@@ -329,7 +343,7 @@ describe("CLI parsing", () => {
         label: "failed-page",
       },
     });
-    cliMocks.bossBehavior.sendError = new Error("queue down");
+    cliMocks.requestPageSync.mockRejectedValueOnce(new Error("queue down"));
 
     const program = buildProgram();
 
@@ -349,6 +363,58 @@ describe("CLI parsing", () => {
 
     const boss = cliMocks.bossInstances[0];
     expect(boss.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for requested revisions by default on sync", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    cliMocks.requestPageSync.mockResolvedValue({
+      page: { id: 44, label: "lora-main" },
+      revisions: [{ stream: "light", desiredRevision: 2 }],
+      wakeupId: "job-44",
+    });
+
+    const program = buildProgram();
+    await program.parseAsync([
+      "sync",
+      "--page",
+      "lora-main",
+      "--scope",
+      "light",
+    ], { from: "user" });
+
+    expect(cliMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      pageLabel: "lora-main",
+      scope: "light",
+      reason: "manual",
+      onlyFansTransactionsStart: null,
+    });
+    expect(cliMocks.waitForRequestedSyncRevisions).toHaveBeenCalledWith(expect.anything(), {
+      platformAccountId: 44,
+      revisions: [{ stream: "light", desiredRevision: 2 }],
+    });
+    expect(logSpy).toHaveBeenCalledWith("Completed light sync for lora-main");
+  });
+
+  it("supports sync --no-wait without polling sync_stream_state", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    cliMocks.requestPageSync.mockResolvedValue({
+      page: { id: 55, label: "lora-main" },
+      revisions: [{ stream: "followers", desiredRevision: 1 }],
+      wakeupId: "job-55",
+    });
+
+    const program = buildProgram();
+    await program.parseAsync([
+      "sync",
+      "--page",
+      "lora-main",
+      "--scope",
+      "followers",
+      "--no-wait",
+    ], { from: "user" });
+
+    expect(cliMocks.waitForRequestedSyncRevisions).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith("Queued followers sync for lora-main");
   });
 
   it("sets a proxy on an existing page", async () => {

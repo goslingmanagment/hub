@@ -23,6 +23,7 @@ import { PgBoss } from "pg-boss";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
 import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
@@ -32,8 +33,7 @@ import {
   unassignPageFromUser,
 } from "../apps/runtime/src/services/auth.ts";
 import { getModelRevenueReport, getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
-import { SYNC_TRIGGER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
-import { processSyncTriggerBatch, type SyncTriggerJob } from "../apps/runtime/src/worker-sync-trigger.ts";
+import { ensureSyncQueues } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -2156,84 +2156,88 @@ describe("api integration", () => {
 
     workerBoss = new PgBoss({ connectionString: activeTestDb.connectionString });
     await workerBoss.start();
-    await workerBoss.work(SYNC_TRIGGER_QUEUE, { batchSize: 10 }, async (jobs) => {
-      await processSyncTriggerBatch(appContext, jobs as SyncTriggerJob[]);
+    await ensureSyncQueues(workerBoss);
+    const abortController = new AbortController();
+    const executorPromise = startSyncPageExecutor(appContext, workerBoss, {
+      signal: abortController.signal,
     });
 
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: {
-        username: "dima",
-        password: "owner-secret",
-      },
-    });
-    const cookie = sessionCookieFrom(login);
-
-    const response = await server.inject({
-      method: "POST",
-      url: "/api/v1/admin/pages",
-      headers: { cookie },
-      payload: {
-        platform: "fansly",
-        modelSlug: "lana-model",
-        label: "auto-sync-page",
-        session: {
-          authorization: "token",
+    try {
+      const login = await server.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          username: "dima",
+          password: "owner-secret",
         },
-      },
-    });
+      });
+      const cookie = sessionCookieFrom(login);
 
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      page: {
-        label: "auto-sync-page",
-        platform: "fansly",
-        username: "auto_sync_user",
-      },
-      verified: true,
-    });
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/admin/pages",
+        headers: { cookie },
+        payload: {
+          platform: "fansly",
+          modelSlug: "lana-model",
+          label: "auto-sync-page",
+          session: {
+            authorization: "token",
+          },
+        },
+      });
 
-    await waitForCondition(async () => {
-      const rows = await activeTestDb.pool.query<{
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        page: {
+          label: "auto-sync-page",
+          platform: "fansly",
+          username: "auto_sync_user",
+        },
+        verified: true,
+      });
+
+      await waitForCondition(async () => {
+        const rows = await activeTestDb.pool.query<{
+          stream: string;
+          status: string;
+        }>(`
+          select sr.stream, sr.status
+          from sync_runs sr
+          join platform_accounts pa on pa.id = sr.platform_account_id
+          where pa.label = 'auto-sync-page'
+          order by sr.stream asc
+        `);
+
+        return rows.rows.length >= 4
+          && rows.rows.every((row) => row.status === "success");
+      });
+
+      const syncRunRows = await activeTestDb.pool.query<{
         stream: string;
         status: string;
+        trigger: string;
       }>(`
-        select sr.stream, sr.status
+        select sr.stream, sr.status, sr.trigger
         from sync_runs sr
         join platform_accounts pa on pa.id = sr.platform_account_id
         where pa.label = 'auto-sync-page'
         order by sr.stream asc
       `);
 
-      return rows.rows.length === 2
-        && rows.rows.every((row) => row.status === "success");
-    });
-
-    const syncRunRows = await activeTestDb.pool.query<{
-      stream: string;
-      status: string;
-      trigger: string;
-    }>(`
-      select sr.stream, sr.status, sr.trigger
-      from sync_runs sr
-      join platform_accounts pa on pa.id = sr.platform_account_id
-      where pa.label = 'auto-sync-page'
-      order by sr.stream asc
-    `);
-
-    expect(syncRunRows.rows).toEqual([
-      {
-        stream: "light",
-        status: "success",
-        trigger: "api",
-      },
-      {
-        stream: "followers",
-        status: "success",
-        trigger: "api",
-      },
-    ]);
+      expect(syncRunRows.rows.map((row) => row.stream)).toEqual([
+        "light",
+        "followers",
+        "transactions",
+        "subscribers",
+        "followers_reconcile",
+      ]);
+      expect(syncRunRows.rows.every((row) => row.status === "success")).toBe(true);
+      expect(syncRunRows.rows.every((row) => row.trigger === "onboarding")).toBe(true);
+    } finally {
+      abortController.abort();
+      await executorPromise;
+    }
   });
 
   it("returns 503 when page creation succeeds but the initial sync cannot be queued", async (context) => {

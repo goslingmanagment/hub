@@ -24,6 +24,7 @@ async function main() {
       followerPageDelayMs: 5000,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
+      syncSharedRateLimitEnabled: false,
       syncObservabilityRetentionDays: 30,
     },
     logger: createLogger("silent"),

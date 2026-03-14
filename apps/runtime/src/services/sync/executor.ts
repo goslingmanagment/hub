@@ -1,0 +1,291 @@
+import { setTimeout as delay } from "node:timers/promises";
+
+import {
+  ensureSyncStreamStateRows,
+  listRunnableSyncStreamStatesForPage,
+  markSyncPageAuthFailed,
+  recordSyncStreamChunkFailure,
+  recordSyncStreamChunkStarted,
+  recordSyncStreamChunkSucceeded,
+  recordSyncStreamChunkYielded,
+  startSyncRun,
+  type SyncControlStream,
+  type SyncStreamStateRow,
+} from "@agency_hub_core/db";
+import { FanslyApiError } from "@agency_hub_core/fansly";
+import { OnlyMonsterApiError } from "@agency_hub_core/onlyfans";
+import type { JobWithMetadata, PgBoss } from "pg-boss";
+
+import type { AppContext } from "../../bootstrap.ts";
+import { SYNC_PAGE_EXECUTE_QUEUE, sendSyncPageWakeup, type SyncPageExecutePayload } from "../sync-queue.ts";
+import { normalizeSyncError } from "./errors.ts";
+import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
+import { SyncChunkBudget } from "./chunk-budget.ts";
+import { SyncRunTelemetry } from "./observability.ts";
+import { persistFailedSyncPayload } from "./shared.ts";
+
+const PAGE_EXECUTOR_IDLE_POLL_MS = 1_000;
+const PAGE_EXECUTOR_HEARTBEAT_MS = 15_000;
+const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
+
+export interface SyncPageChunkResult {
+  kind: "idle" | "success" | "yielded" | "failed" | "auth_failed";
+  platformAccountId: number;
+  stream: SyncControlStream | null;
+  runId: number | null;
+  needsContinuation: boolean;
+  continuationPriority: number | null;
+}
+
+type PageExecuteBoss = Pick<PgBoss, "complete" | "fail" | "fetch" | "send" | "touch">;
+
+function isAuthError(error: unknown) {
+  if (error instanceof FanslyApiError || error instanceof OnlyMonsterApiError) {
+    return error.status === 401 || error.status === 403;
+  }
+
+  return false;
+}
+
+function buildContinuationResult(
+  platformAccountId: number,
+  stream: SyncControlStream | null,
+  runId: number | null,
+  kind: SyncPageChunkResult["kind"],
+  nextRows: SyncStreamStateRow[],
+): SyncPageChunkResult {
+  return {
+    kind,
+    platformAccountId,
+    stream,
+    runId,
+    needsContinuation: nextRows.length > 0,
+    continuationPriority: nextRows[0]?.effectivePriority ?? null,
+  };
+}
+
+async function createChunkTelemetry(
+  app: AppContext,
+  streamState: SyncStreamStateRow,
+) {
+  const pageContext = await resolveExecutorPageContext(app, streamState.platformAccountId);
+  const run = await startSyncRun(app.db, {
+    platformAccountId: pageContext.page.id,
+    stream: streamState.stream,
+    trigger: streamState.pendingReason,
+  });
+  const telemetry = new SyncRunTelemetry(app, {
+    runId: run.id,
+    platformAccountId: pageContext.page.id,
+    pageLabel: pageContext.page.label,
+    provider: pageContext.platform,
+    stream: streamState.stream,
+    trigger: streamState.pendingReason,
+  }, {
+    runStartedAt: run.startedAt,
+  });
+  await telemetry.recordRunStarted();
+
+  return {
+    pageContext,
+    run,
+    telemetry,
+  };
+}
+
+export async function executeNextSyncPageChunk(
+  app: AppContext,
+  platformAccountId: number,
+): Promise<SyncPageChunkResult> {
+  await ensureSyncStreamStateRows(app.db, { platformAccountId });
+
+  const runnableRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
+  const streamState = runnableRows[0];
+  if (!streamState) {
+    return {
+      kind: "idle",
+      platformAccountId,
+      stream: null,
+      runId: null,
+      needsContinuation: false,
+      continuationPriority: null,
+    };
+  }
+
+  const { pageContext, run, telemetry } = await createChunkTelemetry(app, streamState);
+  const budget = new SyncChunkBudget();
+  await recordSyncStreamChunkStarted(app.db, platformAccountId, streamState.stream);
+
+  try {
+    const result = await executeStreamChunk(app, {
+      pageContext,
+      streamState,
+      syncRunId: run.id,
+      telemetry,
+      budget,
+    });
+
+    if (result.satisfied) {
+      await recordSyncStreamChunkSucceeded(app.db, {
+        platformAccountId,
+        stream: streamState.stream,
+        satisfied: true,
+        targetRevision: streamState.desiredRevision,
+        clearRequestPayload: "clearRequestPayload" in result ? result.clearRequestPayload : undefined,
+      });
+      await telemetry.finish("success", null, {
+        chunkBudget: {
+          requestCount: budget.totalRequests,
+          elapsedMs: budget.elapsedMs,
+        },
+        ...result.stats,
+      });
+      const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
+      return buildContinuationResult(platformAccountId, streamState.stream, run.id, "success", nextRows);
+    }
+
+    await recordSyncStreamChunkYielded(app.db, platformAccountId, streamState.stream);
+    await telemetry.finish("partial", null, {
+      yieldReason: result.yieldReason,
+      chunkBudget: {
+        requestCount: budget.totalRequests,
+        elapsedMs: budget.elapsedMs,
+      },
+      ...result.stats,
+    });
+    const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
+    return buildContinuationResult(platformAccountId, streamState.stream, run.id, "yielded", nextRows);
+  } catch (error) {
+    const failure = normalizeSyncError(error, {
+      endpoint: streamState.stream,
+      action: `executing ${streamState.stream} sync chunk`,
+    });
+
+    await persistFailedSyncPayload(app, {
+      platformAccountId,
+      syncRunId: run.id,
+      endpoint: streamState.stream,
+      platform: pageContext.platform,
+      failure,
+    });
+
+    if (isAuthError(error)) {
+      await markSyncPageAuthFailed(app.db, {
+        platformAccountId,
+        errorCode: failure.error.code,
+        errorSummary: failure.summary,
+      });
+      await telemetry.finish("failed", failure, {
+        chunkStatus: "auth_failed",
+      });
+      return {
+        kind: "auth_failed",
+        platformAccountId,
+        stream: streamState.stream,
+        runId: run.id,
+        needsContinuation: false,
+        continuationPriority: null,
+      };
+    }
+
+    await recordSyncStreamChunkFailure(app.db, {
+      platformAccountId,
+      stream: streamState.stream,
+      errorCode: failure.error.code,
+      errorSummary: failure.summary,
+    });
+    await telemetry.finish("failed", failure, {
+      chunkStatus: "failed",
+    });
+    const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
+    return buildContinuationResult(platformAccountId, streamState.stream, run.id, "failed", nextRows);
+  }
+}
+
+export async function processSyncPageExecuteJob(
+  app: AppContext,
+  boss: Pick<PgBoss, "complete" | "send">,
+  input: {
+    job: Pick<JobWithMetadata<SyncPageExecutePayload>, "id" | "data">;
+  },
+) {
+  const result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
+  await boss.complete(SYNC_PAGE_EXECUTE_QUEUE, input.job.id);
+
+  if (result.needsContinuation && result.continuationPriority !== null) {
+    await sendSyncPageWakeup(boss as Pick<PgBoss, "send">, {
+      platformAccountId: result.platformAccountId,
+      priority: result.continuationPriority,
+    });
+  }
+
+  return result;
+}
+
+export async function startSyncPageExecutor(
+  app: AppContext,
+  boss: PageExecuteBoss,
+  input?: {
+    signal?: AbortSignal;
+  },
+) {
+  while (!input?.signal?.aborted) {
+    try {
+      const jobs = await boss.fetch<SyncPageExecutePayload>(SYNC_PAGE_EXECUTE_QUEUE, {
+        batchSize: 1,
+        includeMetadata: true,
+      });
+      const job = jobs[0];
+      if (!job) {
+        await delay(PAGE_EXECUTOR_IDLE_POLL_MS);
+        continue;
+      }
+
+      const heartbeat = setInterval(() => {
+        void boss.touch(SYNC_PAGE_EXECUTE_QUEUE, job.id).catch((error) => {
+          app.logger.warn({ err: error, jobId: job.id }, "Failed to heartbeat sync page execute job");
+        });
+      }, PAGE_EXECUTOR_HEARTBEAT_MS);
+
+      try {
+        await processSyncPageExecuteJob(app, boss, { job });
+      } catch (error) {
+        app.logger.error({ err: error, jobId: job.id }, "Sync page executor job crashed");
+        await boss.fail(SYNC_PAGE_EXECUTE_QUEUE, job.id, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        clearInterval(heartbeat);
+      }
+    } catch (error) {
+      if (input?.signal?.aborted) {
+        break;
+      }
+
+      app.logger.error({ err: error }, "Sync page executor loop failed");
+      await delay(PAGE_EXECUTOR_IDLE_POLL_MS);
+    }
+  }
+}
+
+export async function runSyncPageExecutorUntilIdle(
+  app: AppContext,
+  platformAccountId: number,
+  input?: {
+    maxChunks?: number;
+  },
+) {
+  const maxChunks = input?.maxChunks ?? MAX_LOCAL_EXECUTOR_CHUNKS;
+  for (let index = 0; index < maxChunks; index += 1) {
+    const result = await executeNextSyncPageChunk(app, platformAccountId);
+    if (result.kind === "idle") {
+      return result;
+    }
+
+    if (!result.needsContinuation) {
+      return result;
+    }
+  }
+
+  throw new Error(`Sync page executor exceeded ${maxChunks} local chunks for page ${platformAccountId}`);
+}

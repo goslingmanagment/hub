@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  computeSyncStreamSlotOffsetSeconds,
   getSyncRun,
   listRecentSyncRuns,
   listRunningSyncRuns,
   listSyncRequestAttempts,
   listSyncRunEvents,
+  reserveSyncProviderRateLimit,
+  resolveSyncRequestPriority,
 } from "../packages/db/src/repositories/sync.ts";
 
 describe("sync repository timestamp normalization", () => {
@@ -137,5 +140,55 @@ describe("sync repository timestamp normalization", () => {
 
     expect(runningRuns[0]?.startedAt).toBeInstanceOf(Date);
     expect(runningRuns[0]?.lastActivityAt).toBeInstanceOf(Date);
+  });
+
+  it("derives deterministic slot jitter and request priorities for control-plane streams", () => {
+    expect(computeSyncStreamSlotOffsetSeconds(42, "light")).toBe(
+      computeSyncStreamSlotOffsetSeconds(42, "light"),
+    );
+    expect(computeSyncStreamSlotOffsetSeconds(42, "light")).not.toBe(
+      computeSyncStreamSlotOffsetSeconds(42, "followers"),
+    );
+    expect(resolveSyncRequestPriority("followers_reconcile", "anomaly")).toBe(45);
+    expect(resolveSyncRequestPriority("light", "manual")).toBeGreaterThan(
+      resolveSyncRequestPriority("light", "scheduled"),
+    );
+  });
+
+  it("reserves shared provider rate-limit rows at the latest available slot", async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{
+          provider: "fansly",
+          scope: "global",
+          egressKey: "global",
+          minSpacingMs: 2_600,
+          nextAvailableAt: new Date("2026-03-14T12:00:01.000Z"),
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          provider: "fansly",
+          scope: "followers_page",
+          egressKey: "global",
+          minSpacingMs: 5_000,
+          nextAvailableAt: new Date("2026-03-14T12:00:03.000Z"),
+        }],
+      })
+      .mockResolvedValue({ rows: [] });
+    const db = {
+      transaction: async (run: (tx: unknown) => Promise<Date>) => run({ execute }),
+    } as never;
+
+    const reservedAt = await reserveSyncProviderRateLimit(db, {
+      scopes: [
+        { provider: "fansly", scope: "global", egressKey: "global" },
+        { provider: "fansly", scope: "followers_page", egressKey: "global" },
+      ],
+      now: new Date("2026-03-14T12:00:00.000Z"),
+    });
+
+    expect(reservedAt.toISOString()).toBe("2026-03-14T12:00:03.000Z");
+    expect(execute).toHaveBeenCalledTimes(4);
   });
 });

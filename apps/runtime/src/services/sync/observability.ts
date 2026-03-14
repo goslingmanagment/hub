@@ -22,7 +22,13 @@ import {
   type PersistedSyncError,
 } from "./errors.ts";
 
-type SyncStream = "light" | "followers" | "transactions" | "subscribers" | "cleanup";
+type SyncStream =
+  | "light"
+  | "followers"
+  | "followers_reconcile"
+  | "transactions"
+  | "subscribers"
+  | "cleanup";
 type SyncProvider = "fansly" | "onlyfans";
 
 type RequestTraceWriter = {

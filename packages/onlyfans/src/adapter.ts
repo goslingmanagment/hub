@@ -232,7 +232,7 @@ export class OnlyFansAdapter {
       pagination: options.pagination ?? null,
       requestMetadata: options.requestShape ?? {},
       retries,
-      waitForRateLimit: () => this.waitForRateLimit(options.category, minDelayMs),
+      waitForRateLimit: () => this.waitForRateLimit(context, options.category, minDelayMs),
       execute: async () => {
         const response = await fetch(url, {
           method: "GET",
@@ -391,7 +391,15 @@ export class OnlyFansAdapter {
     return buildProxyDispatcherCacheKey(proxy);
   }
 
-  private async waitForRateLimit(category: string, minDelayMs: number) {
+  private async waitForRateLimit(
+    context: OnlyFansRequestContext,
+    category: string,
+    minDelayMs: number,
+  ) {
+    await context.rateLimitWaiter?.([
+      { provider: "onlyfans", scope: "global", egressKey: "global" },
+    ]);
+
     const previous = this.rateLimitChains.get(category) ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {

@@ -146,8 +146,10 @@ export async function upsertPageFollow(
     fanId: number;
     platformFollowId: string;
     followedAt: Date;
+    lastSeenGeneration?: number | null;
   },
 ) {
+  const lastSeenAt = new Date();
   const [pageFollow] = await db
     .insert(pageFollows)
     .values({
@@ -155,12 +157,15 @@ export async function upsertPageFollow(
       fanId: input.fanId,
       platformFollowId: input.platformFollowId,
       followedAt: input.followedAt,
+      lastSeenGeneration: input.lastSeenGeneration ?? null,
+      lastSeenAt,
     })
     .onConflictDoUpdate({
       target: [pageFollows.platformAccountId, pageFollows.platformFollowId],
       set: {
-        lastSeenAt: new Date(),
+        lastSeenAt,
         isActive: true,
+        lastSeenGeneration: input.lastSeenGeneration ?? null,
       },
     })
     .returning();
@@ -290,8 +295,10 @@ export async function upsertPageSubscription(
     sourceCreatedAt?: Date | null;
     sourceUpdatedAt?: Date | null;
     endsAt?: Date | null;
+    lastSeenGeneration?: number | null;
   },
 ) {
+  const lastSeenAt = new Date();
   const patch = {
     platformAccountId: input.platformAccountId,
     fanId: input.fanId,
@@ -312,7 +319,8 @@ export async function upsertPageSubscription(
     sourceUpdatedAt: input.sourceUpdatedAt ?? null,
     endsAt: input.endsAt ?? null,
     isCurrent: true,
-    lastSeenAt: new Date(),
+    lastSeenGeneration: input.lastSeenGeneration ?? null,
+    lastSeenAt,
   };
 
   const [subscription] = await db
@@ -327,6 +335,78 @@ export async function upsertPageSubscription(
     })
     .returning();
   return subscription;
+}
+
+export async function deactivatePageFollowsByGeneration(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    generation: number;
+  },
+) {
+  await db.execute(sql`
+    update page_follows
+    set is_active = false,
+        last_seen_at = now()
+    where platform_account_id = ${input.platformAccountId}
+      and is_active = true
+      and (last_seen_generation is null or last_seen_generation < ${input.generation})
+  `);
+}
+
+export async function deactivatePageSubscriptionsByGeneration(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    generation: number;
+  },
+) {
+  await db.execute(sql`
+    update page_subscriptions
+    set is_current = false,
+        last_seen_at = now()
+    where platform_account_id = ${input.platformAccountId}
+      and is_current = true
+      and (last_seen_generation is null or last_seen_generation < ${input.generation})
+  `);
+}
+
+export async function refreshFanPageSubscriberState(db: Database, platformAccountId: number) {
+  await db.execute(sql`
+    update fan_pages fp
+    set is_subscriber = active.active_subscriber_since is not null,
+        subscriber_since = active.active_subscriber_since,
+        subscription_expires_at = active.active_subscription_expires_at,
+        auto_renew = active.active_auto_renew,
+        last_seen_at = now()
+    from (
+      select fan_id,
+             min(source_created_at) as active_subscriber_since,
+             max(ends_at) as active_subscription_expires_at,
+             bool_or(coalesce(auto_renew, false)) as active_auto_renew
+      from page_subscriptions
+      where platform_account_id = ${platformAccountId}
+        and is_current = true
+      group by fan_id
+    ) active
+    where fp.platform_account_id = ${platformAccountId}
+      and fp.fan_id = active.fan_id
+  `);
+  await db.execute(sql`
+    update fan_pages
+    set is_subscriber = false,
+        subscriber_since = null,
+        subscription_expires_at = null,
+        auto_renew = null,
+        last_seen_at = now()
+    where platform_account_id = ${platformAccountId}
+      and fan_id not in (
+        select fan_id
+        from page_subscriptions
+        where platform_account_id = ${platformAccountId}
+          and is_current = true
+      )
+  `);
 }
 
 export async function recalculateFanPageSpend(db: Database, platformAccountId: number) {

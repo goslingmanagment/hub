@@ -1,40 +1,84 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const syncMocks = vi.hoisted(() => ({
-  runLightSync: vi.fn(),
-  runFollowerSync: vi.fn(),
-  runAllSync: vi.fn(),
+const dbMocks = vi.hoisted(() => ({
+  ensureSyncStreamStateRows: vi.fn(),
+  promoteDueSyncStreamStateRows: vi.fn(),
+  listRunnableSyncPages: vi.fn(),
+  markSyncPageWakeupEnqueued: vi.fn(),
 }));
 
-vi.mock("../apps/runtime/src/services/sync.ts", () => ({
-  runLightSync: syncMocks.runLightSync,
-  runFollowerSync: syncMocks.runFollowerSync,
-  runAllSync: syncMocks.runAllSync,
+const queueMocks = vi.hoisted(() => ({
+  sendSyncPageWakeup: vi.fn(),
 }));
 
-import { processSyncTriggerBatch } from "../apps/runtime/src/worker-sync-trigger.ts";
+vi.mock("@agency_hub_core/db", () => dbMocks);
+vi.mock("../apps/runtime/src/services/sync-queue.ts", async () => {
+  const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync-queue.ts")>(
+    "../apps/runtime/src/services/sync-queue.ts",
+  );
 
-describe("worker sync trigger batching", () => {
+  return {
+    ...actual,
+    sendSyncPageWakeup: queueMocks.sendSyncPageWakeup,
+  };
+});
+
+import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.ts";
+
+describe("sync planner", () => {
   beforeEach(() => {
-    syncMocks.runLightSync.mockReset();
-    syncMocks.runFollowerSync.mockReset();
-    syncMocks.runAllSync.mockReset();
+    dbMocks.ensureSyncStreamStateRows.mockReset();
+    dbMocks.promoteDueSyncStreamStateRows.mockReset();
+    dbMocks.listRunnableSyncPages.mockReset();
+    dbMocks.markSyncPageWakeupEnqueued.mockReset();
+    queueMocks.sendSyncPageWakeup.mockReset();
   });
 
-  it("processes every job in the batch sequentially", async () => {
-    const app = {} as never;
-
-    await processSyncTriggerBatch(app, [
-      { data: { pageLabel: "alpha", scope: "light" } },
-      { data: { pageLabel: "beta", scope: "followers" } },
-      { data: { pageLabel: "gamma", scope: "all" } },
+  it("promotes due rows and emits one wakeup per runnable page", async () => {
+    const boss = {
+      send: vi.fn(),
+    } as never;
+    const now = new Date("2026-03-14T12:00:00.000Z");
+    dbMocks.listRunnableSyncPages.mockResolvedValue([
+      { platformAccountId: 11, priority: 60, desiredAt: now },
+      { platformAccountId: 22, priority: 45, desiredAt: now },
     ]);
+    queueMocks.sendSyncPageWakeup
+      .mockResolvedValueOnce("job-11")
+      .mockResolvedValueOnce("job-22");
 
-    expect(syncMocks.runLightSync).toHaveBeenCalledTimes(1);
-    expect(syncMocks.runLightSync).toHaveBeenCalledWith(app, "alpha", { trigger: "api" });
-    expect(syncMocks.runFollowerSync).toHaveBeenCalledTimes(1);
-    expect(syncMocks.runFollowerSync).toHaveBeenCalledWith(app, "beta", "api");
-    expect(syncMocks.runAllSync).toHaveBeenCalledTimes(1);
-    expect(syncMocks.runAllSync).toHaveBeenCalledWith(app, "gamma", { trigger: "api" });
+    const pages = await runSyncPlannerCycle({ db: {} } as never, boss, now);
+
+    expect(dbMocks.ensureSyncStreamStateRows).toHaveBeenCalledWith({}, { now });
+    expect(dbMocks.promoteDueSyncStreamStateRows).toHaveBeenCalledWith({}, now);
+    expect(queueMocks.sendSyncPageWakeup).toHaveBeenNthCalledWith(1, boss, {
+      platformAccountId: 11,
+      priority: 60,
+    });
+    expect(queueMocks.sendSyncPageWakeup).toHaveBeenNthCalledWith(2, boss, {
+      platformAccountId: 22,
+      priority: 45,
+    });
+    expect(dbMocks.markSyncPageWakeupEnqueued).toHaveBeenCalledTimes(2);
+    expect(pages).toHaveLength(2);
+  });
+
+  it("does not stamp enqueue metadata when pg-boss deduplicates a wakeup", async () => {
+    const boss = {
+      send: vi.fn(),
+    } as never;
+    const now = new Date("2026-03-14T12:01:00.000Z");
+    dbMocks.listRunnableSyncPages.mockResolvedValue([
+      { platformAccountId: 33, priority: 60, desiredAt: now },
+    ]);
+    queueMocks.sendSyncPageWakeup.mockResolvedValue(null);
+
+    await runSyncPlannerCycle({ db: {} } as never, boss, now);
+
+    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(boss, {
+      platformAccountId: 33,
+      priority: 60,
+    });
+    expect(dbMocks.markSyncPageWakeupEnqueued).not.toHaveBeenCalled();
   });
 });

@@ -32,6 +32,7 @@ import {
 } from "./services/auth.ts";
 import { getModelRevenueReport, getPageRevenueReport } from "./services/reporting.ts";
 import { loadFanslySessionBundleFromFile, loadOnlyMonsterTokenBundleFromFile } from "./services/page-context.ts";
+import { requestPageSync, waitForRequestedSyncRevisions } from "./services/sync-control.ts";
 import { refreshPageMetadata } from "./services/sync/shared.ts";
 import {
   fanSpendForPage,
@@ -43,12 +44,9 @@ import {
   listPages,
   listStatus,
   listSubscribers,
-  runAllSync,
-  runFollowerSync,
-  runLightSync,
 } from "./services/sync.ts";
 import { resolvePageContext } from "./services/page-context.ts";
-import { enqueueInitialFullSync } from "./services/sync-queue.ts";
+import { ensureSyncQueues } from "./services/sync-queue.ts";
 import {
   buildStatusRows,
   listStalledRuns,
@@ -216,13 +214,19 @@ function describeError(error: unknown) {
 
 async function queueInitialFullSyncAfterPageCreate(
   databaseUrl: string,
+  app: Awaited<ReturnType<typeof createAppContext>>,
   pageLabel: string,
 ) {
   const boss = new PgBoss({ connectionString: databaseUrl });
 
   try {
     await boss.start();
-    await enqueueInitialFullSync(boss, pageLabel);
+    await ensureSyncQueues(boss);
+    await requestPageSync(app, boss, {
+      pageLabel,
+      scope: "all",
+      reason: "onboarding",
+    });
   } catch (error) {
     throw new Error(
       `Page "${pageLabel}" was created, but the automatic sync could not be queued: ${describeError(error)}`,
@@ -369,7 +373,7 @@ export function buildProgram() {
           session,
           proxy,
         });
-        await queueInitialFullSyncAfterPageCreate(app.config.databaseUrl, created.label);
+        await queueInitialFullSyncAfterPageCreate(app.config.databaseUrl, app, created.label);
 
         console.log(`Created Fansly page ${created.label} (${created.id})`);
         console.log(`Queued initial full sync for ${created.label}`);
@@ -400,7 +404,7 @@ export function buildProgram() {
           username: options.username,
           proxy,
         });
-        await queueInitialFullSyncAfterPageCreate(app.config.databaseUrl, created.label);
+        await queueInitialFullSyncAfterPageCreate(app.config.databaseUrl, app, created.label);
 
         console.log(`Created OnlyFans page ${created.label} (${created.id})`);
         console.log(`Queued initial full sync for ${created.label}`);
@@ -506,6 +510,7 @@ export function buildProgram() {
     .requiredOption("--page <label>")
     .option("--scope <scope>", "light|followers|all", "all")
     .option("--transactions-start <iso>", "OnlyFans-only manual rescan start", parseDateOption)
+    .option("--no-wait", "queue the sync and return without waiting")
     .action(async (options) => {
       const app = await createAppContext();
       try {
@@ -513,75 +518,31 @@ export function buildProgram() {
           throw new Error("--transactions-start is only supported with light or all sync scopes");
         }
 
-        if (options.scope === "light") {
-          const result = await runLightSync(app, options.page, {
-            onlyFansTransactionStart: options.transactionsStart ?? null,
+        const boss = new PgBoss({ connectionString: app.config.databaseUrl });
+        try {
+          await boss.start();
+          await ensureSyncQueues(boss);
+          const noWait = options.wait === false || options.noWait === true;
+          const request = await requestPageSync(app, boss, {
+            pageLabel: options.page,
+            scope: options.scope,
+            reason: "manual",
+            onlyFansTransactionsStart: options.transactionsStart ?? null,
           });
-          if (result.status === "skipped") {
-            console.log("Skipped sync because the page lock is already held");
+
+          if (noWait) {
+            console.log(`Queued ${options.scope} sync for ${options.page}`);
             return;
           }
-          const txStats = result.stats.transactions as
-            | {
-              processed?: number;
-              processedTransactions?: number;
-              processedChargebacks?: number;
-            }
-            | undefined;
-          if (txStats?.processedTransactions !== undefined) {
-            console.log(`Synced ${txStats.processedTransactions} transactions`);
-            console.log(`Synced ${txStats.processedChargebacks ?? 0} chargebacks`);
-          } else {
-            console.log(`Synced ${txStats?.processed ?? 0} transactions`);
-            console.log(
-              `Synced ${(result.stats.subscribers as { processed?: number } | undefined)?.processed ?? 0} subscribers`,
-            );
-          }
-          return;
-        }
 
-        if (options.scope === "followers") {
-          const result = await runFollowerSync(app, options.page);
-          if (result.status === "skipped") {
-            console.log("Skipped follower sync because the page lock is already held");
-            return;
-          }
-          console.log(`Synced ${result.processed} followers (delta: +${result.delta})`);
-          return;
+          await waitForRequestedSyncRevisions(app, {
+            platformAccountId: request.page.id,
+            revisions: request.revisions,
+          });
+          console.log(`Completed ${options.scope} sync for ${options.page}`);
+        } finally {
+          await boss.stop().catch(() => undefined);
         }
-
-        const result = await runAllSync(app, options.page, {
-          onlyFansTransactionStart: options.transactionsStart ?? null,
-        });
-        if (result.light.status === "skipped") {
-          console.log("Skipped sync because the page lock is already held");
-          return;
-        }
-        const txStats = result.light.stats.transactions as
-          | {
-            processed?: number;
-            processedTransactions?: number;
-            processedChargebacks?: number;
-          }
-          | undefined;
-        if (txStats?.processedTransactions !== undefined) {
-          console.log(`✓ Synced ${txStats.processedTransactions} transactions`);
-          console.log(`✓ Synced ${txStats.processedChargebacks ?? 0} chargebacks`);
-        } else {
-          console.log(`✓ Synced ${txStats?.processed ?? 0} transactions`);
-        }
-        if (result.followers) {
-          if (result.followers.status === "skipped") {
-            console.log("✓ Skipped follower sync because the page lock is already held");
-          } else {
-            console.log(
-              `✓ Synced ${result.followers.processed} followers (delta: +${result.followers.delta})`,
-            );
-          }
-        } else {
-          console.log("✓ Skipped follower sync (unsupported for OnlyFans pages)");
-        }
-        console.log("✓ Built daily rollups");
       } finally {
         await app.close();
       }

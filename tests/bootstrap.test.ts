@@ -37,6 +37,7 @@ const bootstrapMocks = vi.hoisted(() => {
       followerPageDelayMs: 0,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
+      syncSharedRateLimitEnabled: false,
       syncObservabilityRetentionDays: 30,
     })),
     onlyFansAdapter,

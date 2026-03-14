@@ -11,6 +11,7 @@ import {
 } from "@agency_hub_core/shared";
 import {
   deleteProxyConfig,
+  findPageById,
   findPageByLabel,
   storePlatformCredentials,
   storeProxyConfig,
@@ -159,7 +160,19 @@ function resolveStoredProxy(
 
 export async function resolvePageContext(app: AppContext, label: string) {
   const stored = await findPageByLabel(app.db, label);
+  return resolveStoredPageContext(app, stored, label);
+}
 
+export async function resolvePageContextById(app: AppContext, platformAccountId: number) {
+  const stored = await findPageById(app.db, platformAccountId);
+  return resolveStoredPageContext(app, stored, String(platformAccountId));
+}
+
+function resolveStoredPageContext(
+  app: AppContext,
+  stored: Awaited<ReturnType<typeof findPageByLabel>> | Awaited<ReturnType<typeof findPageById>>,
+  label: string,
+) {
   if (!stored) {
     throw new Error(`Page not found for label "${label}"`);
   }

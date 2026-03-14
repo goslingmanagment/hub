@@ -209,6 +209,25 @@ export async function findPageByLabel(db: Database, label: string) {
   return { page, credentials, proxy };
 }
 
+export async function findPageById(db: Database, platformAccountId: number) {
+  const page = await db.query.platformAccounts.findFirst({
+    where: eq(platformAccounts.id, platformAccountId),
+  });
+
+  if (!page) {
+    return null;
+  }
+
+  const credentials = await db.query.platformAccountCredentials.findFirst({
+    where: eq(platformAccountCredentials.platformAccountId, page.id),
+  });
+  const proxy = await db.query.platformAccountProxies.findFirst({
+    where: eq(platformAccountProxies.platformAccountId, page.id),
+  });
+
+  return { page, credentials, proxy };
+}
+
 export async function listFanslyPages(db: Database) {
   return listPagesByPlatform(db, "fansly");
 }
@@ -265,7 +284,7 @@ export async function updatePageMetadata(
     subscriberCount: number;
     earningsBalanceMills: bigint;
     metadata: Record<string, unknown>;
-    syncType: "light" | "followers";
+    syncType?: "light" | "followers";
   },
 ) {
   const now = new Date();
@@ -295,7 +314,7 @@ export async function updatePageMetadata(
 
   if (input.syncType === "light") {
     patch.lastLightSyncAt = now;
-  } else {
+  } else if (input.syncType === "followers") {
     patch.lastFollowerSyncAt = now;
   }
 

@@ -1,55 +1,102 @@
-export const SYNC_TRIGGER_QUEUE = "sync.trigger";
+import type { PgBoss, Queue } from "pg-boss";
+
+export const SYNC_PLANNER_QUEUE = "sync.planner";
+export const SYNC_PLANNER_DLQ_QUEUE = "sync.planner.dlq";
+export const SYNC_PAGE_EXECUTE_QUEUE = "sync.page.execute";
+export const SYNC_PAGE_EXECUTE_DLQ_QUEUE = "sync.page.execute.dlq";
 export const RAW_PAYLOAD_CLEANUP_QUEUE = "fansly.raw-payload-cleanup";
 
 export type SyncTriggerScope = "light" | "followers" | "all";
 
-export interface SyncTriggerPayload {
-  pageLabel: string;
-  scope: SyncTriggerScope;
+export interface SyncPageExecutePayload {
+  platformAccountId: number;
 }
 
 export interface QueueCreationClient {
-  createQueue(name: string): Promise<unknown>;
-}
-
-export interface SyncTriggerQueueClient extends QueueCreationClient {
-  send(name: string, data: SyncTriggerPayload): Promise<unknown>;
-}
-
-export function lightQueueName(page: { label: string; platform: "fansly" | "onlyfans" }) {
-  return `${page.platform}.sync.light.${page.label}`;
-}
-
-export function followerQueueName(page: { label: string }) {
-  return `fansly.sync.followers.${page.label}`;
+  createQueue(name: string, options?: Omit<Queue, "name">): Promise<unknown>;
+  schedule?(name: string, cron: string, data?: object | null): Promise<unknown>;
+  send?(
+    name: string,
+    data?: object | null,
+    options?: {
+      singletonKey?: string;
+      priority?: number;
+    },
+  ): Promise<string | null | unknown>;
 }
 
 export async function ensureQueueCreated(
   boss: QueueCreationClient,
   queueName: string,
+  options?: Omit<Queue, "name">,
   createdQueues?: Set<string>,
 ) {
   if (createdQueues?.has(queueName)) {
     return;
   }
 
-  await boss.createQueue(queueName);
+  await boss.createQueue(queueName, options);
   createdQueues?.add(queueName);
 }
 
-export async function enqueueSyncTriggerJob(
-  boss: SyncTriggerQueueClient,
-  payload: SyncTriggerPayload,
+export async function ensureSyncQueues(
+  boss: QueueCreationClient,
   createdQueues?: Set<string>,
 ) {
-  await ensureQueueCreated(boss, SYNC_TRIGGER_QUEUE, createdQueues);
-  await boss.send(SYNC_TRIGGER_QUEUE, payload);
+  await ensureQueueCreated(boss, SYNC_PLANNER_DLQ_QUEUE, {
+    policy: "standard",
+    retentionSeconds: 1_209_600,
+  }, createdQueues);
+  await ensureQueueCreated(boss, SYNC_PAGE_EXECUTE_DLQ_QUEUE, {
+    policy: "standard",
+    retentionSeconds: 1_209_600,
+  }, createdQueues);
+  await ensureQueueCreated(boss, SYNC_PLANNER_QUEUE, {
+    policy: "exclusive",
+    expireInSeconds: 120,
+    heartbeatSeconds: 30,
+    retryLimit: 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    deadLetter: SYNC_PLANNER_DLQ_QUEUE,
+  }, createdQueues);
+  await ensureQueueCreated(boss, SYNC_PAGE_EXECUTE_QUEUE, {
+    policy: "exclusive",
+    expireInSeconds: 180,
+    heartbeatSeconds: 30,
+    retryLimit: 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    deadLetter: SYNC_PAGE_EXECUTE_DLQ_QUEUE,
+  }, createdQueues);
+  await ensureQueueCreated(boss, RAW_PAYLOAD_CLEANUP_QUEUE, {
+    policy: "standard",
+  }, createdQueues);
 }
 
-export async function enqueueInitialFullSync(
-  boss: SyncTriggerQueueClient,
-  pageLabel: string,
-  createdQueues?: Set<string>,
+export async function ensurePlannerSchedule(
+  boss: QueueCreationClient,
 ) {
-  await enqueueSyncTriggerJob(boss, { pageLabel, scope: "all" }, createdQueues);
+  if (!boss.schedule) {
+    return;
+  }
+
+  await boss.schedule(SYNC_PLANNER_QUEUE, "* * * * *");
+}
+
+export async function sendSyncPageWakeup(
+  boss: Pick<PgBoss, "send">,
+  input: {
+    platformAccountId: number;
+    priority: number;
+  },
+) {
+  return boss.send(
+    SYNC_PAGE_EXECUTE_QUEUE,
+    { platformAccountId: input.platformAccountId } satisfies SyncPageExecutePayload,
+    {
+      singletonKey: String(input.platformAccountId),
+      priority: input.priority,
+    },
+  );
 }

@@ -103,13 +103,11 @@ import {
   searchVisibleFans,
 } from "../services/spenders.ts";
 import {
-  enqueueInitialFullSync,
-  enqueueSyncTriggerJob,
-  ensureQueueCreated,
-  SYNC_TRIGGER_QUEUE,
+  ensureSyncQueues,
 } from "../services/sync-queue.ts";
 import { sql } from "drizzle-orm";
 import { listStatus, getStatusDetail } from "../services/sync.ts";
+import { requestAllPagesSync, requestPageSync } from "../services/sync-control.ts";
 import { refreshPageMetadata } from "../services/sync/shared.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "../services/page-onboarding.ts";
 
@@ -542,7 +540,7 @@ export async function buildApiServer(appContext: AppContext) {
   if (appContext.config.databaseUrl) {
     boss = new PgBoss({ connectionString: appContext.config.databaseUrl });
     await boss.start();
-    await ensureQueueCreated(boss, SYNC_TRIGGER_QUEUE, createdQueues);
+    await ensureSyncQueues(boss, createdQueues);
     server.addHook("onClose", async () => {
       await boss!.stop();
     });
@@ -1213,7 +1211,11 @@ export async function buildApiServer(appContext: AppContext) {
     const { pageLabel, scope } = request.body;
     await getPageSummary(appContext, pageLabel);
     if (!boss) throw new Error("Job queue not available");
-    await enqueueSyncTriggerJob(boss, { pageLabel, scope }, createdQueues);
+    await requestPageSync(appContext, boss, {
+      pageLabel,
+      scope,
+      reason: "manual",
+    });
     reply.code(202);
     return { accepted: true as const, pageLabel, scope };
   });
@@ -1224,12 +1226,12 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     if (!boss) throw new Error("Job queue not available");
-    const pages = await listVisiblePages(appContext.db);
-    for (const page of pages) {
-      await enqueueSyncTriggerJob(boss, { pageLabel: page.label, scope: "all" }, createdQueues);
-    }
+    const results = await requestAllPagesSync(appContext, boss, {
+      scope: "all",
+      reason: "manual",
+    });
     reply.code(202);
-    return { accepted: true as const, pagesQueued: pages.length };
+    return { accepted: true as const, pagesQueued: results.length };
   });
 
   // Connection management
@@ -1265,7 +1267,11 @@ export async function buildApiServer(appContext: AppContext) {
       });
       if (!boss) throw new Error("Job queue not available");
       try {
-        await enqueueInitialFullSync(boss, body.label, createdQueues);
+        await requestPageSync(appContext, boss, {
+          pageLabel: body.label,
+          scope: "all",
+          reason: "onboarding",
+        });
       } catch (error) {
         request.log.error({ err: error, pageLabel: body.label }, "Failed to queue initial sync for created page");
         throw new ServiceUnavailableError(
@@ -1299,7 +1305,11 @@ export async function buildApiServer(appContext: AppContext) {
       });
       if (!boss) throw new Error("Job queue not available");
       try {
-        await enqueueInitialFullSync(boss, body.label, createdQueues);
+        await requestPageSync(appContext, boss, {
+          pageLabel: body.label,
+          scope: "all",
+          reason: "onboarding",
+        });
       } catch (error) {
         request.log.error({ err: error, pageLabel: body.label }, "Failed to queue initial sync for created page");
         throw new ServiceUnavailableError(
