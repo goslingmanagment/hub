@@ -19,7 +19,7 @@ import {
   upsertPageSubscription,
   upsertTransaction,
 } from "@agency_hub_core/db";
-import PgBoss from "pg-boss";
+import { PgBoss } from "pg-boss";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";

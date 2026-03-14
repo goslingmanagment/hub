@@ -1,4 +1,4 @@
-import PgBoss from "pg-boss";
+import { PgBoss } from "pg-boss";
 
 import { createAppContext } from "./bootstrap.ts";
 import { ensureQueueCreated, SYNC_TRIGGER_QUEUE } from "./services/sync-queue.ts";

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConstructorOptions, Queue, SendOptions, StopOptions } from "pg-boss";
 
 const cliMocks = vi.hoisted(() => {
   const bossBehavior = {
@@ -16,16 +17,16 @@ const cliMocks = vi.hoisted(() => {
   }> = [];
 
   class PgBossMock {
-    start = vi.fn(async () => {});
-    createQueue = vi.fn(async () => {});
-    send = vi.fn(async () => {
+    start = vi.fn(async (): Promise<this> => this);
+    createQueue = vi.fn(async (_name: string, _options?: Omit<Queue, "name">) => {});
+    send = vi.fn(async (_name: string, _data?: object | null, _options?: SendOptions) => {
       if (bossBehavior.sendError) {
         throw bossBehavior.sendError;
       }
     });
-    stop = vi.fn(async () => {});
+    stop = vi.fn(async (_options?: StopOptions) => {});
 
-    constructor() {
+    constructor(_options?: string | ConstructorOptions) {
       bossInstances.push(this);
     }
   }
@@ -44,7 +45,7 @@ const cliMocks = vi.hoisted(() => {
 });
 
 vi.mock("pg-boss", () => ({
-  default: cliMocks.PgBossMock,
+  PgBoss: cliMocks.PgBossMock,
 }));
 
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({

@@ -154,6 +154,7 @@ export async function seedFanslyPage(
   db: ReturnType<typeof createDb>,
   encryptionKey: Buffer,
   encryptionKeyVersion = 1,
+  pageLabel = "lora-main",
 ) {
   const model = await createModel(db, {
     slug: "lora",
@@ -161,7 +162,7 @@ export async function seedFanslyPage(
   });
   const page = await createFanslyPage(db, {
     modelId: model.id,
-    label: "lora-main",
+    label: pageLabel,
   });
   const session: FanslySessionBundle = {
     authorization: "token",

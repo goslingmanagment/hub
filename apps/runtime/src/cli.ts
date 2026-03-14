@@ -2,7 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 import { Command } from "commander";
-import PgBoss from "pg-boss";
+import { PgBoss } from "pg-boss";
 
 import {
   createModel,

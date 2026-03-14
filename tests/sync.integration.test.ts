@@ -37,7 +37,7 @@ import type {
   OnlyMonsterTransaction,
 } from "@agency_hub_core/onlyfans";
 import { encryptJson } from "@agency_hub_core/shared";
-import PgBoss from "pg-boss";
+import { PgBoss } from "pg-boss";
 
 import {
   listFans,
@@ -2939,7 +2939,7 @@ describe("sync integration", () => {
       return;
     }
 
-    const { page: fanslyPage } = await seedFanslyPage(testDb.db, testEncryptionKey);
+    const { page: fanslyPage } = await seedFanslyPage(testDb.db, testEncryptionKey, 1, "lily-1");
     await seedOnlyFansPage(testDb, "worker-existing-of");
 
     const createdQueues: string[] = [];
@@ -2963,23 +2963,27 @@ describe("sync integration", () => {
 
     const scheduler = await scheduleExistingPages(app, boss);
 
-    expect(createdQueues).toContain(lightQueueName(fanslyPage));
-    expect(createdQueues).toContain(followerQueueName(fanslyPage));
+    expect(createdQueues).toContain("fansly.sync.light.lily-1");
+    expect(createdQueues).toContain("fansly.sync.followers.lily-1");
     expect(createdQueues).toContain("onlyfans.sync.light.worker-existing-of");
     expect(createdQueues).toContain(RAW_PAYLOAD_CLEANUP_QUEUE);
-    expect(schedules).toContain(`fansly.sync.light.${fanslyPage.label}`);
-    expect(schedules).toContain(`fansly.sync.followers.${fanslyPage.label}`);
+    expect(schedules).toContain("fansly.sync.light.lily-1");
+    expect(schedules).toContain("fansly.sync.followers.lily-1");
     expect(schedules).toContain("onlyfans.sync.light.worker-existing-of");
     expect(schedules).not.toContain("onlyfans.sync.followers.worker-existing-of");
-    expect(workers).toContain(`fansly.sync.light.${fanslyPage.label}`);
-    expect(workers).toContain(`fansly.sync.followers.${fanslyPage.label}`);
+    expect(workers).toContain("fansly.sync.light.lily-1");
+    expect(workers).toContain("fansly.sync.followers.lily-1");
     expect(workers).toContain("onlyfans.sync.light.worker-existing-of");
 
     await seedOnlyFansPage(testDb, "worker-new-of");
     await scheduler.discoverPages();
 
-    expect(createdQueues.filter((name) => name === lightQueueName(fanslyPage))).toHaveLength(1);
-    expect(schedules.filter((name) => name === `fansly.sync.light.${fanslyPage.label}`)).toHaveLength(1);
+    expect(createdQueues.filter((name) => name === "fansly.sync.light.lily-1")).toHaveLength(1);
+    expect(createdQueues.filter((name) => name === "fansly.sync.followers.lily-1")).toHaveLength(1);
+    expect(schedules.filter((name) => name === "fansly.sync.light.lily-1")).toHaveLength(1);
+    expect(schedules.filter((name) => name === "fansly.sync.followers.lily-1")).toHaveLength(1);
+    expect(workers.filter((name) => name === "fansly.sync.light.lily-1")).toHaveLength(1);
+    expect(workers.filter((name) => name === "fansly.sync.followers.lily-1")).toHaveLength(1);
     expect(createdQueues.filter((name) => name === "onlyfans.sync.light.worker-new-of")).toHaveLength(1);
     expect(schedules.filter((name) => name === "onlyfans.sync.light.worker-new-of")).toHaveLength(1);
     expect(workers.filter((name) => name === "onlyfans.sync.light.worker-new-of")).toHaveLength(1);

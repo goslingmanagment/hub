@@ -37,7 +37,7 @@ import {
 } from "@agency_hub_core/shared";
 import type { FastifyReply } from "fastify";
 import Fastify from "fastify";
-import PgBoss from "pg-boss";
+import { PgBoss } from "pg-boss";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import {
   createJsonSchemaTransform,

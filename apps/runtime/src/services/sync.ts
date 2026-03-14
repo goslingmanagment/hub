@@ -20,7 +20,7 @@ import {
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
 import { ONLYMONSTER_MAPPER_VERSION } from "@agency_hub_core/onlyfans";
 import { resolveRevenuePeriodBoundsForPlatform } from "@agency_hub_core/shared";
-import type PgBoss from "pg-boss";
+import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext, type ResolvedPageContext } from "./page-context.ts";
