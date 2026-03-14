@@ -319,12 +319,13 @@ export async function executeTransactionsChunk(
     requestContext: buildOnlyFansRequestContext(app, input),
     syncRunId: input.syncRunId,
     telemetry: input.telemetry,
+    budget: input.budget,
   });
 
   return {
-    satisfied: true,
-    yieldReason: null,
-    clearRequestPayload: Boolean(transactionsStart),
+    satisfied: result.satisfied,
+    yieldReason: result.yieldReason,
+    clearRequestPayload: result.satisfied && Boolean(transactionsStart),
     stats: result as Record<string, unknown>,
   } satisfies StreamChunkResult;
 }

@@ -1,0 +1,439 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const dbMocks = vi.hoisted(() => ({
+  deleteTransactionsMissingFromWindow: vi.fn(),
+  getCheckpoint: vi.fn(),
+  getOldestPendingTransactionAt: vi.fn(),
+  rebuildSpenderProjections: vi.fn(),
+  rebuildRevenueRollups: vi.fn(),
+  upsertCheckpoint: vi.fn(),
+  upsertCheckpointProgress: vi.fn(),
+  upsertFanPage: vi.fn(),
+  upsertFans: vi.fn(),
+  upsertTransaction: vi.fn(),
+}));
+
+const sharedMocks = vi.hoisted(() => ({
+  DAY_MS: 24 * 60 * 60 * 1000,
+  persistRawPayload: vi.fn(),
+  retentionDate: vi.fn(() => new Date("2026-09-10T00:00:00.000Z")),
+}));
+
+vi.mock("@agency_hub_core/db", () => dbMocks);
+vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
+
+import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
+import { syncOnlyFansTransactions } from "../apps/runtime/src/services/sync/onlyfans-transactions.ts";
+
+function createTelemetry() {
+  return {
+    recordCheckpointLoaded: vi.fn(async () => {}),
+    recordCheckpointAdvanced: vi.fn(async () => {}),
+    addNote: vi.fn(async () => {}),
+    addAnomaly: vi.fn(async () => {}),
+    setBoundarySummary: vi.fn(),
+    setScanSummary: vi.fn(),
+  };
+}
+
+async function observeRequest(
+  context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+  operation: string,
+  pageIndex: number,
+) {
+  await context.requestObserver?.onRequestEvent({
+    requestId: `${operation}:${pageIndex}`,
+    operation,
+    endpointTemplate: operation,
+    method: "GET",
+    attemptNumber: 1,
+    timestamp: new Date("2026-03-15T00:00:00.000Z"),
+    pagination: {
+      pageIndex,
+      cursorPresent: false,
+    },
+    requestMetadata: {},
+    state: "started",
+  });
+}
+
+function makeTransaction(id: string, timestamp: string, fanId = "fan-1") {
+  return {
+    id,
+    amount: 10,
+    fan: { id: fanId },
+    type: "Tip from",
+    status: "done",
+    timestamp,
+  };
+}
+
+function makeChargeback(id: string, chargebackTimestamp: string, fanId = "fan-1") {
+  return {
+    id,
+    amount: 10,
+    fan: { id: fanId },
+    type: "Tip from",
+    status: "done",
+    chargeback_timestamp: chargebackTimestamp,
+    transaction_timestamp: chargebackTimestamp,
+  };
+}
+
+function makeCursorPage<TItem>(items: TItem[], cursor?: string) {
+  return {
+    parsed: cursor ? { items, cursor } : { items },
+    raw: {
+      items,
+      cursor,
+    },
+  };
+}
+
+function createAdapter(input: {
+  transactionPages: Array<ReturnType<typeof makeCursorPage>>;
+  chargebackPages: Array<ReturnType<typeof makeCursorPage>>;
+}) {
+  const transactionPages = [...input.transactionPages];
+  const chargebackPages = [...input.chargebackPages];
+
+  return {
+    getTransactionsPage: vi.fn(async (
+      context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+      _platformAccountIdValue: string,
+      params: {
+        start?: Date;
+        end?: Date;
+        cursor?: string | null;
+        limit?: number;
+        pageIndex?: number | null;
+      },
+    ) => {
+      await observeRequest(context, "onlymonster_transactions", params.pageIndex ?? 0);
+      const page = transactionPages.shift();
+      if (!page) {
+        throw new Error("Unexpected OnlyFans transactions page request");
+      }
+      return page;
+    }),
+    getChargebacksPage: vi.fn(async (
+      context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+      _platformAccountIdValue: string,
+      params: {
+        start?: Date;
+        end?: Date;
+        cursor?: string | null;
+        limit?: number;
+        pageIndex?: number | null;
+      },
+    ) => {
+      await observeRequest(context, "onlymonster_chargebacks", params.pageIndex ?? 0);
+      const page = chargebackPages.shift();
+      if (!page) {
+        throw new Error("Unexpected OnlyFans chargebacks page request");
+      }
+      return page;
+    }),
+  };
+}
+
+function createApp(adapter: ReturnType<typeof createAdapter>) {
+  return {
+    db: {
+      transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+    },
+    config: {
+      transactionLookbackDays: 7,
+      transactionRescanCapDays: 30,
+    },
+    onlyFansAdapter: adapter,
+    logger: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+  } as never;
+}
+
+async function runOnlyFansTransactionsSync(input?: {
+  adapter?: ReturnType<typeof createAdapter>;
+  budget?: SyncChunkBudget;
+  telemetry?: ReturnType<typeof createTelemetry>;
+  checkpoint?: {
+    cursorTimestamp?: Date | null;
+    state?: Record<string, unknown>;
+  } | null;
+  rescanStart?: Date | null;
+}) {
+  const adapter = input?.adapter ?? createAdapter({
+    transactionPages: [makeCursorPage([])],
+    chargebackPages: [makeCursorPage([])],
+  });
+  const telemetry = input?.telemetry ?? createTelemetry();
+  const budget = input?.budget ?? new SyncChunkBudget(10, 60_000);
+
+  dbMocks.getCheckpoint.mockResolvedValueOnce(input?.checkpoint ?? null);
+
+  return syncOnlyFansTransactions(createApp(adapter), {
+    pageLabel: "onlyfans-page",
+    platformAccountId: 1,
+    platformAccountIdValue: "of-1",
+    pageMetadata: {},
+    commissionRate: 0.2,
+    rescanStart: input?.rescanStart ?? null,
+    requestContext: {
+      auth: { token: "secret" },
+      proxy: null,
+      requestObserver: budget,
+    } as never,
+    syncRunId: 123,
+    telemetry: telemetry as never,
+    budget,
+  });
+}
+
+describe("syncOnlyFansTransactions", () => {
+  beforeEach(() => {
+    for (const mock of Object.values(dbMocks)) {
+      mock.mockReset();
+    }
+    sharedMocks.persistRawPayload.mockReset();
+    sharedMocks.retentionDate.mockReset();
+
+    sharedMocks.persistRawPayload.mockResolvedValue(undefined);
+    sharedMocks.retentionDate.mockReturnValue(new Date("2026-09-10T00:00:00.000Z"));
+
+    dbMocks.deleteTransactionsMissingFromWindow.mockResolvedValue(undefined);
+    dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
+    dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);
+    dbMocks.rebuildRevenueRollups.mockResolvedValue(undefined);
+    dbMocks.upsertFanPage.mockResolvedValue(undefined);
+    dbMocks.upsertTransaction.mockResolvedValue(undefined);
+    dbMocks.upsertFans.mockImplementation(async (_db: unknown, inputs: Array<{ platformUserId: string }>) =>
+      inputs.map((input: { platformUserId: string }, index: number) => ({
+        id: index + 1,
+        platformUserId: input.platformUserId,
+      })));
+    dbMocks.upsertCheckpointProgress.mockImplementation(async (
+      _db: unknown,
+      input: {
+        cursorText?: string | null;
+        cursorTimestamp?: Date | null;
+        state?: Record<string, unknown>;
+      },
+    ) => ({
+      cursorText: input.cursorText ?? null,
+      cursorTimestamp: input.cursorTimestamp ?? null,
+      state: input.state ?? {},
+    }));
+    dbMocks.upsertCheckpoint.mockImplementation(async (
+      _db: unknown,
+      input: {
+        cursorText?: string | null;
+        cursorTimestamp?: Date | null;
+        lastSuccessfulRunId?: number | null;
+        state?: Record<string, unknown>;
+      },
+    ) => ({
+      cursorText: input.cursorText ?? null,
+      cursorTimestamp: input.cursorTimestamp ?? null,
+      lastSuccessfulRunId: input.lastSuccessfulRunId ?? null,
+      state: input.state ?? {},
+    }));
+  });
+
+  it("rolls the transaction window after the safe cursor page limit", async () => {
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")], "cursor-1"),
+        makeCursorPage([makeTransaction("tx-2", "2026-03-09T00:00:00.000Z")], "cursor-2"),
+        makeCursorPage([makeTransaction("tx-3", "2026-03-08T00:00:00.000Z")], "cursor-3"),
+        makeCursorPage([makeTransaction("tx-4", "2026-03-07T00:00:00.000Z")], "cursor-4"),
+        makeCursorPage([makeTransaction("tx-5", "2026-03-06T00:00:00.000Z")]),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    const result = await runOnlyFansTransactionsSync({
+      adapter,
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    const rolledState = dbMocks.upsertCheckpointProgress.mock.calls[3]![1].state;
+    expect(rolledState.cursor).toBeNull();
+    expect(rolledState.windowEnd).toBe("2026-03-07T00:00:00.000Z");
+    expect(rolledState.windowPageCount).toBe(0);
+
+    const resumedRequest = adapter.getTransactionsPage.mock.calls[4]![2];
+    expect(resumedRequest.cursor).toBeNull();
+    expect(resumedRequest.end!.toISOString()).toBe("2026-03-07T00:00:00.000Z");
+
+    expect(result.satisfied).toBe(true);
+    expect(result.processedTransactions).toBe(5);
+    expect(result.processedChargebacks).toBe(0);
+  });
+
+  it("yields after flushing dirty state and resumes from a reset cursor", async () => {
+    const firstAdapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")], "cursor-1"),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    const firstResult = await runOnlyFansTransactionsSync({
+      adapter: firstAdapter,
+      budget: new SyncChunkBudget(2, 0),
+    });
+
+    expect(firstResult.satisfied).toBe(false);
+    expect(firstResult.yieldReason).toBe("wall_clock");
+    expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      new Date("2026-03-10T00:00:00.000Z"),
+    );
+    expect(dbMocks.rebuildRevenueRollups).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      new Date("2026-03-10T00:00:00.000Z"),
+    );
+
+    const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)![1].state;
+    expect(yieldedState.cursor).toBeNull();
+    expect(yieldedState.dirtyFrom).toBeNull();
+    expect(yieldedState.windowEnd).toBe("2026-03-10T00:00:00.000Z");
+
+    const resumedAdapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-2", "2026-03-09T00:00:00.000Z")]),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    const resumedResult = await runOnlyFansTransactionsSync({
+      adapter: resumedAdapter,
+      checkpoint: {
+        state: yieldedState,
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    const resumedRequest = resumedAdapter.getTransactionsPage.mock.calls[0]![2];
+    expect(resumedRequest.cursor).toBeNull();
+    expect(resumedRequest.end!.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(resumedResult.satisfied).toBe(true);
+  });
+
+  it("upgrades legacy transaction backfill state by clearing the deep cursor", async () => {
+    const adapter = createAdapter({
+      transactionPages: [makeCursorPage([])],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    await runOnlyFansTransactionsSync({
+      adapter,
+      checkpoint: {
+        state: {
+          mode: "backfill",
+          completed: false,
+          provider: "onlyfans",
+          phase: "transactions",
+          snapshotEnd: "2026-03-15T00:00:00.000Z",
+          newestSeenAt: "2026-03-12T00:00:00.000Z",
+          dirtyFrom: "2026-03-10T00:00:00.000Z",
+          processedTransactions: 300,
+          processedChargebacks: 0,
+          transactionPages: 13,
+          chargebackPages: 0,
+          start: "1970-01-01T00:00:00.000Z",
+          fallbackStartUsed: false,
+          cursor: "deep-cursor",
+        },
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    const firstRequest = adapter.getTransactionsPage.mock.calls[0]![2];
+    expect(firstRequest.cursor).toBeNull();
+    expect(firstRequest.end!.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+  });
+
+  it("transitions into chargebacks and finalizes the checkpoint", async () => {
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")]),
+      ],
+      chargebackPages: [
+        makeCursorPage([makeChargeback("cb-1", "2026-03-09T00:00:00.000Z")]),
+      ],
+    });
+
+    const result = await runOnlyFansTransactionsSync({
+      adapter,
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(adapter.getChargebacksPage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 1,
+      stream: "transactions",
+      cursorTimestamp: new Date("2026-03-10T00:00:00.000Z"),
+      lastSuccessfulRunId: 123,
+      state: {
+        pageLabel: "onlyfans-page",
+        processedTransactions: 1,
+        processedChargebacks: 1,
+      },
+    }));
+    expect(result.satisfied).toBe(true);
+    expect(result.processedTransactions).toBe(1);
+    expect(result.processedChargebacks).toBe(1);
+  });
+
+  it("honors manual rescanStart for incremental syncs", async () => {
+    const adapter = createAdapter({
+      transactionPages: [makeCursorPage([])],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    await runOnlyFansTransactionsSync({
+      adapter,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: {},
+      },
+      rescanStart: new Date("2026-03-01T00:00:00.000Z"),
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    const firstRequest = adapter.getTransactionsPage.mock.calls[0]![2];
+    expect(firstRequest.start!.toISOString()).toBe("2026-03-01T00:00:00.000Z");
+  });
+
+  it("rejects manual rescans while an incomplete backfill exists", async () => {
+    await expect(runOnlyFansTransactionsSync({
+      checkpoint: {
+        state: {
+          mode: "backfill",
+          completed: false,
+          provider: "onlyfans",
+          phase: "transactions",
+          snapshotEnd: "2026-03-15T00:00:00.000Z",
+          newestSeenAt: null,
+          dirtyFrom: null,
+          processedTransactions: 0,
+          processedChargebacks: 0,
+          transactionPages: 0,
+          chargebackPages: 0,
+          start: "1970-01-01T00:00:00.000Z",
+          fallbackStartUsed: false,
+          cursor: null,
+          windowEnd: "2026-03-15T00:00:00.000Z",
+          windowPageCount: 0,
+        },
+      },
+      rescanStart: new Date("2026-03-01T00:00:00.000Z"),
+    })).rejects.toThrow("Manual OnlyFans transaction rescans are not allowed while an incomplete backfill exists");
+  });
+});

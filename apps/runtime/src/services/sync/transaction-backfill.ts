@@ -23,6 +23,8 @@ export type OnlyFansTransactionBackfillState = TransactionBackfillBase & {
   cursor: string | null;
   start: string;
   fallbackStartUsed: boolean;
+  windowEnd: string;
+  windowPageCount: number;
 };
 
 export type TransactionBackfillState =
@@ -116,6 +118,8 @@ export function parseTransactionBackfillState(value: unknown): TransactionBackfi
     const start = asIsoString(state.start);
     const fallbackStartUsed = asBoolean(state.fallbackStartUsed);
     const cursor = asNullableString(state.cursor);
+    const windowEnd = asIsoString(state.windowEnd);
+    const windowPageCount = asNonNegativeInt(state.windowPageCount);
     if (
       start === null ||
       fallbackStartUsed === null ||
@@ -140,6 +144,8 @@ export function parseTransactionBackfillState(value: unknown): TransactionBackfi
       start,
       fallbackStartUsed,
       cursor,
+      windowEnd: windowEnd ?? snapshotEnd,
+      windowPageCount: windowPageCount ?? 0,
     };
   }
 
