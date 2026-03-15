@@ -4,6 +4,10 @@ export function formatMills(mills: number): string {
   return sharedFormatUsd(mills);
 }
 
+export function formatUsdFromCents(cents: number): string {
+  return sharedFormatUsd(cents * 10);
+}
+
 export function formatDelta(pct: number | null): { text: string; direction: "up" | "down" | "neutral" } {
   if (pct === null) return { text: "—", direction: "neutral" };
   const rounded = Math.abs(Math.round(pct * 10) / 10);

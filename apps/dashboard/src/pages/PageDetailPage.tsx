@@ -19,6 +19,7 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 import {
   formatDate,
   formatDateTime,
+  formatUsdFromCents,
   transactionTypeLabel,
   daysRemaining,
   formatRelativeTime,
@@ -364,11 +365,11 @@ export function PageDetailPage() {
                       <span className="text-text-muted">&mdash;</span>
                     )}
                   </td>
-                  <td className="p-3.5 px-[22px] text-sm text-text-muted border-b border-border-light">
-                    &mdash;
+                  <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
+                    {item.totalSpentCents != null ? formatUsdFromCents(item.totalSpentCents) : "\u2014"}
                   </td>
-                  <td className="p-3.5 px-[22px] text-sm text-text-muted border-b border-border-light">
-                    &mdash;
+                  <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
+                    {item.lastTransactionAt ? formatDateTime(item.lastTransactionAt) : "\u2014"}
                   </td>
                 </tr>
               );

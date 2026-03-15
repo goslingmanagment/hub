@@ -431,6 +431,8 @@ export const subscriberItemSchema = z.object({
   autoRenew: z.boolean().nullable(),
   subscriptionTierName: z.string().nullable(),
   startedAt: isoTimestamp.nullable(),
+  totalSpentCents: z.number().int(),
+  lastTransactionAt: isoTimestamp.nullable(),
 });
 
 export const subscriberDailyItemSchema = z.object({

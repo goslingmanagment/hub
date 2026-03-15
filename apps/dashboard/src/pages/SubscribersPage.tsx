@@ -6,7 +6,7 @@ import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { SearchInput } from "@/components/shared/SearchInput";
-import { formatDate, daysRemaining } from "@/lib/format";
+import { formatDate, formatDateTime, daysRemaining, formatUsdFromCents } from "@/lib/format";
 
 type Filter = "all" | "expiring7d" | "new24h" | "norenew";
 
@@ -85,7 +85,7 @@ export function SubscribersPage() {
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
-              {["Username", "Since", "Expires", "Remaining", "Renew", "Spent", "Last Txn", "Notes"].map(
+              {["Username", "Since", "Expires", "Remaining", "Renew", "Spent", "Last Txn"].map(
                 (col) => (
                   <th
                     key={col}
@@ -100,7 +100,7 @@ export function SubscribersPage() {
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-text-muted">
+                <td colSpan={7} className="px-4 py-8 text-center text-sm text-text-muted">
                   No subscribers match the current filter.
                 </td>
               </tr>
@@ -153,9 +153,12 @@ export function SubscribersPage() {
                       <span className="text-text-muted">&mdash;</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-sm text-text-muted">&mdash;</td>
-                  <td className="px-4 py-3 text-sm text-text-muted">&mdash;</td>
-                  <td className="px-4 py-3 text-sm text-text-muted">&mdash;</td>
+                  <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">
+                    {sub.totalSpentCents != null ? formatUsdFromCents(sub.totalSpentCents) : "\u2014"}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-text-secondary">
+                    {sub.lastTransactionAt ? formatDateTime(sub.lastTransactionAt) : "\u2014"}
+                  </td>
                 </tr>
               );
             })}

@@ -902,6 +902,8 @@ export interface paths {
                                 autoRenew: boolean | null;
                                 subscriptionTierName: string | null;
                                 startedAt: string | null;
+                                totalSpentCents: number;
+                                lastTransactionAt: string | null;
                             }[];
                             limit: number;
                             offset: number;

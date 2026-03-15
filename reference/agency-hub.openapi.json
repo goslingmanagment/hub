@@ -2567,6 +2567,21 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "totalSpentCents": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "lastTransactionAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -2577,7 +2592,9 @@
                           "endsAt",
                           "autoRenew",
                           "subscriptionTierName",
-                          "startedAt"
+                          "startedAt",
+                          "totalSpentCents",
+                          "lastTransactionAt"
                         ],
                         "additionalProperties": false
                       }

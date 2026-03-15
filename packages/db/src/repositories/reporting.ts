@@ -393,8 +393,14 @@ export async function listSubscribersForPage(
     platformUserId: fans.platformUserId,
     username: fans.username,
     displayName: fans.displayName,
+    totalCreatorNetAmountMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
+    lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(pageSubscriptions)
     .innerJoin(fans, eq(fans.id, pageSubscriptions.fanId))
+    .leftJoin(spenderLifetimePage, and(
+      eq(spenderLifetimePage.platformAccountId, pageSubscriptions.platformAccountId),
+      eq(spenderLifetimePage.fanId, pageSubscriptions.fanId),
+    ))
     .where(clauses)
     .orderBy(asc(pageSubscriptions.endsAt), asc(pageSubscriptions.id))
     .limit(input.limit)

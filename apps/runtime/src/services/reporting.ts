@@ -85,6 +85,15 @@ function serializeTimestamp(value: Date | string | null | undefined) {
   return new Date(value).toISOString();
 }
 
+function millsToRoundedCents(value: bigint | number | string | null | undefined) {
+  if (value == null) {
+    return 0;
+  }
+
+  const mills = toMills(value);
+  return Number((mills + (mills >= 0n ? 5n : -5n)) / 10n);
+}
+
 function serializeRawType(
   platform: "fansly" | "onlyfans",
   rawType: string,
@@ -617,6 +626,8 @@ export async function getPageSubscribersReport(
       autoRenew: row.autoRenew,
       subscriptionTierName: row.subscriptionTierName,
       startedAt: serializeTimestamp(row.sourceCreatedAt),
+      totalSpentCents: millsToRoundedCents(row.totalCreatorNetAmountMills),
+      lastTransactionAt: serializeTimestamp(row.lastTransactionAt),
     })),
     limit: input.limit,
     offset: input.offset,

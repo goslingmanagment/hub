@@ -2371,6 +2371,38 @@ describe("api integration", () => {
     ]));
   });
 
+  it("returns subscriber spend and last transaction metadata", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const subscribers = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/subscribers?limit=10",
+      headers: { cookie },
+    });
+
+    expect(subscribers.statusCode).toBe(200);
+    expect(subscribers.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        platformSubscriptionId: "sub-lana-1",
+        totalSpentCents: 700,
+        lastTransactionAt: "2026-03-06T12:00:00.000Z",
+      }),
+    ]));
+  });
+
   it("applies subscriber and follower query filters before pagination", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
@@ -2473,6 +2505,8 @@ describe("api integration", () => {
     expect(subscriberSearch.json().items).toEqual([
       expect.objectContaining({
         platformUserId: "fan-102",
+        totalSpentCents: 0,
+        lastTransactionAt: null,
       }),
     ]);
 
