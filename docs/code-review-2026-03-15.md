@@ -233,4 +233,4 @@ File `docs/code-review-2026-03-09.md` missing from working tree. Delta reconstru
 | M-3 | Fixed | `fix(M-3): clean chargeback-only transaction windows` | `pnpm exec vitest run tests/onlyfans-transactions.test.ts` | OnlyFans delete-missing cleanup now runs when the window contains only chargebacks. |
 | M-4 | Fixed | `fix(M-4): add fan_pages platform account index` | `pnpm exec vitest run tests/schema-guard.test.ts` | Added the standalone `fan_pages(platform_account_id)` index used by page-scoped fan lookups. |
 | M-5 | Fixed | `fix(M-5): add pending transaction boundary index` | `pnpm exec vitest run tests/schema-guard.test.ts` | Added a composite index for pending-transaction boundary scans on incremental sync. |
-| M-1 | Pending |  |  |  |
+| M-1 | Fixed | `fix(M-1): remove dead legacy sync files` | `pnpm typecheck` | Deleted the unreferenced legacy follower/subscriber sync implementations. |
