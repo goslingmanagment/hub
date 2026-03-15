@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment } from "react";
 import { useSearchParams } from "react-router";
 import { useAdminSyncRuns, useAdminSyncRunDetail } from "@/api/queries";
 import { formatRelativeTime } from "@/lib/format";
@@ -16,6 +16,15 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
   const ms = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function parseRunIdParam(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
 }
 
 function RunDetail({ runId }: { runId: number }) {
@@ -74,15 +83,10 @@ function RunDetail({ runId }: { runId: number }) {
 
 export function SyncStatusPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const runIdParam = searchParams.get("runId");
-
-  const [expandedRunId, setExpandedRunId] = useState<number | null>(
-    runIdParam ? Number(runIdParam) : null,
-  );
+  const expandedRunId = parseRunIdParam(searchParams.get("runId"));
 
   const toggleRun = (id: number) => {
     const next = expandedRunId === id ? null : id;
-    setExpandedRunId(next);
     setSearchParams(next != null ? { runId: String(next) } : {}, { replace: true });
   };
 
