@@ -7,6 +7,7 @@ import {
   createFanslyPage,
   createModel,
   finishSyncRun,
+  insertSyncRunEvent,
   recalculateFanPageSpend,
   rebuildFollowerRollups,
   rebuildRevenueRollups,
@@ -33,7 +34,7 @@ import {
   unassignPageFromUser,
 } from "../apps/runtime/src/services/auth.ts";
 import { getModelRevenueReport, getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
-import { ensureSyncQueues } from "../apps/runtime/src/services/sync-queue.ts";
+import { ensureSyncQueues, SYNC_PAGE_EXECUTE_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -2692,6 +2693,170 @@ describe("api integration", () => {
         stream: "light",
       }),
     ]);
+  });
+
+  it("serializes raw-SQL admin endpoints without BigInt response failures", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const emittedAt = new Date("2026-03-10T12:00:00.000Z");
+    const migrationCreatedAtMs = 1_710_000_000_000;
+    const run = await startSyncRun(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      stream: "light",
+      trigger: "worker",
+    });
+    await insertSyncRunEvent(testDb.db, {
+      syncRunId: run.id,
+      platformAccountId: fixture.lanaPage.id,
+      provider: "fansly",
+      stream: "light",
+      eventType: "anomaly",
+      severity: "warn",
+      message: "Observed an anomaly",
+      details: {
+        code: "TEST_WARN",
+        context: "admin-endpoint-regression",
+      },
+      emittedAt,
+    });
+    await finishSyncRun(testDb.db, run.id, {
+      status: "success",
+      stats: { synced: 1 },
+    });
+
+    workerBoss = new PgBoss({ connectionString: testDb.connectionString });
+    await workerBoss.start();
+    await ensureSyncQueues(workerBoss);
+    await workerBoss.send(SYNC_PAGE_EXECUTE_QUEUE, {
+      platformAccountId: fixture.lanaPage.id,
+    });
+
+    await testDb.pool.query(`create schema if not exists drizzle`);
+
+    try {
+      await testDb.pool.query(`
+        create table if not exists drizzle.__drizzle_migrations (
+          id serial primary key,
+          hash text not null,
+          created_at numeric
+        )
+      `);
+      await testDb.pool.query(`truncate drizzle.__drizzle_migrations restart identity`);
+      await testDb.pool.query(
+        `insert into drizzle.__drizzle_migrations (hash, created_at) values ($1, $2)`,
+        ["20260315_admin_bigint", String(migrationCreatedAtMs)],
+      );
+
+      const login = await server.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          username: "dima",
+          password: "owner-secret",
+        },
+      });
+      const cookie = sessionCookieFrom(login);
+
+      const logsResponse = await server.inject({
+        method: "GET",
+        url: "/api/v1/admin/logs?severity=warn&limit=10",
+        headers: { cookie },
+      });
+      expect(logsResponse.statusCode).toBe(200);
+      expect(logsResponse.json()).toEqual([
+        expect.objectContaining({
+          id: expect.any(Number),
+          syncRunId: run.id,
+          provider: "fansly",
+          stream: "light",
+          eventType: "anomaly",
+          severity: "warn",
+          message: "Observed an anomaly",
+          details: {
+            code: "TEST_WARN",
+            context: "admin-endpoint-regression",
+          },
+          emittedAt: emittedAt.toISOString(),
+          pageLabel: "lana",
+        }),
+      ]);
+
+      const incidentsResponse = await server.inject({
+        method: "GET",
+        url: "/api/v1/admin/incidents?code=TEST_WARN&limit=10",
+        headers: { cookie },
+      });
+      expect(incidentsResponse.statusCode).toBe(200);
+      expect(incidentsResponse.json()).toMatchObject({
+        summary: [
+          expect.objectContaining({
+            code: "TEST_WARN",
+            severity: "warn",
+            count: 1,
+          }),
+        ],
+        items: [
+          expect.objectContaining({
+            id: expect.any(Number),
+            syncRunId: run.id,
+            emittedAt: emittedAt.toISOString(),
+            pageLabel: "lana",
+          }),
+        ],
+      });
+
+      const queueResponse = await server.inject({
+        method: "GET",
+        url: "/api/v1/admin/queue/jobs?state=created&limit=10",
+        headers: { cookie },
+      });
+      expect(queueResponse.statusCode).toBe(200);
+      const queueJobs = queueResponse.json() as Array<Record<string, unknown>>;
+      expect(queueJobs.length).toBeGreaterThan(0);
+      expect(queueJobs).toContainEqual(expect.objectContaining({
+        id: expect.any(String),
+        name: SYNC_PAGE_EXECUTE_QUEUE,
+        state: "created",
+        data: { platformAccountId: fixture.lanaPage.id },
+        createdOn: expect.any(String),
+        startedOn: null,
+        completedOn: null,
+        output: null,
+        retryLimit: expect.any(Number),
+        retryCount: expect.any(Number),
+      }));
+
+      const dbStatsResponse = await server.inject({
+        method: "GET",
+        url: "/api/v1/admin/db/stats",
+        headers: { cookie },
+      });
+      expect(dbStatsResponse.statusCode).toBe(200);
+      const dbStats = dbStatsResponse.json() as {
+        tables: Array<Record<string, unknown>>;
+        migrations: Array<Record<string, unknown>>;
+      };
+      expect(dbStats.tables.length).toBeGreaterThan(0);
+      expect(dbStats.tables[0]).toEqual(expect.objectContaining({
+        schema: "public",
+        table: expect.any(String),
+        rowEstimate: expect.any(Number),
+        totalBytes: expect.any(Number),
+        indexBytes: expect.any(Number),
+      }));
+      expect(dbStats.migrations).toEqual([
+        {
+          id: 1,
+          hash: "20260315_admin_bigint",
+          createdAt: new Date(migrationCreatedAtMs).toISOString(),
+        },
+      ]);
+    } finally {
+      await testDb.pool.query(`drop schema if exists drizzle cascade`);
+    }
   });
 
   it("rejects owner-only admin endpoints for team leads", async (context) => {

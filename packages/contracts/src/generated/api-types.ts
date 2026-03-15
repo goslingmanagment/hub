@@ -4905,9 +4905,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List recent sync event logs */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    severity?: string;
+                    limit?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -4919,7 +4923,49 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            id: number;
+                            syncRunId: number;
+                            /** @enum {string} */
+                            provider: "fansly" | "onlyfans";
+                            stream: string;
+                            eventType: string;
+                            severity: string;
+                            message: string;
+                            details: {
+                                [key: string]: unknown;
+                            };
+                            emittedAt: string;
+                            pageLabel: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
                 };
             };
         };
@@ -4938,9 +4984,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List pg-boss jobs */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    state?: string;
+                    name?: string;
+                    limit?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -4952,7 +5003,46 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            id: string;
+                            name: string;
+                            state: string;
+                            data: unknown | null;
+                            createdOn: string;
+                            startedOn: string | null;
+                            completedOn: string | null;
+                            output: unknown | null;
+                            retryLimit: number;
+                            retryCount: number;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
                 };
             };
         };
@@ -4971,6 +5061,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List database table sizes and migrations */
         get: {
             parameters: {
                 query?: never;
@@ -4985,7 +5076,48 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            tables: {
+                                schema: string;
+                                table: string;
+                                rowEstimate: number;
+                                totalBytes: number;
+                                indexBytes: number;
+                            }[];
+                            migrations: {
+                                id: number;
+                                hash: string;
+                                createdAt: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
                 };
             };
         };
@@ -5004,9 +5136,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List sync incidents and seven-day summary counts */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    severity?: string;
+                    code?: string;
+                    limit?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -5018,7 +5155,56 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            summary: {
+                                code: string | null;
+                                severity: string;
+                                count: number;
+                            }[];
+                            items: {
+                                id: number;
+                                syncRunId: number;
+                                /** @enum {string} */
+                                provider: "fansly" | "onlyfans";
+                                stream: string;
+                                eventType: string;
+                                severity: string;
+                                message: string;
+                                details: {
+                                    [key: string]: unknown;
+                                };
+                                emittedAt: string;
+                                pageLabel: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
                 };
             };
         };

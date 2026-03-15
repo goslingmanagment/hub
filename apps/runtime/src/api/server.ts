@@ -145,6 +145,26 @@ function clearCookie(reply: {
   });
 }
 
+function serializeTimestamp(value: Date | string) {
+  return new Date(value).toISOString();
+}
+
+function serializeNullableTimestamp(value: Date | string | null | undefined) {
+  return value == null ? null : serializeTimestamp(value);
+}
+
+function serializeEpochMillisecondsTimestamp(value: Date | string | number | bigint) {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  return new Date(Number(value)).toISOString();
+}
+
+function toNumber(value: number | string | bigint) {
+  return typeof value === "number" ? value : Number(value);
+}
+
 export async function buildApiServer(appContext: AppContext) {
   const server = Fastify({
     loggerInstance: appContext.logger ?? createLogger(appContext.config.logLevel),
@@ -1413,13 +1433,11 @@ export async function buildApiServer(appContext: AppContext) {
   // ---------------------------------------------------------------------------
 
   server.get("/api/v1/admin/logs", {
-    schema: { tags: ["admin"] },
+    schema: routeSchemas.adminLogs,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    const query = request.query as { severity?: string; limit?: string };
-    const limit = Math.min(parseInt(query.limit || "100", 10) || 100, 500);
-    const severity = query.severity;
+    const { severity, limit } = request.query;
 
     const rows = severity
       ? (await appContext.db.execute(sql`
@@ -1449,45 +1467,56 @@ export async function buildApiServer(appContext: AppContext) {
         `)).rows;
 
     return rows.map((r: any) => ({
-      ...r,
-      emittedAt: r.emittedAt instanceof Date ? r.emittedAt.toISOString() : r.emittedAt,
+      id: toNumber(r.id),
+      syncRunId: toNumber(r.syncRunId),
+      provider: r.provider,
+      stream: r.stream,
+      eventType: r.eventType,
+      severity: r.severity,
+      message: r.message,
+      details: r.details,
+      emittedAt: serializeTimestamp(r.emittedAt),
+      pageLabel: r.pageLabel,
     }));
   });
 
   server.get("/api/v1/admin/queue/jobs", {
-    schema: { tags: ["admin"] },
+    schema: routeSchemas.adminQueueJobs,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    const query = request.query as { state?: string; name?: string; limit?: string };
-    const limit = Math.min(parseInt(query.limit || "50", 10) || 50, 200);
-    const state = query.state;
-    const name = query.name;
+    const { state, name, limit } = request.query;
 
     let condition = sql`true`;
     if (state) condition = sql`${condition} AND state = ${state}`;
     if (name) condition = sql`${condition} AND name = ${name}`;
 
     const rows = (await appContext.db.execute(sql`
-      SELECT id, name, state, data, createdon as "createdOn",
-             startedon as "startedOn", completedon as "completedOn",
-             output, retrylimit as "retryLimit", retrycount as "retryCount"
+      SELECT id, name, state, data, created_on as "createdOn",
+             started_on as "startedOn", completed_on as "completedOn",
+             output, retry_limit as "retryLimit", retry_count as "retryCount"
       FROM pgboss.job
       WHERE ${condition}
-      ORDER BY createdon DESC
+      ORDER BY created_on DESC
       LIMIT ${limit}
     `)).rows;
 
     return rows.map((r: any) => ({
-      ...r,
-      createdOn: r.createdOn instanceof Date ? r.createdOn.toISOString() : r.createdOn,
-      startedOn: r.startedOn instanceof Date ? r.startedOn.toISOString() : r.startedOn,
-      completedOn: r.completedOn instanceof Date ? r.completedOn.toISOString() : r.completedOn,
+      id: r.id,
+      name: r.name,
+      state: r.state,
+      data: r.data,
+      createdOn: serializeTimestamp(r.createdOn),
+      startedOn: serializeNullableTimestamp(r.startedOn),
+      completedOn: serializeNullableTimestamp(r.completedOn),
+      output: r.output,
+      retryLimit: toNumber(r.retryLimit),
+      retryCount: toNumber(r.retryCount),
     }));
   });
 
   server.get("/api/v1/admin/db/stats", {
-    schema: { tags: ["admin"] },
+    schema: routeSchemas.adminDbStats,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
@@ -1503,21 +1532,24 @@ export async function buildApiServer(appContext: AppContext) {
     `)).rows;
 
     const tables = tableRows.map((r: any) => ({
-      ...r,
-      totalBytes: typeof r.totalBytes === "string" ? Number(r.totalBytes) : r.totalBytes,
-      indexBytes: typeof r.indexBytes === "string" ? Number(r.indexBytes) : r.indexBytes,
+      schema: r.schema,
+      table: r.table,
+      rowEstimate: toNumber(r.rowEstimate),
+      totalBytes: toNumber(r.totalBytes),
+      indexBytes: toNumber(r.indexBytes),
     }));
 
     let migrations: any[] = [];
     try {
       const migrationRows = (await appContext.db.execute(sql`
-        SELECT id, hash, created_at as "createdAt"
+        SELECT id, hash, created_at::bigint as "createdAtMs"
         FROM drizzle.__drizzle_migrations
         ORDER BY created_at ASC
       `)).rows;
       migrations = migrationRows.map((r: any) => ({
-        ...r,
-        createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
+        id: toNumber(r.id),
+        hash: r.hash,
+        createdAt: serializeEpochMillisecondsTimestamp(r.createdAtMs),
       }));
     } catch {
       // migrations table may not exist
@@ -1527,14 +1559,11 @@ export async function buildApiServer(appContext: AppContext) {
   });
 
   server.get("/api/v1/admin/incidents", {
-    schema: { tags: ["admin"] },
+    schema: routeSchemas.adminIncidents,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    const query = request.query as { severity?: string; code?: string; limit?: string };
-    const limit = Math.min(parseInt(query.limit || "100", 10) || 100, 500);
-    const severity = query.severity;
-    const code = query.code;
+    const { severity, code, limit } = request.query;
 
     let condition = sql`(e.severity IN ('warn', 'error') OR e.event_type = 'anomaly')`;
     if (severity) condition = sql`${condition} AND e.severity = ${severity}`;
@@ -1553,8 +1582,16 @@ export async function buildApiServer(appContext: AppContext) {
       ORDER BY e.emitted_at DESC
       LIMIT ${limit}
     `)).rows.map((r: any) => ({
-      ...r,
-      emittedAt: r.emittedAt instanceof Date ? r.emittedAt.toISOString() : r.emittedAt,
+      id: toNumber(r.id),
+      syncRunId: toNumber(r.syncRunId),
+      provider: r.provider,
+      stream: r.stream,
+      eventType: r.eventType,
+      severity: r.severity,
+      message: r.message,
+      details: r.details,
+      emittedAt: serializeTimestamp(r.emittedAt),
+      pageLabel: r.pageLabel,
     }));
 
     const summary = (await appContext.db.execute(sql`
@@ -1565,7 +1602,11 @@ export async function buildApiServer(appContext: AppContext) {
       GROUP BY e.details->>'code', e.severity
       ORDER BY count DESC
       LIMIT 20
-    `)).rows;
+    `)).rows.map((r: any) => ({
+      code: r.code,
+      severity: r.severity,
+      count: toNumber(r.count),
+    }));
 
     return { summary, items };
   });

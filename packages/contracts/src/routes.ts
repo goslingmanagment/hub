@@ -1019,6 +1019,81 @@ export const syncRunsQuerySchema = z.object({
   since: z.string().optional(),
 });
 
+export const adminLogsQuerySchema = z.object({
+  severity: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
+export const adminLogItemSchema = z.object({
+  id: intId,
+  syncRunId: intId,
+  provider: platformEnum,
+  stream: z.string(),
+  eventType: z.string(),
+  severity: z.string(),
+  message: z.string(),
+  details: z.record(z.string(), z.unknown()),
+  emittedAt: isoTimestamp,
+  pageLabel: z.string(),
+});
+
+export const adminQueueJobsQuerySchema = z.object({
+  state: z.string().min(1).optional(),
+  name: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+export const adminQueueJobItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  state: z.string(),
+  data: z.unknown().nullable(),
+  createdOn: isoTimestamp,
+  startedOn: isoTimestamp.nullable(),
+  completedOn: isoTimestamp.nullable(),
+  output: z.unknown().nullable(),
+  retryLimit: z.number().int(),
+  retryCount: z.number().int(),
+});
+
+export const adminDbTableStatSchema = z.object({
+  schema: z.string(),
+  table: z.string(),
+  rowEstimate: z.number().int(),
+  totalBytes: z.number().int(),
+  indexBytes: z.number().int(),
+});
+
+export const adminDbMigrationSchema = z.object({
+  id: intId,
+  hash: z.string(),
+  createdAt: isoTimestamp,
+});
+
+export const adminDbStatsResponseSchema = z.object({
+  tables: z.array(adminDbTableStatSchema),
+  migrations: z.array(adminDbMigrationSchema),
+});
+
+export const adminIncidentsQuerySchema = z.object({
+  severity: z.string().min(1).optional(),
+  code: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
+export const adminIncidentItemSchema = adminLogItemSchema;
+
+export const adminIncidentSummaryItemSchema = z.object({
+  code: z.string().nullable(),
+  severity: z.string(),
+  count: z.number().int(),
+});
+
+export const adminIncidentsResponseSchema = z.object({
+  summary: z.array(adminIncidentSummaryItemSchema),
+  items: z.array(adminIncidentItemSchema),
+});
+
 const fanslyCredentialsSchema = z.object({
   platform: z.literal("fansly"),
   session: z.object({
@@ -1695,6 +1770,49 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+    },
+  },
+  adminLogs: {
+    tags: ["admin"],
+    summary: "List recent sync event logs",
+    security: cookieOnlySecurity,
+    querystring: adminLogsQuerySchema,
+    response: {
+      200: z.array(adminLogItemSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminQueueJobs: {
+    tags: ["admin"],
+    summary: "List pg-boss jobs",
+    security: cookieOnlySecurity,
+    querystring: adminQueueJobsQuerySchema,
+    response: {
+      200: z.array(adminQueueJobItemSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminDbStats: {
+    tags: ["admin"],
+    summary: "List database table sizes and migrations",
+    security: cookieOnlySecurity,
+    response: {
+      200: adminDbStatsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminIncidents: {
+    tags: ["admin"],
+    summary: "List sync incidents and seven-day summary counts",
+    security: cookieOnlySecurity,
+    querystring: adminIncidentsQuerySchema,
+    response: {
+      200: adminIncidentsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
 } as const;
