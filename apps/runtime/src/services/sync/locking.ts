@@ -9,6 +9,18 @@ export class PageSyncLockedError extends Error {
   }
 }
 
+export class PageSyncLockReleaseError extends Error {
+  constructor(
+    readonly pageLabel: string,
+    cause?: unknown,
+  ) {
+    super(`Failed to release page sync lock for "${pageLabel}"`, {
+      cause: cause instanceof Error ? cause : undefined,
+    });
+    this.name = "PageSyncLockReleaseError";
+  }
+}
+
 export async function withPageSyncLock<T>(
   app: Pick<AppContext, "pool">,
   input: {
@@ -18,6 +30,7 @@ export async function withPageSyncLock<T>(
   run: () => Promise<T>,
 ) {
   const client = await app.pool.connect();
+  let releaseError: PageSyncLockReleaseError | null = null;
 
   try {
     const result = await client.query<{ locked: boolean }>(
@@ -32,11 +45,20 @@ export async function withPageSyncLock<T>(
     try {
       return await run();
     } finally {
-      await client
-        .query("select pg_advisory_unlock($1, $2)", [PAGE_SYNC_LOCK_NAMESPACE, input.pageId])
-        .catch(() => undefined);
+      try {
+        const unlockResult = await client.query<{ unlocked: boolean }>(
+          "select pg_advisory_unlock($1, $2) as unlocked",
+          [PAGE_SYNC_LOCK_NAMESPACE, input.pageId],
+        );
+        if (!unlockResult.rows[0]?.unlocked) {
+          throw new Error(`Session did not release advisory lock for page "${input.pageLabel}"`);
+        }
+      } catch (error) {
+        releaseError = new PageSyncLockReleaseError(input.pageLabel, error);
+        throw releaseError;
+      }
     }
   } finally {
-    client.release();
+    client.release(releaseError ?? undefined);
   }
 }
