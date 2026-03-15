@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 
 import type { Platform, ProxyConfig } from "@agency_hub_core/shared";
 
@@ -13,6 +13,35 @@ import {
 
 function defaultCommissionRateForPlatform(platform: Platform) {
   return platform === "onlyfans" ? 0.2 : 0;
+}
+
+export class PlatformAccountIdentityImmutableError extends Error {
+  constructor(
+    readonly label: string,
+    readonly existingPlatformAccountId: string,
+    readonly attemptedPlatformAccountId: string,
+  ) {
+    super(
+      `Page "${label}" is already bound to upstream account ` +
+        `"${existingPlatformAccountId}" and cannot be rebound to "${attemptedPlatformAccountId}"`,
+    );
+    this.name = "PlatformAccountIdentityImmutableError";
+  }
+}
+
+export class PlatformAccountIdentityConflictError extends Error {
+  constructor(
+    readonly platform: Platform,
+    readonly platformAccountId: string,
+    readonly conflictingLabel: string | null,
+  ) {
+    super(
+      conflictingLabel
+        ? `Upstream account "${platform}:${platformAccountId}" is already bound to page "${conflictingLabel}"`
+        : `Upstream account "${platform}:${platformAccountId}" is already bound to another page`,
+    );
+    this.name = "PlatformAccountIdentityConflictError";
+  }
 }
 
 function hasErrorCode(error: unknown, code: string) {
@@ -287,6 +316,39 @@ export async function updatePageMetadata(
     syncType?: "light" | "followers";
   },
 ) {
+  const existingPage = await db.query.platformAccounts.findFirst({
+    where: eq(platformAccounts.id, platformAccountId),
+  });
+  if (!existingPage) {
+    throw new Error(`Platform account ${platformAccountId} was not found`);
+  }
+
+  if (
+    existingPage.platformAccountId &&
+    existingPage.platformAccountId !== input.platformAccountIdValue
+  ) {
+    throw new PlatformAccountIdentityImmutableError(
+      existingPage.label,
+      existingPage.platformAccountId,
+      input.platformAccountIdValue,
+    );
+  }
+
+  const conflictingPage = await db.query.platformAccounts.findFirst({
+    where: and(
+      eq(platformAccounts.platform, existingPage.platform),
+      eq(platformAccounts.platformAccountId, input.platformAccountIdValue),
+      ne(platformAccounts.id, platformAccountId),
+    ),
+  });
+  if (conflictingPage) {
+    throw new PlatformAccountIdentityConflictError(
+      existingPage.platform,
+      input.platformAccountIdValue,
+      conflictingPage.label,
+    );
+  }
+
   const now = new Date();
   const patch: {
     platformAccountId: string;
@@ -318,11 +380,31 @@ export async function updatePageMetadata(
     patch.lastFollowerSyncAt = now;
   }
 
-  const [updated] = await db
-    .update(platformAccounts)
-    .set(patch)
-    .where(eq(platformAccounts.id, platformAccountId))
-    .returning();
+  let updated;
+  try {
+    [updated] = await db
+      .update(platformAccounts)
+      .set(patch)
+      .where(eq(platformAccounts.id, platformAccountId))
+      .returning();
+  } catch (error) {
+    if (hasErrorCode(error, "23505")) {
+      const concurrentConflict = await db.query.platformAccounts.findFirst({
+        where: and(
+          eq(platformAccounts.platform, existingPage.platform),
+          eq(platformAccounts.platformAccountId, input.platformAccountIdValue),
+          ne(platformAccounts.id, platformAccountId),
+        ),
+      });
+      throw new PlatformAccountIdentityConflictError(
+        existingPage.platform,
+        input.platformAccountIdValue,
+        concurrentConflict?.label ?? null,
+      );
+    }
+
+    throw error;
+  }
 
   return updated;
 }

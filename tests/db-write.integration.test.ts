@@ -14,6 +14,7 @@ import {
   rebuildRevenueRollups,
   storeFanslySession,
   storeProxyConfig,
+  updatePageMetadata,
   upsertCheckpoint,
   upsertFanPage,
   upsertFans,
@@ -342,6 +343,115 @@ describe("db write safety", () => {
       platform_accounts_count: 0,
       credentials_count: 0,
       proxies_count: 0,
+    });
+  });
+
+  it("rejects onboarding a second Fansly page for the same upstream account", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+
+    const app = createOnboardingApp(async () => ({
+      account: {
+        id: "acct-123",
+        username: "lora_verified",
+        displayName: "Lora Verified",
+        createdAt: 1_772_157_317_000,
+        followCount: 42,
+        subscriberCount: 7,
+        earningsWallet: { id: "wallet-1", balance: 123_45 },
+        walls: [{ id: "wall-1" }],
+        subscriptionTiers: [{ id: "tier-1" }],
+      },
+    }));
+
+    await onboardFanslyPage(app, {
+      modelSlug: "lora",
+      label: "lora-main",
+      session: {
+        authorization: "token-1",
+      },
+    });
+
+    await expect(
+      onboardFanslyPage(app, {
+        modelSlug: "lora",
+        label: "lora-duplicate",
+        session: {
+          authorization: "token-2",
+        },
+      }),
+    ).rejects.toThrow('Upstream account "fansly:acct-123" is already bound to page "lora-main"');
+
+    const counts = await testDb.pool.query(`
+      select
+        (select count(*)::int from platform_accounts) as platform_accounts_count,
+        (select count(*)::int from platform_account_credentials) as credentials_count
+    `);
+
+    expect(counts.rows[0]).toMatchObject({
+      platform_accounts_count: 1,
+      credentials_count: 1,
+    });
+  });
+
+  it("refuses to rebind an existing page to a different upstream account", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "lora-main",
+    });
+
+    await updatePageMetadata(testDb.db, page.id, {
+      platformAccountIdValue: "acct-123",
+      username: "lora_verified",
+      displayName: "Lora Verified",
+      followerCount: 42,
+      subscriberCount: 7,
+      earningsBalanceMills: 12345n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    await expect(
+      updatePageMetadata(testDb.db, page.id, {
+        platformAccountIdValue: "acct-456",
+        username: "lora_rebound",
+        displayName: "Lora Rebound",
+        followerCount: 99,
+        subscriberCount: 9,
+        earningsBalanceMills: 999n,
+        metadata: {},
+        syncType: "light",
+      }),
+    ).rejects.toThrow(
+      'Page "lora-main" is already bound to upstream account "acct-123" and cannot be rebound to "acct-456"',
+    );
+
+    const rows = await testDb.pool.query(`
+      select platform_account_id, username, display_name
+      from platform_accounts
+      where id = ${page.id}
+    `);
+
+    expect(rows.rows[0]).toMatchObject({
+      platform_account_id: "acct-123",
+      username: "lora_verified",
+      display_name: "Lora Verified",
     });
   });
 

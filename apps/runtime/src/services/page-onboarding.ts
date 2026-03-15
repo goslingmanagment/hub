@@ -2,6 +2,8 @@ import {
   createOnlyFansPage,
   createFanslyPage,
   findModelBySlug,
+  PlatformAccountIdentityConflictError,
+  PlatformAccountIdentityImmutableError,
   storePlatformCredentials,
   updatePageMetadata,
 } from "@agency_hub_core/db";
@@ -17,7 +19,7 @@ import {
 import type { OnlyMonsterAccount } from "@agency_hub_core/onlyfans";
 
 import type { AppContext } from "../bootstrap.ts";
-import { NotFoundError } from "./errors.ts";
+import { ConflictError, NotFoundError } from "./errors.ts";
 import { buildOnlyFansMetadata, findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
 
@@ -54,6 +56,17 @@ async function storeProxyIfPresent(
   await saveProxy(app, platformAccountId, proxy);
 }
 
+function rethrowPageIdentityConflict(error: unknown): never {
+  if (
+    error instanceof PlatformAccountIdentityConflictError ||
+    error instanceof PlatformAccountIdentityImmutableError
+  ) {
+    throw new ConflictError(error.message);
+  }
+
+  throw error;
+}
+
 export async function onboardFanslyPage(
   app: FanslyOnboardingContext,
   input: {
@@ -75,40 +88,45 @@ export async function onboardFanslyPage(
   });
   const verified = verification.parsed;
 
-  const page = await app.db.transaction(async (tx) => {
-    const dbTx = tx as unknown as typeof app.db;
-    const created = await createFanslyPage(dbTx, {
-      modelId: model.id,
-      label: input.label,
+  let page;
+  try {
+    page = await app.db.transaction(async (tx) => {
+      const dbTx = tx as unknown as typeof app.db;
+      const created = await createFanslyPage(dbTx, {
+        modelId: model.id,
+        label: input.label,
+      });
+
+      await storePlatformCredentials(dbTx, {
+        platformAccountId: created.id,
+        encryptedSession: encryptCredentials({
+          platform: "fansly",
+          session: input.session,
+        }, app),
+        keyVersion: app.config.encryptionKeyVersion,
+      });
+
+      await storeProxyIfPresent({ ...app, db: dbTx }, created.id, proxy);
+
+      await updatePageMetadata(dbTx, created.id, {
+        platformAccountIdValue: verified.account.id,
+        username: verified.account.username,
+        displayName: verified.account.displayName,
+        followerCount: verified.account.followCount,
+        subscriberCount: verified.account.subscriberCount,
+        earningsBalanceMills: toMills(verified.account.earningsWallet?.balance ?? 0),
+        metadata: {
+          walls: verified.account.walls ?? [],
+          subscriptionTiers: verified.account.subscriptionTiers ?? [],
+        },
+        syncType: "light",
+      });
+
+      return created;
     });
-
-    await storePlatformCredentials(dbTx, {
-      platformAccountId: created.id,
-      encryptedSession: encryptCredentials({
-        platform: "fansly",
-        session: input.session,
-      }, app),
-      keyVersion: app.config.encryptionKeyVersion,
-    });
-
-    await storeProxyIfPresent({ ...app, db: dbTx }, created.id, proxy);
-
-    await updatePageMetadata(dbTx, created.id, {
-      platformAccountIdValue: verified.account.id,
-      username: verified.account.username,
-      displayName: verified.account.displayName,
-      followerCount: verified.account.followCount,
-      subscriberCount: verified.account.subscriberCount,
-      earningsBalanceMills: toMills(verified.account.earningsWallet?.balance ?? 0),
-      metadata: {
-        walls: verified.account.walls ?? [],
-        subscriptionTiers: verified.account.subscriptionTiers ?? [],
-      },
-      syncType: "light",
-    });
-
-    return created;
-  });
+  } catch (error) {
+    rethrowPageIdentityConflict(error);
+  }
 
   return { page, verified };
 }
@@ -141,37 +159,42 @@ export async function onboardOnlyFansPage(
   const verification = await app.onlyFansAdapter.getAccount(lookupContext, account.id);
   const verified = verification.parsed.account;
 
-  const page = await app.db.transaction(async (tx) => {
-    const dbTx = tx as unknown as typeof app.db;
-    const created = await createOnlyFansPage(dbTx, {
-      modelId: model.id,
-      label: input.label,
+  let page;
+  try {
+    page = await app.db.transaction(async (tx) => {
+      const dbTx = tx as unknown as typeof app.db;
+      const created = await createOnlyFansPage(dbTx, {
+        modelId: model.id,
+        label: input.label,
+      });
+
+      await storePlatformCredentials(dbTx, {
+        platformAccountId: created.id,
+        encryptedSession: encryptCredentials({
+          platform: "onlyfans",
+          auth: input.auth,
+        }, app),
+        keyVersion: app.config.encryptionKeyVersion,
+      });
+
+      await storeProxyIfPresent({ ...app, db: dbTx }, created.id, proxy);
+
+      await updatePageMetadata(dbTx, created.id, {
+        platformAccountIdValue: verified.platform_account_id,
+        username: verified.username,
+        displayName: verified.name,
+        followerCount: 0,
+        subscriberCount: 0,
+        earningsBalanceMills: 0n,
+        metadata: buildOnlyFansMetadata(verified),
+        syncType: "light",
+      });
+
+      return created;
     });
-
-    await storePlatformCredentials(dbTx, {
-      platformAccountId: created.id,
-      encryptedSession: encryptCredentials({
-        platform: "onlyfans",
-        auth: input.auth,
-      }, app),
-      keyVersion: app.config.encryptionKeyVersion,
-    });
-
-    await storeProxyIfPresent({ ...app, db: dbTx }, created.id, proxy);
-
-    await updatePageMetadata(dbTx, created.id, {
-      platformAccountIdValue: verified.platform_account_id,
-      username: verified.username,
-      displayName: verified.name,
-      followerCount: 0,
-      subscriberCount: 0,
-      earningsBalanceMills: 0n,
-      metadata: buildOnlyFansMetadata(verified),
-      syncType: "light",
-    });
-
-    return created;
-  });
+  } catch (error) {
+    rethrowPageIdentityConflict(error);
+  }
 
   return {
     page,

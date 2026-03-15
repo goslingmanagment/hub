@@ -129,7 +129,7 @@ export const platformAccounts = pgTable(
   },
   (table) => ({
     modelIdx: index("platform_accounts_model_idx").on(table.modelId),
-    platformUserIdx: index("platform_accounts_platform_user_idx").on(
+    platformAccountUniq: unique("platform_accounts_platform_account_uniq").on(
       table.platform,
       table.platformAccountId,
     ),
