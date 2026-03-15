@@ -545,6 +545,11 @@ export const transactions = pgTable(
       table.platformAccountId,
       table.transactionId,
     ),
+    pendingBoundaryIdx: index("transactions_pending_boundary_idx").on(
+      table.platformAccountId,
+      table.transactionState,
+      table.occurredAt,
+    ),
     occurredIdx: index("transactions_account_occurred_idx").on(
       table.platformAccountId,
       table.occurredAt,

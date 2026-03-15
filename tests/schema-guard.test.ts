@@ -26,7 +26,7 @@ describe("runtime schema guard", () => {
 
     try {
       await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
-        "missing latest migration 0016_fan_pages_platform_account_idx.sql",
+        "missing latest migration 0017_transactions_pending_boundary_idx.sql",
       );
     } finally {
       await testDb.stop();
