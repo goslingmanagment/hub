@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   encryptJson,
@@ -1456,6 +1456,67 @@ describe("db write safety", () => {
       creator_net_amount_mills: 1200n,
     });
     expect(rows.rows[0]?.source_updated_at).toBeInstanceOf(Date);
+  });
+
+  it("batches fan upserts and username alias writes into set-based statements", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const querySpy = vi.spyOn(testDb.pool, "query");
+
+    try {
+      const fans = await upsertFans(testDb.db, [
+        {
+          platform: "fansly",
+          platformUserId: "batch-fan-1",
+          username: "alpha",
+          displayName: "Alpha",
+        },
+        {
+          platform: "fansly",
+          platformUserId: "batch-fan-2",
+          username: "beta",
+          displayName: "Beta",
+        },
+        {
+          platform: "fansly",
+          platformUserId: "batch-fan-1",
+          displayName: "Alpha Updated",
+        },
+      ]);
+
+      const statements = querySpy.mock.calls
+        .map((call) => {
+          const statement = call[0];
+          if (typeof statement === "string") {
+            return statement;
+          }
+          if (statement && typeof statement === "object" && "text" in statement) {
+            const text = (statement as { text?: unknown }).text;
+            return typeof text === "string" ? text : "";
+          }
+          return "";
+        })
+        .filter((statement) => statement.length > 0);
+      expect(statements.filter((statement) => statement.includes('insert into "fans"'))).toHaveLength(1);
+      expect(statements.filter((statement) => statement.includes('insert into "fan_username_aliases"')))
+        .toHaveLength(1);
+      expect(fans.map((fan) => fan.platformUserId)).toEqual([
+        "batch-fan-1",
+        "batch-fan-2",
+      ]);
+    } finally {
+      querySpy.mockRestore();
+    }
+
+    const aliasRows = await testDb.pool.query(`
+      select count(*)::int as count
+      from fan_username_aliases
+      where username in ('alpha', 'beta')
+    `);
+    expect(aliasRows.rows[0]?.count).toBe(2);
   });
 
   it("rebuilds revenue rollups from the first affected business day without deleting older history", async (context) => {

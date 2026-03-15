@@ -9,7 +9,7 @@ const dbMocks = vi.hoisted(() => ({
   rebuildRevenueRollups: vi.fn(),
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
-  upsertFanPage: vi.fn(),
+  upsertFanPages: vi.fn(),
   upsertFans: vi.fn(),
   upsertTransaction: vi.fn(),
 }));
@@ -213,7 +213,7 @@ describe("syncOnlyFansTransactions", () => {
     dbMocks.mergePageMetadata.mockResolvedValue(null);
     dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);
     dbMocks.rebuildRevenueRollups.mockResolvedValue(undefined);
-    dbMocks.upsertFanPage.mockResolvedValue(undefined);
+    dbMocks.upsertFanPages.mockResolvedValue(undefined);
     dbMocks.upsertTransaction.mockResolvedValue(undefined);
     dbMocks.upsertFans.mockImplementation(async (_db: unknown, inputs: Array<{ platformUserId: string }>) =>
       inputs.map((input: { platformUserId: string }, index: number) => ({

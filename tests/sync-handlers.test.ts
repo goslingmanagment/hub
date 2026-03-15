@@ -12,10 +12,10 @@ const dbMocks = vi.hoisted(() => ({
   updateLegacySyncTimestamp: vi.fn(),
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
-  upsertFanPage: vi.fn(),
+  upsertFanPages: vi.fn(),
   upsertFans: vi.fn(),
-  upsertPageFollow: vi.fn(),
-  upsertPageSubscription: vi.fn(),
+  upsertPageFollows: vi.fn(),
+  upsertPageSubscriptions: vi.fn(),
   refreshFanPageFollowerState: vi.fn(),
   refreshFanPageSubscriberState: vi.fn(),
 }));
@@ -79,9 +79,9 @@ describe("sync executor handlers", () => {
     dbMocks.rebuildFollowerRollups.mockResolvedValue(undefined);
     dbMocks.rebuildSubscriberRollups.mockResolvedValue(undefined);
     dbMocks.updateLegacySyncTimestamp.mockResolvedValue(undefined);
-    dbMocks.upsertFanPage.mockResolvedValue(undefined);
-    dbMocks.upsertPageFollow.mockResolvedValue(undefined);
-    dbMocks.upsertPageSubscription.mockResolvedValue(undefined);
+    dbMocks.upsertFanPages.mockResolvedValue(undefined);
+    dbMocks.upsertPageFollows.mockResolvedValue(undefined);
+    dbMocks.upsertPageSubscriptions.mockResolvedValue(undefined);
     dbMocks.refreshFanPageFollowerState.mockResolvedValue(undefined);
     dbMocks.refreshFanPageSubscriberState.mockResolvedValue(undefined);
     sharedMocks.persistRawPayload.mockResolvedValue(undefined);

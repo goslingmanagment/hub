@@ -10,12 +10,15 @@ import {
   updateLegacySyncTimestamp,
   upsertCheckpoint,
   upsertCheckpointProgress,
-  upsertFanPage,
+  upsertFanPages,
   upsertFans,
-  upsertPageFollow,
-  upsertPageSubscription,
+  upsertPageFollows,
+  upsertPageSubscriptions,
   refreshFanPageFollowerState,
   refreshFanPageSubscriberState,
+  type UpsertFanPageInput,
+  type UpsertPageFollowInput,
+  type UpsertPageSubscriptionInput,
   type SyncStreamStateRow,
 } from "@agency_hub_core/db";
 import {
@@ -416,6 +419,8 @@ export async function executeSubscribersChunk(
       telemetry: input.telemetry,
     });
 
+    const subscriptionInputs: UpsertPageSubscriptionInput[] = [];
+    const fanPageInputs: UpsertFanPageInput[] = [];
     for (const item of page.items) {
       const fanId = fanMap.get(item.subscriberId);
       if (!fanId) {
@@ -426,7 +431,7 @@ export async function executeSubscribersChunk(
       const endsAt = item.endsAt ? new Date(item.endsAt) : null;
       const autoRenew = item.autoRenew === null ? null : item.autoRenew === 1;
       const canonicalStatus = mapFanslySubscriptionStatus(item.status);
-      await upsertPageSubscription(app.db, {
+      subscriptionInputs.push({
         platformSubscriptionId: item.id,
         platformAccountId: input.pageContext.page.id,
         fanId,
@@ -448,7 +453,7 @@ export async function executeSubscribersChunk(
         endsAt,
         lastSeenGeneration: state.generation,
       });
-      await upsertFanPage(app.db, {
+      fanPageInputs.push({
         fanId,
         platformAccountId: input.pageContext.page.id,
         isSubscriber: true,
@@ -456,8 +461,10 @@ export async function executeSubscribersChunk(
         subscriptionExpiresAt: endsAt,
         autoRenew,
       });
-      processedThisChunk += 1;
     }
+    await upsertPageSubscriptions(app.db, subscriptionInputs);
+    await upsertFanPages(app.db, fanPageInputs);
+    processedThisChunk += subscriptionInputs.length;
 
     if (page.done) {
       await deactivatePageSubscriptionsByGeneration(app.db, {
@@ -605,6 +612,8 @@ export async function executeFollowersChunk(
     const fanMap = new Map(fanRows.map((fan) => [fan.platformUserId, fan.id]));
 
     let reachedBoundary = false;
+    const followInputs: UpsertPageFollowInput[] = [];
+    const fanPageInputs: UpsertFanPageInput[] = [];
     for (const follower of page.items) {
       if (state.knownFollowId && follower.id === state.knownFollowId) {
         sawKnownCheckpoint = true;
@@ -618,20 +627,22 @@ export async function executeFollowersChunk(
       }
 
       const followedAt = fanslyFollowIdToDate(follower.id);
-      await upsertPageFollow(app.db, {
+      followInputs.push({
         platformAccountId: input.pageContext.page.id,
         fanId,
         platformFollowId: follower.id,
         followedAt,
       });
-      await upsertFanPage(app.db, {
+      fanPageInputs.push({
         fanId,
         platformAccountId: input.pageContext.page.id,
         isFollower: true,
         followerSince: followedAt,
       });
-      processedThisChunk += 1;
     }
+    await upsertPageFollows(app.db, followInputs);
+    await upsertFanPages(app.db, fanPageInputs);
+    processedThisChunk += followInputs.length;
 
     if (reachedBoundary || page.done) {
       const newestFollowId = state.newestFollowId ?? state.knownFollowId;
@@ -791,6 +802,8 @@ export async function executeFollowersReconcileChunk(
     })));
     const fanMap = new Map(fanRows.map((fan) => [fan.platformUserId, fan.id]));
 
+    const followInputs: UpsertPageFollowInput[] = [];
+    const fanPageInputs: UpsertFanPageInput[] = [];
     for (const follower of page.items) {
       const fanId = fanMap.get(follower.followerId);
       if (!fanId) {
@@ -798,21 +811,23 @@ export async function executeFollowersReconcileChunk(
       }
 
       const followedAt = fanslyFollowIdToDate(follower.id);
-      await upsertPageFollow(app.db, {
+      followInputs.push({
         platformAccountId: input.pageContext.page.id,
         fanId,
         platformFollowId: follower.id,
         followedAt,
         lastSeenGeneration: state.generation,
       });
-      await upsertFanPage(app.db, {
+      fanPageInputs.push({
         fanId,
         platformAccountId: input.pageContext.page.id,
         isFollower: true,
         followerSince: followedAt,
       });
-      processedThisChunk += 1;
     }
+    await upsertPageFollows(app.db, followInputs);
+    await upsertFanPages(app.db, fanPageInputs);
+    processedThisChunk += followInputs.length;
 
     if (page.done) {
       await deactivatePageFollowsByGeneration(app.db, {

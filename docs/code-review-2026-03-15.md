@@ -228,7 +228,7 @@ File `docs/code-review-2026-03-09.md` missing from working tree. Delta reconstru
 | H-4 | Fixed | `fix(H-4): preserve fan attribution on rescans` | `pnpm test -- tests/db-write.integration.test.ts` | Transaction upserts now keep existing `fan_id` when rescans resolve to `NULL`. |
 | H-2 | Fixed | `fix(H-2): verify credential account identity` | `pnpm test -- tests/db-write.integration.test.ts` | Credential updates now reject upstream-account mismatches for Fansly and OnlyFans. |
 | H-5 | Fixed | `fix(H-5): fail hard on advisory unlock errors` | `pnpm test -- tests/sync-locking.test.ts` | Unlock failures now discard the pooled client instead of silently returning it. |
-| H-1 | Pending |  |  |  |
+| H-1 | Fixed | `fix(H-1): batch sync fan upserts` | `pnpm exec vitest run tests/db-write.integration.test.ts tests/sync-handlers.test.ts tests/onlyfans-transactions.test.ts` | Batched fan, fan-page, follow, and subscription writes on active sync paths. |
 | M-2 | Pending |  |  |  |
 | M-3 | Pending |  |  |  |
 | M-4 | Pending |  |  |  |

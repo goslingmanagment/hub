@@ -5,7 +5,7 @@ import {
   rebuildRevenueRollups,
   upsertCheckpoint,
   upsertCheckpointProgress,
-  upsertFanPage,
+  upsertFanPages,
   upsertFans,
   upsertTransaction,
 } from "@agency_hub_core/db";
@@ -197,13 +197,13 @@ async function syncTransactionsIncremental(
   await app.db.transaction(async (tx) => {
     const fans = await upsertFans(tx as typeof app.db, hydratedFans);
     const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
-
-    for (const fan of fans) {
-      await upsertFanPage(tx as typeof app.db, {
+    await upsertFanPages(
+      tx as typeof app.db,
+      fans.map((fan) => ({
         fanId: fan.id,
         platformAccountId: input.platformAccountId,
-      });
-    }
+      })),
+    );
 
     for (const item of collectedItems) {
       const fanId = item.correlationAccountId
@@ -497,13 +497,10 @@ async function syncTransactionsBackfill(
         const dbTx = tx as typeof app.db;
         const fans = await upsertFans(dbTx, hydratedFans);
         const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
-
-        for (const fan of fans) {
-          await upsertFanPage(dbTx, {
-            fanId: fan.id,
-            platformAccountId: input.platformAccountId,
-          });
-        }
+        await upsertFanPages(dbTx, fans.map((fan) => ({
+          fanId: fan.id,
+          platformAccountId: input.platformAccountId,
+        })));
 
         for (const item of page.items) {
           const fanId = item.correlationAccountId

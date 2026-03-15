@@ -20,76 +20,231 @@ export interface UpsertFanInput {
   metadata?: Record<string, unknown>;
 }
 
-export async function upsertFans(db: Database, items: UpsertFanInput[]) {
-  const results: Array<typeof fans.$inferSelect> = [];
+function dedupeByKey<T>(items: T[], keyFor: (item: T) => string, merge: (current: T, next: T) => T) {
+  const deduped = new Map<string, T>();
 
   for (const item of items) {
+    const key = keyFor(item);
+    const current = deduped.get(key);
+    deduped.set(key, current ? merge(current, item) : item);
+  }
+
+  return Array.from(deduped.values());
+}
+
+function groupByKey<T>(items: T[], keyFor: (item: T) => string) {
+  const grouped = new Map<string, T[]>();
+
+  for (const item of items) {
+    const key = keyFor(item);
+    const current = grouped.get(key) ?? [];
+    current.push(item);
+    grouped.set(key, current);
+  }
+
+  return grouped;
+}
+
+function mergeUpsertFanInput(current: UpsertFanInput, next: UpsertFanInput): UpsertFanInput {
+  return {
+    platform: next.platform,
+    platformUserId: next.platformUserId,
+    username: next.username !== undefined ? next.username : current.username,
+    displayName: next.displayName !== undefined ? next.displayName : current.displayName,
+    createdAtExternal: next.createdAtExternal !== undefined
+      ? next.createdAtExternal
+      : current.createdAtExternal,
+    metadata: next.metadata !== undefined ? next.metadata : current.metadata,
+  };
+}
+
+function fanUpsertPresenceKey(item: UpsertFanInput) {
+  return [
+    item.username !== undefined ? "username" : "",
+    item.displayName !== undefined ? "displayName" : "",
+    item.createdAtExternal !== undefined ? "createdAtExternal" : "",
+    item.metadata !== undefined ? "metadata" : "",
+  ].join("|");
+}
+
+export async function upsertFans(db: Database, items: UpsertFanInput[]) {
+  if (items.length === 0) {
+    return [] as Array<typeof fans.$inferSelect>;
+  }
+
+  const deduped = dedupeByKey(
+    items,
+    (item) => `${item.platform}:${item.platformUserId}`,
+    mergeUpsertFanInput,
+  );
+  const groups = groupByKey(deduped, fanUpsertPresenceKey);
+  const fanByKey = new Map<string, typeof fans.$inferSelect>();
+
+  for (const group of groups.values()) {
+    const template = group[0]!;
+    const lastSeenAt = new Date();
     const updateSet: Record<string, unknown> = {
-      lastSeenAt: new Date(),
+      lastSeenAt,
     };
 
-    if (item.username !== undefined) {
-      updateSet.username = item.username;
+    if (template.username !== undefined) {
+      updateSet.username = sql`excluded.username`;
     }
-    if (item.displayName !== undefined) {
-      updateSet.displayName = item.displayName;
+    if (template.displayName !== undefined) {
+      updateSet.displayName = sql`excluded.display_name`;
     }
-    if (item.createdAtExternal !== undefined) {
-      updateSet.createdAtExternal = item.createdAtExternal;
+    if (template.createdAtExternal !== undefined) {
+      updateSet.createdAtExternal = sql`excluded.created_at_external`;
     }
-    if (item.metadata !== undefined) {
-      updateSet.metadata = item.metadata;
+    if (template.metadata !== undefined) {
+      updateSet.metadata = sql`excluded.metadata`;
     }
 
-    const [fan] = await db
+    const rows = await db
       .insert(fans)
-      .values({
+      .values(group.map((item) => ({
         platform: item.platform,
         platformUserId: item.platformUserId,
         username: item.username ?? null,
         displayName: item.displayName ?? null,
         createdAtExternal: item.createdAtExternal ?? null,
         metadata: item.metadata ?? {},
-      })
+      })))
       .onConflictDoUpdate({
         target: [fans.platform, fans.platformUserId],
         set: updateSet,
       })
       .returning();
 
-    if (fan.username && fan.username.trim().length > 0) {
-      await db.insert(fanUsernameAliases).values({
-        fanId: fan.id,
-        username: fan.username,
-        firstSeenAt: fan.firstSeenAt,
-        lastSeenAt: fan.lastSeenAt,
-      }).onConflictDoUpdate({
+    const aliasValues = rows.flatMap((fan) => (
+      fan.username && fan.username.trim().length > 0
+        ? [{
+          fanId: fan.id,
+          username: fan.username,
+          firstSeenAt: fan.firstSeenAt,
+          lastSeenAt: fan.lastSeenAt,
+        }]
+        : []
+    ));
+    if (aliasValues.length > 0) {
+      await db.insert(fanUsernameAliases).values(aliasValues).onConflictDoUpdate({
         target: [fanUsernameAliases.fanId, fanUsernameAliases.username],
         set: {
-          firstSeenAt: sql`least(${fanUsernameAliases.firstSeenAt}, ${fan.firstSeenAt})`,
-          lastSeenAt: fan.lastSeenAt,
+          firstSeenAt: sql`least(${fanUsernameAliases.firstSeenAt}, excluded.first_seen_at)`,
+          lastSeenAt: sql`greatest(${fanUsernameAliases.lastSeenAt}, excluded.last_seen_at)`,
         },
       });
     }
 
-    results.push(fan);
+    for (const row of rows) {
+      fanByKey.set(`${row.platform}:${row.platformUserId}`, row);
+    }
   }
 
-  return results;
+  return deduped.map((item) => fanByKey.get(`${item.platform}:${item.platformUserId}`)!);
+}
+
+export interface UpsertFanPageInput {
+  fanId: number;
+  platformAccountId: number;
+  isFollower?: boolean;
+  followerSince?: Date | null;
+  isSubscriber?: boolean;
+  subscriberSince?: Date | null;
+  subscriptionExpiresAt?: Date | null;
+  autoRenew?: boolean | null;
+}
+
+function mergeUpsertFanPageInput(
+  current: UpsertFanPageInput,
+  next: UpsertFanPageInput,
+): UpsertFanPageInput {
+  return {
+    fanId: next.fanId,
+    platformAccountId: next.platformAccountId,
+    isFollower: next.isFollower !== undefined ? next.isFollower : current.isFollower,
+    followerSince: next.followerSince !== undefined ? next.followerSince : current.followerSince,
+    isSubscriber: next.isSubscriber !== undefined ? next.isSubscriber : current.isSubscriber,
+    subscriberSince: next.subscriberSince !== undefined ? next.subscriberSince : current.subscriberSince,
+    subscriptionExpiresAt: next.subscriptionExpiresAt !== undefined
+      ? next.subscriptionExpiresAt
+      : current.subscriptionExpiresAt,
+    autoRenew: next.autoRenew !== undefined ? next.autoRenew : current.autoRenew,
+  };
+}
+
+function fanPagePresenceKey(input: UpsertFanPageInput) {
+  return [
+    input.isFollower !== undefined ? "isFollower" : "",
+    input.followerSince !== undefined ? "followerSince" : "",
+    input.isSubscriber !== undefined ? "isSubscriber" : "",
+    input.subscriberSince !== undefined ? "subscriberSince" : "",
+    input.subscriptionExpiresAt !== undefined ? "subscriptionExpiresAt" : "",
+    input.autoRenew !== undefined ? "autoRenew" : "",
+  ].join("|");
+}
+
+export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[]) {
+  if (inputs.length === 0) {
+    return;
+  }
+
+  const deduped = dedupeByKey(
+    inputs,
+    (input) => `${input.platformAccountId}:${input.fanId}`,
+    mergeUpsertFanPageInput,
+  );
+  const groups = groupByKey(deduped, fanPagePresenceKey);
+
+  for (const group of groups.values()) {
+    const template = group[0]!;
+    const lastSeenAt = new Date();
+    const updateSet: Record<string, unknown> = {
+      lastSeenAt,
+    };
+
+    if (template.isFollower !== undefined) {
+      updateSet.isFollower = sql`excluded.is_follower`;
+    }
+    if (template.followerSince !== undefined) {
+      updateSet.followerSince = sql`excluded.follower_since`;
+    }
+    if (template.isSubscriber !== undefined) {
+      updateSet.isSubscriber = sql`excluded.is_subscriber`;
+    }
+    if (template.subscriberSince !== undefined) {
+      updateSet.subscriberSince = sql`excluded.subscriber_since`;
+    }
+    if (template.subscriptionExpiresAt !== undefined) {
+      updateSet.subscriptionExpiresAt = sql`excluded.subscription_expires_at`;
+    }
+    if (template.autoRenew !== undefined) {
+      updateSet.autoRenew = sql`excluded.auto_renew`;
+    }
+
+    await db
+      .insert(fanPages)
+      .values(group.map((input) => ({
+        fanId: input.fanId,
+        platformAccountId: input.platformAccountId,
+        isFollower: input.isFollower ?? false,
+        followerSince: input.followerSince ?? null,
+        isSubscriber: input.isSubscriber ?? false,
+        subscriberSince: input.subscriberSince ?? null,
+        subscriptionExpiresAt: input.subscriptionExpiresAt ?? null,
+        autoRenew: input.autoRenew ?? null,
+        lastSeenAt,
+      })))
+      .onConflictDoUpdate({
+        target: [fanPages.fanId, fanPages.platformAccountId],
+        set: updateSet,
+      });
+  }
 }
 
 export async function upsertFanPage(
   db: Database,
-  input: {
-    fanId: number;
-    platformAccountId: number;
-    isFollower?: boolean;
-    followerSince?: Date | null;
-    isSubscriber?: boolean;
-    subscriberSince?: Date | null;
-    subscriptionExpiresAt?: Date | null;
-    autoRenew?: boolean | null;
-  },
+  input: UpsertFanPageInput,
 ) {
   const patch = {
     isFollower: input.isFollower ?? false,
@@ -139,15 +294,49 @@ export async function upsertFanPage(
   return fanPage;
 }
 
+export interface UpsertPageFollowInput {
+  platformAccountId: number;
+  fanId: number;
+  platformFollowId: string;
+  followedAt: Date;
+  lastSeenGeneration?: number | null;
+}
+
+export async function upsertPageFollows(db: Database, inputs: UpsertPageFollowInput[]) {
+  if (inputs.length === 0) {
+    return;
+  }
+
+  const deduped = dedupeByKey(
+    inputs,
+    (input) => `${input.platformAccountId}:${input.platformFollowId}`,
+    (_current, next) => next,
+  );
+  const lastSeenAt = new Date();
+
+  await db
+    .insert(pageFollows)
+    .values(deduped.map((input) => ({
+      platformAccountId: input.platformAccountId,
+      fanId: input.fanId,
+      platformFollowId: input.platformFollowId,
+      followedAt: input.followedAt,
+      lastSeenGeneration: input.lastSeenGeneration ?? null,
+      lastSeenAt,
+    })))
+    .onConflictDoUpdate({
+      target: [pageFollows.platformAccountId, pageFollows.platformFollowId],
+      set: {
+        lastSeenAt,
+        isActive: true,
+        lastSeenGeneration: sql`excluded.last_seen_generation`,
+      },
+    });
+}
+
 export async function upsertPageFollow(
   db: Database,
-  input: {
-    platformAccountId: number;
-    fanId: number;
-    platformFollowId: string;
-    followedAt: Date;
-    lastSeenGeneration?: number | null;
-  },
+  input: UpsertPageFollowInput,
 ) {
   const lastSeenAt = new Date();
   const [pageFollow] = await db
@@ -275,28 +464,7 @@ export async function setPageSubscriptionsCurrentFlag(
 
 export async function upsertPageSubscription(
   db: Database,
-  input: {
-    platformSubscriptionId: string;
-    platformAccountId: number;
-    fanId: number;
-    platformHistoryId?: string | null;
-    subscriptionTierId?: string | null;
-    subscriptionTierName?: string | null;
-    subscriptionTierColor?: string | null;
-    planId?: string | null;
-    rawStatus: number;
-    canonicalStatus: string;
-    priceMills: bigint;
-    renewPriceMills: bigint;
-    autoRenew?: boolean | null;
-    billingCycleDays?: number | null;
-    durationDays?: number | null;
-    renewDate?: Date | null;
-    sourceCreatedAt?: Date | null;
-    sourceUpdatedAt?: Date | null;
-    endsAt?: Date | null;
-    lastSeenGeneration?: number | null;
-  },
+  input: UpsertPageSubscriptionInput,
 ) {
   const lastSeenAt = new Date();
   const patch = {
@@ -335,6 +503,98 @@ export async function upsertPageSubscription(
     })
     .returning();
   return subscription;
+}
+
+export interface UpsertPageSubscriptionInput {
+  platformSubscriptionId: string;
+  platformAccountId: number;
+  fanId: number;
+  platformHistoryId?: string | null;
+  subscriptionTierId?: string | null;
+  subscriptionTierName?: string | null;
+  subscriptionTierColor?: string | null;
+  planId?: string | null;
+  rawStatus: number;
+  canonicalStatus: string;
+  priceMills: bigint;
+  renewPriceMills: bigint;
+  autoRenew?: boolean | null;
+  billingCycleDays?: number | null;
+  durationDays?: number | null;
+  renewDate?: Date | null;
+  sourceCreatedAt?: Date | null;
+  sourceUpdatedAt?: Date | null;
+  endsAt?: Date | null;
+  lastSeenGeneration?: number | null;
+}
+
+export async function upsertPageSubscriptions(
+  db: Database,
+  inputs: UpsertPageSubscriptionInput[],
+) {
+  if (inputs.length === 0) {
+    return;
+  }
+
+  const deduped = dedupeByKey(
+    inputs,
+    (input) => input.platformSubscriptionId,
+    (_current, next) => next,
+  );
+  const lastSeenAt = new Date();
+
+  await db
+    .insert(pageSubscriptions)
+    .values(deduped.map((input) => ({
+      platformSubscriptionId: input.platformSubscriptionId,
+      platformAccountId: input.platformAccountId,
+      fanId: input.fanId,
+      platformHistoryId: input.platformHistoryId ?? null,
+      subscriptionTierId: input.subscriptionTierId ?? null,
+      subscriptionTierName: input.subscriptionTierName ?? null,
+      subscriptionTierColor: input.subscriptionTierColor ?? null,
+      planId: input.planId ?? null,
+      rawStatus: input.rawStatus,
+      canonicalStatus: input.canonicalStatus,
+      priceMills: input.priceMills,
+      renewPriceMills: input.renewPriceMills,
+      autoRenew: input.autoRenew ?? null,
+      billingCycleDays: input.billingCycleDays ?? null,
+      durationDays: input.durationDays ?? null,
+      renewDate: input.renewDate ?? null,
+      sourceCreatedAt: input.sourceCreatedAt ?? null,
+      sourceUpdatedAt: input.sourceUpdatedAt ?? null,
+      endsAt: input.endsAt ?? null,
+      isCurrent: true,
+      lastSeenGeneration: input.lastSeenGeneration ?? null,
+      lastSeenAt,
+    })))
+    .onConflictDoUpdate({
+      target: pageSubscriptions.platformSubscriptionId,
+      set: {
+        platformAccountId: sql`excluded.platform_account_id`,
+        fanId: sql`excluded.fan_id`,
+        platformHistoryId: sql`excluded.platform_history_id`,
+        subscriptionTierId: sql`excluded.subscription_tier_id`,
+        subscriptionTierName: sql`excluded.subscription_tier_name`,
+        subscriptionTierColor: sql`excluded.subscription_tier_color`,
+        planId: sql`excluded.plan_id`,
+        rawStatus: sql`excluded.raw_status`,
+        canonicalStatus: sql`excluded.canonical_status`,
+        priceMills: sql`excluded.price_mills`,
+        renewPriceMills: sql`excluded.renew_price_mills`,
+        autoRenew: sql`excluded.auto_renew`,
+        billingCycleDays: sql`excluded.billing_cycle_days`,
+        durationDays: sql`excluded.duration_days`,
+        renewDate: sql`excluded.renew_date`,
+        sourceCreatedAt: sql`excluded.source_created_at`,
+        sourceUpdatedAt: sql`excluded.source_updated_at`,
+        endsAt: sql`excluded.ends_at`,
+        isCurrent: true,
+        lastSeenGeneration: sql`excluded.last_seen_generation`,
+        lastSeenAt,
+      },
+    });
 }
 
 export async function deactivatePageFollowsByGeneration(
