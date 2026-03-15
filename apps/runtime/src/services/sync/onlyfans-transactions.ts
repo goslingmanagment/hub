@@ -571,8 +571,11 @@ async function syncOnlyFansTransactionsIncremental(
         keepTransactionIds: Array.from(sourceTransactionIds),
       });
     }
-    await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId);
-    await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId);
+    const dirtyFrom = processedTransactions > 0 ? start : oldestSeenAt;
+    if (dirtyFrom) {
+      await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId, dirtyFrom);
+      await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId, dirtyFrom);
+    }
 
     if (newestSeenAt) {
       checkpointAfter = await upsertCheckpoint(tx as typeof app.db, {

@@ -245,8 +245,10 @@ async function syncTransactionsIncremental(
       });
     }
 
-    await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId);
-    await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId);
+    if (oldestSeenAt) {
+      await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId, oldestSeenAt);
+      await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId, oldestSeenAt);
+    }
 
     if (newestSeenAt) {
       checkpointAfter = await upsertCheckpoint(tx as typeof app.db, {

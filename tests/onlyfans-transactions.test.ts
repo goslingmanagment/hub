@@ -666,6 +666,61 @@ describe("syncOnlyFansTransactions", () => {
     expect(firstRequest.start!.toISOString()).toBe("2026-03-01T00:00:00.000Z");
   });
 
+  it("skips incremental OnlyFans rollup rebuilds when no ledger rows changed", async () => {
+    const adapter = createAdapter({
+      transactionPages: [makeCursorPage([])],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    await runOnlyFansTransactionsSync({
+      adapter,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: {},
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(dbMocks.rebuildSpenderProjections).not.toHaveBeenCalled();
+    expect(dbMocks.rebuildRevenueRollups).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds incremental OnlyFans rollups from the cleanup window start", async () => {
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")]),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    await runOnlyFansTransactionsSync({
+      adapter,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: {},
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(dbMocks.deleteTransactionsMissingFromWindow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        platformAccountId: 1,
+        from: new Date("2026-03-07T00:00:00.000Z"),
+      }),
+    );
+    expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      new Date("2026-03-07T00:00:00.000Z"),
+    );
+    expect(dbMocks.rebuildRevenueRollups).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      new Date("2026-03-07T00:00:00.000Z"),
+    );
+  });
+
   it("rejects manual rescans while an incomplete backfill exists", async () => {
     await expect(runOnlyFansTransactionsSync({
       checkpoint: {
