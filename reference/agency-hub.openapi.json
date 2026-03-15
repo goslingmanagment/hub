@@ -7446,13 +7446,76 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "typeBreakdown": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "canonicalType": {
+                                      "type": "string",
+                                      "enum": [
+                                        "subscription",
+                                        "tip",
+                                        "message_purchase",
+                                        "post_purchase",
+                                        "stream_tip",
+                                        "chargeback",
+                                        "refund",
+                                        "payout_reversal",
+                                        "other"
+                                      ]
+                                    },
+                                    "grossAmountMills": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "creatorNetAmountMills": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "transactionCount": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "canonicalType",
+                                    "grossAmountMills",
+                                    "creatorNetAmountMills",
+                                    "transactionCount"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lifetimeLastTransactionAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
                           "requestedFan",
                           "found",
                           "fan",
-                          "metrics"
+                          "metrics",
+                          "typeBreakdown",
+                          "lifetimeLastTransactionAt"
                         ],
                         "additionalProperties": false
                       }

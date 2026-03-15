@@ -2084,6 +2084,15 @@ describe("api integration", () => {
             platformCreatorNetAmountMills: 7000,
           },
         }),
+        typeBreakdown: expect.arrayContaining([
+          expect.objectContaining({
+            canonicalType: expect.any(String),
+            grossAmountMills: expect.any(Number),
+            creatorNetAmountMills: expect.any(Number),
+            transactionCount: expect.any(Number),
+          }),
+        ]),
+        lifetimeLastTransactionAt: expect.any(String),
       }),
       {
         requestedFan: {
@@ -2093,6 +2102,8 @@ describe("api integration", () => {
         found: false,
         fan: null,
         metrics: null,
+        typeBreakdown: null,
+        lifetimeLastTransactionAt: null,
       },
     ]);
 

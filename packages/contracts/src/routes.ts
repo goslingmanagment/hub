@@ -695,6 +695,8 @@ export const spenderBatchItemSchema = z.object({
   found: z.boolean(),
   fan: spenderFanSchema.nullable(),
   metrics: spenderMetricsSchema.nullable(),
+  typeBreakdown: z.array(spenderTypeBreakdownItemSchema).nullable(),
+  lifetimeLastTransactionAt: isoTimestamp.nullable(),
 });
 
 export const spenderBatchResponseSchema = z.object({

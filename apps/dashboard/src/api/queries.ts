@@ -19,6 +19,8 @@ import type {
   CrossPageFanDetailResponse,
   SpenderListResponse,
   SpenderDetailResponse,
+  SpenderBatchBody,
+  SpenderBatchResponse,
   ConnectionItem,
   SyncRunItem,
   FanNoteResponse,
@@ -286,6 +288,14 @@ export function useSpenderDetail(
     queryFn: () =>
       api.get<SpenderDetailResponse>(`/api/v2/spenders/${platform}/${platformUserId}${qs(params)}`),
     enabled: !!platformUserId,
+  });
+}
+
+export function useSpenderBatch(body: SpenderBatchBody | null) {
+  return useQuery({
+    queryKey: ["spenderBatch", body],
+    queryFn: () => api.post<SpenderBatchResponse>("/api/v2/spenders:batch", body!),
+    enabled: body !== null && body.fans.length > 0,
   });
 }
 

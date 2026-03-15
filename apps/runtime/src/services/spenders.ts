@@ -21,6 +21,7 @@ import {
   getSpenderProjectionAsOf,
   getSpenderRevenueDiagnosticsForScope,
   getSpenderTypeBreakdown,
+  getSpenderTypeBreakdownBatch,
   getSpenderWindowMetrics,
   getVisibleFanPageMemberships,
   listRankedSpenders,
@@ -870,6 +871,35 @@ export async function getSpenderBatch(
     }
   }
 
+  const typeBreakdownByFanId = new Map<number, SerializedSpenderTypeBreakdown[]>();
+  if (fanIds.length > 0) {
+    const breakdownInput: {
+      fanIds: number[];
+      pageIds: number[];
+      fromBusinessDate?: string;
+      toBusinessDateExclusive?: string;
+    } = {
+      fanIds,
+      pageIds: scope.pageIds,
+    };
+    if (period !== "lifetime") {
+      const range = resolveSpenderBusinessDateRangeForPlatform(
+        scope.platform,
+        period,
+        new Date(),
+        custom,
+      );
+      breakdownInput.fromBusinessDate = range.fromBusinessDate!;
+      breakdownInput.toBusinessDateExclusive = nextBusinessDate(range.toBusinessDateInclusive!);
+    }
+    const breakdownRows = await getSpenderTypeBreakdownBatch(app.db, breakdownInput);
+    for (const row of breakdownRows) {
+      const existing = typeBreakdownByFanId.get(row.fanId) ?? [];
+      existing.push(serializeTypeBreakdownItem(row));
+      typeBreakdownByFanId.set(row.fanId, existing);
+    }
+  }
+
   return {
     scope: scope.responseScope,
     period: toPeriodMetadata(
@@ -886,11 +916,14 @@ export async function getSpenderBatch(
           found: false,
           fan: null,
           metrics: null,
+          typeBreakdown: null,
+          lifetimeLastTransactionAt: null,
         };
       }
 
       const currentMetrics = currentWindowByFanId.get(fan.fanId) ?? null;
       const previousMetrics = comparisonByFanId.get(fan.fanId) ?? null;
+      const scopeLifetime = scopeLifetimeByFanId.get(fan.fanId) ?? null;
 
       return {
         requestedFan,
@@ -899,11 +932,13 @@ export async function getSpenderBatch(
         metrics: {
           window: period === "lifetime" ? null : serializeWindowMetrics(currentMetrics),
           lifetime: serializeLifetimeMetrics(
-            scopeLifetimeByFanId.get(fan.fanId) ?? null,
+            scopeLifetime,
             platformLifetimeByFanId.get(fan.fanId) ?? null,
           ),
           comparison: period === "lifetime" ? null : serializeComparison(currentMetrics, previousMetrics),
         },
+        typeBreakdown: typeBreakdownByFanId.get(fan.fanId) ?? [],
+        lifetimeLastTransactionAt: serializeTimestamp(scopeLifetime?.lastTransactionAt),
       };
     }),
   };

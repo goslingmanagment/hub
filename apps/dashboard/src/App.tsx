@@ -7,6 +7,7 @@ import { PageDetailPage } from "./pages/PageDetailPage";
 import { SubscribersPage } from "./pages/SubscribersPage";
 import { FollowersPage } from "./pages/FollowersPage";
 import { FanProfilePage } from "./pages/FanProfilePage";
+import { TopSupportersPage } from "./pages/TopSupportersPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { LogPage } from "./pages/dev/LogPage";
 import { SyncStatusPage } from "./pages/dev/SyncStatusPage";
@@ -23,6 +24,7 @@ export function App() {
         <Route path="pages/:pageLabel" element={<PageDetailPage />} />
         <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
         <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />
+        <Route path="pages/:pageLabel/top-supporters" element={<TopSupportersPage />} />
         <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
         <Route
           path="settings"
