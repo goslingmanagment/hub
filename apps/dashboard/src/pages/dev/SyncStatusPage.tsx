@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
+import { useSearchParams } from "react-router";
 import { useAdminSyncRuns, useAdminSyncRunDetail } from "@/api/queries";
 import { formatRelativeTime } from "@/lib/format";
 
@@ -22,7 +23,7 @@ function RunDetail({ runId }: { runId: number }) {
 
   if (isLoading) {
     return (
-      <div className="border-t border-border px-4 py-3">
+      <div className="px-6 py-4 bg-hover-alt/40">
         <span className="text-text-muted text-sm">Loading run details...</span>
       </div>
     );
@@ -33,8 +34,8 @@ function RunDetail({ runId }: { runId: number }) {
   const events = data.events ?? [];
 
   return (
-    <div className="border-t border-border px-4 py-3">
-      <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
+    <div className="px-6 py-4 bg-hover-alt/40 space-y-3">
+      <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
         Events ({events.length})
       </h4>
       {events.length === 0 ? (
@@ -63,7 +64,7 @@ function RunDetail({ runId }: { runId: number }) {
         </div>
       )}
       {data.error && (
-        <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 mt-2 overflow-x-auto">
+        <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 overflow-x-auto">
           {typeof data.error === "string" ? data.error : JSON.stringify(data.error, null, 2)}
         </pre>
       )}
@@ -72,9 +73,20 @@ function RunDetail({ runId }: { runId: number }) {
 }
 
 export function SyncStatusPage() {
-  const [expandedRunId, setExpandedRunId] = useState<number | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const runIdParam = searchParams.get("runId");
 
-  const { data, isLoading } = useAdminSyncRuns({ limit: 50 });
+  const [expandedRunId, setExpandedRunId] = useState<number | null>(
+    runIdParam ? Number(runIdParam) : null,
+  );
+
+  const toggleRun = (id: number) => {
+    const next = expandedRunId === id ? null : id;
+    setExpandedRunId(next);
+    setSearchParams(next != null ? { runId: String(next) } : {}, { replace: true });
+  };
+
+  const { data, isLoading } = useAdminSyncRuns({ limit: 100 });
 
   if (isLoading || !data) {
     return (
@@ -121,45 +133,49 @@ export function SyncStatusPage() {
               const isExpanded = expandedRunId === run.id;
 
               return (
-                <tr
-                  key={run.id}
-                  className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-                  onClick={() => setExpandedRunId(isExpanded ? null : run.id)}
-                >
-                  <td className="px-4 py-3 text-sm text-text-primary font-medium">
-                    {run.pageLabel ?? "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {run.platform ?? "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {run.stream ?? run.scope ?? "\u2014"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[run.status] ?? STATUS_STYLES.skipped}`}
-                    >
-                      {run.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                    {run.startedAt ? formatRelativeTime(run.startedAt) : "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                    {formatDuration(run.startedAt, run.finishedAt)}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-danger max-w-xs truncate">
-                    {run.error ?? ""}
-                  </td>
-                </tr>
+                <Fragment key={run.id}>
+                  <tr
+                    className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
+                    onClick={() => toggleRun(run.id)}
+                  >
+                    <td className="px-4 py-3 text-sm text-text-primary font-medium">
+                      {run.pageLabel ?? "\u2014"}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-text-secondary">
+                      {run.platform ?? "\u2014"}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-text-secondary">
+                      {run.stream ?? run.scope ?? "\u2014"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[run.status] ?? STATUS_STYLES.skipped}`}
+                      >
+                        {run.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
+                      {run.startedAt ? formatRelativeTime(run.startedAt) : "\u2014"}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
+                      {formatDuration(run.startedAt, run.finishedAt)}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-danger max-w-xs truncate">
+                      {run.error ?? ""}
+                    </td>
+                  </tr>
+                  {isExpanded && (
+                    <tr>
+                      <td colSpan={7} className="p-0">
+                        <RunDetail runId={run.id} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
           </tbody>
         </table>
-
-        {expandedRunId != null && (
-          <RunDetail runId={expandedRunId} />
-        )}
       </section>
     </div>
   );

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useAdminLogs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
+import { EventDetailPanel, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
 import { formatRelativeTime } from "@/lib/format";
 
 const SEVERITY_FILTERS = [
@@ -9,12 +10,6 @@ const SEVERITY_FILTERS = [
   { key: "warn", label: "Warn" },
   { key: "error", label: "Error" },
 ];
-
-const SEVERITY_STYLES: Record<string, string> = {
-  info: "bg-[#e5e7eb] text-[#374151]",
-  warn: "bg-[#fef3c7] text-[#92400e]",
-  error: "bg-[#fee2e2] text-[#991b1b]",
-};
 
 export function LogPage() {
   const [severity, setSeverity] = useState("all");
@@ -79,51 +74,52 @@ export function LogPage() {
               const isExpanded = expandedId === rowId;
 
               return (
-                <tr
-                  key={rowId}
-                  className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-                  onClick={() => setExpandedId(isExpanded ? null : rowId)}
-                >
-                  <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                    {log.emittedAt ? formatRelativeTime(log.emittedAt) : "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-primary font-medium">
-                    {log.pageLabel ?? "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {log.stream ?? "\u2014"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_STYLES[log.severity] ?? SEVERITY_STYLES.info}`}
-                    >
-                      {log.severity}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {log.eventType ?? "\u2014"}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-secondary max-w-xs truncate">
-                    {log.message ?? "\u2014"}
-                  </td>
-                </tr>
+                <Fragment key={rowId}>
+                  <tr
+                    className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
+                    onClick={() => setExpandedId(isExpanded ? null : rowId)}
+                  >
+                    <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
+                      {log.emittedAt ? formatRelativeTime(log.emittedAt) : "\u2014"}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-text-primary font-medium">
+                      {log.pageLabel ?? "\u2014"}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-text-secondary">
+                      {log.stream ?? "\u2014"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_STYLES[log.severity] ?? SEVERITY_STYLES.info}`}
+                      >
+                        {log.severity}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-text-secondary">
+                      {log.eventType ?? "\u2014"}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-text-secondary max-w-xs truncate">
+                      {log.message ?? "\u2014"}
+                    </td>
+                  </tr>
+                  {isExpanded && (
+                    <tr>
+                      <td colSpan={6} className="p-0">
+                        <EventDetailPanel
+                          message={log.message}
+                          syncRunId={log.syncRunId}
+                          eventCode={log.details?.code ?? log.eventType}
+                          severity={log.severity}
+                          details={log.details}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
           </tbody>
         </table>
-
-        {/* Expanded detail panel rendered outside the table for valid HTML */}
-        {expandedId != null && (() => {
-          const log = items.find((l: any, i: number) => (l.id ?? `${i}`) === expandedId);
-          if (!log?.details) return null;
-          return (
-            <div className="border-t border-border px-4 py-3">
-              <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 mt-2 overflow-x-auto">
-                {JSON.stringify(log.details, null, 2)}
-              </pre>
-            </div>
-          );
-        })()}
       </section>
     </div>
   );
