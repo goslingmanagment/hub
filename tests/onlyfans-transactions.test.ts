@@ -242,7 +242,7 @@ describe("syncOnlyFansTransactions", () => {
     }));
   });
 
-  it("rolls the transaction window after the safe cursor page limit", async () => {
+  it("keeps persisted transaction progress cursorless while continuing live cursors in-memory", async () => {
     const adapter = createAdapter({
       transactionPages: [
         makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")], "cursor-1"),
@@ -259,10 +259,19 @@ describe("syncOnlyFansTransactions", () => {
       budget: new SyncChunkBudget(10, 60_000),
     });
 
-    const rolledState = dbMocks.upsertCheckpointProgress.mock.calls[3]![1].state;
-    expect(rolledState.cursor).toBeNull();
-    expect(rolledState.windowEnd).toBe("2026-03-07T00:00:00.000Z");
-    expect(rolledState.windowPageCount).toBe(0);
+    const progressStates = dbMocks.upsertCheckpointProgress.mock.calls
+      .slice(0, 5)
+      .map((call) => call[1].state);
+    expect(progressStates.every((state) => state.cursor === null)).toBe(true);
+    expect(progressStates[0]?.windowEnd).toBe("2026-03-10T00:00:00.000Z");
+    expect(progressStates[1]?.windowEnd).toBe("2026-03-09T00:00:00.000Z");
+    expect(progressStates[2]?.windowEnd).toBe("2026-03-08T00:00:00.000Z");
+    expect(progressStates[3]?.windowEnd).toBe("2026-03-07T00:00:00.000Z");
+    expect(progressStates[3]?.windowPageCount).toBe(0);
+
+    expect(adapter.getTransactionsPage.mock.calls[1]![2].cursor).toBe("cursor-1");
+    expect(adapter.getTransactionsPage.mock.calls[2]![2].cursor).toBe("cursor-2");
+    expect(adapter.getTransactionsPage.mock.calls[3]![2].cursor).toBe("cursor-3");
 
     const resumedRequest = adapter.getTransactionsPage.mock.calls[4]![2];
     expect(resumedRequest.cursor).toBeNull();
@@ -273,40 +282,47 @@ describe("syncOnlyFansTransactions", () => {
     expect(result.processedChargebacks).toBe(0);
   });
 
-  it("yields after flushing dirty state and resumes from a reset cursor", async () => {
+  it("yields after page five with a cursorless narrowed checkpoint and resumes fresh", async () => {
     const firstAdapter = createAdapter({
       transactionPages: [
         makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")], "cursor-1"),
+        makeCursorPage([makeTransaction("tx-2", "2026-03-09T00:00:00.000Z")], "cursor-2"),
+        makeCursorPage([makeTransaction("tx-3", "2026-03-08T00:00:00.000Z")], "cursor-3"),
+        makeCursorPage([makeTransaction("tx-4", "2026-03-07T00:00:00.000Z")], "cursor-4"),
+        makeCursorPage([makeTransaction("tx-5", "2026-03-06T00:00:00.000Z")], "cursor-5"),
       ],
       chargebackPages: [makeCursorPage([])],
     });
 
     const firstResult = await runOnlyFansTransactionsSync({
       adapter: firstAdapter,
-      budget: new SyncChunkBudget(2, 0),
+      budget: new SyncChunkBudget(5, 60_000),
     });
 
     expect(firstResult.satisfied).toBe(false);
-    expect(firstResult.yieldReason).toBe("wall_clock");
+    expect(firstResult.yieldReason).toBe("request_budget");
     expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
       expect.anything(),
       1,
-      new Date("2026-03-10T00:00:00.000Z"),
+      new Date("2026-03-06T00:00:00.000Z"),
     );
     expect(dbMocks.rebuildRevenueRollups).toHaveBeenCalledWith(
       expect.anything(),
       1,
-      new Date("2026-03-10T00:00:00.000Z"),
+      new Date("2026-03-06T00:00:00.000Z"),
     );
 
     const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)![1].state;
     expect(yieldedState.cursor).toBeNull();
     expect(yieldedState.dirtyFrom).toBeNull();
-    expect(yieldedState.windowEnd).toBe("2026-03-10T00:00:00.000Z");
+    expect(yieldedState.windowEnd).toBe("2026-03-06T00:00:00.000Z");
+    expect(yieldedState.windowPageCount).toBe(0);
+    expect(firstAdapter.getTransactionsPage.mock.calls[4]![2].cursor).toBeNull();
+    expect(firstAdapter.getTransactionsPage.mock.calls[4]![2].end!.toISOString()).toBe("2026-03-07T00:00:00.000Z");
 
     const resumedAdapter = createAdapter({
       transactionPages: [
-        makeCursorPage([makeTransaction("tx-2", "2026-03-09T00:00:00.000Z")]),
+        makeCursorPage([makeTransaction("tx-6", "2026-03-05T00:00:00.000Z")]),
       ],
       chargebackPages: [makeCursorPage([])],
     });
@@ -321,7 +337,7 @@ describe("syncOnlyFansTransactions", () => {
 
     const resumedRequest = resumedAdapter.getTransactionsPage.mock.calls[0]![2];
     expect(resumedRequest.cursor).toBeNull();
-    expect(resumedRequest.end!.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(resumedRequest.end!.toISOString()).toBe("2026-03-06T00:00:00.000Z");
     expect(resumedResult.satisfied).toBe(true);
   });
 
@@ -359,7 +375,7 @@ describe("syncOnlyFansTransactions", () => {
     expect(firstRequest.end!.toISOString()).toBe("2026-03-10T00:00:00.000Z");
   });
 
-  it("transitions into chargebacks and finalizes the checkpoint", async () => {
+  it("persists a cursorless transition into chargebacks and finalizes the checkpoint", async () => {
     const adapter = createAdapter({
       transactionPages: [
         makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")]),
@@ -373,6 +389,14 @@ describe("syncOnlyFansTransactions", () => {
       adapter,
       budget: new SyncChunkBudget(10, 60_000),
     });
+
+    const transitionState = dbMocks.upsertCheckpointProgress.mock.calls[0]![1].state;
+    expect(transitionState.phase).toBe("chargebacks");
+    expect(transitionState.cursor).toBeNull();
+    expect(transitionState.windowPageCount).toBe(0);
+    expect(transitionState.windowEnd).toBe(transitionState.snapshotEnd);
+    expect(adapter.getChargebacksPage.mock.calls[0]![2].cursor).toBeNull();
+    expect(adapter.getChargebacksPage.mock.calls[0]![2].end!.toISOString()).toBe(transitionState.windowEnd);
 
     expect(adapter.getChargebacksPage).toHaveBeenCalledTimes(1);
     expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
@@ -389,6 +413,52 @@ describe("syncOnlyFansTransactions", () => {
     expect(result.satisfied).toBe(true);
     expect(result.processedTransactions).toBe(1);
     expect(result.processedChargebacks).toBe(1);
+  });
+
+  it("persists cursorless chargeback resume state when a chargeback chunk yields", async () => {
+    const firstAdapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")]),
+      ],
+      chargebackPages: [
+        makeCursorPage([makeChargeback("cb-1", "2026-03-09T00:00:00.000Z")], "cb-cursor-1"),
+      ],
+    });
+
+    const firstResult = await runOnlyFansTransactionsSync({
+      adapter: firstAdapter,
+      budget: new SyncChunkBudget(2, 60_000),
+    });
+
+    expect(firstResult.satisfied).toBe(false);
+    expect(firstResult.yieldReason).toBe("request_budget");
+
+    const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)![1].state;
+    expect(yieldedState.phase).toBe("chargebacks");
+    expect(yieldedState.cursor).toBeNull();
+    expect(yieldedState.windowEnd).toBe("2026-03-09T00:00:00.000Z");
+    expect(yieldedState.windowPageCount).toBe(0);
+    expect(yieldedState.dirtyFrom).toBeNull();
+
+    const resumedAdapter = createAdapter({
+      transactionPages: [makeCursorPage([])],
+      chargebackPages: [
+        makeCursorPage([makeChargeback("cb-2", "2026-03-08T00:00:00.000Z")]),
+      ],
+    });
+
+    const resumedResult = await runOnlyFansTransactionsSync({
+      adapter: resumedAdapter,
+      checkpoint: {
+        state: yieldedState,
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    const resumedRequest = resumedAdapter.getChargebacksPage.mock.calls[0]![2];
+    expect(resumedRequest.cursor).toBeNull();
+    expect(resumedRequest.end!.toISOString()).toBe("2026-03-09T00:00:00.000Z");
+    expect(resumedResult.satisfied).toBe(true);
   });
 
   it("honors manual rescanStart for incremental syncs", async () => {

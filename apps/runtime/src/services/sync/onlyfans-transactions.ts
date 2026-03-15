@@ -108,23 +108,36 @@ function isLegacyOnlyFansTransactionBackfillState(value: unknown) {
     Number.isInteger(value.windowPageCount) &&
     value.windowPageCount >= 0;
 
-  return !windowEndValid || !windowPageCountValid;
+  return !windowEndValid || !windowPageCountValid || typeof value.cursor === "string";
 }
 
 function upgradeOnlyFansBackfillState(
   state: OnlyFansTransactionBackfillState,
   rawState: unknown,
 ) {
-  if (!isLegacyOnlyFansTransactionBackfillState(rawState)) {
-    return state;
+  if (isLegacyOnlyFansTransactionBackfillState(rawState)) {
+    return {
+      ...state,
+      windowEnd: state.dirtyFrom ?? state.snapshotEnd,
+      windowPageCount: 0,
+      cursor: null,
+    } satisfies OnlyFansTransactionBackfillState;
   }
 
-  return {
-    ...state,
-    windowEnd: state.dirtyFrom ?? state.snapshotEnd,
-    windowPageCount: 0,
-    cursor: null,
-  } satisfies OnlyFansTransactionBackfillState;
+  if (
+    isRecord(rawState) &&
+    rawState.provider === "onlyfans" &&
+    rawState.phase === "chargebacks" &&
+    typeof rawState.cursor === "string"
+  ) {
+    return {
+      ...state,
+      cursor: null,
+      windowPageCount: 0,
+    } satisfies OnlyFansTransactionBackfillState;
+  }
+
+  return state;
 }
 
 function getOnlyFansBackfillWindowPageLimit(budget: SyncChunkBudget) {
@@ -172,7 +185,9 @@ async function flushAndClearOnlyFansDirtyRange(
 
   const clearedState: OnlyFansTransactionBackfillState = {
     ...state,
+    cursor: null,
     dirtyFrom: null,
+    windowPageCount: 0,
   };
   await upsertCheckpointProgress(app.db, {
     platformAccountId,
@@ -181,6 +196,36 @@ async function flushAndClearOnlyFansDirtyRange(
   });
 
   return clearedState;
+}
+
+function buildOnlyFansPersistedResumeState(
+  state: OnlyFansTransactionBackfillState,
+  input: {
+    phase?: OnlyFansTransactionBackfillState["phase"];
+    windowEnd?: Date | string;
+    newestSeenAt?: Date | null;
+    dirtyFrom?: Date | null;
+    processedTransactions?: number;
+    processedChargebacks?: number;
+    transactionPages?: number;
+    chargebackPages?: number;
+  },
+): OnlyFansTransactionBackfillState {
+  const windowEnd = input.windowEnd ?? state.windowEnd;
+
+  return {
+    ...state,
+    phase: input.phase ?? state.phase,
+    cursor: null,
+    newestSeenAt: input.newestSeenAt === undefined ? state.newestSeenAt : isoDateOrNull(input.newestSeenAt),
+    dirtyFrom: input.dirtyFrom === undefined ? state.dirtyFrom : isoDateOrNull(input.dirtyFrom),
+    processedTransactions: input.processedTransactions ?? state.processedTransactions,
+    processedChargebacks: input.processedChargebacks ?? state.processedChargebacks,
+    transactionPages: input.transactionPages ?? state.transactionPages,
+    chargebackPages: input.chargebackPages ?? state.chargebackPages,
+    windowEnd: typeof windowEnd === "string" ? new Date(windowEnd).toISOString() : windowEnd.toISOString(),
+    windowPageCount: 0,
+  };
 }
 
 async function syncOnlyFansTransactionsIncremental(
@@ -657,6 +702,7 @@ async function syncOnlyFansTransactionsBackfill(
   let newestSeenAt = state.newestSeenAt ? new Date(state.newestSeenAt) : null;
   let currentRunProcessedTransactions = 0;
   let currentRunProcessedChargebacks = 0;
+  let persistedState = buildOnlyFansPersistedResumeState(state, {});
 
   await input.telemetry.addNote(
     existingState
@@ -677,7 +723,7 @@ async function syncOnlyFansTransactionsBackfill(
     kind: "backfill",
     requestedLowerBound: state.start,
     end: state.snapshotEnd,
-    windowEnd: state.phase === "transactions" ? state.windowEnd : state.snapshotEnd,
+    windowEnd: state.windowEnd,
     phase: state.phase,
     fallbackStartUsed: state.fallbackStartUsed,
     windowPageLimit: transactionWindowPageLimit,
@@ -693,7 +739,7 @@ async function syncOnlyFansTransactionsBackfill(
     processedChargebacksThisRun: currentRunProcessedChargebacks,
     oldestSeenAt: null,
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
-    windowEnd: state.phase === "transactions" ? state.windowEnd : null,
+    windowEnd: state.windowEnd,
     windowPageCount: state.windowPageCount,
     windowPageLimit: transactionWindowPageLimit,
     fallbackStartUsed: state.fallbackStartUsed,
@@ -749,28 +795,47 @@ async function syncOnlyFansTransactionsBackfill(
 
         const fanPlatformIds = Array.from(new Set(page.parsed.items.map((item) => item.fan.id)));
         const nextCursor = page.parsed.cursor ?? null;
+        if (nextCursor && !pageOldestSeenAt) {
+          throw new Error("OnlyFans transaction backfill cannot resume cursorlessly without page items");
+        }
         const nextWindowPageCount = state.windowPageCount + 1;
         const shouldRollWindow = Boolean(nextCursor) &&
           nextWindowPageCount >= transactionWindowPageLimit;
-        if (shouldRollWindow && !pageOldestSeenAt) {
-          throw new Error("OnlyFans transaction backfill cannot roll to an older window without page items");
-        }
+        const nextDirtyFrom = minDate(
+          state.dirtyFrom ? new Date(state.dirtyFrom) : null,
+          pageOldestSeenAt,
+        );
+        const nextPhase = nextCursor ? "transactions" : "chargebacks";
         const nextState: OnlyFansTransactionBackfillState = {
           ...state,
-          phase: nextCursor ? "transactions" : "chargebacks",
-          cursor: shouldRollWindow ? null : nextCursor,
+          phase: nextPhase,
+          cursor: nextCursor
+            ? (shouldRollWindow ? null : nextCursor)
+            : null,
           transactionPages: state.transactionPages + 1,
           processedTransactions: state.processedTransactions + page.parsed.items.length,
           newestSeenAt: isoDateOrNull(newestSeenAt),
-          dirtyFrom: isoDateOrNull(minDate(
-            state.dirtyFrom ? new Date(state.dirtyFrom) : null,
-            pageOldestSeenAt,
-          )),
-          windowEnd: shouldRollWindow ? pageOldestSeenAt!.toISOString() : state.windowEnd,
+          dirtyFrom: isoDateOrNull(nextDirtyFrom),
+          windowEnd: nextCursor
+            ? (shouldRollWindow ? pageOldestSeenAt!.toISOString() : state.windowEnd)
+            : snapshotEnd.toISOString(),
           windowPageCount: nextCursor
             ? (shouldRollWindow ? 0 : nextWindowPageCount)
             : 0,
         };
+        const persistedNextState = nextCursor
+          ? buildOnlyFansPersistedResumeState(nextState, {
+            phase: "transactions",
+            windowEnd: pageOldestSeenAt!,
+            dirtyFrom: nextDirtyFrom,
+            newestSeenAt,
+          })
+          : buildOnlyFansPersistedResumeState(nextState, {
+            phase: "chargebacks",
+            windowEnd: snapshotEnd,
+            dirtyFrom: nextDirtyFrom,
+            newestSeenAt,
+          });
 
         await app.db.transaction(async (tx) => {
           const dbTx = tx as typeof app.db;
@@ -810,11 +875,12 @@ async function syncOnlyFansTransactionsBackfill(
           await upsertCheckpointProgress(dbTx, {
             platformAccountId: input.platformAccountId,
             stream: "transactions",
-            state: nextState,
+            state: persistedNextState,
           });
         });
 
         state = nextState;
+        persistedState = persistedNextState;
         currentRunProcessedTransactions += page.parsed.items.length;
 
         const progressMessage = buildBackfillProgressMessage({
@@ -858,14 +924,18 @@ async function syncOnlyFansTransactionsBackfill(
           processedChargebacksThisRun: currentRunProcessedChargebacks,
           oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
           newestSeenAt: newestSeenAt?.toISOString() ?? null,
-          windowEnd: state.phase === "transactions" ? state.windowEnd : null,
+          windowEnd: state.windowEnd,
           windowPageCount: state.windowPageCount,
           windowPageLimit: transactionWindowPageLimit,
           fallbackStartUsed: state.fallbackStartUsed,
         });
 
         if (input.budget.shouldYield()) {
-          state = await flushAndClearOnlyFansDirtyRange(app, input.platformAccountId, state);
+          persistedState = await flushAndClearOnlyFansDirtyRange(
+            app,
+            input.platformAccountId,
+            persistedState,
+          );
           return {
             satisfied: false,
             yieldReason: input.budget.resolveYieldReason(),
@@ -884,7 +954,7 @@ async function syncOnlyFansTransactionsBackfill(
         input.platformAccountIdValue,
         {
           start: new Date(state.start),
-          end: snapshotEnd,
+          end: new Date(state.windowEnd),
           cursor: state.cursor,
           limit: 100,
           pageIndex: state.chargebackPages,
@@ -897,7 +967,7 @@ async function syncOnlyFansTransactionsBackfill(
         endpoint: "onlymonster_chargebacks",
         requestParams: {
           start: state.start,
-          end: snapshotEnd.toISOString(),
+          end: state.windowEnd,
           cursor: state.cursor,
           limit: 100,
         },
@@ -922,18 +992,35 @@ async function syncOnlyFansTransactionsBackfill(
 
       const fanPlatformIds = Array.from(new Set(page.parsed.items.map((item) => item.fan.id)));
       const nextCursor = page.parsed.cursor ?? null;
+      if (nextCursor && !pageOldestSeenAt) {
+        throw new Error("OnlyFans chargeback backfill cannot resume cursorlessly without page items");
+      }
+      const nextDirtyFrom = minDate(
+        state.dirtyFrom ? new Date(state.dirtyFrom) : null,
+        pageOldestSeenAt,
+      );
       const nextState: OnlyFansTransactionBackfillState = {
         ...state,
         cursor: nextCursor,
         chargebackPages: state.chargebackPages + 1,
         processedChargebacks: state.processedChargebacks + page.parsed.items.length,
         newestSeenAt: isoDateOrNull(newestSeenAt),
-        dirtyFrom: isoDateOrNull(minDate(
-          state.dirtyFrom ? new Date(state.dirtyFrom) : null,
-          pageOldestSeenAt,
-        )),
+        dirtyFrom: isoDateOrNull(nextDirtyFrom),
         windowPageCount: 0,
       };
+      const persistedNextState = nextCursor
+        ? buildOnlyFansPersistedResumeState(nextState, {
+          phase: "chargebacks",
+          windowEnd: pageOldestSeenAt!,
+          dirtyFrom: nextDirtyFrom,
+          newestSeenAt,
+        })
+        : buildOnlyFansPersistedResumeState(nextState, {
+          phase: "chargebacks",
+          windowEnd: nextState.windowEnd,
+          dirtyFrom: nextDirtyFrom,
+          newestSeenAt,
+        });
 
       await app.db.transaction(async (tx) => {
         const dbTx = tx as typeof app.db;
@@ -974,11 +1061,12 @@ async function syncOnlyFansTransactionsBackfill(
         await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.platformAccountId,
           stream: "transactions",
-          state: nextState,
+          state: persistedNextState,
         });
       });
 
       state = nextState;
+      persistedState = persistedNextState;
       currentRunProcessedChargebacks += page.parsed.items.length;
 
       const progressMessage = buildBackfillProgressMessage({
@@ -1022,7 +1110,7 @@ async function syncOnlyFansTransactionsBackfill(
         processedChargebacksThisRun: currentRunProcessedChargebacks,
         oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
         newestSeenAt: newestSeenAt?.toISOString() ?? null,
-        windowEnd: null,
+        windowEnd: state.windowEnd,
         windowPageCount: 0,
         windowPageLimit: transactionWindowPageLimit,
         fallbackStartUsed: state.fallbackStartUsed,
@@ -1033,7 +1121,11 @@ async function syncOnlyFansTransactionsBackfill(
       }
 
       if (input.budget.shouldYield()) {
-        state = await flushAndClearOnlyFansDirtyRange(app, input.platformAccountId, state);
+        persistedState = await flushAndClearOnlyFansDirtyRange(
+          app,
+          input.platformAccountId,
+          persistedState,
+        );
         return {
           satisfied: false,
           yieldReason: input.budget.resolveYieldReason(),
@@ -1045,7 +1137,11 @@ async function syncOnlyFansTransactionsBackfill(
       }
     }
   } catch (error) {
-    state = await flushAndClearOnlyFansDirtyRange(app, input.platformAccountId, state);
+    persistedState = await flushAndClearOnlyFansDirtyRange(
+      app,
+      input.platformAccountId,
+      persistedState,
+    );
     throw error;
   }
 
