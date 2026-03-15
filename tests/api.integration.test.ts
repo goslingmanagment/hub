@@ -1211,6 +1211,19 @@ describe("api integration", () => {
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lilyPage.id,
       fanId: fan.id,
+      transactionId: "lily-boundary-january",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 19199n,
+      sourceDestinationAmountMills: 19199n,
+      creatorNetAmountMills: 19199n,
+      occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lilyPage.id,
+      fanId: fan.id,
       transactionId: "lily-boundary-november",
       rawType: 20001,
       canonicalType: "tip",
@@ -1229,14 +1242,14 @@ describe("api integration", () => {
       period: "custom",
       custom: {
         from: "2025-12-01",
-        to: "2025-12-31",
+        to: "2026-01-01",
       },
     });
     const modelReport = await getModelRevenueReport(createTestAppContext(testDb), "lily-model", {
       period: "custom",
       custom: {
         from: "2025-12-01",
-        to: "2025-12-31",
+        to: "2026-01-01",
       },
     });
     const rollupRows = await testDb.pool.query(`
@@ -1244,7 +1257,7 @@ describe("api integration", () => {
              creator_net_amount_mills as net_amount_mills
       from daily_revenue
       where platform_account_id = ${fixture.lilyPage.id}
-        and business_date between '2025-11-30'::date and '2025-12-31'::date
+        and business_date between '2025-11-30'::date and '2026-01-01'::date
       order by business_date asc
     `);
 
@@ -1264,6 +1277,10 @@ describe("api integration", () => {
         business_date: "2025-12-15",
         net_amount_mills: 350376n,
       },
+      {
+        business_date: "2026-01-01",
+        net_amount_mills: 19199n,
+      },
     ]);
 
     const ownerLogin = await server.inject({
@@ -1277,14 +1294,14 @@ describe("api integration", () => {
     const ownerCookie = sessionCookieFrom(ownerLogin);
     const spenderList = await server.inject({
       method: "GET",
-      url: "/api/v2/spenders?scope=page&pageLabel=lily1&period=custom&from=2025-12-01&to=2025-12-31&limit=10&offset=0",
+      url: "/api/v2/spenders?scope=page&pageLabel=lily1&period=custom&from=2025-12-01&to=2026-01-01&limit=10&offset=0",
       headers: {
         cookie: ownerCookie,
       },
     });
     const spenderSeries = await server.inject({
       method: "GET",
-      url: "/api/v2/spenders/fansly/fan-001/series?scope=page&pageLabel=lily1&period=custom&from=2025-11-30&to=2025-12-01&granularity=day",
+      url: "/api/v2/spenders/fansly/fan-001/series?scope=page&pageLabel=lily1&period=custom&from=2025-11-30&to=2025-12-02&granularity=day",
       headers: {
         cookie: ownerCookie,
       },
@@ -1888,7 +1905,7 @@ describe("api integration", () => {
     const ownerCookie = sessionCookieFrom(ownerLogin);
     const response = await server.inject({
       method: "GET",
-      url: "/api/v2/spenders/fansly/fan-001/series?scope=page&pageLabel=lana&period=custom&from=2026-03-04&to=2026-03-07&granularity=day",
+      url: "/api/v2/spenders/fansly/fan-001/series?scope=page&pageLabel=lana&period=custom&from=2026-03-04&to=2026-03-08&granularity=day",
       headers: {
         cookie: ownerCookie,
       },
@@ -2944,7 +2961,7 @@ describe("api integration", () => {
     });
     const subscribersDaily = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/utc-fansly-daily/subscribers/daily?period=custom&from=2026-03-01&to=2026-03-06",
+      url: "/api/v1/pages/utc-fansly-daily/subscribers/daily?period=custom&from=2026-03-01&to=2026-03-07",
       headers: { cookie },
     });
 

@@ -7,6 +7,7 @@ import {
   formatUsdFromMills,
   millsToDecimalString,
   parsePeriod,
+  resolveBusinessDateRangeForPlatform,
   resolveComparisonPeriodBounds,
   resolveSpenderBusinessDateRangeForPlatform,
   resolvePeriodBounds,
@@ -82,6 +83,41 @@ describe("money helpers", () => {
       fromBusinessDate: "2026-02-08",
       toBusinessDateInclusive: "2026-03-09",
     });
+  });
+
+  it("treats custom upper bounds as exclusive on UTC day ranges", () => {
+    const now = new Date("2026-01-15T12:00:00.000Z");
+    const bounds = resolveRevenuePeriodBoundsForPlatform("fansly", "custom", now, {
+      from: "2025-12-01",
+      to: "2026-01-01",
+    });
+    const businessRange = resolveBusinessDateRangeForPlatform("fansly", "custom", now, {
+      from: "2025-12-01",
+      to: "2026-01-01",
+    });
+    const spenderRange = resolveSpenderBusinessDateRangeForPlatform("fansly", "custom", now, {
+      from: "2025-11-30",
+      to: "2025-12-02",
+    });
+
+    expect(bounds.from?.toISOString()).toBe("2025-12-01T00:00:00.000Z");
+    expect(bounds.to?.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+    expect(businessRange).toEqual({
+      from: "2025-12-01",
+      toExclusive: "2026-01-01",
+    });
+    expect(spenderRange).toMatchObject({
+      fromBusinessDate: "2025-11-30",
+      toBusinessDateInclusive: "2025-12-01",
+    });
+  });
+
+  it("keeps UTC today revenue windows unchanged", () => {
+    const now = new Date("2026-03-09T12:00:00.000Z");
+    const today = resolveRevenuePeriodBoundsForPlatform("fansly", "today", now);
+
+    expect(today.from?.toISOString()).toBe("2026-03-09T00:00:00.000Z");
+    expect(today.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
   });
 
   it("rejects unsupported periods with the canonical option list", () => {

@@ -242,12 +242,10 @@ function resolveCustomPeriodBounds(
     { year: fromYear, month: fromMonth, day: fromDay },
     timeZone,
   );
-  const to = addUtcDays(
-    zonedDateTimeToUtc(
-      { year: toYear, month: toMonth, day: toDay },
-      timeZone,
-    ),
-    1,
+  // Custom ranges already use an exclusive upper bound: [from, to).
+  const to = zonedDateTimeToUtc(
+    { year: toYear, month: toMonth, day: toDay },
+    timeZone,
   );
 
   return { from, to };
