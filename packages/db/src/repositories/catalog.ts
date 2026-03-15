@@ -326,3 +326,25 @@ export async function updatePageMetadata(
 
   return updated;
 }
+
+export async function mergePageMetadata(
+  db: Database,
+  platformAccountId: number,
+  metadataPatch: Record<string, unknown>,
+) {
+  const now = new Date();
+  const patchJson = JSON.stringify(metadataPatch);
+
+  const result = await db.execute(sql`
+    update platform_accounts
+    set metadata = coalesce(metadata, '{}'::jsonb) || ${patchJson}::jsonb,
+        updated_at = ${now}
+    where id = ${platformAccountId}
+    returning metadata
+  `);
+
+  const metadata = result.rows[0]?.metadata;
+  return typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : null;
+}

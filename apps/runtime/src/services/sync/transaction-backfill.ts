@@ -20,11 +20,13 @@ export type FanslyTransactionBackfillState = TransactionBackfillBase & {
 export type OnlyFansTransactionBackfillState = TransactionBackfillBase & {
   provider: "onlyfans";
   phase: "transactions" | "chargebacks";
+  oldestSeenAt: string | null;
   cursor: string | null;
   start: string;
   fallbackStartUsed: boolean;
   windowEnd: string;
   windowPageCount: number;
+  emptyWindowCount: number;
 };
 
 export type TransactionBackfillState =
@@ -116,10 +118,12 @@ export function parseTransactionBackfillState(value: unknown): TransactionBackfi
 
   if (provider === "onlyfans") {
     const start = asIsoString(state.start);
+    const oldestSeenAt = asNullableIsoString(state.oldestSeenAt);
     const fallbackStartUsed = asBoolean(state.fallbackStartUsed);
     const cursor = asNullableString(state.cursor);
     const windowEnd = asIsoString(state.windowEnd);
     const windowPageCount = asNonNegativeInt(state.windowPageCount);
+    const emptyWindowCount = asNonNegativeInt(state.emptyWindowCount);
     if (
       start === null ||
       fallbackStartUsed === null ||
@@ -141,11 +145,13 @@ export function parseTransactionBackfillState(value: unknown): TransactionBackfi
       processedChargebacks,
       transactionPages,
       chargebackPages,
+      oldestSeenAt: oldestSeenAt ?? null,
       start,
       fallbackStartUsed,
       cursor,
       windowEnd: windowEnd ?? snapshotEnd,
       windowPageCount: windowPageCount ?? 0,
+      emptyWindowCount: emptyWindowCount ?? 0,
     };
   }
 

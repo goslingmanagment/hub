@@ -168,7 +168,7 @@ export async function refreshPageMetadata(
       followerCount: 0,
       subscriberCount: 0,
       earningsBalanceMills: 0n,
-      metadata: buildOnlyFansMetadata(account.parsed.account),
+      metadata: buildOnlyFansMetadata(account.parsed.account, pageContext.page.metadata),
       ...(syncType ? { syncType } : {}),
     });
 

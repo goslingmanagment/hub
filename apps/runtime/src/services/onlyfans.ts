@@ -5,8 +5,45 @@ import type {
   OnlyMonsterAccount,
 } from "@agency_hub_core/onlyfans";
 
-export function buildOnlyFansMetadata(account: OnlyMonsterAccount) {
+export const ONLYFANS_ACCOUNT_CREATED_AT_METADATA_KEY = "accountCreatedAt";
+export const ONLYFANS_TRANSACTION_BACKFILL_LOWER_BOUND_METADATA_KEY = "transactionBackfillLowerBound";
+
+const ONLYFANS_INTERNAL_METADATA_KEYS = [
+  ONLYFANS_ACCOUNT_CREATED_AT_METADATA_KEY,
+  ONLYFANS_TRANSACTION_BACKFILL_LOWER_BOUND_METADATA_KEY,
+] as const;
+
+function pickOnlyFansInternalMetadata(metadata?: Record<string, unknown> | null) {
+  if (!metadata) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    ONLYFANS_INTERNAL_METADATA_KEYS.flatMap((key) =>
+      metadata[key] === undefined ? [] : [[key, metadata[key]]]
+    ),
+  );
+}
+
+function parseOnlyFansMetadataDate(
+  metadata: Record<string, unknown>,
+  key: string,
+) {
+  const value = metadata[key];
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function buildOnlyFansMetadata(
+  account: OnlyMonsterAccount,
+  existingMetadata?: Record<string, unknown> | null,
+) {
   return {
+    ...pickOnlyFansInternalMetadata(existingMetadata),
     provider: "onlymonster",
     onlyMonsterAccountId: account.id,
     platform: account.platform,
@@ -18,6 +55,17 @@ export function buildOnlyFansMetadata(account: OnlyMonsterAccount) {
       : millsToNumber(dollarsToMills(account.subscribe_price)),
     subscriptionExpirationDate: account.subscription_expiration_date,
   };
+}
+
+export function parseOnlyFansMetadataAccountCreatedAt(metadata: Record<string, unknown>) {
+  return parseOnlyFansMetadataDate(metadata, ONLYFANS_ACCOUNT_CREATED_AT_METADATA_KEY);
+}
+
+export function parseOnlyFansTransactionBackfillLowerBound(metadata: Record<string, unknown>) {
+  return parseOnlyFansMetadataDate(
+    metadata,
+    ONLYFANS_TRANSACTION_BACKFILL_LOWER_BOUND_METADATA_KEY,
+  );
 }
 
 export function getOnlyMonsterAccountId(metadata: Record<string, unknown>) {

@@ -2,6 +2,7 @@ import {
   deleteTransactionsMissingFromWindow,
   getCheckpoint,
   getOldestPendingTransactionAt,
+  mergePageMetadata,
   rebuildSpenderProjections,
   rebuildRevenueRollups,
   upsertCheckpoint,
@@ -26,6 +27,11 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import {
+  ONLYFANS_TRANSACTION_BACKFILL_LOWER_BOUND_METADATA_KEY,
+  parseOnlyFansMetadataAccountCreatedAt,
+  parseOnlyFansTransactionBackfillLowerBound,
+} from "../onlyfans.ts";
 import type { SyncChunkBudget, SyncChunkYieldReason } from "./chunk-budget.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
@@ -36,9 +42,10 @@ import {
   type OnlyFansTransactionBackfillState,
 } from "./transaction-backfill.ts";
 
-const ONLYFANS_EPOCH_BACKFILL_START = new Date("1970-01-01T00:00:00.000Z");
-const ONLYFANS_FALLBACK_BACKFILL_START = new Date("2020-01-01T00:00:00.000Z");
+const ONLYFANS_SYNTHETIC_BACKFILL_START = new Date("2016-01-01T00:00:00.000Z");
 const ONLYFANS_SAFE_CURSOR_PAGES = 4;
+const ONLYFANS_HISTORICAL_WINDOW_MS = 365 * DAY_MS;
+const ONLYFANS_EMPTY_WINDOW_LIMIT = 2;
 
 type OnlyFansTransactionSyncResult = {
   satisfied: boolean;
@@ -83,18 +90,103 @@ function maxDate(a: Date | null, b: Date | null) {
   return a >= b ? a : b;
 }
 
-function parseOnlyFansMetadataAccountCreatedAt(metadata: Record<string, unknown>) {
-  const value = metadata.accountCreatedAt;
-  if (typeof value !== "string") {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function maxLowerBound(a: Date, b: Date) {
+  return a >= b ? a : b;
+}
+
+function resolveOnlyFansBackfillLowerBound(metadata: Record<string, unknown>) {
+  const persisted = parseOnlyFansTransactionBackfillLowerBound(metadata);
+  if (persisted) {
+    return {
+      date: persisted,
+      source: "persisted" as const,
+    };
+  }
+
+  const legacy = parseOnlyFansMetadataAccountCreatedAt(metadata);
+  if (legacy) {
+    return {
+      date: legacy,
+      source: "legacy" as const,
+    };
+  }
+
+  return {
+    date: ONLYFANS_SYNTHETIC_BACKFILL_START,
+    source: "synthetic" as const,
+  };
+}
+
+function getOnlyFansHistoricalWindowStart(windowEnd: Date, lowerBound: Date) {
+  return maxLowerBound(new Date(windowEnd.getTime() - ONLYFANS_HISTORICAL_WINDOW_MS), lowerBound);
+}
+
+function getOnlyFansSyntheticLowerBound() {
+  return ONLYFANS_SYNTHETIC_BACKFILL_START;
+}
+
+function buildOnlyFansSyntheticWindow(snapshotEnd: Date) {
+  return {
+    start: getOnlyFansHistoricalWindowStart(snapshotEnd, getOnlyFansSyntheticLowerBound()),
+    end: snapshotEnd,
+  };
+}
+
+function usesSyntheticOnlyFansBackfillBound(state: OnlyFansTransactionBackfillState) {
+  return state.fallbackStartUsed;
+}
+
+function canAdvanceOnlyFansHistoricalWindow(
+  state: OnlyFansTransactionBackfillState,
+  windowEnd: Date,
+) {
+  return usesSyntheticOnlyFansBackfillBound(state) &&
+    windowEnd.getTime() > getOnlyFansSyntheticLowerBound().getTime();
+}
+
+function buildNextOnlyFansHistoricalWindow(
+  state: OnlyFansTransactionBackfillState,
+  pageOldestSeenAt: Date | null,
+) {
+  const lowerBound = getOnlyFansSyntheticLowerBound();
+  const nextWindowEnd = pageOldestSeenAt ?? new Date(state.start);
+  if (!canAdvanceOnlyFansHistoricalWindow(state, nextWindowEnd)) {
     return null;
   }
 
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  const nextWindowStart = getOnlyFansHistoricalWindowStart(nextWindowEnd, lowerBound);
+  if (
+    nextWindowStart.getTime() === new Date(state.start).getTime() &&
+    nextWindowEnd.getTime() === new Date(state.windowEnd).getTime()
+  ) {
+    return null;
+  }
+
+  return {
+    start: nextWindowStart,
+    end: nextWindowEnd,
+  };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function bufferOnlyFansBackfillLowerBound(oldestSeenAt: Date, lookbackDays: number) {
+  return maxLowerBound(
+    new Date(oldestSeenAt.getTime() - lookbackDays * DAY_MS),
+    getOnlyFansSyntheticLowerBound(),
+  );
+}
+
+async function persistOnlyFansBackfillLowerBound(
+  app: AppContext,
+  platformAccountId: number,
+  lowerBound: Date,
+) {
+  await mergePageMetadata(app.db, platformAccountId, {
+    [ONLYFANS_TRANSACTION_BACKFILL_LOWER_BOUND_METADATA_KEY]: lowerBound.toISOString(),
+  });
 }
 
 function isLegacyOnlyFansTransactionBackfillState(value: unknown) {
@@ -121,6 +213,7 @@ function upgradeOnlyFansBackfillState(
       windowEnd: state.dirtyFrom ?? state.snapshotEnd,
       windowPageCount: 0,
       cursor: null,
+      emptyWindowCount: 0,
     } satisfies OnlyFansTransactionBackfillState;
   }
 
@@ -134,6 +227,7 @@ function upgradeOnlyFansBackfillState(
       ...state,
       cursor: null,
       windowPageCount: 0,
+      emptyWindowCount: 0,
     } satisfies OnlyFansTransactionBackfillState;
   }
 
@@ -202,21 +296,27 @@ function buildOnlyFansPersistedResumeState(
   state: OnlyFansTransactionBackfillState,
   input: {
     phase?: OnlyFansTransactionBackfillState["phase"];
+    start?: Date | string;
     windowEnd?: Date | string;
+    oldestSeenAt?: Date | null;
     newestSeenAt?: Date | null;
     dirtyFrom?: Date | null;
     processedTransactions?: number;
     processedChargebacks?: number;
     transactionPages?: number;
     chargebackPages?: number;
+    emptyWindowCount?: number;
   },
 ): OnlyFansTransactionBackfillState {
+  const start = input.start ?? state.start;
   const windowEnd = input.windowEnd ?? state.windowEnd;
 
   return {
     ...state,
     phase: input.phase ?? state.phase,
     cursor: null,
+    start: typeof start === "string" ? new Date(start).toISOString() : start.toISOString(),
+    oldestSeenAt: input.oldestSeenAt === undefined ? state.oldestSeenAt : isoDateOrNull(input.oldestSeenAt),
     newestSeenAt: input.newestSeenAt === undefined ? state.newestSeenAt : isoDateOrNull(input.newestSeenAt),
     dirtyFrom: input.dirtyFrom === undefined ? state.dirtyFrom : isoDateOrNull(input.dirtyFrom),
     processedTransactions: input.processedTransactions ?? state.processedTransactions,
@@ -225,6 +325,7 @@ function buildOnlyFansPersistedResumeState(
     chargebackPages: input.chargebackPages ?? state.chargebackPages,
     windowEnd: typeof windowEnd === "string" ? new Date(windowEnd).toISOString() : windowEnd.toISOString(),
     windowPageCount: 0,
+    emptyWindowCount: input.emptyWindowCount ?? state.emptyWindowCount,
   };
 }
 
@@ -622,15 +723,23 @@ async function fetchOnlyFansBackfillTransactionsPage(
     if (
       state.transactionPages === 0 &&
       state.chargebackPages === 0 &&
-      state.start === ONLYFANS_EPOCH_BACKFILL_START.toISOString() &&
       isOnlyFansBackfillRangeError(error)
     ) {
-      const fallbackStart = parseOnlyFansMetadataAccountCreatedAt(input.pageMetadata) ??
-        ONLYFANS_FALLBACK_BACKFILL_START;
+      const resolvedLowerBound = resolveOnlyFansBackfillLowerBound(input.pageMetadata);
+      const fallbackStart = maxLowerBound(
+        resolvedLowerBound.date,
+        getOnlyFansSyntheticLowerBound(),
+      );
+      const syntheticWindow = buildOnlyFansSyntheticWindow(new Date(state.snapshotEnd));
       const nextState: OnlyFansTransactionBackfillState = {
         ...state,
-        start: fallbackStart.toISOString(),
-        fallbackStartUsed: true,
+        start: resolvedLowerBound.source === "synthetic"
+          ? syntheticWindow.start.toISOString()
+          : fallbackStart.toISOString(),
+        fallbackStartUsed: resolvedLowerBound.source === "synthetic",
+        windowEnd: resolvedLowerBound.source === "synthetic"
+          ? syntheticWindow.end.toISOString()
+          : state.windowEnd,
       };
       await input.telemetry.addNote("OnlyFans full-history backfill start was clamped after provider rejection", {
         rejectedStart: state.start,
@@ -641,7 +750,7 @@ async function fetchOnlyFansBackfillTransactionsPage(
           input.requestContext,
           input.platformAccountIdValue,
           {
-            start: fallbackStart,
+            start: new Date(nextState.start),
             end: new Date(nextState.windowEnd),
             cursor: null,
             limit: 100,
@@ -677,28 +786,54 @@ async function syncOnlyFansTransactionsBackfill(
   }
 
   const initialSnapshotEnd = new Date().toISOString();
+  const initialLowerBound = resolveOnlyFansBackfillLowerBound(input.pageMetadata);
+  const initialTrustedLowerBound = maxLowerBound(
+    initialLowerBound.date,
+    getOnlyFansSyntheticLowerBound(),
+  );
+  const initialSyntheticWindow = buildOnlyFansSyntheticWindow(new Date(initialSnapshotEnd));
   let state: OnlyFansTransactionBackfillState = existingState ?? {
     mode: "backfill",
     completed: false,
     provider: "onlyfans",
     phase: "transactions",
     snapshotEnd: initialSnapshotEnd,
+    oldestSeenAt: null,
     newestSeenAt: null,
     dirtyFrom: null,
     processedTransactions: 0,
     processedChargebacks: 0,
     transactionPages: 0,
     chargebackPages: 0,
-    start: ONLYFANS_EPOCH_BACKFILL_START.toISOString(),
-    fallbackStartUsed: false,
+    start: initialLowerBound.source === "synthetic"
+      ? initialSyntheticWindow.start.toISOString()
+      : initialTrustedLowerBound.toISOString(),
+    fallbackStartUsed: initialLowerBound.source === "synthetic",
     cursor: null,
-    windowEnd: initialSnapshotEnd,
+    windowEnd: initialLowerBound.source === "synthetic"
+      ? initialSyntheticWindow.end.toISOString()
+      : initialSnapshotEnd,
     windowPageCount: 0,
+    emptyWindowCount: 0,
   };
+
+  if (state.fallbackStartUsed) {
+    const floor = getOnlyFansSyntheticLowerBound();
+    const clampedStart = maxLowerBound(new Date(state.start), floor);
+    if (clampedStart.getTime() !== new Date(state.start).getTime()) {
+      state = {
+        ...state,
+        start: clampedStart.toISOString(),
+      };
+    }
+  }
 
   const snapshotEnd = new Date(state.snapshotEnd);
   const transactionWindowPageLimit = getOnlyFansBackfillWindowPageLimit(input.budget);
-  let oldestSeenAt: Date | null = null;
+  const requestedLowerBound = state.fallbackStartUsed
+    ? getOnlyFansSyntheticLowerBound().toISOString()
+    : state.start;
+  let oldestSeenAt = state.oldestSeenAt ? new Date(state.oldestSeenAt) : null;
   let newestSeenAt = state.newestSeenAt ? new Date(state.newestSeenAt) : null;
   let currentRunProcessedTransactions = 0;
   let currentRunProcessedChargebacks = 0;
@@ -710,10 +845,13 @@ async function syncOnlyFansTransactionsBackfill(
       : "Starting OnlyFans full-history transaction backfill",
     {
       snapshotEnd: state.snapshotEnd,
-      start: state.start,
+      start: requestedLowerBound,
+      windowStart: state.start,
       windowEnd: state.windowEnd,
       windowPageCount: state.windowPageCount,
+      emptyWindowCount: state.emptyWindowCount,
       phase: state.phase,
+      oldestSeenAt: state.oldestSeenAt,
       processedTransactions: state.processedTransactions,
       processedChargebacks: state.processedChargebacks,
     },
@@ -721,8 +859,9 @@ async function syncOnlyFansTransactionsBackfill(
 
   input.telemetry.setBoundarySummary({
     kind: "backfill",
-    requestedLowerBound: state.start,
+    requestedLowerBound,
     end: state.snapshotEnd,
+    windowStart: state.start,
     windowEnd: state.windowEnd,
     phase: state.phase,
     fallbackStartUsed: state.fallbackStartUsed,
@@ -737,11 +876,13 @@ async function syncOnlyFansTransactionsBackfill(
     processedChargebacks: state.processedChargebacks,
     processedTransactionsThisRun: currentRunProcessedTransactions,
     processedChargebacksThisRun: currentRunProcessedChargebacks,
-    oldestSeenAt: null,
+    oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
+    windowStart: state.start,
     windowEnd: state.windowEnd,
     windowPageCount: state.windowPageCount,
     windowPageLimit: transactionWindowPageLimit,
+    emptyWindowCount: state.emptyWindowCount,
     fallbackStartUsed: state.fallbackStartUsed,
   });
 
@@ -805,37 +946,61 @@ async function syncOnlyFansTransactionsBackfill(
           state.dirtyFrom ? new Date(state.dirtyFrom) : null,
           pageOldestSeenAt,
         );
-        const nextPhase = nextCursor ? "transactions" : "chargebacks";
+        const nextHistoricalWindow = nextCursor
+          ? null
+          : buildNextOnlyFansHistoricalWindow(state, pageOldestSeenAt);
+        const nextEmptyWindowCount = page.parsed.items.length === 0
+          ? state.emptyWindowCount + 1
+          : 0;
+        const shouldContinueHistoricalTransactions = Boolean(nextHistoricalWindow) &&
+          nextEmptyWindowCount < ONLYFANS_EMPTY_WINDOW_LIMIT;
+        const nextChargebackWindow = usesSyntheticOnlyFansBackfillBound(state)
+          ? buildOnlyFansSyntheticWindow(snapshotEnd)
+          : {
+            start: new Date(state.start),
+            end: snapshotEnd,
+          };
         const nextState: OnlyFansTransactionBackfillState = {
           ...state,
-          phase: nextPhase,
+          phase: nextCursor || shouldContinueHistoricalTransactions ? "transactions" : "chargebacks",
           cursor: nextCursor
             ? (shouldRollWindow ? null : nextCursor)
             : null,
           transactionPages: state.transactionPages + 1,
           processedTransactions: state.processedTransactions + page.parsed.items.length,
+          oldestSeenAt: isoDateOrNull(oldestSeenAt),
           newestSeenAt: isoDateOrNull(newestSeenAt),
           dirtyFrom: isoDateOrNull(nextDirtyFrom),
+          start: nextCursor
+            ? state.start
+            : shouldContinueHistoricalTransactions
+              ? nextHistoricalWindow!.start.toISOString()
+              : nextChargebackWindow.start.toISOString(),
           windowEnd: nextCursor
             ? (shouldRollWindow ? pageOldestSeenAt!.toISOString() : state.windowEnd)
-            : snapshotEnd.toISOString(),
+            : shouldContinueHistoricalTransactions
+              ? nextHistoricalWindow!.end.toISOString()
+              : nextChargebackWindow.end.toISOString(),
           windowPageCount: nextCursor
             ? (shouldRollWindow ? 0 : nextWindowPageCount)
             : 0,
+          emptyWindowCount: nextCursor
+            ? state.emptyWindowCount
+            : shouldContinueHistoricalTransactions
+              ? nextEmptyWindowCount
+              : 0,
         };
-        const persistedNextState = nextCursor
-          ? buildOnlyFansPersistedResumeState(nextState, {
-            phase: "transactions",
-            windowEnd: pageOldestSeenAt!,
-            dirtyFrom: nextDirtyFrom,
-            newestSeenAt,
-          })
-          : buildOnlyFansPersistedResumeState(nextState, {
-            phase: "chargebacks",
-            windowEnd: snapshotEnd,
-            dirtyFrom: nextDirtyFrom,
-            newestSeenAt,
-          });
+        const persistedNextState = buildOnlyFansPersistedResumeState(nextState, {
+          phase: nextState.phase,
+          start: nextState.start,
+          windowEnd: nextCursor
+            ? pageOldestSeenAt!
+            : nextState.windowEnd,
+          oldestSeenAt,
+          dirtyFrom: nextDirtyFrom,
+          newestSeenAt,
+          emptyWindowCount: nextState.emptyWindowCount,
+        });
 
         await app.db.transaction(async (tx) => {
           const dbTx = tx as typeof app.db;
@@ -897,6 +1062,9 @@ async function syncOnlyFansTransactionsBackfill(
           page: state.transactionPages,
           processedTransactions: state.processedTransactions,
           processedChargebacks: state.processedChargebacks,
+          windowStart: state.start,
+          windowEnd: state.windowEnd,
+          emptyWindowCount: state.emptyWindowCount,
           oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
           newestSeenAt: newestSeenAt?.toISOString() ?? null,
         });
@@ -909,6 +1077,9 @@ async function syncOnlyFansTransactionsBackfill(
           page: state.transactionPages,
           processedTransactions: state.processedTransactions,
           processedChargebacks: state.processedChargebacks,
+          windowStart: state.start,
+          windowEnd: state.windowEnd,
+          emptyWindowCount: state.emptyWindowCount,
           oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
           newestSeenAt: newestSeenAt?.toISOString() ?? null,
           fallbackStartUsed: state.fallbackStartUsed,
@@ -924,9 +1095,11 @@ async function syncOnlyFansTransactionsBackfill(
           processedChargebacksThisRun: currentRunProcessedChargebacks,
           oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
           newestSeenAt: newestSeenAt?.toISOString() ?? null,
+          windowStart: state.start,
           windowEnd: state.windowEnd,
           windowPageCount: state.windowPageCount,
           windowPageLimit: transactionWindowPageLimit,
+          emptyWindowCount: state.emptyWindowCount,
           fallbackStartUsed: state.fallbackStartUsed,
         });
 
@@ -999,28 +1172,46 @@ async function syncOnlyFansTransactionsBackfill(
         state.dirtyFrom ? new Date(state.dirtyFrom) : null,
         pageOldestSeenAt,
       );
+      const nextHistoricalWindow = nextCursor
+        ? null
+        : buildNextOnlyFansHistoricalWindow(state, pageOldestSeenAt);
+      const nextEmptyWindowCount = page.parsed.items.length === 0
+        ? state.emptyWindowCount + 1
+        : 0;
+      const shouldContinueHistoricalChargebacks = Boolean(nextHistoricalWindow) &&
+        nextEmptyWindowCount < ONLYFANS_EMPTY_WINDOW_LIMIT;
       const nextState: OnlyFansTransactionBackfillState = {
         ...state,
         cursor: nextCursor,
         chargebackPages: state.chargebackPages + 1,
         processedChargebacks: state.processedChargebacks + page.parsed.items.length,
+        oldestSeenAt: isoDateOrNull(oldestSeenAt),
         newestSeenAt: isoDateOrNull(newestSeenAt),
         dirtyFrom: isoDateOrNull(nextDirtyFrom),
+        start: shouldContinueHistoricalChargebacks
+          ? nextHistoricalWindow!.start.toISOString()
+          : state.start,
+        windowEnd: shouldContinueHistoricalChargebacks
+          ? nextHistoricalWindow!.end.toISOString()
+          : state.windowEnd,
         windowPageCount: 0,
+        emptyWindowCount: nextCursor
+          ? state.emptyWindowCount
+          : shouldContinueHistoricalChargebacks
+            ? nextEmptyWindowCount
+            : 0,
       };
-      const persistedNextState = nextCursor
-        ? buildOnlyFansPersistedResumeState(nextState, {
-          phase: "chargebacks",
-          windowEnd: pageOldestSeenAt!,
-          dirtyFrom: nextDirtyFrom,
-          newestSeenAt,
-        })
-        : buildOnlyFansPersistedResumeState(nextState, {
-          phase: "chargebacks",
-          windowEnd: nextState.windowEnd,
-          dirtyFrom: nextDirtyFrom,
-          newestSeenAt,
-        });
+      const persistedNextState = buildOnlyFansPersistedResumeState(nextState, {
+        phase: "chargebacks",
+        start: nextState.start,
+        windowEnd: nextCursor
+          ? pageOldestSeenAt!
+          : nextState.windowEnd,
+        oldestSeenAt,
+        dirtyFrom: nextDirtyFrom,
+        newestSeenAt,
+        emptyWindowCount: nextState.emptyWindowCount,
+      });
 
       await app.db.transaction(async (tx) => {
         const dbTx = tx as typeof app.db;
@@ -1083,6 +1274,9 @@ async function syncOnlyFansTransactionsBackfill(
         page: state.chargebackPages,
         processedTransactions: state.processedTransactions,
         processedChargebacks: state.processedChargebacks,
+        windowStart: state.start,
+        windowEnd: state.windowEnd,
+        emptyWindowCount: state.emptyWindowCount,
         oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
         newestSeenAt: newestSeenAt?.toISOString() ?? null,
       });
@@ -1095,6 +1289,9 @@ async function syncOnlyFansTransactionsBackfill(
         page: state.chargebackPages,
         processedTransactions: state.processedTransactions,
         processedChargebacks: state.processedChargebacks,
+        windowStart: state.start,
+        windowEnd: state.windowEnd,
+        emptyWindowCount: state.emptyWindowCount,
         oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
         newestSeenAt: newestSeenAt?.toISOString() ?? null,
         fallbackStartUsed: state.fallbackStartUsed,
@@ -1110,13 +1307,15 @@ async function syncOnlyFansTransactionsBackfill(
         processedChargebacksThisRun: currentRunProcessedChargebacks,
         oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
         newestSeenAt: newestSeenAt?.toISOString() ?? null,
+        windowStart: state.start,
         windowEnd: state.windowEnd,
         windowPageCount: 0,
         windowPageLimit: transactionWindowPageLimit,
+        emptyWindowCount: state.emptyWindowCount,
         fallbackStartUsed: state.fallbackStartUsed,
       });
 
-      if (!page.parsed.cursor) {
+      if (!page.parsed.cursor && !shouldContinueHistoricalChargebacks) {
         break;
       }
 
@@ -1151,6 +1350,14 @@ async function syncOnlyFansTransactionsBackfill(
     state.dirtyFrom ? new Date(state.dirtyFrom) : null,
   );
 
+  if (oldestSeenAt) {
+    await persistOnlyFansBackfillLowerBound(
+      app,
+      input.platformAccountId,
+      bufferOnlyFansBackfillLowerBound(oldestSeenAt, app.config.transactionLookbackDays),
+    );
+  }
+
   const checkpointAfter = await upsertCheckpoint(app.db, {
     platformAccountId: input.platformAccountId,
     stream: "transactions",
@@ -1166,7 +1373,7 @@ async function syncOnlyFansTransactionsBackfill(
   await input.telemetry.recordCheckpointAdvanced("transactions", summarizeCheckpoint(checkpointAfter));
   input.telemetry.setBoundarySummary({
     kind: "backfill",
-    requestedLowerBound: state.start,
+    requestedLowerBound,
     end: state.snapshotEnd,
     phase: "complete",
     fallbackStartUsed: state.fallbackStartUsed,
@@ -1182,9 +1389,11 @@ async function syncOnlyFansTransactionsBackfill(
     processedChargebacksThisRun: currentRunProcessedChargebacks,
     oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
+    windowStart: null,
     windowEnd: null,
     windowPageCount: 0,
     windowPageLimit: transactionWindowPageLimit,
+    emptyWindowCount: 0,
     fallbackStartUsed: state.fallbackStartUsed,
   });
 

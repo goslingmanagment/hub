@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   deleteTransactionsMissingFromWindow: vi.fn(),
   getCheckpoint: vi.fn(),
   getOldestPendingTransactionAt: vi.fn(),
+  mergePageMetadata: vi.fn(),
   rebuildSpenderProjections: vi.fn(),
   rebuildRevenueRollups: vi.fn(),
   upsertCheckpoint: vi.fn(),
@@ -163,6 +164,7 @@ async function runOnlyFansTransactionsSync(input?: {
     cursorTimestamp?: Date | null;
     state?: Record<string, unknown>;
   } | null;
+  pageMetadata?: Record<string, unknown>;
   rescanStart?: Date | null;
 }) {
   const adapter = input?.adapter ?? createAdapter({
@@ -178,7 +180,7 @@ async function runOnlyFansTransactionsSync(input?: {
     pageLabel: "onlyfans-page",
     platformAccountId: 1,
     platformAccountIdValue: "of-1",
-    pageMetadata: {},
+    pageMetadata: input?.pageMetadata ?? {},
     commissionRate: 0.2,
     rescanStart: input?.rescanStart ?? null,
     requestContext: {
@@ -194,6 +196,9 @@ async function runOnlyFansTransactionsSync(input?: {
 
 describe("syncOnlyFansTransactions", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-15T00:00:00.000Z"));
+
     for (const mock of Object.values(dbMocks)) {
       mock.mockReset();
     }
@@ -205,6 +210,7 @@ describe("syncOnlyFansTransactions", () => {
 
     dbMocks.deleteTransactionsMissingFromWindow.mockResolvedValue(undefined);
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
+    dbMocks.mergePageMetadata.mockResolvedValue(null);
     dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);
     dbMocks.rebuildRevenueRollups.mockResolvedValue(undefined);
     dbMocks.upsertFanPage.mockResolvedValue(undefined);
@@ -242,6 +248,10 @@ describe("syncOnlyFansTransactions", () => {
     }));
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("keeps persisted transaction progress cursorless while continuing live cursors in-memory", async () => {
     const adapter = createAdapter({
       transactionPages: [
@@ -257,6 +267,9 @@ describe("syncOnlyFansTransactions", () => {
     const result = await runOnlyFansTransactionsSync({
       adapter,
       budget: new SyncChunkBudget(10, 60_000),
+      pageMetadata: {
+        transactionBackfillLowerBound: "2026-03-01T00:00:00.000Z",
+      },
     });
 
     const progressStates = dbMocks.upsertCheckpointProgress.mock.calls
@@ -297,6 +310,9 @@ describe("syncOnlyFansTransactions", () => {
     const firstResult = await runOnlyFansTransactionsSync({
       adapter: firstAdapter,
       budget: new SyncChunkBudget(5, 60_000),
+      pageMetadata: {
+        transactionBackfillLowerBound: "2026-03-01T00:00:00.000Z",
+      },
     });
 
     expect(firstResult.satisfied).toBe(false);
@@ -333,6 +349,9 @@ describe("syncOnlyFansTransactions", () => {
         state: yieldedState,
       },
       budget: new SyncChunkBudget(10, 60_000),
+      pageMetadata: {
+        transactionBackfillLowerBound: "2026-03-01T00:00:00.000Z",
+      },
     });
 
     const resumedRequest = resumedAdapter.getTransactionsPage.mock.calls[0]![2];
@@ -341,13 +360,58 @@ describe("syncOnlyFansTransactions", () => {
     expect(resumedResult.satisfied).toBe(true);
   });
 
-  it("upgrades legacy transaction backfill state by clearing the deep cursor", async () => {
+  it("persists the discovered lower bound when a resumed synthetic backfill finishes on empty windows", async () => {
+    const firstAdapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-02-10T00:00:00.000Z")]),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    const firstResult = await runOnlyFansTransactionsSync({
+      adapter: firstAdapter,
+      budget: new SyncChunkBudget(1, 60_000),
+    });
+
+    expect(firstResult.satisfied).toBe(false);
+    expect(firstResult.yieldReason).toBe("request_budget");
+    expect(dbMocks.mergePageMetadata).not.toHaveBeenCalled();
+
+    const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)![1].state;
+    expect(yieldedState.oldestSeenAt).toBe("2026-02-10T00:00:00.000Z");
+
+    const resumedAdapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([]),
+        makeCursorPage([]),
+      ],
+      chargebackPages: [
+        makeCursorPage([]),
+        makeCursorPage([]),
+      ],
+    });
+
+    const resumedResult = await runOnlyFansTransactionsSync({
+      adapter: resumedAdapter,
+      checkpoint: {
+        state: yieldedState,
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(resumedResult.satisfied).toBe(true);
+    expect(dbMocks.mergePageMetadata).toHaveBeenCalledWith(expect.anything(), 1, {
+      transactionBackfillLowerBound: "2026-02-03T00:00:00.000Z",
+    });
+  });
+
+  it("upgrades legacy transaction backfill state without oldestSeenAt by clearing the deep cursor", async () => {
     const adapter = createAdapter({
       transactionPages: [makeCursorPage([])],
       chargebackPages: [makeCursorPage([])],
     });
 
-    await runOnlyFansTransactionsSync({
+    const result = await runOnlyFansTransactionsSync({
       adapter,
       checkpoint: {
         state: {
@@ -373,6 +437,7 @@ describe("syncOnlyFansTransactions", () => {
     const firstRequest = adapter.getTransactionsPage.mock.calls[0]![2];
     expect(firstRequest.cursor).toBeNull();
     expect(firstRequest.end!.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(result.satisfied).toBe(true);
   });
 
   it("persists a cursorless transition into chargebacks and finalizes the checkpoint", async () => {
@@ -388,6 +453,9 @@ describe("syncOnlyFansTransactions", () => {
     const result = await runOnlyFansTransactionsSync({
       adapter,
       budget: new SyncChunkBudget(10, 60_000),
+      pageMetadata: {
+        transactionBackfillLowerBound: "2026-03-01T00:00:00.000Z",
+      },
     });
 
     const transitionState = dbMocks.upsertCheckpointProgress.mock.calls[0]![1].state;
@@ -428,6 +496,9 @@ describe("syncOnlyFansTransactions", () => {
     const firstResult = await runOnlyFansTransactionsSync({
       adapter: firstAdapter,
       budget: new SyncChunkBudget(2, 60_000),
+      pageMetadata: {
+        transactionBackfillLowerBound: "2026-03-01T00:00:00.000Z",
+      },
     });
 
     expect(firstResult.satisfied).toBe(false);
@@ -453,12 +524,126 @@ describe("syncOnlyFansTransactions", () => {
         state: yieldedState,
       },
       budget: new SyncChunkBudget(10, 60_000),
+      pageMetadata: {
+        transactionBackfillLowerBound: "2026-03-01T00:00:00.000Z",
+      },
     });
 
     const resumedRequest = resumedAdapter.getChargebacksPage.mock.calls[0]![2];
     expect(resumedRequest.cursor).toBeNull();
     expect(resumedRequest.end!.toISOString()).toBe("2026-03-09T00:00:00.000Z");
     expect(resumedResult.satisfied).toBe(true);
+  });
+
+  it("stops synthetic transaction backfill after two empty historical windows and buffers the discovered lower bound", async () => {
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-02-10T00:00:00.000Z")]),
+        makeCursorPage([]),
+        makeCursorPage([]),
+      ],
+      chargebackPages: [
+        makeCursorPage([]),
+        makeCursorPage([]),
+      ],
+    });
+
+    const result = await runOnlyFansTransactionsSync({
+      adapter,
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(adapter.getTransactionsPage).toHaveBeenCalledTimes(3);
+    expect(adapter.getChargebacksPage).toHaveBeenCalledTimes(2);
+    expect(adapter.getTransactionsPage.mock.calls[0]![2].start!.toISOString()).toBe("2025-03-15T00:00:00.000Z");
+    expect(adapter.getTransactionsPage.mock.calls[0]![2].end!.toISOString()).toBe("2026-03-15T00:00:00.000Z");
+    expect(adapter.getTransactionsPage.mock.calls[1]![2].start!.toISOString()).toBe("2025-02-10T00:00:00.000Z");
+    expect(adapter.getTransactionsPage.mock.calls[1]![2].end!.toISOString()).toBe("2026-02-10T00:00:00.000Z");
+    expect(adapter.getTransactionsPage.mock.calls[2]![2].start!.toISOString()).toBe("2024-02-11T00:00:00.000Z");
+    expect(adapter.getTransactionsPage.mock.calls[2]![2].end!.toISOString()).toBe("2025-02-10T00:00:00.000Z");
+    expect(dbMocks.mergePageMetadata).toHaveBeenCalledWith(expect.anything(), 1, {
+      transactionBackfillLowerBound: "2026-02-03T00:00:00.000Z",
+    });
+    expect(result.satisfied).toBe(true);
+    expect(result.processedTransactions).toBe(1);
+    expect(result.processedChargebacks).toBe(0);
+  });
+
+  it("resets empty-window counting when chargebacks begin on synthetic scans", async () => {
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-02-10T00:00:00.000Z")]),
+        makeCursorPage([]),
+        makeCursorPage([]),
+      ],
+      chargebackPages: [
+        makeCursorPage([makeChargeback("cb-1", "2026-01-15T00:00:00.000Z")]),
+        makeCursorPage([]),
+        makeCursorPage([]),
+      ],
+    });
+
+    await runOnlyFansTransactionsSync({
+      adapter,
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(adapter.getChargebacksPage).toHaveBeenCalledTimes(3);
+    expect(adapter.getChargebacksPage.mock.calls[0]![2].start!.toISOString()).toBe("2025-03-15T00:00:00.000Z");
+    expect(adapter.getChargebacksPage.mock.calls[0]![2].end!.toISOString()).toBe("2026-03-15T00:00:00.000Z");
+    expect(adapter.getChargebacksPage.mock.calls[1]![2].start!.toISOString()).toBe("2025-01-15T00:00:00.000Z");
+    expect(adapter.getChargebacksPage.mock.calls[1]![2].end!.toISOString()).toBe("2026-01-15T00:00:00.000Z");
+    expect(dbMocks.mergePageMetadata).toHaveBeenCalledWith(expect.anything(), 1, {
+      transactionBackfillLowerBound: "2026-01-08T00:00:00.000Z",
+    });
+  });
+
+  it("completes a synthetic no-data backfill without persisting a discovered lower bound", async () => {
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([]),
+        makeCursorPage([]),
+      ],
+      chargebackPages: [
+        makeCursorPage([]),
+        makeCursorPage([]),
+      ],
+    });
+
+    const result = await runOnlyFansTransactionsSync({
+      adapter,
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(adapter.getTransactionsPage).toHaveBeenCalledTimes(2);
+    expect(adapter.getChargebacksPage).toHaveBeenCalledTimes(2);
+    expect(dbMocks.mergePageMetadata).not.toHaveBeenCalled();
+    expect(result.satisfied).toBe(true);
+    expect(result.processedTransactions).toBe(0);
+    expect(result.processedChargebacks).toBe(0);
+  });
+
+  it("clamps buffered backfill lower bounds to the synthetic floor", async () => {
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2016-01-03T00:00:00.000Z")]),
+      ],
+      chargebackPages: [
+        makeCursorPage([]),
+      ],
+    });
+
+    await runOnlyFansTransactionsSync({
+      adapter,
+      budget: new SyncChunkBudget(10, 60_000),
+      pageMetadata: {
+        transactionBackfillLowerBound: "2016-01-01T00:00:00.000Z",
+      },
+    });
+
+    expect(dbMocks.mergePageMetadata).toHaveBeenCalledWith(expect.anything(), 1, {
+      transactionBackfillLowerBound: "2016-01-01T00:00:00.000Z",
+    });
   });
 
   it("honors manual rescanStart for incremental syncs", async () => {
