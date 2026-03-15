@@ -433,6 +433,7 @@ export const fanPages = pgTable(
   },
   (table) => ({
     uniq: unique("fan_pages_fan_account_uniq").on(table.fanId, table.platformAccountId),
+    platformAccountIdx: index("fan_pages_platform_account_idx").on(table.platformAccountId),
   }),
 );
 

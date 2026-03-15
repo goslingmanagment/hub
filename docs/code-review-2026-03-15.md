@@ -231,6 +231,6 @@ File `docs/code-review-2026-03-09.md` missing from working tree. Delta reconstru
 | H-1 | Fixed | `fix(H-1): batch sync fan upserts` | `pnpm exec vitest run tests/db-write.integration.test.ts tests/sync-handlers.test.ts tests/onlyfans-transactions.test.ts` | Batched fan, fan-page, follow, and subscription writes on active sync paths. |
 | M-2 | Fixed | `fix(M-2): scope incremental rollup rebuilds` | `pnpm exec vitest run tests/onlyfans-transactions.test.ts tests/fansly-transactions.test.ts` | Incremental transaction syncs now rebuild from the dirty lower bound instead of full history. |
 | M-3 | Fixed | `fix(M-3): clean chargeback-only transaction windows` | `pnpm exec vitest run tests/onlyfans-transactions.test.ts` | OnlyFans delete-missing cleanup now runs when the window contains only chargebacks. |
-| M-4 | Pending |  |  |  |
+| M-4 | Fixed | `fix(M-4): add fan_pages platform account index` | `pnpm exec vitest run tests/schema-guard.test.ts` | Added the standalone `fan_pages(platform_account_id)` index used by page-scoped fan lookups. |
 | M-5 | Pending |  |  |  |
 | M-1 | Pending |  |  |  |
