@@ -26,6 +26,7 @@ import type { FanslyAccountMeResponse } from "@agency_hub_core/fansly";
 import type { OnlyMonsterAccount } from "@agency_hub_core/onlyfans";
 
 import { onboardFanslyPage, onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboarding.ts";
+import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
 import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -778,6 +779,142 @@ describe("db write safety", () => {
     ).rejects.toThrow(
       'OnlyMonster username "lora_of" matched multiple accounts; use a unique username',
     );
+  });
+
+  it("rejects Fansly credential updates that point at a different upstream account", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "fansly-credentials-model",
+      name: "Fansly Credentials Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "fansly-credentials-page",
+    });
+    await updatePageMetadata(testDb.db, page.id, {
+      platformAccountIdValue: "acct-123",
+      username: "fansly-bound",
+      displayName: "Fansly Bound",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    const app = createTestAppContext(testDb, {
+      adapter: {
+        async verifySession() {
+          return {
+            parsed: {
+              account: {
+                id: "acct-999",
+                username: "fansly-other",
+                displayName: "Fansly Other",
+                followCount: 0,
+                subscriberCount: 0,
+              },
+            },
+            raw: null,
+          };
+        },
+      } as never,
+    });
+
+    await expect(
+      updatePageCredentials(app, page.label, {
+        platform: "fansly",
+        session: {
+          authorization: "replacement-token",
+        },
+      }),
+    ).rejects.toThrow(
+      'Submitted credentials belong to upstream account "acct-999", but page "fansly-credentials-page" is bound to "acct-123"',
+    );
+
+    const credentialRows = await testDb.pool.query(`
+      select count(*)::int as count
+      from platform_account_credentials
+      where platform_account_id = ${page.id}
+    `);
+    expect(credentialRows.rows[0]?.count).toBe(0);
+  });
+
+  it("rejects OnlyFans credential updates that point at a different upstream account", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "onlyfans-credentials-model",
+      name: "OnlyFans Credentials Model",
+    });
+    const page = await createOnlyFansPage(testDb.db, {
+      modelId: model.id,
+      label: "onlyfans-credentials-page",
+    });
+    await updatePageMetadata(testDb.db, page.id, {
+      platformAccountIdValue: "of-acct-42",
+      username: "lora_of",
+      displayName: "Lora OF",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    const mismatchAccount: OnlyMonsterAccount = {
+      id: 99,
+      platform_account_id: "of-acct-99",
+      platform: "onlyfans",
+      name: "Other OF",
+      email: null,
+      avatar: "https://example.com/other.png",
+      username: "other_of",
+      organisation_id: "org-2",
+      subscribe_price: null,
+      subscription_expiration_date: null,
+    };
+
+    const app = createTestAppContext(testDb, {
+      onlyFansAdapter: {
+        async listAccountsPage() {
+          return {
+            parsed: {
+              accounts: [mismatchAccount],
+            },
+            raw: {
+              accounts: [mismatchAccount],
+            },
+          };
+        },
+      } as never,
+    });
+
+    await expect(
+      updatePageCredentials(app, page.label, {
+        platform: "onlyfans",
+        auth: {
+          token: "replacement-token",
+        },
+        username: "other_of",
+      }),
+    ).rejects.toThrow(
+      'Submitted credentials belong to upstream account "of-acct-99", but page "onlyfans-credentials-page" is bound to "of-acct-42"',
+    );
+
+    const credentialRows = await testDb.pool.query(`
+      select count(*)::int as count
+      from platform_account_credentials
+      where platform_account_id = ${page.id}
+    `);
+    expect(credentialRows.rows[0]?.count).toBe(0);
   });
 
   it("leaves no persisted rows behind when OnlyFans account verification fails during onboarding", async (context) => {

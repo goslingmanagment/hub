@@ -14,7 +14,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, NotFoundError } from "./errors.ts";
+import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
 
@@ -27,6 +27,21 @@ export type ConnectionStatus =
   | "unverified";
 
 const STALE_THRESHOLD_HOURS = 9;
+
+function assertVerifiedAccountIdentity(
+  pageLabel: string,
+  expectedPlatformAccountId: string | null,
+  actualPlatformAccountId: string,
+) {
+  if (!expectedPlatformAccountId || expectedPlatformAccountId === actualPlatformAccountId) {
+    return;
+  }
+
+  throw new ConflictError(
+    `Submitted credentials belong to upstream account "${actualPlatformAccountId}", ` +
+      `but page "${pageLabel}" is bound to "${expectedPlatformAccountId}"`,
+  );
+}
 
 function isAuthError(errorSummary: string | null): boolean {
   if (!errorSummary) return false;
@@ -151,17 +166,27 @@ export async function updatePageCredentials(
 
   // Verify credentials with platform adapter
   if (body.platform === "fansly") {
-    await app.adapter.verifySession({
+    const verification = await app.adapter.verifySession({
       session: body.session,
       proxy,
     });
+    assertVerifiedAccountIdentity(
+      stored.page.label,
+      stored.page.platformAccountId,
+      verification.parsed.account.id,
+    );
   } else {
     const context = {
       auth: body.auth,
       proxy,
       requestObserver: null,
     };
-    await findOnlyFansAccountByUsername(app.onlyFansAdapter, context, body.username);
+    const account = await findOnlyFansAccountByUsername(app.onlyFansAdapter, context, body.username);
+    assertVerifiedAccountIdentity(
+      stored.page.label,
+      stored.page.platformAccountId,
+      account.platform_account_id,
+    );
   }
 
   // Save encrypted credentials
