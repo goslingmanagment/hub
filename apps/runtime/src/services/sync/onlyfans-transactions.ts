@@ -383,6 +383,7 @@ async function syncOnlyFansTransactionsIncremental(
   let olderThanBoundaryItems = 0;
   let olderThanBoundaryPages = 0;
   const sourceTransactionIds = new Set<string>();
+  let cleanupApplied = false;
   const transactionsToUpsert: Array<OnlyMonsterTransaction> = [];
   const chargebacksToUpsert: Array<OnlyMonsterChargeback> = [];
   const fanPlatformIds = new Set<string>();
@@ -563,7 +564,8 @@ async function syncOnlyFansTransactionsIncremental(
       });
     }
 
-    if (processedTransactions > 0) {
+    cleanupApplied = sourceTransactionIds.size > 0;
+    if (cleanupApplied) {
       await deleteTransactionsMissingFromWindow(tx as typeof app.db, {
         platformAccountId: input.platformAccountId,
         from: start,
@@ -571,7 +573,7 @@ async function syncOnlyFansTransactionsIncremental(
         keepTransactionIds: Array.from(sourceTransactionIds),
       });
     }
-    const dirtyFrom = processedTransactions > 0 ? start : oldestSeenAt;
+    const dirtyFrom = cleanupApplied ? start : oldestSeenAt;
     if (dirtyFrom) {
       await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId, dirtyFrom);
       await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId, dirtyFrom);
@@ -610,10 +612,10 @@ async function syncOnlyFansTransactionsIncremental(
     processedChargebacks,
     oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
-    deleteWindowApplied: processedTransactions > 0,
+    deleteWindowApplied: cleanupApplied,
     mode: "incremental",
   });
-  if (processedTransactions > 0) {
+  if (cleanupApplied) {
     await input.telemetry.addNote("Delete-missing-in-window cleanup was applied to the OnlyFans transaction scan", {
       from: start.toISOString(),
       to: end.toISOString(),

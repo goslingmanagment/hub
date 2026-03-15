@@ -230,7 +230,7 @@ File `docs/code-review-2026-03-09.md` missing from working tree. Delta reconstru
 | H-5 | Fixed | `fix(H-5): fail hard on advisory unlock errors` | `pnpm test -- tests/sync-locking.test.ts` | Unlock failures now discard the pooled client instead of silently returning it. |
 | H-1 | Fixed | `fix(H-1): batch sync fan upserts` | `pnpm exec vitest run tests/db-write.integration.test.ts tests/sync-handlers.test.ts tests/onlyfans-transactions.test.ts` | Batched fan, fan-page, follow, and subscription writes on active sync paths. |
 | M-2 | Fixed | `fix(M-2): scope incremental rollup rebuilds` | `pnpm exec vitest run tests/onlyfans-transactions.test.ts tests/fansly-transactions.test.ts` | Incremental transaction syncs now rebuild from the dirty lower bound instead of full history. |
-| M-3 | Pending |  |  |  |
+| M-3 | Fixed | `fix(M-3): clean chargeback-only transaction windows` | `pnpm exec vitest run tests/onlyfans-transactions.test.ts` | OnlyFans delete-missing cleanup now runs when the window contains only chargebacks. |
 | M-4 | Pending |  |  |  |
 | M-5 | Pending |  |  |  |
 | M-1 | Pending |  |  |  |
