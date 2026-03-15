@@ -1250,6 +1250,77 @@ describe("db write safety", () => {
     expect(BigInt(spendAfterPayoutReversal.rows[0]?.creator_net_amount_mills ?? 0)).toBe(4300n);
   });
 
+  it("preserves a known fan binding when a transaction rescan cannot resolve the fan", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "rescan-model",
+      name: "Rescan Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "rescan-page",
+    });
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-1",
+      username: "fan1",
+    }]);
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      transactionId: "rescan-tip",
+      correlationAccountId: "fan-1",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-05T00:00:00.000Z"),
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: null,
+      transactionId: "rescan-tip",
+      correlationAccountId: null,
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 3,
+      grossAmountMills: 1200n,
+      sourceDestinationAmountMills: 1200n,
+      creatorNetAmountMills: 1200n,
+      occurredAt: new Date("2026-03-05T01:00:00.000Z"),
+      sourceUpdatedAt: new Date("2026-03-05T01:05:00.000Z"),
+    });
+
+    const rows = await testDb.pool.query(`
+      select fan_id,
+             correlation_account_id,
+             raw_status,
+             creator_net_amount_mills,
+             source_updated_at
+      from transactions
+      where platform_account_id = ${page.id}
+        and transaction_id = 'rescan-tip'
+    `);
+
+    expect(rows.rows[0]).toMatchObject({
+      fan_id: BigInt(fan.id),
+      correlation_account_id: null,
+      raw_status: "3",
+      creator_net_amount_mills: 1200n,
+    });
+    expect(rows.rows[0]?.source_updated_at).toBeInstanceOf(Date);
+  });
+
   it("rebuilds revenue rollups from the first affected business day without deleting older history", async (context) => {
     if (!testDb) {
       context.skip();

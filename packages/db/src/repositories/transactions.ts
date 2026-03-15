@@ -49,7 +49,7 @@ export interface UpsertTransactionInput {
 }
 
 export async function upsertTransaction(db: Database, input: UpsertTransactionInput) {
-  const patch = {
+  const insertValues = {
     fanId: input.fanId ?? null,
     walletId: input.walletId ?? null,
     accountId: input.accountId ?? null,
@@ -70,17 +70,21 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     occurredAt: input.occurredAt,
     sourceUpdatedAt: input.sourceUpdatedAt ?? null,
   };
+  const updateSet = {
+    ...insertValues,
+    fanId: sql<number | null>`coalesce(excluded.fan_id, ${transactions.fanId})`,
+  };
 
   const [transaction] = await db
     .insert(transactions)
     .values({
       platformAccountId: input.platformAccountId,
       transactionId: input.transactionId,
-      ...patch,
+      ...insertValues,
     })
     .onConflictDoUpdate({
       target: [transactions.platformAccountId, transactions.transactionId],
-      set: patch,
+      set: updateSet,
     })
     .returning();
   return transaction;

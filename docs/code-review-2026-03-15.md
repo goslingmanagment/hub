@@ -225,7 +225,7 @@ File `docs/code-review-2026-03-09.md` missing from working tree. Delta reconstru
 | Finding ID | Status | Commit | Tests | Notes |
 |---|---|---|---|---|
 | C-1 | Fixed | `fix(C-1): prevent duplicate upstream identity binding` | `pnpm test -- tests/db-write.integration.test.ts tests/schema-guard.test.ts` | Added DB uniqueness and immutable page identity binding. |
-| H-4 | Pending |  |  |  |
+| H-4 | Fixed | `fix(H-4): preserve fan attribution on rescans` | `pnpm test -- tests/db-write.integration.test.ts` | Transaction upserts now keep existing `fan_id` when rescans resolve to `NULL`. |
 | H-2 | Pending |  |  |  |
 | H-5 | Pending |  |  |  |
 | H-1 | Pending |  |  |  |
