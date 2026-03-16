@@ -6,7 +6,6 @@ import { startSyncPageExecutor } from "./services/sync/executor.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
   ensurePlannerSchedule,
-  ensureQueueCreated,
   ensureSyncQueues,
   RAW_PAYLOAD_CLEANUP_QUEUE,
   SYNC_PLANNER_QUEUE,
@@ -22,11 +21,10 @@ async function main() {
 
   await boss.start();
   await ensureSyncQueues(boss, createdQueues);
-  await ensurePlannerSchedule(boss);
-  await ensureQueueCreated(boss, RAW_PAYLOAD_CLEANUP_QUEUE, {
-    policy: "standard",
-  }, createdQueues);
-  await boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *");
+  await Promise.all([
+    ensurePlannerSchedule(boss),
+    boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
+  ]);
 
   await boss.work(SYNC_PLANNER_QUEUE, {
     batchSize: 1,

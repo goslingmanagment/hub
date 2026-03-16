@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router";
 import {
   useOverview,
@@ -24,19 +24,12 @@ import {
   daysRemaining,
   formatRelativeTime,
 } from "@/lib/format";
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
-
 type TabKey = "transactions" | "spenders" | "followers";
 
 const PAGE_SIZE = 50;
+const PageActivityChart = lazy(() =>
+  import("@/components/page/PageActivityChart").then((m) => ({ default: m.PageActivityChart })),
+);
 
 function isRecent(iso: string | null) {
   return iso ? Date.now() - new Date(iso).getTime() < 86_400_000 : false;
@@ -192,62 +185,25 @@ export function PageDetailPage() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-xl p-5">
-          <div className="mb-4 flex items-baseline justify-between">
-            <h2 className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
-              {chartTitle}
-            </h2>
-            <span className="text-[12px] text-text-muted">{selectedPeriodLabel}</span>
-          </div>
-          <ResponsiveContainer width="100%" height={150}>
-            <AreaChart
-              data={chartItems ?? []}
-              margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
-            >
-              <defs>
-                <linearGradient id="chartGreen" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#4ead6b" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="#4ead6b" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid
-                strokeDasharray="3 3"
-                vertical={false}
-                stroke="var(--color-border, #333)"
-              />
-              <XAxis
-                dataKey="businessDate"
-                tickFormatter={(value: string) => formatDate(value)}
-                tick={{ fontSize: 11, fill: "var(--color-text-muted, #888)" }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: "var(--color-text-muted, #888)" }}
-                axisLine={false}
-                tickLine={false}
-                width={32}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "var(--color-card, #1a1a2e)",
-                  border: "1px solid var(--color-border, #333)",
-                  borderRadius: 8,
-                  fontSize: 13,
-                }}
-                labelFormatter={(value: string) => formatDate(value)}
-              />
-              <Area
-                type="monotone"
-                dataKey={chartDataKey}
-                stroke="#4ead6b"
-                strokeWidth={2.5}
-                fill="url(#chartGreen)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
       </div>
+
+      <Suspense
+        fallback={(
+          <div className="bg-card border border-border rounded-xl p-5 mb-6">
+            <div className="h-[300px] flex items-center justify-center text-sm text-text-muted">
+              Loading chart...
+            </div>
+          </div>
+        )}
+      >
+        <PageActivityChart
+          title={chartTitle}
+          selectedPeriod={selectedPeriod}
+          selectedPeriodLabel={selectedPeriodLabel}
+          items={chartItems ?? []}
+          dataKey={chartDataKey}
+        />
+      </Suspense>
 
       <div className="grid grid-cols-3 gap-4 mb-6">
         {[

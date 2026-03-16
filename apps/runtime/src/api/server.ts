@@ -21,6 +21,7 @@ import {
   listRevenueDailyForPages,
   listTransactionsForScope,
   listSubscriberDailyForPage,
+  listSubscriberTotalsForPages,
   listVisiblePages,
   setFanFlags,
 } from "@agency_hub_core/db";
@@ -580,7 +581,10 @@ export async function buildApiServer(appContext: AppContext) {
       modelSet.set(p.modelSlug, { slug: p.modelSlug, name: p.modelName });
     }
     const fanCount = await countDistinctFansForPages(appContext.db, pageIds);
-    const connectionStatuses = await listConnectionStatuses(appContext, pageScope);
+    const connectionStatuses = await listConnectionStatuses(appContext, {
+      pageIds: pageScope,
+      pages,
+    });
     const statusByPageId = new Map(connectionStatuses.map((c) => [c.id, c]));
 
     // Revenue 7d and 30d
@@ -665,14 +669,13 @@ export async function buildApiServer(appContext: AppContext) {
     // Per-page new subscribers today
     const pageNewSubsToday = new Map<number, number>();
     const todayBusinessDate = resolveBusinessDateRangeForPlatform("fansly", "today", now);
-    for (const p of pages) {
-      const items = await listSubscriberDailyForPage(appContext.db, {
-        pageId: p.id,
-        fromBusinessDate: todayBusinessDate.from,
-        toBusinessDate: todayBusinessDate.toExclusive,
-      });
-      const count = items.reduce((sum, item) => sum + item.newSubscribers, 0);
-      pageNewSubsToday.set(p.id, count);
+    const subscriberTotals = await listSubscriberTotalsForPages(appContext.db, {
+      pageIds,
+      fromBusinessDate: todayBusinessDate.from,
+      toBusinessDate: todayBusinessDate.toExclusive,
+    });
+    for (const row of subscriberTotals) {
+      pageNewSubsToday.set(row.pageId, row.newSubscribers);
     }
 
     return {
@@ -1260,7 +1263,9 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return listConnectionStatuses(appContext, pageScopeFor(principal));
+    return listConnectionStatuses(appContext, {
+      pageIds: pageScopeFor(principal),
+    });
   });
 
   server.post("/api/v1/admin/models", {

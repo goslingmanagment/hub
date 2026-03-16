@@ -464,6 +464,12 @@ export const pageFollows = pgTable(
       table.platformAccountId,
       table.lastSeenGeneration,
     ),
+    activeFollowedIdx: index("page_follows_active_followed_idx").on(
+      table.platformAccountId,
+      table.isActive,
+      table.followedAt,
+      table.id,
+    ),
   }),
 );
 
@@ -503,6 +509,12 @@ export const pageSubscriptions = pgTable(
     generationIdx: index("page_subscriptions_generation_idx").on(
       table.platformAccountId,
       table.lastSeenGeneration,
+    ),
+    currentIdx: index("page_subscriptions_current_idx").on(
+      table.platformAccountId,
+      table.isCurrent,
+      table.endsAt,
+      table.id,
     ),
   }),
 );
@@ -581,6 +593,10 @@ export const dailyRevenue = pgTable(
       table.businessDate,
       table.canonicalType,
       table.transactionState,
+    ),
+    accountDateIdx: index("daily_revenue_account_date_idx").on(
+      table.platformAccountId,
+      table.businessDate,
     ),
   }),
 );

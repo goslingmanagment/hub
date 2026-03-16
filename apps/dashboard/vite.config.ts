@@ -5,6 +5,11 @@ import { resolve } from "path";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    modulePreload: {
+      resolveDependencies: (_filename, deps) => deps.filter((dep) => !dep.includes("recharts-")),
+    },
+  },
   resolve: {
     alias: {
       "@": resolve(__dirname, "src"),

@@ -663,13 +663,8 @@ export async function listRankedSpenders(
 
     const sortField = sortFieldMap[input.sortBy];
     const orderBy = input.sortDir === "asc" ? asc(sortField) : desc(sortField);
-    const [countRow] = await db.select({
-      total: sql<number>`count(*)::int`,
-    }).from(lifetimeMetrics)
-      .innerJoin(fans, eq(fans.id, lifetimeMetrics.fanId))
-      .where(whereClause);
-
-    const items = await db.select({
+    const rows = await db.select({
+      total: sql<number>`count(*) over()::int`,
       fanId: fans.id,
       platform: fans.platform,
       platformUserId: fans.platformUserId,
@@ -696,8 +691,8 @@ export async function listRankedSpenders(
       .offset(input.offset);
 
     return {
-      total: countRow?.total ?? 0,
-      items,
+      total: rows[0]?.total ?? 0,
+      items: rows.map(({ total: _total, ...item }) => item),
     };
   }
 
@@ -744,14 +739,8 @@ export async function listRankedSpenders(
 
   const sortField = sortFieldMap[input.sortBy];
   const orderBy = input.sortDir === "asc" ? asc(sortField) : desc(sortField);
-  const [countRow] = await db.select({
-    total: sql<number>`count(*)::int`,
-  }).from(currentMetrics)
-    .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
-    .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
-    .where(whereClause);
-
-  const items = await db.select({
+  const rows = await db.select({
+    total: sql<number>`count(*) over()::int`,
     fanId: fans.id,
     platform: fans.platform,
     platformUserId: fans.platformUserId,
@@ -779,8 +768,8 @@ export async function listRankedSpenders(
     .offset(input.offset);
 
   return {
-    total: countRow?.total ?? 0,
-    items,
+    total: rows[0]?.total ?? 0,
+    items: rows.map(({ total: _total, ...item }) => item),
   };
 }
 

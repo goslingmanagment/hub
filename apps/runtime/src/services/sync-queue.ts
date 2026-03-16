@@ -43,35 +43,40 @@ export async function ensureSyncQueues(
   boss: QueueCreationClient,
   createdQueues?: Set<string>,
 ) {
-  await ensureQueueCreated(boss, SYNC_PLANNER_DLQ_QUEUE, {
-    policy: "standard",
-    retentionSeconds: 1_209_600,
-  }, createdQueues);
-  await ensureQueueCreated(boss, SYNC_PAGE_EXECUTE_DLQ_QUEUE, {
-    policy: "standard",
-    retentionSeconds: 1_209_600,
-  }, createdQueues);
-  await ensureQueueCreated(boss, SYNC_PLANNER_QUEUE, {
-    policy: "exclusive",
-    expireInSeconds: 120,
-    heartbeatSeconds: 30,
-    retryLimit: 2,
-    retryDelay: 30,
-    retryBackoff: true,
-    deadLetter: SYNC_PLANNER_DLQ_QUEUE,
-  }, createdQueues);
-  await ensureQueueCreated(boss, SYNC_PAGE_EXECUTE_QUEUE, {
-    policy: "exclusive",
-    expireInSeconds: 180,
-    heartbeatSeconds: 30,
-    retryLimit: 2,
-    retryDelay: 30,
-    retryBackoff: true,
-    deadLetter: SYNC_PAGE_EXECUTE_DLQ_QUEUE,
-  }, createdQueues);
-  await ensureQueueCreated(boss, RAW_PAYLOAD_CLEANUP_QUEUE, {
-    policy: "standard",
-  }, createdQueues);
+  await Promise.all([
+    ensureQueueCreated(boss, SYNC_PLANNER_DLQ_QUEUE, {
+      policy: "standard",
+      retentionSeconds: 1_209_600,
+    }, createdQueues),
+    ensureQueueCreated(boss, SYNC_PAGE_EXECUTE_DLQ_QUEUE, {
+      policy: "standard",
+      retentionSeconds: 1_209_600,
+    }, createdQueues),
+  ]);
+
+  await Promise.all([
+    ensureQueueCreated(boss, SYNC_PLANNER_QUEUE, {
+      policy: "exclusive",
+      expireInSeconds: 120,
+      heartbeatSeconds: 30,
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: true,
+      deadLetter: SYNC_PLANNER_DLQ_QUEUE,
+    }, createdQueues),
+    ensureQueueCreated(boss, SYNC_PAGE_EXECUTE_QUEUE, {
+      policy: "exclusive",
+      expireInSeconds: 180,
+      heartbeatSeconds: 30,
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: true,
+      deadLetter: SYNC_PAGE_EXECUTE_DLQ_QUEUE,
+    }, createdQueues),
+    ensureQueueCreated(boss, RAW_PAYLOAD_CLEANUP_QUEUE, {
+      policy: "standard",
+    }, createdQueues),
+  ]);
 }
 
 export async function ensurePlannerSchedule(

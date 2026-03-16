@@ -93,9 +93,12 @@ function classifyConnectionStatus(
 
 export async function listConnectionStatuses(
   app: AppContext,
-  pageIds?: number[],
+  input?: {
+    pageIds?: number[];
+    pages?: Awaited<ReturnType<typeof listVisiblePages>>;
+  },
 ) {
-  const pages = await listVisiblePages(app.db, pageIds);
+  const pages = input?.pages ?? await listVisiblePages(app.db, input?.pageIds);
   if (pages.length === 0) {
     return [];
   }

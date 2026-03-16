@@ -377,14 +377,8 @@ export async function listSubscribersForPage(
   }
 
   const clauses = and(...conditions);
-
-  const [countRow] = await db.select({
-    total: sql<number>`count(*)::int`,
-  }).from(pageSubscriptions)
-    .innerJoin(fans, eq(fans.id, pageSubscriptions.fanId))
-    .where(clauses);
-
-  const items = await db.select({
+  const rows = await db.select({
+    total: sql<number>`count(*) over()::int`,
     platformSubscriptionId: pageSubscriptions.platformSubscriptionId,
     endsAt: pageSubscriptions.endsAt,
     autoRenew: pageSubscriptions.autoRenew,
@@ -407,8 +401,8 @@ export async function listSubscribersForPage(
     .offset(input.offset);
 
   return {
-    total: countRow?.total ?? 0,
-    items,
+    total: rows[0]?.total ?? 0,
+    items: rows.map(({ total: _total, ...item }) => item),
   };
 }
 
@@ -435,6 +429,34 @@ export async function listSubscriberDailyForPage(
   }).from(dailySubscribers)
     .where(and(...clauses))
     .orderBy(dailySubscribers.businessDate);
+}
+
+export async function listSubscriberTotalsForPages(
+  db: Database,
+  input: {
+    pageIds: number[];
+    fromBusinessDate?: string | null;
+    toBusinessDate?: string | null;
+  },
+) {
+  if (input.pageIds.length === 0) {
+    return [];
+  }
+
+  const clauses = [inArray(dailySubscribers.platformAccountId, input.pageIds)];
+  if (input.fromBusinessDate) {
+    clauses.push(gte(dailySubscribers.businessDate, input.fromBusinessDate));
+  }
+  if (input.toBusinessDate) {
+    clauses.push(lt(dailySubscribers.businessDate, input.toBusinessDate));
+  }
+
+  return db.select({
+    pageId: dailySubscribers.platformAccountId,
+    newSubscribers: sql<number>`coalesce(sum(${dailySubscribers.newSubscribers}), 0)::int`,
+  }).from(dailySubscribers)
+    .where(and(...clauses))
+    .groupBy(dailySubscribers.platformAccountId);
 }
 
 export async function listFollowersForPage(
@@ -473,14 +495,8 @@ export async function listFollowersForPage(
   }
 
   const whereClause = and(...clauses);
-
-  const [countRow] = await db.select({
-    total: sql<number>`count(*)::int`,
-  }).from(pageFollows)
-    .innerJoin(fans, eq(fans.id, pageFollows.fanId))
-    .where(whereClause);
-
-  const items = await db.select({
+  const rows = await db.select({
+    total: sql<number>`count(*) over()::int`,
     platformUserId: fans.platformUserId,
     username: fans.username,
     displayName: fans.displayName,
@@ -493,8 +509,8 @@ export async function listFollowersForPage(
     .offset(input.offset);
 
   return {
-    total: countRow?.total ?? 0,
-    items,
+    total: rows[0]?.total ?? 0,
+    items: rows.map(({ total: _total, ...item }) => item),
   };
 }
 
@@ -547,14 +563,8 @@ export async function listFansForPage(
       )`,
     )!);
   }
-
-  const [countRow] = await db.select({
-    total: sql<number>`count(*)::int`,
-  }).from(fanPages)
-    .innerJoin(fans, eq(fans.id, fanPages.fanId))
-    .where(and(...clauses));
-
-  const items = await db.select({
+  const rows = await db.select({
+    total: sql<number>`count(*) over()::int`,
     platformUserId: fans.platformUserId,
     username: fans.username,
     displayName: fans.displayName,
@@ -583,8 +593,8 @@ export async function listFansForPage(
     .offset(input.offset);
 
   return {
-    total: countRow?.total ?? 0,
-    items,
+    total: rows[0]?.total ?? 0,
+    items: rows.map(({ total: _total, ...item }) => item),
   };
 }
 
