@@ -168,6 +168,30 @@ describe("syncTransactions", () => {
     dbMocks.getCheckpoint.mockResolvedValue(checkpoint);
 
     const telemetry = createTelemetry();
+    const getTransactionsPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-01T00:00:00.000Z")],
+        total: 3,
+        done: false,
+        raw: {},
+      })
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-2", "2026-02-28T00:00:00.000Z")],
+        total: 3,
+        done: false,
+        raw: {},
+      })
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-3", "2026-02-27T00:00:00.000Z")],
+        total: 3,
+        done: false,
+        raw: {},
+      });
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
     const app = {
       db: {
         transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
@@ -177,31 +201,9 @@ describe("syncTransactions", () => {
         transactionRescanCapDays: 30,
       },
       adapter: {
-        getTransactionsPage: vi
-          .fn()
-          .mockResolvedValueOnce({
-            items: [buildTransaction("tx-1", "2026-03-01T00:00:00.000Z")],
-            total: 3,
-            done: false,
-            raw: {},
-          })
-          .mockResolvedValueOnce({
-            items: [buildTransaction("tx-2", "2026-02-28T00:00:00.000Z")],
-            total: 3,
-            done: false,
-            raw: {},
-          })
-          .mockResolvedValueOnce({
-            items: [buildTransaction("tx-3", "2026-02-27T00:00:00.000Z")],
-            total: 3,
-            done: false,
-            raw: {},
-          }),
+        getTransactionsPage,
       },
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-      },
+      logger,
     } as never;
 
     await syncTransactions(app, {
@@ -217,8 +219,8 @@ describe("syncTransactions", () => {
       telemetry: telemetry as never,
     });
 
-    expect(app.adapter.getTransactionsPage).toHaveBeenCalledTimes(2);
-    expect(app.logger.warn).toHaveBeenCalledWith(
+    expect(getTransactionsPage).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         after: "2026-03-07T00:00:00.000Z",
         pageCount: 2,
