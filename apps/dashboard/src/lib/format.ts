@@ -1,4 +1,4 @@
-import { formatUsdFromMills as sharedFormatUsd } from "@agency_hub_core/shared";
+import { formatUsdFromMills as sharedFormatUsd, parseBusinessDate } from "@agency_hub_core/shared";
 
 export function formatMills(mills: number): string {
   return sharedFormatUsd(mills);
@@ -66,4 +66,16 @@ export function transactionTypeLabel(type: string): string {
 export function daysRemaining(expiresIso: string): number {
   const diff = new Date(expiresIso).getTime() - Date.now();
   return Math.max(0, Math.ceil(diff / 86_400_000));
+}
+
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+export function formatBusinessDateShort(bd: string): string {
+  const { month, day } = parseBusinessDate(bd);
+  return `${MONTH_SHORT[month - 1]} ${day}`;
+}
+
+export function formatBusinessDateMonth(bd: string): string {
+  const { year, month } = parseBusinessDate(bd);
+  return `${MONTH_SHORT[month - 1]} ${String(year).slice(2)}`;
 }
