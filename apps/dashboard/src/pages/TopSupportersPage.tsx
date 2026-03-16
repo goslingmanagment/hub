@@ -4,7 +4,7 @@ import { useSpenders, useSpenderBatch } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { usePeriodStore } from "@/stores/periodStore";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
 import { formatRelativeTime } from "@/lib/format";
 import type { SpenderBatchBody } from "@agency_hub_core/contracts";
 
@@ -163,7 +163,7 @@ export function TopSupportersPage() {
               </tr>
             )}
             {items.map((item, index) => {
-              const displayName = item.fan.displayName ?? item.fan.username ?? "Unknown";
+              const fanLabel = resolveFanLabel(item.fan);
               const lifetimeNet = item.metrics.lifetime.scopeCreatorNetAmountMills;
               const windowMetrics = item.metrics.window;
               const spent = spenderPeriod === "lifetime"
@@ -193,12 +193,12 @@ export function TopSupportersPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center">
                       <span className="text-[15px] font-semibold text-text-primary">
-                        {displayName}
+                        {fanLabel.label}
                       </span>
                       {whaleBadge(lifetimeNet)}
                     </div>
-                    {item.fan.displayName && item.fan.username && (
-                      <div className="text-xs text-text-muted">@{item.fan.username}</div>
+                    {fanLabel.displayName && fanLabel.username && (
+                      <div className="text-xs text-text-muted">@{fanLabel.username}</div>
                     )}
                   </td>
                   <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">

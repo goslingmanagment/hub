@@ -6,6 +6,7 @@ import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { SearchInput } from "@/components/shared/SearchInput";
+import { resolveFanLabel } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, daysRemaining, formatUsdFromCents } from "@/lib/format";
 
 type Filter = "all" | "expiring7d" | "new24h" | "norenew";
@@ -108,7 +109,7 @@ export function SubscribersPage() {
             {items.map((sub) => {
               const days = sub.endsAt ? daysRemaining(sub.endsAt) : null;
               const isNew = isNewWithin24Hours(sub.startedAt);
-              const displayName = sub.displayName ?? sub.username ?? "Unknown";
+              const fanLabel = resolveFanLabel(sub);
 
               return (
                 <tr
@@ -121,10 +122,10 @@ export function SubscribersPage() {
                         to={`/pages/${pageLabel}/fans/${platform}/${sub.platformUserId}`}
                         className="text-[15px] font-semibold text-text-primary hover:text-accent"
                       >
-                        {displayName}
+                        {fanLabel.label}
                       </Link>
-                      {sub.displayName && sub.username && (
-                        <span className="text-xs text-text-muted">@{sub.username}</span>
+                      {fanLabel.displayName && fanLabel.username && (
+                        <span className="text-xs text-text-muted">@{fanLabel.username}</span>
                       )}
                       {isNew && <Badge variant="new">NEW</Badge>}
                     </div>

@@ -9,7 +9,7 @@ import {
 } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
 import { Pagination } from "@/components/shared/Pagination";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, transactionTypeLabel } from "@/lib/format";
 import { usePeriodStore } from "@/stores/periodStore";
 import { toast } from "sonner";
@@ -47,6 +47,7 @@ export function FanProfilePage() {
   }
 
   const { fan, page } = data;
+  const fanLabel = resolveFanLabel(fan);
 
   // Type breakdown from spender detail
   const typeBreakdown = spenderDetail?.typeBreakdown ?? [];
@@ -126,11 +127,11 @@ export function FanProfilePage() {
       {/* Header */}
       <div className="mb-6 flex items-center gap-4">
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-hover text-2xl font-bold text-text-secondary">
-          {(fan?.username ?? "?")[0].toUpperCase()}
+          {fanLabel.label[0]?.toUpperCase() ?? "?"}
         </div>
         <div>
           <h1 className="text-2xl font-extrabold text-text-primary">
-            {fan?.displayName ?? fan?.username ?? "Unknown"}
+            {fanLabel.label}
           </h1>
           <div className="mt-1 flex items-center gap-2 flex-wrap">
             {page?.isSubscriber && <Badge variant="subscriber">Subscriber</Badge>}

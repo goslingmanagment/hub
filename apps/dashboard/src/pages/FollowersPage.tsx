@@ -5,6 +5,7 @@ import { Badge } from "@/components/shared/Badge";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
+import { resolveFanLabel } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime } from "@/lib/format";
 
 type Filter = "all" | "new24h";
@@ -96,7 +97,7 @@ export function FollowersPage() {
             )}
             {items.map((follower) => {
               const recentFollow = isNew24h(follower.followedAt);
-              const displayName = follower.displayName ?? follower.username ?? "Unknown";
+              const fanLabel = resolveFanLabel(follower);
 
               return (
                 <tr
@@ -109,10 +110,10 @@ export function FollowersPage() {
                         to={`/pages/${pageLabel}/fans/${platform}/${follower.platformUserId}`}
                         className="text-[15px] font-semibold text-text-primary hover:text-accent"
                       >
-                        {displayName}
+                        {fanLabel.label}
                       </Link>
-                      {follower.displayName && follower.username && (
-                        <span className="text-xs text-text-muted">@{follower.username}</span>
+                      {fanLabel.displayName && fanLabel.username && (
+                        <span className="text-xs text-text-muted">@{fanLabel.username}</span>
                       )}
                       {recentFollow && <Badge variant="new">NEW</Badge>}
                     </div>

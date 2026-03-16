@@ -16,7 +16,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { usePeriodStore } from "@/stores/periodStore";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
 import {
   formatDate,
   formatDateTime,
@@ -260,7 +260,7 @@ export function PageDetailPage() {
           <tbody>
             {(subscribers?.items ?? []).map((item) => {
               const days = item.endsAt ? daysRemaining(item.endsAt) : null;
-              const displayName = item.displayName ?? item.username ?? "Unknown";
+              const fanLabel = resolveFanLabel(item);
               const isNew = isRecent(item.startedAt);
 
               return (
@@ -277,11 +277,11 @@ export function PageDetailPage() {
                     <div className="flex items-center gap-2">
                       <div className="flex flex-col">
                         <span className="text-text-primary font-medium">
-                          {displayName}
+                          {fanLabel.label}
                         </span>
-                        {item.username && item.displayName && (
+                        {fanLabel.username && fanLabel.displayName && (
                           <span className="text-[12px] text-text-muted">
-                            @{item.username}
+                            @{fanLabel.username}
                           </span>
                         )}
                       </div>
@@ -372,12 +372,9 @@ export function PageDetailPage() {
             </thead>
             <tbody>
               {(transactions?.items ?? []).map((item, idx) => {
-                const fanDisplay = item.fan?.username
-                  ? item.fan.username
-                  : item.fan?.platformUserId
-                    ? item.fan.platformUserId.slice(0, 10) + "\u2026"
-                    : null;
-                const fanIsMuted = !item.fan?.username;
+                const fanLabel = item.fan ? resolveFanLabel(item.fan) : null;
+                const fanDisplay = fanLabel?.label ?? null;
+                const fanIsMuted = fanLabel?.isDeletedFallback ?? false;
 
                 return (
                   <tr
@@ -456,7 +453,7 @@ export function PageDetailPage() {
               )}
               {(spenders?.items ?? []).map((item, index) => {
                 const windowMetrics = item.metrics.window;
-                const displayName = item.fan.displayName ?? item.fan.username ?? "Unknown";
+                const fanLabel = resolveFanLabel(item.fan);
 
                 return (
                   <tr
@@ -469,10 +466,10 @@ export function PageDetailPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="text-[15px] font-semibold text-text-primary">
-                        {displayName}
+                        {fanLabel.label}
                       </div>
-                      {item.fan.displayName && item.fan.username && (
-                        <div className="text-xs text-text-muted">@{item.fan.username}</div>
+                      {fanLabel.displayName && fanLabel.username && (
+                        <div className="text-xs text-text-muted">@{fanLabel.username}</div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">

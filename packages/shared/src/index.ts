@@ -1,5 +1,6 @@
 export * from "./config.ts";
 export * from "./crypto.ts";
+export * from "./fans.ts";
 export * from "./http-client.ts";
 export * from "./http-request.ts";
 export * from "./logger.ts";
