@@ -150,41 +150,35 @@ export function PageDetailPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <div className="bg-card border border-border rounded-xl p-5">
-          <div className="mb-4 flex items-baseline justify-between">
-            <h2 className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
-              Revenue
-            </h2>
-            <span className="rounded-full bg-hover-alt px-2.5 py-1 text-[11px] font-semibold text-accent">
-              {selectedPeriodLabel}
-            </span>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-6">
+        <div className="rounded-[10px] border border-border bg-card p-4">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+            Revenue
           </div>
-          <div className="flex h-[150px] flex-col justify-between rounded-xl border border-border-light bg-hover-alt/30 p-4">
-            <div>
-              <div className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
-                Net Revenue
-              </div>
-              <div className="mt-2 text-[34px] font-extrabold tabular-nums text-accent">
-                {formatUsdFromMills(selectedRevenue?.netEarningsMills ?? 0)}
-              </div>
+          <div className="text-2xl font-extrabold tabular-nums text-accent mt-1">
+            {formatUsdFromMills(selectedRevenue?.netEarningsMills ?? 0)}
+          </div>
+          {selectedPeriod !== "all" && (
+            <div className="flex items-center gap-1.5 mt-1.5">
+              <DeltaIndicator pct={selectedRevenue?.comparison?.deltaPct ?? null} />
+              <span className="text-[11px] text-text-muted">vs prev</span>
             </div>
-
-            {selectedPeriod === "all" ? (
-              <span className="text-[12px] text-text-muted">
-                {selectedRevenue?.from
-                  ? `Since ${formatDate(selectedRevenue.from, { includeYear: true })}`
-                  : "All time total"}
-              </span>
-            ) : (
-              <div className="flex items-center gap-2">
-                <DeltaIndicator pct={selectedRevenue?.comparison?.deltaPct ?? null} />
-                <span className="text-[12px] text-text-muted">vs previous period</span>
-              </div>
-            )}
-          </div>
+          )}
         </div>
-
+        {[
+          { label: "Subscriptions", type: "subscription" },
+          { label: "Tips", type: "tip" },
+          { label: "Messages", type: "message_purchase" },
+        ].map(({ label, type }) => (
+          <div key={type} className="rounded-[10px] border border-border bg-card p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+              {label}
+            </div>
+            <div className="text-2xl font-extrabold tabular-nums text-text-primary mt-1">
+              {formatUsdFromMills(breakdownAmount(type))}
+            </div>
+          </div>
+        ))}
       </div>
 
       <Suspense
@@ -204,29 +198,6 @@ export function PageDetailPage() {
           dataKey={chartDataKey}
         />
       </Suspense>
-
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        {[
-          { label: "Subscriptions", type: "subscription" },
-          { label: "Tips", type: "tip" },
-          { label: "Messages", type: "message_purchase" },
-        ].map(({ label, type }) => (
-          <div
-            key={type}
-            className="bg-card border border-border rounded-xl p-5"
-          >
-            <div className="flex items-center justify-between">
-              <div className="text-[12px] text-text-muted uppercase tracking-wider font-semibold">
-                {label}
-              </div>
-              <span className="text-[11px] text-text-muted">{selectedPeriodLabel}</span>
-            </div>
-            <div className="text-[22px] font-bold tabular-nums mt-1.5 text-text-primary">
-              {formatUsdFromMills(breakdownAmount(type))}
-            </div>
-          </div>
-        ))}
-      </div>
 
       <div className="bg-card border border-border rounded-xl overflow-hidden mb-6">
         <div className="flex items-center justify-between p-4 px-[22px] border-b border-border bg-hover-alt">
