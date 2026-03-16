@@ -1785,6 +1785,50 @@ describe("api integration", () => {
     });
   });
 
+  it("preserves spender totals when paginating past the last row", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const windowResponse = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&period=30d&limit=10&offset=10",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+    const lifetimeResponse = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&period=lifetime&limit=10&offset=10",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+
+    expect(windowResponse.statusCode).toBe(200);
+    expect(windowResponse.json()).toMatchObject({
+      total: 1,
+      items: [],
+    });
+
+    expect(lifetimeResponse.statusCode).toBe(200);
+    expect(lifetimeResponse.json()).toMatchObject({
+      total: 1,
+      items: [],
+    });
+  });
+
   it("serves v2 spender detail with visible-platform totals and scoped page breakdowns", async (context) => {
     if (!testDb || !server) {
       context.skip();

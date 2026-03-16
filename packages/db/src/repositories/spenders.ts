@@ -611,6 +611,24 @@ function buildSpenderQueryClause(
   )!;
 }
 
+async function resolvePagedTotal(
+  input: {
+    offset: number;
+  },
+  rows: Array<{ total: number }>,
+  loadTotal: () => Promise<number>,
+) {
+  if (rows.length > 0) {
+    return rows[0].total;
+  }
+
+  if (input.offset === 0) {
+    return 0;
+  }
+
+  return loadTotal();
+}
+
 export async function listRankedSpenders(
   db: Database,
   input: {
@@ -690,8 +708,18 @@ export async function listRankedSpenders(
       .limit(input.limit)
       .offset(input.offset);
 
+    const total = await resolvePagedTotal(input, rows, async () => {
+      const [countRow] = await db.select({
+        total: sql<number>`count(*)::int`,
+      }).from(lifetimeMetrics)
+        .innerJoin(fans, eq(fans.id, lifetimeMetrics.fanId))
+        .where(whereClause);
+
+      return countRow?.total ?? 0;
+    });
+
     return {
-      total: rows[0]?.total ?? 0,
+      total,
       items: rows.map(({ total: _total, ...item }) => item),
     };
   }
@@ -754,12 +782,12 @@ export async function listRankedSpenders(
     unknownGrossAmountMills: currentMetrics.unknownGrossAmountMills,
     postedCreatorNetAmountMills: currentMetrics.postedCreatorNetAmountMills,
     pendingCreatorNetAmountMills: currentMetrics.pendingCreatorNetAmountMills,
-      unknownCreatorNetAmountMills: currentMetrics.unknownCreatorNetAmountMills,
-      transactionCount: currentMetrics.transactionCount,
-      lastTransactionAt: currentMetrics.lastTransactionAt,
-      lifetimeGrossAmountMills: sql<bigint>`coalesce(${lifetimeMetrics.grossAmountMills}, 0)::bigint`.as("lifetime_gross_amount_mills"),
-      lifetimeCreatorNetAmountMills: sql<bigint>`coalesce(${lifetimeMetrics.creatorNetAmountMills}, 0)::bigint`.as("lifetime_creator_net_amount_mills"),
-    }).from(currentMetrics)
+    unknownCreatorNetAmountMills: currentMetrics.unknownCreatorNetAmountMills,
+    transactionCount: currentMetrics.transactionCount,
+    lastTransactionAt: currentMetrics.lastTransactionAt,
+    lifetimeGrossAmountMills: sql<bigint>`coalesce(${lifetimeMetrics.grossAmountMills}, 0)::bigint`.as("lifetime_gross_amount_mills"),
+    lifetimeCreatorNetAmountMills: sql<bigint>`coalesce(${lifetimeMetrics.creatorNetAmountMills}, 0)::bigint`.as("lifetime_creator_net_amount_mills"),
+  }).from(currentMetrics)
     .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
     .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
     .where(whereClause)
@@ -767,8 +795,18 @@ export async function listRankedSpenders(
     .limit(input.limit)
     .offset(input.offset);
 
+  const total = await resolvePagedTotal(input, rows, async () => {
+    const [countRow] = await db.select({
+      total: sql<number>`count(*)::int`,
+    }).from(currentMetrics)
+      .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
+      .where(whereClause);
+
+    return countRow?.total ?? 0;
+  });
+
   return {
-    total: rows[0]?.total ?? 0,
+    total,
     items: rows.map(({ total: _total, ...item }) => item),
   };
 }
