@@ -146,7 +146,7 @@ function ModelGroupRows({
             {group.pages.length} {group.pages.length === 1 ? "page" : "pages"}
           </span>
         </td>
-        <td className="px-4 pt-4 pb-2 text-right tabular-nums text-[15px] font-semibold text-text-primary">
+        <td className="px-4 pt-4 pb-2 text-right tabular-nums text-[15px] font-semibold text-accent">
           {formatUsdFromMills(groupRevenue)}
         </td>
         <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold">
