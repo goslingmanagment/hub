@@ -8,6 +8,7 @@ import {
   useSpenders,
   usePageFollowersDaily,
   usePageSubscribersDaily,
+  usePageRevenueDaily,
 } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
 import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
@@ -51,6 +52,7 @@ export function PageDetailPage() {
     enabled: isFansly,
   });
   const { data: subsDailyData } = usePageSubscribersDaily(pageLabel!, selectedPeriod);
+  const { data: revenueDailyData } = usePageRevenueDaily(pageLabel!, selectedPeriod);
 
   const { data: subscribers } = usePageSubscribers(pageLabel!, { limit: 6 });
 
@@ -99,9 +101,15 @@ export function PageDetailPage() {
     );
   }
 
-  const chartItems = isFansly ? dailyData?.items : subsDailyData?.items;
-  const chartDataKey = isFansly ? "newFollowers" : "newSubscribers";
+  const activityPoints = (isFansly ? dailyData?.items : subsDailyData?.items)?.map((item) => ({
+    businessDate: item.businessDate,
+    value: (isFansly ? item.newFollowers : item.newSubscribers) ?? 0,
+  })) ?? [];
   const chartTitle = isFansly ? "New Followers" : "New Subscribers";
+  const revenuePoints = (revenueDailyData?.series ?? []).map((item) => ({
+    businessDate: item.businessDate,
+    value: item.netAmountMills,
+  }));
   const selectedPeriodLabel = selectedPeriod === "today"
     ? "Today"
     : selectedPeriod === "7d"
@@ -194,8 +202,16 @@ export function PageDetailPage() {
           title={chartTitle}
           selectedPeriod={selectedPeriod}
           selectedPeriodLabel={selectedPeriodLabel}
-          items={chartItems ?? []}
-          dataKey={chartDataKey}
+          points={activityPoints}
+          color="#5b8def"
+        />
+        <PageActivityChart
+          title="REVENUE"
+          selectedPeriod={selectedPeriod}
+          selectedPeriodLabel={selectedPeriodLabel}
+          points={revenuePoints}
+          valueFormatter={(v) => formatUsdFromMills(v)}
+          yAxisWidth={72}
         />
       </Suspense>
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -14,12 +14,6 @@ import {
   formatBusinessDateMonth,
   formatBusinessDateShort,
 } from "@/lib/format";
-
-type ChartItem = {
-  businessDate: string;
-  newFollowers?: number;
-  newSubscribers?: number;
-};
 
 type ChartPoint = {
   businessDate: string;
@@ -82,14 +76,12 @@ const tooltipProps = {
   },
 };
 
-const GRADIENT_ID = "pageActivityGradient";
-
-function AreaGradientDef() {
+function AreaGradientDef(props: { id: string; color: string }) {
   return (
     <defs>
-      <linearGradient id={GRADIENT_ID} x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stopColor="#4ead6b" stopOpacity={0.3} />
-        <stop offset="100%" stopColor="#4ead6b" stopOpacity={0.02} />
+      <linearGradient id={props.id} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor={props.color} stopOpacity={0.3} />
+        <stop offset="100%" stopColor={props.color} stopOpacity={0.02} />
       </linearGradient>
     </defs>
   );
@@ -99,25 +91,33 @@ export function PageActivityChart(props: {
   title: string;
   selectedPeriod: "today" | "7d" | "30d" | "all";
   selectedPeriodLabel: string;
-  items: ChartItem[];
-  dataKey: "newFollowers" | "newSubscribers";
+  points: Array<{ businessDate: string; value: number }>;
+  valueFormatter?: (value: number) => string;
+  yAxisWidth?: number;
+  color?: string;
 }) {
+  const gradientId = useId();
+  const color = props.color ?? "#4ead6b";
   const [allTimeGranularity, setAllTimeGranularity] = useState<"monthly" | "daily">("monthly");
   const mode = getChartMode(props.selectedPeriod, allTimeGranularity);
 
-  const chartItems: ChartPoint[] = props.items.map((item) => ({
-    businessDate: item.businessDate,
-    value: item[props.dataKey] ?? 0,
-  }));
-
   const useMonthly = props.selectedPeriod === "all" && allTimeGranularity === "monthly";
-  const chartDisplayItems = useMonthly ? aggregateMonthly(chartItems) : chartItems;
+  const chartDisplayItems = useMonthly ? aggregateMonthly(props.points) : props.points;
 
   const tickFormatter = (value: string) =>
     useMonthly ? formatBusinessDateMonth(value) : formatBusinessDateShort(value);
   const labelFormatter = tickFormatter;
 
   const isArea = mode !== "bar";
+
+  const yAxisOverrides = {
+    ...(props.yAxisWidth != null ? { width: props.yAxisWidth } : {}),
+    ...(props.valueFormatter ? { tickFormatter: props.valueFormatter } : {}),
+  };
+
+  const tooltipOverrides = props.valueFormatter
+    ? { formatter: (v: number) => [props.valueFormatter!(v), props.title] }
+    : {};
 
   return (
     <div className="bg-card border border-border rounded-xl p-5 mb-6">
@@ -149,11 +149,12 @@ export function PageActivityChart(props: {
       <ResponsiveContainer width="100%" height={300}>
         {isArea ? (
           <AreaChart data={chartDisplayItems} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-            <AreaGradientDef />
+            <AreaGradientDef id={gradientId} color={color} />
             <CartesianGrid {...gridProps} />
             <XAxis {...xAxisProps} tickFormatter={tickFormatter} />
             <YAxis
               {...yAxisProps}
+              {...yAxisOverrides}
               label={{
                 value: props.title,
                 angle: -90,
@@ -162,16 +163,16 @@ export function PageActivityChart(props: {
                 offset: 0,
               }}
             />
-            <Tooltip {...tooltipProps} labelFormatter={labelFormatter} />
+            <Tooltip {...tooltipProps} {...tooltipOverrides} labelFormatter={labelFormatter} />
             <Area
               type="monotone"
               dataKey="value"
               name={props.title}
-              stroke="#4ead6b"
+              stroke={color}
               strokeWidth={2}
-              fill={`url(#${GRADIENT_ID})`}
-              dot={mode === "area-dots" ? { r: 3, fill: "#4ead6b", strokeWidth: 0 } : false}
-              activeDot={{ r: 4, fill: "#4ead6b", strokeWidth: 0 }}
+              fill={`url(#${gradientId})`}
+              dot={mode === "area-dots" ? { r: 3, fill: color, strokeWidth: 0 } : false}
+              activeDot={{ r: 4, fill: color, strokeWidth: 0 }}
             />
           </AreaChart>
         ) : (
@@ -180,6 +181,7 @@ export function PageActivityChart(props: {
             <XAxis {...xAxisProps} tickFormatter={tickFormatter} />
             <YAxis
               {...yAxisProps}
+              {...yAxisOverrides}
               label={{
                 value: props.title,
                 angle: -90,
@@ -188,8 +190,8 @@ export function PageActivityChart(props: {
                 offset: 0,
               }}
             />
-            <Tooltip {...tooltipProps} labelFormatter={labelFormatter} />
-            <Bar dataKey="value" name={props.title} fill="#4ead6b" radius={[3, 3, 0, 0]} />
+            <Tooltip {...tooltipProps} {...tooltipOverrides} labelFormatter={labelFormatter} />
+            <Bar dataKey="value" name={props.title} fill={color} radius={[3, 3, 0, 0]} />
           </BarChart>
         )}
       </ResponsiveContainer>
