@@ -38,6 +38,27 @@ function createTelemetry() {
   };
 }
 
+function buildTransaction(transactionId: string, createdAt: string) {
+  return {
+    transactionId,
+    walletId: null,
+    accountId: null,
+    correlationId: null,
+    correlationAccountId: null,
+    type: 20001,
+    status: 2,
+    destination: null,
+    amount: 10,
+    destinationAmount: 10,
+    destinationTax: null,
+    newBalance64: null,
+    senderId: null,
+    receiverId: null,
+    createdAt: new Date(createdAt).getTime(),
+    updatedAt: null,
+  };
+}
+
 describe("syncTransactions", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -137,5 +158,102 @@ describe("syncTransactions", () => {
       1,
       new Date("2026-03-10T00:00:00.000Z"),
     );
+  });
+
+  it("early-stops when the upstream after filter is ignored and downgrades a stalled checkpoint", async () => {
+    const checkpoint = {
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    };
+    dbMocks.getCheckpoint.mockResolvedValue(checkpoint);
+
+    const telemetry = createTelemetry();
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi
+          .fn()
+          .mockResolvedValueOnce({
+            items: [buildTransaction("tx-1", "2026-03-01T00:00:00.000Z")],
+            total: 3,
+            done: false,
+            raw: {},
+          })
+          .mockResolvedValueOnce({
+            items: [buildTransaction("tx-2", "2026-02-28T00:00:00.000Z")],
+            total: 3,
+            done: false,
+            raw: {},
+          })
+          .mockResolvedValueOnce({
+            items: [buildTransaction("tx-3", "2026-02-27T00:00:00.000Z")],
+            total: 3,
+            done: false,
+            raw: {},
+          }),
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    });
+
+    expect(app.adapter.getTransactionsPage).toHaveBeenCalledTimes(2);
+    expect(app.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        after: "2026-03-07T00:00:00.000Z",
+        pageCount: 2,
+        olderThanBoundaryItems: 2,
+        olderThanBoundaryPages: 2,
+      }),
+      "Early-stopping transaction scan: upstream API is not honoring the after filter",
+    );
+    expect(telemetry.setBoundarySummary).toHaveBeenCalledWith(expect.objectContaining({
+      olderThanBoundaryItems: 2,
+      olderThanBoundaryPages: 2,
+      earlyStoppedBeyondBoundary: true,
+    }));
+    expect(telemetry.setScanSummary).toHaveBeenCalledWith(expect.objectContaining({
+      transactionPages: 2,
+      processedTransactions: 2,
+      earlyStoppedBeyondBoundary: true,
+    }));
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "checkpoint_stalled",
+      severity: "warn",
+      details: expect.objectContaining({
+        checkpointTimestamp: checkpoint.cursorTimestamp.toISOString(),
+        newestSeenAt: checkpoint.cursorTimestamp.toISOString(),
+        processed: 2,
+        earlyStoppedBeyondBoundary: true,
+      }),
+    }));
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "after_ineffective",
+      severity: "error",
+      details: expect.objectContaining({
+        earlyStoppedBeyondBoundary: true,
+        olderThanBoundaryPages: 2,
+      }),
+    }));
   });
 });

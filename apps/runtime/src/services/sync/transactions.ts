@@ -131,7 +131,9 @@ async function syncTransactionsIncremental(
   let pageCount = 0;
   let olderThanBoundaryItems = 0;
   let olderThanBoundaryPages = 0;
+  let consecutiveAllOlderPages = 0;
   let firstPageOlderThanBoundaryItems = 0;
+  let earlyStoppedBeyondBoundary = false;
   const collectedItems: Awaited<ReturnType<AppContext["adapter"]["getTransactionsPage"]>>["items"] = [];
   let providerReportedTotal: number | null = null;
 
@@ -176,6 +178,9 @@ async function syncTransactionsIncremental(
       }
       if (olderItemsInPage > 0 && olderItemsInPage === page.items.length) {
         olderThanBoundaryPages += 1;
+        consecutiveAllOlderPages += 1;
+      } else {
+        consecutiveAllOlderPages = 0;
       }
     }
 
@@ -183,6 +188,28 @@ async function syncTransactionsIncremental(
     if (page.done) {
       break;
     }
+
+    // The upstream API returns transactions newest-first. If we see two
+    // consecutive full pages where every item is older than the requested
+    // lower bound, the API is not honoring the `after` filter and all
+    // subsequent pages will only contain even older data. Stop early to
+    // avoid exhaustively scanning the full transaction history.
+    if (after && consecutiveAllOlderPages >= 2) {
+      earlyStoppedBeyondBoundary = true;
+      app.logger.warn(
+        {
+          pageLabel: input.pageLabel,
+          platformAccountId: input.platformAccountId,
+          after: after.toISOString(),
+          pageCount,
+          olderThanBoundaryItems,
+          olderThanBoundaryPages,
+        },
+        "Early-stopping transaction scan: upstream API is not honoring the after filter",
+      );
+      break;
+    }
+
     offset += 100;
   }
 
@@ -271,6 +298,7 @@ async function syncTransactionsIncremental(
     lowerBoundClamped: Boolean(after && earliestRescanStart && after.getTime() !== earliestRescanStart.getTime()),
     olderThanBoundaryItems,
     olderThanBoundaryPages,
+    earlyStoppedBeyondBoundary,
   });
   input.telemetry.setScanSummary({
     transactionPages: pageCount,
@@ -278,6 +306,7 @@ async function syncTransactionsIncremental(
     oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
     mode: "incremental",
+    earlyStoppedBeyondBoundary,
   });
 
   if (after && lookbackStart && after.getTime() < lookbackStart.getTime() - DAY_MS) {
@@ -298,14 +327,20 @@ async function syncTransactionsIncremental(
     newestSeenAt.getTime() <= checkpoint.cursorTimestamp.getTime() &&
     processed > 0
   ) {
+    // When the scan was early-stopped because the upstream API ignored the
+    // `after` filter, a stalled checkpoint is the expected outcome — all the
+    // scanned items were older than the checkpoint so there is nothing to
+    // advance. Downgrade to warn so it doesn't page.
+    const severity = earlyStoppedBeyondBoundary ? "warn" : "error";
     await input.telemetry.addAnomaly({
       code: "checkpoint_stalled",
-      severity: "error",
+      severity,
       message: "Transaction checkpoint did not advance despite processing transaction pages",
       details: {
         checkpointTimestamp: checkpoint.cursorTimestamp.toISOString(),
         newestSeenAt: newestSeenAt.toISOString(),
         processed,
+        earlyStoppedBeyondBoundary,
       },
     });
   }
@@ -334,6 +369,7 @@ async function syncTransactionsIncremental(
         olderThanBoundaryItems,
         olderThanBoundaryPages,
         oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+        earlyStoppedBeyondBoundary,
       },
     });
   }
