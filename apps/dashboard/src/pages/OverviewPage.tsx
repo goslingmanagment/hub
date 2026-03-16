@@ -50,8 +50,13 @@ export function OverviewPage() {
     data: growthData,
     isLoading: isGrowthLoading,
     isFetching: isGrowthFetching,
+    isPlaceholderData: isGrowthPlaceholderData,
   } = useOverviewGrowth(selectedPeriod);
-  const growthState = growthData ? "ready" : isGrowthLoading || isGrowthFetching ? "loading" : "idle";
+  const growthState = growthData && !isGrowthPlaceholderData
+    ? "ready"
+    : isGrowthLoading || isGrowthFetching
+      ? "loading"
+      : "idle";
   const growthReady = growthState === "ready";
 
   if (isOverviewLoading || !data) {
