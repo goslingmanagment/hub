@@ -3389,4 +3389,158 @@ describe("api integration", () => {
     expect(ofOverview).toBeDefined();
     expect(ofOverview.newFollowersToday).toBe(0);
   });
+
+  it("returns period-aware growth metrics from /api/v1/overview/growth", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    // Seed an additional fansly page with follower/subscriber data on a different day
+    const extraModel = await createModel(testDb.db, {
+      slug: "extra-model",
+      name: "Extra Model",
+    });
+    const extraPage = await createFanslyPage(testDb.db, {
+      modelId: extraModel.id,
+      label: "extra",
+    });
+    await updatePageMetadata(testDb.db, extraPage.id, {
+      platformAccountIdValue: "acct-extra",
+      username: "extra_page",
+      displayName: "Extra",
+      followerCount: 2,
+      subscriberCount: 1,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+    const [extraFan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-extra-1",
+      username: "extra_buyer",
+      displayName: "Extra Buyer",
+    }]);
+    await upsertFanPage(testDb.db, {
+      fanId: extraFan.id,
+      platformAccountId: extraPage.id,
+      isFollower: true,
+      followerSince: new Date("2026-03-10T12:00:00.000Z"),
+      isSubscriber: true,
+      subscriberSince: new Date("2026-03-10T12:00:00.000Z"),
+      subscriptionExpiresAt: new Date("2026-04-10T12:00:00.000Z"),
+      autoRenew: true,
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: extraPage.id,
+      fanId: extraFan.id,
+      platformFollowId: "follow-extra-1",
+      followedAt: new Date("2026-03-10T12:00:00.000Z"),
+    });
+    await upsertPageSubscription(testDb.db, {
+      platformSubscriptionId: "sub-extra-1",
+      platformAccountId: extraPage.id,
+      fanId: extraFan.id,
+      rawStatus: 3,
+      canonicalStatus: "active",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: true,
+      sourceCreatedAt: new Date("2026-03-10T12:00:00.000Z"),
+      endsAt: new Date("2026-04-10T12:00:00.000Z"),
+    });
+    await rebuildFollowerRollups(testDb.db, extraPage.id, 2);
+    await rebuildSubscriberRollups(testDb.db, extraPage.id);
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    // "today" period should show 0 for pages whose data is in the past
+    const todayRes = await server.inject({
+      method: "GET",
+      url: "/api/v1/overview/growth?period=today",
+      headers: { cookie },
+    });
+    expect(todayRes.statusCode).toBe(200);
+    const todayBody = todayRes.json();
+    expect(todayBody.pages).toBeInstanceOf(Array);
+    // lana page: follower data on 2026-03-02, today is much later → 0
+    const lanaToday = todayBody.pages.find((p: any) => p.pageId === fixture!.lanaPage.id);
+    expect(lanaToday).toBeDefined();
+    expect(lanaToday.newFollowers).toBe(0);
+    expect(lanaToday.newSubscribers).toBe(0);
+
+    // "30d" period should include data from the last 30 days
+    const thirtyDayRes = await server.inject({
+      method: "GET",
+      url: "/api/v1/overview/growth?period=30d",
+      headers: { cookie },
+    });
+    expect(thirtyDayRes.statusCode).toBe(200);
+    const thirtyDayBody = thirtyDayRes.json();
+    const lana30d = thirtyDayBody.pages.find((p: any) => p.pageId === fixture!.lanaPage.id);
+    expect(lana30d).toBeDefined();
+    expect(lana30d.newFollowers).toBeGreaterThanOrEqual(1);
+    expect(lana30d.newSubscribers).toBeGreaterThanOrEqual(1);
+
+    const extra30d = thirtyDayBody.pages.find((p: any) => p.pageId === extraPage.id);
+    expect(extra30d).toBeDefined();
+    expect(extra30d.newFollowers).toBeGreaterThanOrEqual(1);
+    expect(extra30d.newSubscribers).toBeGreaterThanOrEqual(1);
+
+    // Pages with no data in range return zeros (lily page has no follows/subs)
+    const lily30d = thirtyDayBody.pages.find((p: any) => p.pageId === fixture!.lilyPage.id);
+    expect(lily30d).toBeDefined();
+    expect(lily30d.newFollowers).toBe(0);
+    expect(lily30d.newSubscribers).toBe(0);
+  });
+
+  it("returns period-aware growth with OnlyFans pages reporting zero followers", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    // Create an OnlyFans page (no follower data available)
+    const ofModel = await createModel(testDb.db, {
+      slug: "of-growth-model",
+      name: "OF Growth Model",
+    });
+    const ofPage = await createOnlyFansPage(testDb.db, {
+      modelId: ofModel.id,
+      label: "of-growth",
+    });
+    await updatePageMetadata(testDb.db, ofPage.id, {
+      platformAccountIdValue: "of-acct-growth",
+      username: "of_growth_page",
+      displayName: "OF Growth",
+      followerCount: 100,
+      subscriberCount: 50,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const res = await server.inject({
+      method: "GET",
+      url: "/api/v1/overview/growth?period=30d",
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const ofGrowth = body.pages.find((p: any) => p.pageId === ofPage.id);
+    expect(ofGrowth).toBeDefined();
+    expect(ofGrowth.newFollowers).toBe(0);
+  });
 });

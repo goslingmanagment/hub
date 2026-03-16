@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router";
-import { useOverview, useOverviewRevenue } from "@/api/queries";
-import { CONNECTION_STATUS_COLORS, PLATFORM_COLORS } from "@/lib/constants";
+import { useOverview, useOverviewRevenue, useOverviewGrowth } from "@/api/queries";
+import { PLATFORM_COLORS } from "@/lib/constants";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
 import type { OverviewResponse } from "@agency_hub_core/contracts";
@@ -40,6 +40,7 @@ export function OverviewPage() {
 
   const { data, isLoading } = useOverview();
   const { data: revenueData } = useOverviewRevenue(selectedPeriod);
+  const { data: growthData } = useOverviewGrowth(selectedPeriod);
 
   if (isLoading || !data) {
     return (
@@ -59,16 +60,32 @@ export function OverviewPage() {
     }
   }
 
+  const followersByPageId = new Map<number, number>();
+  const subsByPageId = new Map<number, number>();
+  if (growthData?.pages) {
+    for (const gp of growthData.pages) {
+      followersByPageId.set(gp.pageId, gp.newFollowers);
+      subsByPageId.set(gp.pageId, gp.newSubscribers);
+    }
+  }
+
   const totalRevenue = revenueData?.netEarningsMills ?? 0;
   const totalSubs = pages.reduce((sum, p) => sum + (p.subscriberCount ?? 0), 0);
-  const totalNewSubs = pages.reduce((sum, p) => sum + (p.newSubscribersToday ?? 0), 0);
-  const totalNewFollowers = pages.reduce((sum, p) => sum + (p.newFollowersToday ?? 0), 0);
+  const totalNewSubs = pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0);
+  const totalNewFollowers = pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0);
 
   const periodLabel = PERIOD_LABELS[selectedPeriod] ?? "30 Days";
 
   return (
     <div>
       <table className="w-full border-collapse overflow-hidden rounded-xl border border-border bg-card">
+        <colgroup>
+          <col />
+          <col className="w-[120px]" />
+          <col className="w-[100px]" />
+          <col className="w-[120px]" />
+          <col className="w-[100px]" />
+        </colgroup>
         <thead>
           <tr className="bg-hover-alt">
             <th className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted">
@@ -81,13 +98,10 @@ export function OverviewPage() {
               Subs
             </th>
             <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Subs Today
+              Followers {periodLabel}
             </th>
             <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Followers Today
-            </th>
-            <th className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted">
-              Status
+              Subs {periodLabel}
             </th>
           </tr>
         </thead>
@@ -98,6 +112,8 @@ export function OverviewPage() {
               group={group}
               navigate={navigate}
               revenueByPageId={revenueByPageId}
+              followersByPageId={followersByPageId}
+              subsByPageId={subsByPageId}
             />
           ))}
           <tr className="border-t-2 border-border bg-hover-alt">
@@ -109,12 +125,11 @@ export function OverviewPage() {
               {totalSubs.toLocaleString()}
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-green">
-              +{totalNewSubs}
-            </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-green">
               +{totalNewFollowers}
             </td>
-            <td />
+            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-green">
+              +{totalNewSubs}
+            </td>
           </tr>
         </tbody>
       </table>
@@ -126,16 +141,20 @@ function ModelGroupRows({
   group,
   navigate,
   revenueByPageId,
+  followersByPageId,
+  subsByPageId,
 }: {
   group: ModelGroup;
   navigate: ReturnType<typeof useNavigate>;
   revenueByPageId: Map<number, number>;
+  followersByPageId: Map<number, number>;
+  subsByPageId: Map<number, number>;
 }) {
   const modelName = group.modelName;
   const groupRevenue = group.pages.reduce((sum, p) => sum + (revenueByPageId.get(p.id) ?? 0), 0);
   const groupSubs = group.pages.reduce((sum, p) => sum + (p.subscriberCount ?? 0), 0);
-  const groupNewSubs = group.pages.reduce((sum, p) => sum + (p.newSubscribersToday ?? 0), 0);
-  const groupNewFollowers = group.pages.reduce((sum, p) => sum + (p.newFollowersToday ?? 0), 0);
+  const groupNewSubs = group.pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0);
+  const groupNewFollowers = group.pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0);
 
   return (
     <>
@@ -153,20 +172,15 @@ function ModelGroupRows({
           {groupSubs.toLocaleString()}
         </td>
         <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold text-green">
-          +{groupNewSubs}
-        </td>
-        <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold text-green">
           +{groupNewFollowers}
         </td>
-        <td />
+        <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold text-green">
+          +{groupNewSubs}
+        </td>
       </tr>
       {group.pages.map((page) => {
         const platform = page.platform as keyof typeof PLATFORM_COLORS;
         const platformCfg = PLATFORM_COLORS[platform];
-        const statusCfg = CONNECTION_STATUS_COLORS[page.connectionStatus] ?? {
-          dot: "#a8a29e",
-          label: page.connectionStatus,
-        };
         const pageRevenue = revenueByPageId.get(page.id) ?? 0;
         const isFansly = page.platform === "fansly";
 
@@ -195,24 +209,15 @@ function ModelGroupRows({
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
               {(page.subscriberCount ?? 0).toLocaleString()}
             </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[14px] font-bold text-green">
-              +{page.newSubscribersToday ?? 0}
-            </td>
             <td className="px-4 py-3 text-right tabular-nums text-[14px]">
               {isFansly ? (
-                <span className="font-bold text-green">+{page.newFollowersToday ?? 0}</span>
+                <span className="font-bold text-green">+{followersByPageId.get(page.id) ?? 0}</span>
               ) : (
                 <span className="text-text-muted">&mdash;</span>
               )}
             </td>
-            <td className="px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span
-                  className="inline-block h-2 w-2 rounded-full"
-                  style={{ backgroundColor: statusCfg.dot }}
-                />
-                <span className="text-sm text-text-secondary">{statusCfg.label}</span>
-              </div>
+            <td className="px-4 py-3 text-right tabular-nums text-[14px] font-bold text-green">
+              +{subsByPageId.get(page.id) ?? 0}
             </td>
           </tr>
         );

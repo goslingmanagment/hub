@@ -84,6 +84,7 @@ import { resolvePageContext } from "../services/page-context.ts";
 import {
   getCrossPageFanDetailReport,
   getModelRevenueReport,
+  getOverviewGrowthReport,
   getOverviewRevenueReport,
   getPageFanDetailReport,
   getPageFansReport,
@@ -373,6 +374,19 @@ export async function buildApiServer(appContext: AppContext) {
     requireDashboardUser(principal);
     const query = request.query;
     return getOverviewRevenueReport(appContext, {
+      period: query.period,
+      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
+      pageIds: pageScopeFor(principal),
+    });
+  });
+
+  server.get("/api/v1/overview/growth", {
+    schema: routeSchemas.overviewGrowth,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const query = request.query;
+    return getOverviewGrowthReport(appContext, {
       period: query.period,
       custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
       pageIds: pageScopeFor(principal),

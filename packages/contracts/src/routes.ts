@@ -383,6 +383,14 @@ export const overviewRevenueResponseSchema = revenueWindowSchema.extend({
   pages: z.array(pageRevenueItemSchema),
 });
 
+export const overviewGrowthResponseSchema = z.object({
+  pages: z.array(z.object({
+    pageId: intId,
+    newFollowers: z.number().int(),
+    newSubscribers: z.number().int(),
+  })),
+});
+
 export const modelRevenueResponseSchema = revenueWindowSchema.extend({
   model: modelListItemSchema,
   pages: z.array(pageRevenueItemSchema),
@@ -1253,6 +1261,17 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  overviewGrowth: {
+    tags: ["dashboard"],
+    summary: "Get period-aware follower and subscriber growth",
+    security: cookieOnlySecurity,
+    querystring: revenueQuerySchema,
+    response: {
+      200: overviewGrowthResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   modelRevenue: {
     tags: ["revenue"],
     summary: "Get revenue for one model",
@@ -1837,6 +1856,7 @@ export type LoginBody = z.infer<typeof loginBodySchema>;
 export type ModelListItem = z.infer<typeof modelListItemSchema>;
 export type ModelParams = z.infer<typeof modelParamsSchema>;
 export type ModelRevenueResponse = z.infer<typeof modelRevenueResponseSchema>;
+export type OverviewGrowthResponse = z.infer<typeof overviewGrowthResponseSchema>;
 export type OverviewResponse = z.infer<typeof overviewResponseSchema>;
 export type OverviewRevenueResponse = z.infer<typeof overviewRevenueResponseSchema>;
 export type PageFanDetailResponse = z.infer<typeof pageFanDetailResponseSchema>;

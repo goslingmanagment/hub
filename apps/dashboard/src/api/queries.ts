@@ -4,6 +4,7 @@ import type {
   AuthState,
   AuthUser,
   OverviewResponse,
+  OverviewGrowthResponse,
   PageRevenueResponse,
   OverviewRevenueResponse,
   RevenueDailyResponse,
@@ -86,6 +87,14 @@ export function useOverviewRevenue(period: string) {
     queryKey: ["overviewRevenue", period],
     queryFn: () =>
       api.get<OverviewRevenueResponse>(`/api/v1/overview/revenue?period=${period}`),
+  });
+}
+
+export function useOverviewGrowth(period: string) {
+  return useQuery({
+    queryKey: ["overviewGrowth", period],
+    queryFn: () =>
+      api.get<OverviewGrowthResponse>(`/api/v1/overview/growth?period=${period}`),
   });
 }
 
