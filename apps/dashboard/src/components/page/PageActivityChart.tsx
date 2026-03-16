@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Area,
   AreaChart,
@@ -69,7 +69,7 @@ const yAxisProps = {
   tick: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
   axisLine: false,
   tickLine: false,
-  width: 40,
+  width: "auto" as const,
   allowDecimals: false,
 };
 
@@ -79,6 +79,9 @@ const tooltipProps = {
     border: "1px solid var(--color-border, #333)",
     borderRadius: 8,
     fontSize: 13,
+  },
+  wrapperStyle: {
+    zIndex: 20,
   },
 };
 
@@ -115,7 +118,8 @@ export function PageActivityChart(props: {
 
   const tickFormatter = (value: string) =>
     useMonthly ? formatBusinessDateMonth(value) : formatBusinessDateShort(value);
-  const labelFormatter = tickFormatter;
+  const labelFormatter = (label: ReactNode) =>
+    typeof label === "string" ? tickFormatter(label) : label;
 
   const isArea = mode !== "bar";
 
@@ -162,7 +166,6 @@ export function PageActivityChart(props: {
                 offset: 0,
               }}
             />
-            <Tooltip {...tooltipProps} labelFormatter={labelFormatter} />
             <Area
               type="monotone"
               dataKey="value"
@@ -173,6 +176,7 @@ export function PageActivityChart(props: {
               dot={mode === "area-dots" ? { r: 3, fill: "#4ead6b", strokeWidth: 0 } : false}
               activeDot={{ r: 4, fill: "#4ead6b", strokeWidth: 0 }}
             />
+            <Tooltip {...tooltipProps} labelFormatter={labelFormatter} />
           </AreaChart>
         ) : (
           <BarChart data={chartDisplayItems} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
@@ -188,8 +192,8 @@ export function PageActivityChart(props: {
                 offset: 0,
               }}
             />
-            <Tooltip {...tooltipProps} labelFormatter={labelFormatter} />
             <Bar dataKey="value" name={props.title} fill="#4ead6b" radius={[3, 3, 0, 0]} />
+            <Tooltip {...tooltipProps} labelFormatter={labelFormatter} />
           </BarChart>
         )}
       </ResponsiveContainer>
