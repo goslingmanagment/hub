@@ -8388,6 +8388,11 @@
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
                           },
+                          "newFollowersToday": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
                           "connectionStatus": {
                             "type": "string",
                             "enum": [
@@ -8443,6 +8448,7 @@
                           "revenue7dMills",
                           "revenue30dMills",
                           "newSubscribersToday",
+                          "newFollowersToday",
                           "connectionStatus",
                           "lastLightSyncAt",
                           "lastFollowerSyncAt",

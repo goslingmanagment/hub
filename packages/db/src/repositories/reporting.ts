@@ -459,6 +459,26 @@ export async function listSubscriberTotalsForPages(
     .groupBy(dailySubscribers.platformAccountId);
 }
 
+export async function listFollowerTotalsForPages(
+  db: Database,
+  input: {
+    pageIds: number[];
+    fromBusinessDate?: string | null;
+    toBusinessDate?: string | null;
+  },
+) {
+  if (input.pageIds.length === 0) return [];
+  const clauses = [inArray(dailyFollowers.platformAccountId, input.pageIds)];
+  if (input.fromBusinessDate) clauses.push(gte(dailyFollowers.businessDate, input.fromBusinessDate));
+  if (input.toBusinessDate) clauses.push(lt(dailyFollowers.businessDate, input.toBusinessDate));
+  return db.select({
+    pageId: dailyFollowers.platformAccountId,
+    newFollowers: sql<number>`coalesce(sum(${dailyFollowers.newFollowers}), 0)::int`,
+  }).from(dailyFollowers)
+    .where(and(...clauses))
+    .groupBy(dailyFollowers.platformAccountId);
+}
+
 export async function listFollowersForPage(
   db: Database,
   input: {

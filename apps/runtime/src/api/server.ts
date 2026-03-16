@@ -21,6 +21,7 @@ import {
   listRevenueDailyForPages,
   listTransactionsForScope,
   listSubscriberDailyForPage,
+  listFollowerTotalsForPages,
   listSubscriberTotalsForPages,
   listVisiblePages,
   setFanFlags,
@@ -678,6 +679,17 @@ export async function buildApiServer(appContext: AppContext) {
       pageNewSubsToday.set(row.pageId, row.newSubscribers);
     }
 
+    // Per-page new followers today
+    const pageNewFollowersToday = new Map<number, number>();
+    const followerTotals = await listFollowerTotalsForPages(appContext.db, {
+      pageIds,
+      fromBusinessDate: todayBusinessDate.from,
+      toBusinessDate: todayBusinessDate.toExclusive,
+    });
+    for (const row of followerTotals) {
+      pageNewFollowersToday.set(row.pageId, row.newFollowers);
+    }
+
     return {
       counts: {
         models: modelSet.size,
@@ -717,6 +729,7 @@ export async function buildApiServer(appContext: AppContext) {
           revenue7dMills: millsToNumber(pageTotals7d.get(p.id) ?? 0n),
           revenue30dMills: millsToNumber(pageTotals30d.get(p.id) ?? 0n),
           newSubscribersToday: pageNewSubsToday.get(p.id) ?? 0,
+          newFollowersToday: pageNewFollowersToday.get(p.id) ?? 0,
           connectionStatus: status?.connectionStatus ?? "unverified",
           lastLightSyncAt: p.lastLightSyncAt?.toISOString() ?? null,
           lastFollowerSyncAt: p.lastFollowerSyncAt?.toISOString() ?? null,

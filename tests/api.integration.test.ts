@@ -3339,4 +3339,54 @@ describe("api integration", () => {
     expect(subscribers.json().items).toHaveLength(1);
     expect(subscribers.json().items[0]?.platformSubscriptionId).toBe("sub-lana-2");
   });
+
+  it("includes newFollowersToday in overview for Fansly and zero for OnlyFans pages", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const onlyFansPage = await createOnlyFansPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-of-followers",
+    });
+    await updatePageMetadata(testDb.db, onlyFansPage.id, {
+      platformAccountIdValue: "of-followers-42",
+      username: "lana_of_followers",
+      displayName: "Lana OF Followers",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: { onlyMonsterAccountId: 55 },
+      syncType: "light",
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const overview = await server.inject({
+      method: "GET",
+      url: "/api/v1/overview",
+      headers: { cookie },
+    });
+    expect(overview.statusCode).toBe(200);
+
+    const body = overview.json();
+    for (const page of body.pages) {
+      expect(typeof page.newFollowersToday).toBe("number");
+      expect(Number.isInteger(page.newFollowersToday)).toBe(true);
+    }
+
+    const lanaOverview = body.pages.find((p: any) => p.label === "lana");
+    expect(lanaOverview).toBeDefined();
+    expect(lanaOverview.newFollowersToday).toBeGreaterThanOrEqual(0);
+
+    const ofOverview = body.pages.find((p: any) => p.label === "lana-of-followers");
+    expect(ofOverview).toBeDefined();
+    expect(ofOverview.newFollowersToday).toBe(0);
+  });
 });

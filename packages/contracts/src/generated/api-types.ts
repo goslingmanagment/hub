@@ -2529,6 +2529,7 @@ export interface paths {
                                 revenue7dMills: number;
                                 revenue30dMills: number;
                                 newSubscribersToday: number;
+                                newFollowersToday: number;
                                 /** @enum {string} */
                                 connectionStatus: "active" | "stale" | "error" | "expired" | "never_synced" | "unverified";
                                 lastLightSyncAt: string | null;

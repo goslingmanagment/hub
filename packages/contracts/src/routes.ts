@@ -796,6 +796,7 @@ export const overviewResponseSchema = z.object({
     revenue7dMills: mills,
     revenue30dMills: mills,
     newSubscribersToday: z.number().int(),
+    newFollowersToday: z.number().int(),
     connectionStatus: connectionStatusEnum,
     lastLightSyncAt: isoTimestamp.nullable(),
     lastFollowerSyncAt: isoTimestamp.nullable(),
