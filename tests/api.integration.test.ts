@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createOnlyFansPage,
@@ -354,6 +354,8 @@ describe("api integration", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+
     if (workerBoss) {
       await workerBoss.stop();
       workerBoss = null;
@@ -3395,6 +3397,9 @@ describe("api integration", () => {
       context.skip();
       return;
     }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-15T00:00:00.000Z"));
 
     // Seed an additional fansly page with follower/subscriber data on a different day
     const extraModel = await createModel(testDb.db, {

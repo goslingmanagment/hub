@@ -95,6 +95,7 @@ export function useOverviewGrowth(period: string) {
     queryKey: ["overviewGrowth", period],
     queryFn: () =>
       api.get<OverviewGrowthResponse>(`/api/v1/overview/growth?period=${period}`),
+    placeholderData: (previousData) => previousData,
   });
 }
 

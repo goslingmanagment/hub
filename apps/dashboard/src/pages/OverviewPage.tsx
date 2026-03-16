@@ -20,6 +20,8 @@ interface ModelGroup {
   pages: OverviewPageItem[];
 }
 
+const GROWTH_PLACEHOLDER = "—";
+
 function groupByModel(pages: OverviewPageItem[]): ModelGroup[] {
   const map = new Map<string, ModelGroup>();
   for (const page of pages) {
@@ -33,16 +35,26 @@ function groupByModel(pages: OverviewPageItem[]): ModelGroup[] {
   return Array.from(map.values());
 }
 
+function formatGrowthValue(value: number | null) {
+  return value === null ? GROWTH_PLACEHOLDER : `+${value.toLocaleString()}`;
+}
+
 export function OverviewPage() {
   const navigate = useNavigate();
   const { period } = usePeriodStore();
   const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
 
-  const { data, isLoading } = useOverview();
+  const { data, isLoading: isOverviewLoading } = useOverview();
   const { data: revenueData } = useOverviewRevenue(selectedPeriod);
-  const { data: growthData } = useOverviewGrowth(selectedPeriod);
+  const {
+    data: growthData,
+    isLoading: isGrowthLoading,
+    isFetching: isGrowthFetching,
+  } = useOverviewGrowth(selectedPeriod);
+  const growthState = growthData ? "ready" : isGrowthLoading || isGrowthFetching ? "loading" : "idle";
+  const growthReady = growthState === "ready";
 
-  if (isLoading || !data) {
+  if (isOverviewLoading || !data) {
     return (
       <div className="flex items-center justify-center py-24">
         <span className="text-text-muted text-sm">Loading...</span>
@@ -71,8 +83,12 @@ export function OverviewPage() {
 
   const totalRevenue = revenueData?.netEarningsMills ?? 0;
   const totalSubs = pages.reduce((sum, p) => sum + (p.subscriberCount ?? 0), 0);
-  const totalNewSubs = pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0);
-  const totalNewFollowers = pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0);
+  const totalNewSubs = growthReady
+    ? pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
+    : null;
+  const totalNewFollowers = growthReady
+    ? pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0)
+    : null;
 
   const periodLabel = PERIOD_LABELS[selectedPeriod] ?? "30 Days";
 
@@ -114,6 +130,7 @@ export function OverviewPage() {
               revenueByPageId={revenueByPageId}
               followersByPageId={followersByPageId}
               subsByPageId={subsByPageId}
+              growthReady={growthReady}
             />
           ))}
           <tr className="border-t-2 border-border bg-hover-alt">
@@ -124,11 +141,19 @@ export function OverviewPage() {
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-text-primary">
               {totalSubs.toLocaleString()}
             </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-green">
-              +{totalNewFollowers}
+            <td
+              className={`px-4 py-3 text-right tabular-nums text-[15px] font-bold ${
+                totalNewFollowers === null ? "text-text-muted" : "text-green"
+              }`}
+            >
+              {formatGrowthValue(totalNewFollowers)}
             </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-green">
-              +{totalNewSubs}
+            <td
+              className={`px-4 py-3 text-right tabular-nums text-[15px] font-bold ${
+                totalNewSubs === null ? "text-text-muted" : "text-green"
+              }`}
+            >
+              {formatGrowthValue(totalNewSubs)}
             </td>
           </tr>
         </tbody>
@@ -143,18 +168,24 @@ function ModelGroupRows({
   revenueByPageId,
   followersByPageId,
   subsByPageId,
+  growthReady,
 }: {
   group: ModelGroup;
   navigate: ReturnType<typeof useNavigate>;
   revenueByPageId: Map<number, number>;
   followersByPageId: Map<number, number>;
   subsByPageId: Map<number, number>;
+  growthReady: boolean;
 }) {
   const modelName = group.modelName;
   const groupRevenue = group.pages.reduce((sum, p) => sum + (revenueByPageId.get(p.id) ?? 0), 0);
   const groupSubs = group.pages.reduce((sum, p) => sum + (p.subscriberCount ?? 0), 0);
-  const groupNewSubs = group.pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0);
-  const groupNewFollowers = group.pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0);
+  const groupNewSubs = growthReady
+    ? group.pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
+    : null;
+  const groupNewFollowers = growthReady
+    ? group.pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0)
+    : null;
 
   return (
     <>
@@ -171,11 +202,19 @@ function ModelGroupRows({
         <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold">
           {groupSubs.toLocaleString()}
         </td>
-        <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold text-green">
-          +{groupNewFollowers}
+        <td
+          className={`px-4 pt-4 pb-2 text-right tabular-nums font-semibold ${
+            groupNewFollowers === null ? "text-text-muted" : "text-green"
+          }`}
+        >
+          {formatGrowthValue(groupNewFollowers)}
         </td>
-        <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold text-green">
-          +{groupNewSubs}
+        <td
+          className={`px-4 pt-4 pb-2 text-right tabular-nums font-semibold ${
+            groupNewSubs === null ? "text-text-muted" : "text-green"
+          }`}
+        >
+          {formatGrowthValue(groupNewSubs)}
         </td>
       </tr>
       {group.pages.map((page) => {
@@ -183,6 +222,8 @@ function ModelGroupRows({
         const platformCfg = PLATFORM_COLORS[platform];
         const pageRevenue = revenueByPageId.get(page.id) ?? 0;
         const isFansly = page.platform === "fansly";
+        const pageFollowers = growthReady ? (followersByPageId.get(page.id) ?? 0) : null;
+        const pageSubscribers = growthReady ? (subsByPageId.get(page.id) ?? 0) : null;
 
         return (
           <tr
@@ -211,13 +252,19 @@ function ModelGroupRows({
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[14px]">
               {isFansly ? (
-                <span className="font-bold text-green">+{followersByPageId.get(page.id) ?? 0}</span>
+                <span className={pageFollowers === null ? "text-text-muted" : "font-bold text-green"}>
+                  {formatGrowthValue(pageFollowers)}
+                </span>
               ) : (
-                <span className="text-text-muted">&mdash;</span>
+                <span className="text-text-muted">{GROWTH_PLACEHOLDER}</span>
               )}
             </td>
-            <td className="px-4 py-3 text-right tabular-nums text-[14px] font-bold text-green">
-              +{subsByPageId.get(page.id) ?? 0}
+            <td
+              className={`px-4 py-3 text-right tabular-nums text-[14px] font-bold ${
+                pageSubscribers === null ? "text-text-muted" : "text-green"
+              }`}
+            >
+              {formatGrowthValue(pageSubscribers)}
             </td>
           </tr>
         );
