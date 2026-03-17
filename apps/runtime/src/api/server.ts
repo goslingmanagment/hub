@@ -99,6 +99,12 @@ import {
   listPageSummaries,
 } from "../services/reporting.ts";
 import {
+  getCrmConversationPreviewReport,
+  getCrmReactivationReport,
+  getCrmRetentionReport,
+  getCrmSummaryReport,
+} from "../services/crm.ts";
+import {
   getSpenderBatch,
   getSpenderDetail,
   getSpenderList,
@@ -517,6 +523,34 @@ export async function buildApiServer(appContext: AppContext) {
       request.params.platformUserId,
       pageScopeFor(principal),
     );
+  });
+
+  server.get("/api/v1/pages/:pageLabel/crm/summary", {
+    schema: routeSchemas.crmSummary,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getCrmSummaryReport(appContext, principal, request.params.pageLabel);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/crm/retention", {
+    schema: routeSchemas.crmRetention,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getCrmRetentionReport(appContext, principal, request.params.pageLabel, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/crm/reactivation", {
+    schema: routeSchemas.crmReactivation,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getCrmReactivationReport(appContext, principal, request.params.pageLabel, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/crm/conversations/:platformConversationId/preview", {
+    schema: routeSchemas.crmConversationPreview,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getCrmConversationPreviewReport(appContext, principal, request.params, request.query);
   });
 
   server.get("/api/v1/fans/:platform/:platformUserId", {

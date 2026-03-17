@@ -2,6 +2,7 @@ import {
   bigserial,
   bigint,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -30,6 +31,8 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "followers",
   "transactions",
   "subscribers",
+  "dm_conversations",
+  "dm_messages",
   "cleanup",
   "followers_reconcile",
 ]);
@@ -81,6 +84,7 @@ export const transactionStateEnum = pgEnum("transaction_state", [
 ]);
 export const userRoleEnum = pgEnum("user_role", userRoles);
 export const fanFlagEnum = pgEnum("fan_flag", fanFlagTypes);
+export const dmSenderRoleEnum = pgEnum("dm_sender_role", ["fan", "model", "system", "unknown"]);
 
 export const models = pgTable("models", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
@@ -515,6 +519,124 @@ export const pageSubscriptions = pgTable(
       table.isCurrent,
       table.endsAt,
       table.id,
+    ),
+  }),
+);
+
+export const pageDmConversations = pgTable(
+  "page_dm_conversations",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" }).references(() => fans.id, {
+      onDelete: "set null",
+    }),
+    platformConversationId: text("platform_conversation_id").notNull(),
+    partnerPlatformUserId: text("partner_platform_user_id"),
+    partnerUsername: text("partner_username"),
+    partnerDisplayName: text("partner_display_name"),
+    conversationFlags: integer("conversation_flags").default(0).notNull(),
+    unreadCount: integer("unread_count").default(0).notNull(),
+    subscriptionTierId: text("subscription_tier_id"),
+    lastMessageId: text("last_message_id"),
+    lastUnreadMessageId: text("last_unread_message_id"),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+    lastMessageSenderId: text("last_message_sender_id"),
+    lastMessageSenderRole: dmSenderRoleEnum("last_message_sender_role")
+      .default("unknown")
+      .notNull(),
+    lastMessagePreview: text("last_message_preview"),
+    lastFanMessageAt: timestamp("last_fan_message_at", { withTimezone: true }),
+    lastModelMessageAt: timestamp("last_model_message_at", { withTimezone: true }),
+    storedMessageCount: integer("stored_message_count").default(0).notNull(),
+    newestStoredMessageId: text("newest_stored_message_id"),
+    oldestStoredMessageId: text("oldest_stored_message_id"),
+    messageBackfillComplete: boolean("message_backfill_complete").default(false).notNull(),
+    lastMessageSyncAt: timestamp("last_message_sync_at", { withTimezone: true }),
+    isVisible: boolean("is_visible").default(true).notNull(),
+    lastSeenGeneration: bigint("last_seen_generation", { mode: "number" }),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    uniq: unique("page_dm_conversations_account_conversation_uniq").on(
+      table.platformAccountId,
+      table.platformConversationId,
+    ),
+    fanIdx: index("page_dm_conversations_account_fan_idx").on(
+      table.platformAccountId,
+      table.fanId,
+    ),
+    visibleMessageIdx: index("page_dm_conversations_visible_message_idx").on(
+      table.platformAccountId,
+      table.isVisible,
+      table.lastMessageAt.desc(),
+      table.id.desc(),
+    ),
+    visibleUnreadIdx: index("page_dm_conversations_visible_unread_idx").on(
+      table.platformAccountId,
+      table.isVisible,
+      table.unreadCount.desc(),
+      table.lastMessageAt.desc(),
+      table.id.desc(),
+    ),
+    backfillIdx: index("page_dm_conversations_backfill_idx").on(
+      table.platformAccountId,
+      table.isVisible,
+      table.messageBackfillComplete,
+      table.lastMessageSyncAt,
+    ),
+    generationIdx: index("page_dm_conversations_generation_idx").on(
+      table.platformAccountId,
+      table.lastSeenGeneration,
+    ),
+    storedMessageCountCheck: check(
+      "page_dm_conversations_stored_message_count_check",
+      sql`${table.storedMessageCount} between 0 and 75`,
+    ),
+  }),
+);
+
+export const pageDmMessages = pgTable(
+  "page_dm_messages",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    conversationId: bigint("conversation_id", { mode: "number" })
+      .references(() => pageDmConversations.id, { onDelete: "cascade" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    platformMessageId: text("platform_message_id").notNull(),
+    senderPlatformUserId: text("sender_platform_user_id"),
+    senderRole: dmSenderRoleEnum("sender_role").default("unknown").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    content: text("content").default("").notNull(),
+    totalTipAmountCents: integer("total_tip_amount_cents").default(0).notNull(),
+    inReplyToMessageId: text("in_reply_to_message_id"),
+    inReplyToRootMessageId: text("in_reply_to_root_message_id"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    uniq: unique("page_dm_messages_conversation_message_uniq").on(
+      table.conversationId,
+      table.platformMessageId,
+    ),
+    conversationIdx: index("page_dm_messages_conversation_created_idx").on(
+      table.conversationId,
+      table.createdAt.desc(),
+      table.id.desc(),
+    ),
+    accountConversationIdx: index("page_dm_messages_account_conversation_created_idx").on(
+      table.platformAccountId,
+      table.conversationId,
+      table.createdAt.desc(),
+      table.id.desc(),
     ),
   }),
 );

@@ -6,6 +6,9 @@ import type {
   FanslyAccountMeResponse,
   FanslyEarningsTransaction,
   FanslyFollower,
+  FanslyGroupDetail,
+  FanslyMessagesPageResponse,
+  FanslyMessagingGroupsPageResponse,
   FanslyRequestContext,
   FanslySubscriber,
 } from "@agency_hub_core/fansly";
@@ -21,6 +24,30 @@ export type AdapterLike = ProviderAdapter<
   FanslySubscriber,
   FanslyFollower
 > & {
+  getMessagingGroupsPage(
+    context: FanslyRequestContext,
+    params: {
+      offset?: number;
+      limit?: number;
+      sortOrder?: number;
+      flags?: number;
+      search?: string;
+      subscriptionTierId?: string | null;
+      listIds?: string | null;
+    },
+  ): Promise<FanslyMessagingGroupsPageResponse>;
+  getGroupDetail(context: FanslyRequestContext, groupId: string): Promise<{
+    parsed: FanslyGroupDetail;
+    raw: FanslyGroupDetail;
+  }>;
+  getMessagesPage(
+    context: FanslyRequestContext,
+    params: {
+      groupId: string;
+      limit?: number;
+      before?: string | null;
+    },
+  ): Promise<FanslyMessagesPageResponse>;
   close?(): Promise<void>;
 };
 

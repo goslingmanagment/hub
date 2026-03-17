@@ -2,6 +2,7 @@ export * from "./client.ts";
 export * from "./schema.ts";
 export * from "./schema-guard.ts";
 export * from "./repositories/catalog.ts";
+export * from "./repositories/crm.ts";
 export * from "./repositories/fans.ts";
 export * from "./repositories/auth.ts";
 export * from "./repositories/fan-metadata.ts";

@@ -20,9 +20,19 @@ import type { SyncRunTelemetry } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
+const DM_RAW_RETENTION_DAYS = 7;
 
 export function retentionDate(now = new Date()) {
   return new Date(now.getTime() + 180 * DAY_MS);
+}
+
+export function dmRetentionDate(now = new Date()) {
+  return new Date(now.getTime() + DM_RAW_RETENTION_DAYS * DAY_MS);
+}
+
+export function normalizeFanslyTimestamp(value: number) {
+  const ms = value >= 1_000_000_000_000 ? value : value * 1000;
+  return new Date(ms);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -102,6 +112,139 @@ export function trimFanslyFollowerPayload(raw: unknown) {
     followers,
     aggregationData: {
       accounts,
+    },
+  };
+}
+
+function redactFanslyMessageLike(raw: unknown) {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const id = asNullableString(raw.id);
+  const senderId = asNullableString(raw.senderId);
+  const groupId = asNullableString(raw.groupId);
+  const correlationId = asNullableString(raw.correlationId);
+  const inReplyTo = asNullableString(raw.inReplyTo);
+  const inReplyToRoot = asNullableString(raw.inReplyToRoot);
+  const createdAt = asNullableNumber(raw.createdAt);
+  const type = asNullableNumber(raw.type);
+  const dataVersion = asNullableNumber(raw.dataVersion);
+  const totalTipAmount = asNullableNumber(raw.totalTipAmount);
+
+  return {
+    id,
+    type,
+    dataVersion,
+    groupId,
+    senderId,
+    correlationId,
+    inReplyTo,
+    inReplyToRoot,
+    createdAt,
+    attachments: [],
+    embeds: [],
+    interactions: [],
+    likes: [],
+    totalTipAmount,
+  };
+}
+
+export function trimFanslyMessagingGroupsPayload(raw: unknown) {
+  const payload = isRecord(raw) ? raw : {};
+  const data = Array.isArray(payload.data)
+    ? payload.data.flatMap((item) => {
+      if (!isRecord(item)) {
+        return [];
+      }
+
+      const groupId = asNullableString(item.groupId);
+      if (!groupId) {
+        return [];
+      }
+
+      return [{
+        account_id: asNullableString(item.account_id),
+        groupId,
+        partnerAccountId: asNullableString(item.partnerAccountId),
+        partnerUsername: asNullableString(item.partnerUsername),
+        flags: asNullableNumber(item.flags),
+        unreadCount: asNullableNumber(item.unreadCount),
+        subscriptionTierId: asNullableString(item.subscriptionTierId),
+        lastMessageId: asNullableString(item.lastMessageId),
+        lastUnreadMessageId: asNullableString(item.lastUnreadMessageId),
+      }];
+    })
+    : [];
+  const aggregationData = isRecord(payload.aggregationData) ? payload.aggregationData : {};
+  const accounts = Array.isArray(aggregationData.accounts)
+    ? aggregationData.accounts.flatMap((item) => {
+      if (!isRecord(item)) {
+        return [];
+      }
+
+      const id = asNullableString(item.id);
+      if (!id) {
+        return [];
+      }
+
+      return [{
+        id,
+        username: asNullableString(item.username),
+        displayName: asNullableString(item.displayName),
+        createdAt: asNullableNumber(item.createdAt),
+      }];
+    })
+    : [];
+  const groups = Array.isArray(aggregationData.groups)
+    ? aggregationData.groups.flatMap((item) => {
+      if (!isRecord(item)) {
+        return [];
+      }
+
+      const id = asNullableString(item.id);
+      if (!id) {
+        return [];
+      }
+
+      return [{
+        id,
+        type: asNullableNumber(item.type),
+        groupFlags: asNullableNumber(item.groupFlags),
+        createdBy: asNullableString(item.createdBy),
+        users: Array.isArray(item.users)
+          ? item.users.flatMap((user) => {
+            if (!isRecord(user)) {
+              return [];
+            }
+
+            const userId = asNullableString(user.userId);
+            const groupId = asNullableString(user.groupId);
+            const type = asNullableNumber(user.type);
+            const permissionFlags = asNullableNumber(user.permissionFlags);
+            if (!userId || !groupId || type === null || permissionFlags === null) {
+              return [];
+            }
+
+            return [{
+              groupId,
+              userId,
+              type,
+              permissionFlags,
+            }];
+          })
+          : [],
+        lastMessage: redactFanslyMessageLike(item.lastMessage),
+      }];
+    })
+    : [];
+
+  return {
+    data,
+    aggregationData: {
+      total: asNullableNumber(aggregationData.total),
+      accounts,
+      groups,
     },
   };
 }

@@ -16,6 +16,8 @@ export const SYNC_CONTROL_STREAMS = [
   "light",
   "transactions",
   "subscribers",
+  "dm_conversations",
+  "dm_messages",
   "followers",
   "followers_reconcile",
 ] as const;
@@ -36,12 +38,19 @@ export const SYNC_STREAM_CONFIG: Record<SyncControlStream, SyncStreamConfig> = {
   light: { stream: "light", cadenceSeconds: 3600, basePriority: 60, streamIndex: 1 },
   transactions: { stream: "transactions", cadenceSeconds: 3600, basePriority: 50, streamIndex: 2 },
   subscribers: { stream: "subscribers", cadenceSeconds: 3600, basePriority: 40, streamIndex: 3 },
-  followers: { stream: "followers", cadenceSeconds: 43200, basePriority: 20, streamIndex: 4 },
+  dm_conversations: {
+    stream: "dm_conversations",
+    cadenceSeconds: 1800,
+    basePriority: 30,
+    streamIndex: 4,
+  },
+  dm_messages: { stream: "dm_messages", cadenceSeconds: 7200, basePriority: 25, streamIndex: 5 },
+  followers: { stream: "followers", cadenceSeconds: 43200, basePriority: 20, streamIndex: 6 },
   followers_reconcile: {
     stream: "followers_reconcile",
     cadenceSeconds: 172800,
     basePriority: 10,
-    streamIndex: 5,
+    streamIndex: 7,
   },
 };
 
@@ -49,8 +58,10 @@ const SYNC_STREAM_TIE_BREAK_ORDER: Record<SyncControlStream, number> = {
   light: 1,
   transactions: 2,
   subscribers: 3,
-  followers: 4,
-  followers_reconcile: 5,
+  dm_conversations: 4,
+  dm_messages: 5,
+  followers: 6,
+  followers_reconcile: 7,
 };
 
 function asSyncAuditStream(stream: string): SyncAuditStream {
@@ -479,7 +490,7 @@ export async function insertRawPayload(
     requestParams: Record<string, unknown>;
     responsePayload: unknown;
     mapperVersion: string;
-    payloadKind: "mapping_critical" | "failed";
+    payloadKind: "mapping_critical" | "dm_metadata" | "failed";
     statusCode?: number | null;
     errorMessage?: string | null;
     retainUntil: Date;
@@ -966,6 +977,8 @@ function streamOrderSql(columnName: string) {
       when 'light' then ${SYNC_STREAM_TIE_BREAK_ORDER.light}
       when 'transactions' then ${SYNC_STREAM_TIE_BREAK_ORDER.transactions}
       when 'subscribers' then ${SYNC_STREAM_TIE_BREAK_ORDER.subscribers}
+      when 'dm_conversations' then ${SYNC_STREAM_TIE_BREAK_ORDER.dm_conversations}
+      when 'dm_messages' then ${SYNC_STREAM_TIE_BREAK_ORDER.dm_messages}
       when 'followers' then ${SYNC_STREAM_TIE_BREAK_ORDER.followers}
       when 'followers_reconcile' then ${SYNC_STREAM_TIE_BREAK_ORDER.followers_reconcile}
       else 999
@@ -990,7 +1003,9 @@ function buildSeedSyncStreamStateValue(
   const trustedFollowerAt = page.lastFollowerSyncAt;
   const trustedAt = stream === "light" || stream === "transactions" || stream === "subscribers"
     ? trustedLightAt
-    : trustedFollowerAt;
+    : stream === "followers" || stream === "followers_reconcile"
+      ? trustedFollowerAt
+      : null;
   const followersReconcileNeedsRecovery = page.platform === "fansly" && (
     page.lastFollowerSyncAt === null ||
     (now.getTime() - page.lastFollowerSyncAt.getTime()) > SYNC_STREAM_CONFIG.followers_reconcile.cadenceSeconds * 1000 ||

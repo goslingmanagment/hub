@@ -1576,6 +1576,604 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pages/{pageLabel}/crm/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get CRM freshness, coverage, and queue totals for one Fansly page */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            page: {
+                                id: number;
+                                label: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                                followerCount: number;
+                                subscriberCount: number;
+                                lastLightSyncAt: string | null;
+                                lastFollowerSyncAt: string | null;
+                            };
+                            retention: {
+                                total: number;
+                                countsByTouchpoint: {
+                                    "21d": number;
+                                    "14d": number;
+                                    "7d": number;
+                                    "5d": number;
+                                    "3d": number;
+                                    "1d": number;
+                                };
+                            };
+                            reactivation: {
+                                total: number;
+                            };
+                            freshness: {
+                                lastConversationChunkSucceededAt: string | null;
+                                lastConversationFullSweepAt: string | null;
+                                lastMessageChunkSucceededAt: string | null;
+                            };
+                            coverage: {
+                                pendingMessageBackfillCount: number;
+                                previewReadyConversationCount: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/crm/retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List retention CRM candidates for one Fansly page */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    offset?: number;
+                    query?: string;
+                    touchpoint?: "21d" | "14d" | "7d" | "5d" | "3d" | "1d";
+                    autoRenew?: boolean;
+                    unreadOnly?: boolean;
+                    showHandled?: boolean;
+                    sortBy?: "touchpoint" | "subscriptionExpiresAt" | "lifetimeSpendUsd" | "lastContactAt" | "unreadCount";
+                    sortDir?: "asc" | "desc";
+                };
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            page: {
+                                id: number;
+                                label: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                                followerCount: number;
+                                subscriberCount: number;
+                                lastLightSyncAt: string | null;
+                                lastFollowerSyncAt: string | null;
+                            };
+                            items: {
+                                fan: {
+                                    fanId: number;
+                                    /** @enum {string} */
+                                    platform: "fansly";
+                                    platformUserId: string;
+                                    username: string | null;
+                                    displayName: string | null;
+                                };
+                                spend: {
+                                    creatorNetAmountMills: number;
+                                    creatorNetAmountUsd: number;
+                                };
+                                subscription: {
+                                    isSubscriber: boolean;
+                                    subscriberSince?: string | null;
+                                    subscriptionExpiresAt: string | null;
+                                    autoRenew: boolean | null;
+                                    subscriptionTierName: string | null;
+                                };
+                                conversation: {
+                                    platformConversationId: string | null;
+                                    unreadCount: number;
+                                    lastMessageAt: string | null;
+                                    lastMessagePreview: string | null;
+                                    messageBackfillComplete: boolean;
+                                    storedMessageCount: number;
+                                };
+                                platformConversationId: string | null;
+                                /** @enum {string} */
+                                touchpointCode: "21d" | "14d" | "7d" | "5d" | "3d" | "1d";
+                                touchpointLabel: string;
+                                isSoftTouchpoint: boolean;
+                                isHandled: boolean;
+                                lastContactAt: string | null;
+                                touchpointDueAt: string;
+                            }[];
+                            limit: number;
+                            offset: number;
+                            total: number;
+                            summary: {
+                                freshness: {
+                                    lastConversationChunkSucceededAt: string | null;
+                                    lastConversationFullSweepAt: string | null;
+                                    lastMessageChunkSucceededAt: string | null;
+                                };
+                                coverage: {
+                                    pendingMessageBackfillCount: number;
+                                    previewReadyConversationCount: number;
+                                };
+                                countsByTouchpoint: {
+                                    "21d": number;
+                                    "14d": number;
+                                    "7d": number;
+                                    "5d": number;
+                                    "3d": number;
+                                    "1d": number;
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/crm/reactivation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List reactivation CRM candidates for one Fansly page */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    offset?: number;
+                    query?: string;
+                    minSpendUsd?: number;
+                    minSilenceDays?: number;
+                    unreadOnly?: boolean;
+                    noDmHistoryOnly?: boolean;
+                    subscriberState?: "current" | "former" | "never";
+                    sortBy?: "reactivationScore" | "lifetimeSpendUsd" | "silenceDays" | "lastContactAt";
+                    sortDir?: "asc" | "desc";
+                };
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            page: {
+                                id: number;
+                                label: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                                followerCount: number;
+                                subscriberCount: number;
+                                lastLightSyncAt: string | null;
+                                lastFollowerSyncAt: string | null;
+                            };
+                            items: {
+                                fan: {
+                                    fanId: number;
+                                    /** @enum {string} */
+                                    platform: "fansly";
+                                    platformUserId: string;
+                                    username: string | null;
+                                    displayName: string | null;
+                                };
+                                spend: {
+                                    creatorNetAmountMills: number;
+                                    creatorNetAmountUsd: number;
+                                };
+                                subscription: {
+                                    isSubscriber: boolean;
+                                    subscriberSince?: string | null;
+                                    subscriptionExpiresAt: string | null;
+                                    autoRenew: boolean | null;
+                                    subscriptionTierName: string | null;
+                                };
+                                conversation: {
+                                    platformConversationId: string | null;
+                                    unreadCount: number;
+                                    lastMessageAt: string | null;
+                                    lastMessagePreview: string | null;
+                                    messageBackfillComplete: boolean;
+                                    storedMessageCount: number;
+                                };
+                                platformConversationId: string | null;
+                                noDmHistory: boolean;
+                                silenceDays: number;
+                                reactivationScore: number;
+                            }[];
+                            limit: number;
+                            offset: number;
+                            total: number;
+                            summary: {
+                                freshness: {
+                                    lastConversationChunkSucceededAt: string | null;
+                                    lastConversationFullSweepAt: string | null;
+                                    lastMessageChunkSucceededAt: string | null;
+                                };
+                                coverage: {
+                                    pendingMessageBackfillCount: number;
+                                    previewReadyConversationCount: number;
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/crm/conversations/{platformConversationId}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return locally cached DM preview rows for one conversation */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    pageLabel: string;
+                    platformConversationId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            page: {
+                                id: number;
+                                label: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                                followerCount: number;
+                                subscriberCount: number;
+                                lastLightSyncAt: string | null;
+                                lastFollowerSyncAt: string | null;
+                            };
+                            fan: {
+                                fanId: number;
+                                /** @enum {string} */
+                                platform: "fansly";
+                                platformUserId: string;
+                                username: string | null;
+                                displayName: string | null;
+                            } | null;
+                            conversation: {
+                                platformConversationId: string;
+                                storedMessageCount: number;
+                                messageBackfillComplete: boolean;
+                                lastMessageSyncAt: string | null;
+                                unreadCount: number;
+                                lastMessageAt: string | null;
+                            };
+                            messages: {
+                                platformMessageId: string;
+                                senderPlatformUserId: string | null;
+                                /** @enum {string} */
+                                senderRole: "fan" | "model" | "system" | "unknown";
+                                createdAt: string;
+                                content: string;
+                                totalTipAmountCents: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/fans/{platform}/{platformUserId}": {
         parameters: {
             query?: never;

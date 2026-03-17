@@ -4,14 +4,21 @@ const dbMocks = vi.hoisted(() => ({
   countActivePageFollows: vi.fn(),
   deactivatePageFollowsByGeneration: vi.fn(),
   deactivatePageSubscriptionsByGeneration: vi.fn(),
+  finalizePageDmConversationMessageSync: vi.fn(),
   getCheckpoint: vi.fn(),
   getCurrentSubscribers: vi.fn(),
+  getExistingPageDmMessageIds: vi.fn(),
+  getPageDmConversationById: vi.fn(),
+  markPageDmConversationsInvisibleByGeneration: vi.fn(),
   rebuildFollowerRollups: vi.fn(),
   rebuildSubscriberRollups: vi.fn(),
   requestSyncStreamRevisions: vi.fn(),
+  selectNextPageDmMessageSyncCandidate: vi.fn(),
   updateLegacySyncTimestamp: vi.fn(),
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
+  upsertPageDmConversation: vi.fn(),
+  upsertPageDmMessages: vi.fn(),
   upsertFanPages: vi.fn(),
   upsertFans: vi.fn(),
   upsertPageFollows: vi.fn(),
@@ -25,10 +32,13 @@ const onlyFansTransactionMocks = vi.hoisted(() => ({
 }));
 
 const sharedMocks = vi.hoisted(() => ({
+  dmRetentionDate: vi.fn(() => new Date("2026-09-17T00:00:00.000Z")),
+  normalizeFanslyTimestamp: vi.fn((value: number) => new Date(value >= 1_000_000_000_000 ? value : value * 1000)),
   persistRawPayload: vi.fn(),
   refreshPageMetadata: vi.fn(),
   retentionDate: vi.fn(() => new Date("2026-09-10T00:00:00.000Z")),
   trimFanslyFollowerPayload: vi.fn((value: unknown) => value),
+  trimFanslyMessagingGroupsPayload: vi.fn((value: unknown) => value),
 }));
 
 const fanHydrationMocks = vi.hoisted(() => ({
@@ -39,13 +49,21 @@ const transactionMocks = vi.hoisted(() => ({
   syncTransactions: vi.fn(),
 }));
 
-vi.mock("@agency_hub_core/db", () => dbMocks);
+vi.mock("@agency_hub_core/db", async () => {
+  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  return {
+    ...actual,
+    ...dbMocks,
+  };
+});
 vi.mock("../apps/runtime/src/services/sync/onlyfans-transactions.ts", () => onlyFansTransactionMocks);
 vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
 vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", () => fanHydrationMocks);
 vi.mock("../apps/runtime/src/services/sync/transactions.ts", () => transactionMocks);
 
 import {
+  executeDmConversationsChunk,
+  executeDmMessagesChunk,
   executeFollowersChunk,
   executeFollowersReconcileChunk,
   executeSubscribersChunk,
@@ -66,7 +84,9 @@ function createTelemetry() {
 describe("sync executor handlers", () => {
   beforeEach(() => {
     for (const mock of Object.values(dbMocks)) {
-      mock.mockReset();
+      if (typeof mock === "function" && "mockReset" in mock) {
+        mock.mockReset();
+      }
     }
     onlyFansTransactionMocks.syncOnlyFansTransactions.mockReset();
     sharedMocks.persistRawPayload.mockReset();
@@ -76,15 +96,38 @@ describe("sync executor handlers", () => {
 
     dbMocks.upsertCheckpointProgress.mockResolvedValue({});
     dbMocks.upsertCheckpoint.mockResolvedValue({});
+    dbMocks.finalizePageDmConversationMessageSync.mockResolvedValue({
+      conversation: null,
+      deletedCount: 0,
+      summary: {
+        storedMessageCount: 0,
+        newestStoredMessageId: null,
+        oldestStoredMessageId: null,
+        lastFanMessageAt: null,
+        lastModelMessageAt: null,
+      },
+    });
+    dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
+    dbMocks.getPageDmConversationById.mockResolvedValue(null);
+    dbMocks.markPageDmConversationsInvisibleByGeneration.mockResolvedValue(undefined);
     dbMocks.rebuildFollowerRollups.mockResolvedValue(undefined);
     dbMocks.rebuildSubscriberRollups.mockResolvedValue(undefined);
     dbMocks.updateLegacySyncTimestamp.mockResolvedValue(undefined);
+    dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValue(null);
     dbMocks.upsertFanPages.mockResolvedValue(undefined);
+    dbMocks.upsertPageDmConversation.mockResolvedValue(undefined);
+    dbMocks.upsertPageDmMessages.mockResolvedValue(undefined);
     dbMocks.upsertPageFollows.mockResolvedValue(undefined);
     dbMocks.upsertPageSubscriptions.mockResolvedValue(undefined);
     dbMocks.refreshFanPageFollowerState.mockResolvedValue(undefined);
     dbMocks.refreshFanPageSubscriberState.mockResolvedValue(undefined);
+    sharedMocks.dmRetentionDate.mockReset();
+    sharedMocks.dmRetentionDate.mockReturnValue(new Date("2026-09-17T00:00:00.000Z"));
+    sharedMocks.normalizeFanslyTimestamp.mockReset();
+    sharedMocks.normalizeFanslyTimestamp.mockImplementation((value: number) => new Date(value >= 1_000_000_000_000 ? value : value * 1000));
     sharedMocks.persistRawPayload.mockResolvedValue(undefined);
+    sharedMocks.trimFanslyMessagingGroupsPayload.mockReset();
+    sharedMocks.trimFanslyMessagingGroupsPayload.mockImplementation((value: unknown) => value);
   });
 
   it("guards against destructive subscriber finalization on an empty first page", async () => {
@@ -342,5 +385,236 @@ describe("sync executor handlers", () => {
     expect(result.satisfied).toBe(false);
     expect(result.yieldReason).toBe("request_budget");
     expect(result.clearRequestPayload).toBe(false);
+  });
+
+  it("resumes dm_conversations from versioned checkpoint state regardless of desired revision", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async () => ({
+      total: 200,
+      items: [],
+      accounts: [],
+      groups: [],
+      offset: 100,
+      done: false,
+      raw: {
+        data: [],
+        aggregationData: {
+          total: 200,
+          accounts: [],
+          groups: [],
+        },
+      },
+    }));
+    const app = {
+      db: {
+        query: {
+          pageDmConversations: {
+            findFirst: vi.fn(async () => null),
+          },
+        },
+      },
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "full_scan",
+        generation: 7,
+        offset: 100,
+        pageCount: 1,
+        providerReportedTotal: 200,
+        unchangedPageStreak: 0,
+        fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+        lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+      },
+    });
+
+    const result = await executeDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 42,
+      },
+      syncRunId: 900,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(getMessagingGroupsPage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      offset: 100,
+      limit: 100,
+    }));
+    expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith({}, expect.objectContaining({
+      platformAccountId: 55,
+      stream: "dm_conversations",
+      lastSuccessfulRunId: 900,
+      state: expect.objectContaining({
+        version: 1,
+        generation: 7,
+        offset: 200,
+      }),
+    }));
+  });
+
+  it("resumes dm_messages from checkpoint state regardless of desired revision", async () => {
+    const telemetry = createTelemetry();
+    const getMessagesPage = vi.fn(async () => ({
+      items: [{
+        id: "msg-79",
+        type: 1,
+        dataVersion: 1,
+        content: "hey there",
+        groupId: "group-1",
+        senderId: "fan-1",
+        correlationId: null,
+        inReplyTo: null,
+        inReplyToRoot: null,
+        createdAt: 1_770_000_000,
+        attachments: [],
+        embeds: [],
+        interactions: [],
+        likes: [],
+        totalTipAmount: 25,
+      }],
+      groupId: "group-1",
+      before: "msg-65",
+      done: true,
+      raw: {
+        messages: [],
+      },
+    }));
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagesPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        currentConversationId: 777,
+        currentPlatformConversationId: "group-1",
+        currentBeforeMessageId: "msg-65",
+        currentMode: "backfill",
+      },
+    });
+    dbMocks.getPageDmConversationById.mockResolvedValue({
+      id: 777,
+      platformAccountId: 55,
+      fanId: 101,
+      platformConversationId: "group-1",
+      partnerPlatformUserId: "fan-1",
+      partnerUsername: "fan_1",
+      partnerDisplayName: "Fan 1",
+      conversationFlags: 0,
+      unreadCount: 2,
+      subscriptionTierId: null,
+      lastMessageId: "msg-80",
+      lastUnreadMessageId: "msg-80",
+      lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastMessageSenderId: "fan-1",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "previous",
+      lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: 74,
+      newestStoredMessageId: "msg-80",
+      oldestStoredMessageId: "msg-65",
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
+      lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+      metadata: {},
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-03-10T00:00:00.000Z"),
+    });
+    dbMocks.finalizePageDmConversationMessageSync.mockResolvedValue({
+      conversation: {
+        id: 777,
+      },
+      deletedCount: 0,
+      summary: {
+        storedMessageCount: 75,
+        newestStoredMessageId: "msg-80",
+        oldestStoredMessageId: "msg-79",
+        lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+        lastModelMessageAt: null,
+      },
+    });
+
+    const result = await executeDmMessagesChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 999,
+      },
+      syncRunId: 901,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(dbMocks.selectNextPageDmMessageSyncCandidate).not.toHaveBeenCalled();
+    expect(dbMocks.getPageDmConversationById).toHaveBeenCalledWith({}, 777);
+    expect(getMessagesPage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      groupId: "group-1",
+      before: "msg-65",
+      limit: 25,
+    }));
+    expect(dbMocks.upsertPageDmMessages).toHaveBeenCalledWith({}, expect.arrayContaining([
+      expect.objectContaining({
+        conversationId: 777,
+        platformMessageId: "msg-79",
+        senderRole: "fan",
+      }),
+    ]));
+    expect(dbMocks.finalizePageDmConversationMessageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      conversationId: 777,
+      messageBackfillComplete: true,
+    }));
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith({}, expect.objectContaining({
+      platformAccountId: 55,
+      stream: "dm_messages",
+      lastSuccessfulRunId: 901,
+      state: {
+        version: 1,
+        currentConversationId: null,
+        currentPlatformConversationId: null,
+        currentBeforeMessageId: null,
+        currentMode: null,
+      },
+    }));
   });
 });

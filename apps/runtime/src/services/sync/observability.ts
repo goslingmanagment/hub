@@ -28,6 +28,8 @@ type SyncStream =
   | "followers_reconcile"
   | "transactions"
   | "subscribers"
+  | "dm_conversations"
+  | "dm_messages"
   | "cleanup";
 type SyncProvider = "fansly" | "onlyfans";
 

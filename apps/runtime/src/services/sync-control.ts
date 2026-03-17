@@ -28,7 +28,7 @@ export function resolveStreamsForScope(
 ): SyncControlStream[] {
   if (scope === "light") {
     return platform === "fansly"
-      ? ["light", "transactions", "subscribers"]
+      ? ["light", "transactions", "subscribers", "dm_conversations"]
       : ["light", "transactions"];
   }
 
@@ -40,7 +40,15 @@ export function resolveStreamsForScope(
   }
 
   return platform === "fansly"
-    ? ["light", "transactions", "subscribers", "followers", "followers_reconcile"]
+    ? [
+      "light",
+      "transactions",
+      "subscribers",
+      "dm_conversations",
+      "dm_messages",
+      "followers",
+      "followers_reconcile",
+    ]
     : ["light", "transactions"];
 }
 

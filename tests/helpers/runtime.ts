@@ -9,6 +9,7 @@ export function createTestAppContext(
     logger?: StartedTestDatabase["logger"];
     onlyFansAdapter?: AppContext["onlyFansAdapter"];
     sessionTtlDays?: number;
+    syncSharedRateLimitEnabled?: boolean;
   },
 ) {
   return {
@@ -30,7 +31,7 @@ export function createTestAppContext(
       followerPageDelayMs: 0,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
-      syncSharedRateLimitEnabled: false,
+      syncSharedRateLimitEnabled: overrides?.syncSharedRateLimitEnabled ?? false,
       syncObservabilityRetentionDays: 30,
     },
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),

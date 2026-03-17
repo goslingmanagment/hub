@@ -125,6 +125,49 @@ function createFanslySyncAdapter() {
         raw: {},
       };
     },
+    async getMessagingGroupsPage() {
+      return {
+        total: 0,
+        items: [],
+        accounts: [],
+        groups: [],
+        offset: 0,
+        done: true,
+        raw: {
+          data: [],
+          aggregationData: {
+            total: 0,
+            accounts: [],
+            groups: [],
+          },
+        },
+      };
+    },
+    async getGroupDetail(_context: unknown, groupId: string) {
+      const parsed = {
+        id: groupId,
+        type: 1,
+        groupFlags: 0,
+        users: [],
+        lastMessage: null,
+      };
+
+      return {
+        parsed,
+        raw: parsed,
+      };
+    },
+    async getMessagesPage(_context: unknown, params: { groupId: string; before?: string | null }) {
+      return {
+        items: [],
+        groupId: params.groupId,
+        before: params.before ?? null,
+        done: true,
+        raw: {
+          messages: [],
+        },
+      };
+    },
   };
 }
 
@@ -163,6 +206,7 @@ describe("sync integration", () => {
     const app = createTestAppContext(testDb, {
       databaseUrl: testDb.connectionString,
       adapter: createFanslySyncAdapter() as never,
+      syncSharedRateLimitEnabled: true,
     });
     const boss = new PgBoss({ connectionString: testDb.connectionString });
     const abortController = new AbortController();
@@ -194,6 +238,8 @@ describe("sync integration", () => {
         "light",
         "transactions",
         "subscribers",
+        "dm_conversations",
+        "dm_messages",
         "followers",
         "followers_reconcile",
       ]);
@@ -208,7 +254,7 @@ describe("sync integration", () => {
         stream: syncRuns.stream,
         status: syncRuns.status,
       }).from(syncRuns);
-      expect(runRows).toHaveLength(5);
+      expect(runRows).toHaveLength(7);
       expect(runRows.every((row) => row.status === "success")).toBe(true);
     } finally {
       abortController.abort();
@@ -216,5 +262,5 @@ describe("sync integration", () => {
       await boss.stop();
       await app.close();
     }
-  });
+  }, 20_000);
 });

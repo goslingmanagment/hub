@@ -1,0 +1,55 @@
+{
+  "_meta": {
+    "endpoint": "message",
+    "status_code": 200,
+    "timestamp": "2026-03-05T02:45:02.000000+00:00"
+  },
+  "data": {
+    "success": true,
+    "response": {
+      "messages": [
+        {
+          "id": "885512029928960000",
+          "type": 1,
+          "dataVersion": 1,
+          "content": "hey you!! finally 😄\n\nhow's life been treating you this week?",
+          "groupId": "878739490577862656",
+          "senderId": "772956494390898689",
+          "correlationId": "0",
+          "inReplyTo": null,
+          "inReplyToRoot": null,
+          "createdAt": 1772616871,
+          "attachments": [],
+          "embeds": [],
+          "interactions": [],
+          "likes": [],
+          "totalTipAmount": 0
+        },
+        {
+          "id": "885511997599272960",
+          "type": 1,
+          "dataVersion": 1,
+          "content": "life's been good. i owe you an update",
+          "groupId": "878739490577862656",
+          "senderId": "622205078341689346",
+          "correlationId": "0",
+          "inReplyTo": "885512029928960000",
+          "inReplyToRoot": "885512029928960000",
+          "createdAt": 1772616800,
+          "attachments": [],
+          "embeds": [],
+          "interactions": [],
+          "likes": [],
+          "totalTipAmount": 250
+        }
+      ],
+      "accountMedia": [],
+      "accountMediaBundles": [],
+      "tips": [],
+      "tipGoals": [],
+      "accountMediaOrders": [],
+      "stories": [],
+      "storyOrders": []
+    }
+  }
+}

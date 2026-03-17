@@ -1,0 +1,316 @@
+import type {
+  CrmConversationPreviewParams,
+  CrmConversationPreviewQuery,
+  CrmConversationPreviewResponse,
+  CrmReactivationQuery,
+  CrmReactivationResponse,
+  CrmRetentionQuery,
+  CrmRetentionResponse,
+  CrmSummaryResponse,
+} from "@agency_hub_core/contracts";
+import {
+  findPageSummaryByLabel,
+  getCrmConversationPreview,
+  getCrmFreshnessCoverage,
+  getCrmSummary,
+  listCrmReactivation,
+  listCrmRetention,
+} from "@agency_hub_core/db";
+import { millsToNumber } from "@agency_hub_core/shared";
+
+import type { AppContext } from "../bootstrap.ts";
+import { canAccessPage, type AuthPrincipal } from "./auth.ts";
+import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
+
+function serializeTimestamp(value: Date | string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  return new Date(value).toISOString();
+}
+
+function serializePage(page: NonNullable<Awaited<ReturnType<typeof findPageSummaryByLabel>>>) {
+  return {
+    id: page.id,
+    label: page.label,
+    platform: page.platform,
+    username: page.username,
+    displayName: page.displayName,
+    followerCount: page.followerCount,
+    subscriberCount: page.subscriberCount,
+    lastLightSyncAt: serializeTimestamp(page.lastLightSyncAt),
+    lastFollowerSyncAt: serializeTimestamp(page.lastFollowerSyncAt),
+    modelSlug: page.modelSlug,
+    modelName: page.modelName,
+  };
+}
+
+function serializeFreshnessCoverage(freshness: Awaited<ReturnType<typeof getCrmFreshnessCoverage>>) {
+  return {
+    freshness: {
+      lastConversationChunkSucceededAt: serializeTimestamp(freshness.lastConversationChunkSucceededAt),
+      lastConversationFullSweepAt: serializeTimestamp(freshness.lastConversationFullSweepAt),
+      lastMessageChunkSucceededAt: serializeTimestamp(freshness.lastMessageChunkSucceededAt),
+    },
+    coverage: {
+      pendingMessageBackfillCount: freshness.pendingMessageBackfillCount,
+      previewReadyConversationCount: freshness.previewReadyConversationCount,
+    },
+  };
+}
+
+async function resolveCrmPage(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+) {
+  const page = await findPageSummaryByLabel(app.db, pageLabel);
+  if (!page) {
+    throw new NotFoundError(`Page "${pageLabel}" was not found`);
+  }
+  if (!canAccessPage(principal, page.id)) {
+    throw new ForbiddenError();
+  }
+  if (page.platform !== "fansly") {
+    throw new BadRequestError("CRM is only supported for Fansly pages");
+  }
+
+  return page;
+}
+
+function touchpointLabel(code: "21d" | "14d" | "7d" | "5d" | "3d" | "1d") {
+  switch (code) {
+    case "21d":
+      return "21 days";
+    case "14d":
+      return "14 days";
+    case "7d":
+      return "7 days";
+    case "5d":
+      return "5 days";
+    case "3d":
+      return "3 days";
+    case "1d":
+      return "1 day";
+  }
+}
+
+export async function getCrmSummaryReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+): Promise<CrmSummaryResponse> {
+  const page = await resolveCrmPage(app, principal, pageLabel);
+  const summary = await getCrmSummary(app.db, {
+    platformAccountId: page.id,
+  });
+  const freshnessCoverage = serializeFreshnessCoverage(summary.freshness);
+
+  return {
+    page: serializePage(page),
+    retention: {
+      total: summary.retentionTotal,
+      countsByTouchpoint: summary.retentionCountsByTouchpoint,
+    },
+    reactivation: {
+      total: summary.reactivationTotal,
+    },
+    freshness: freshnessCoverage.freshness,
+    coverage: freshnessCoverage.coverage,
+  };
+}
+
+export async function getCrmRetentionReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  query: CrmRetentionQuery,
+): Promise<CrmRetentionResponse> {
+  const page = await resolveCrmPage(app, principal, pageLabel);
+  const [retention, freshness] = await Promise.all([
+    listCrmRetention(app.db, {
+      platformAccountId: page.id,
+      limit: query.limit,
+      offset: query.offset,
+      query: query.query,
+      touchpoint: query.touchpoint,
+      autoRenew: query.autoRenew,
+      unreadOnly: query.unreadOnly,
+      showHandled: query.showHandled,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+    }),
+    getCrmFreshnessCoverage(app.db, page.id),
+  ]);
+  const freshnessCoverage = serializeFreshnessCoverage(freshness);
+
+  return {
+    page: serializePage(page),
+    items: retention.items.map((item) => ({
+      fan: {
+        fanId: item.fanId,
+        platform: "fansly",
+        platformUserId: item.platformUserId,
+        username: item.username,
+        displayName: item.displayName,
+      },
+      spend: {
+        creatorNetAmountMills: millsToNumber(item.creatorNetAmountMills),
+        creatorNetAmountUsd: millsToNumber(item.creatorNetAmountMills) / 1000,
+      },
+      subscription: {
+        isSubscriber: true,
+        subscriptionExpiresAt: serializeTimestamp(item.subscriptionExpiresAt),
+        autoRenew: item.autoRenew,
+        subscriptionTierName: item.subscriptionTierName,
+      },
+      conversation: {
+        platformConversationId: item.platformConversationId,
+        unreadCount: item.unreadCount,
+        lastMessageAt: serializeTimestamp(item.lastMessageAt),
+        lastMessagePreview: item.lastMessagePreview,
+        messageBackfillComplete: item.messageBackfillComplete,
+        storedMessageCount: item.storedMessageCount,
+      },
+      platformConversationId: item.platformConversationId,
+      touchpointCode: item.touchpointCode,
+      touchpointLabel: touchpointLabel(item.touchpointCode),
+      isSoftTouchpoint: item.isSoftTouchpoint,
+      isHandled: item.isHandled,
+      lastContactAt: serializeTimestamp(item.lastContactAt),
+      touchpointDueAt: new Date(item.touchpointDueAt).toISOString(),
+    })),
+    limit: query.limit,
+    offset: query.offset,
+    total: retention.total,
+    summary: {
+      freshness: freshnessCoverage.freshness,
+      coverage: freshnessCoverage.coverage,
+      countsByTouchpoint: {
+        "21d": retention.countsByTouchpoint.get("21d") ?? 0,
+        "14d": retention.countsByTouchpoint.get("14d") ?? 0,
+        "7d": retention.countsByTouchpoint.get("7d") ?? 0,
+        "5d": retention.countsByTouchpoint.get("5d") ?? 0,
+        "3d": retention.countsByTouchpoint.get("3d") ?? 0,
+        "1d": retention.countsByTouchpoint.get("1d") ?? 0,
+      },
+    },
+  };
+}
+
+export async function getCrmReactivationReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  query: CrmReactivationQuery,
+): Promise<CrmReactivationResponse> {
+  const page = await resolveCrmPage(app, principal, pageLabel);
+  const [reactivation, freshness] = await Promise.all([
+    listCrmReactivation(app.db, {
+      platformAccountId: page.id,
+      limit: query.limit,
+      offset: query.offset,
+      query: query.query,
+      minSpendUsd: query.minSpendUsd,
+      minSilenceDays: query.minSilenceDays,
+      unreadOnly: query.unreadOnly,
+      noDmHistoryOnly: query.noDmHistoryOnly,
+      subscriberState: query.subscriberState,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+    }),
+    getCrmFreshnessCoverage(app.db, page.id),
+  ]);
+  const freshnessCoverage = serializeFreshnessCoverage(freshness);
+
+  return {
+    page: serializePage(page),
+    items: reactivation.items.map((item) => ({
+      fan: {
+        fanId: item.fanId,
+        platform: "fansly",
+        platformUserId: item.platformUserId,
+        username: item.username,
+        displayName: item.displayName,
+      },
+      spend: {
+        creatorNetAmountMills: millsToNumber(item.creatorNetAmountMills),
+        creatorNetAmountUsd: millsToNumber(item.creatorNetAmountMills) / 1000,
+      },
+      subscription: {
+        isSubscriber: item.isSubscriber ?? false,
+        subscriberSince: serializeTimestamp(item.subscriberSince),
+        subscriptionExpiresAt: serializeTimestamp(item.subscriptionExpiresAt),
+        autoRenew: item.autoRenew,
+        subscriptionTierName: null,
+      },
+      conversation: {
+        platformConversationId: item.platformConversationId,
+        unreadCount: item.unreadCount,
+        lastMessageAt: serializeTimestamp(item.lastMessageAt),
+        lastMessagePreview: item.lastMessagePreview,
+        messageBackfillComplete: item.messageBackfillComplete,
+        storedMessageCount: item.storedMessageCount,
+      },
+      platformConversationId: item.platformConversationId,
+      noDmHistory: item.noDmHistory,
+      silenceDays: item.silenceDays,
+      reactivationScore: item.reactivationScore,
+    })),
+    limit: query.limit,
+    offset: query.offset,
+    total: reactivation.total,
+    summary: {
+      freshness: freshnessCoverage.freshness,
+      coverage: freshnessCoverage.coverage,
+    },
+  };
+}
+
+export async function getCrmConversationPreviewReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  params: CrmConversationPreviewParams,
+  query: CrmConversationPreviewQuery,
+): Promise<CrmConversationPreviewResponse> {
+  const page = await resolveCrmPage(app, principal, params.pageLabel);
+  const preview = await getCrmConversationPreview(app.db, {
+    platformAccountId: page.id,
+    platformConversationId: params.platformConversationId,
+    limit: query.limit,
+  });
+
+  if (!preview) {
+    throw new NotFoundError("Conversation preview was not found");
+  }
+
+  return {
+    page: serializePage(page),
+    fan: preview.fan
+      ? {
+        fanId: preview.fan.id,
+        platform: "fansly",
+        platformUserId: preview.fan.platformUserId,
+        username: preview.fan.username,
+        displayName: preview.fan.displayName,
+      }
+      : null,
+    conversation: {
+      platformConversationId: preview.conversation.platformConversationId,
+      storedMessageCount: preview.conversation.storedMessageCount,
+      messageBackfillComplete: preview.conversation.messageBackfillComplete,
+      lastMessageSyncAt: serializeTimestamp(preview.conversation.lastMessageSyncAt),
+      unreadCount: preview.conversation.unreadCount,
+      lastMessageAt: serializeTimestamp(preview.conversation.lastMessageAt),
+    },
+    messages: preview.messages.map((message) => ({
+      platformMessageId: message.platformMessageId,
+      senderPlatformUserId: message.senderPlatformUserId,
+      senderRole: message.senderRole,
+      createdAt: message.createdAt.toISOString(),
+      content: message.content,
+      totalTipAmountCents: message.totalTipAmountCents,
+    })),
+  };
+}

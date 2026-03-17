@@ -6,16 +6,21 @@ import {
   createOnlyFansPage,
   createFanslyPage,
   createModel,
+  finalizePageDmConversationMessageSync,
   finishSyncRun,
   insertSyncRunEvent,
   recalculateFanPageSpend,
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
+  syncCheckpoints,
+  syncStreamState,
   startSyncRun,
   updatePageMetadata,
   upsertFanPage,
   upsertFans,
+  upsertPageDmConversation,
+  upsertPageDmMessages,
   upsertPageFollow,
   upsertPageSubscription,
   upsertTransaction,
@@ -281,8 +286,217 @@ function createAutoSyncFanslyAdapter(input: {
         },
       };
     },
+    async getMessagingGroupsPage() {
+      return {
+        total: 0,
+        items: [],
+        accounts: [],
+        groups: [],
+        offset: 0,
+        done: true,
+        raw: {
+          data: [],
+          aggregationData: {
+            total: 0,
+            accounts: [],
+            groups: [],
+          },
+        },
+      };
+    },
+    async getGroupDetail(_context: unknown, groupId: string) {
+      const parsed = {
+        id: groupId,
+        type: 1,
+        groupFlags: 0,
+        users: [],
+        lastMessage: null,
+      };
+
+      return {
+        parsed,
+        raw: parsed,
+      };
+    },
+    async getMessagesPage(_context: unknown, params: { groupId: string; before?: string | null }) {
+      return {
+        items: [],
+        groupId: params.groupId,
+        before: params.before ?? null,
+        done: true,
+        raw: {
+          messages: [],
+        },
+      };
+    },
     async close() {},
   } as AppContext["adapter"];
+}
+
+async function seedCrmApiFixture(input: {
+  testDb: StartedTestDatabase;
+  pageId: number;
+}) {
+  const [subscriberFan, reactivationFan] = await upsertFans(input.testDb.db, [
+    {
+      platform: "fansly",
+      platformUserId: "fan-001",
+      username: "buyer",
+      displayName: "Buyer One",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "fan-777",
+      username: "silent_spender",
+      displayName: "Silent Spender",
+    },
+  ]);
+
+  const conversation = await upsertPageDmConversation(input.testDb.db, {
+    platformAccountId: input.pageId,
+    fanId: subscriberFan.id,
+    platformConversationId: "crm-conv-001",
+    partnerPlatformUserId: "fan-001",
+    partnerUsername: "buyer",
+    partnerDisplayName: "Buyer One",
+    conversationFlags: 0,
+    unreadCount: 2,
+    subscriptionTierId: null,
+    lastMessageId: "crm-msg-004",
+    lastUnreadMessageId: "crm-msg-004",
+    lastMessageAt: new Date("2026-03-14T08:00:00.000Z"),
+    lastMessageSenderId: "fan-001",
+    lastMessageSenderRole: "fan",
+    lastMessagePreview: "Need help with anything else?",
+    lastFanMessageAt: new Date("2026-03-14T08:00:00.000Z"),
+    lastModelMessageAt: new Date("2026-03-13T08:30:00.000Z"),
+    isVisible: true,
+    lastSeenGeneration: 1,
+    metadata: {},
+  });
+
+  await upsertPageDmMessages(input.testDb.db, [
+    {
+      conversationId: conversation.id,
+      platformAccountId: input.pageId,
+      platformMessageId: "crm-msg-001",
+      senderPlatformUserId: "acct-lana",
+      senderRole: "model",
+      createdAt: new Date("2026-03-13T08:00:00.000Z"),
+      content: "hey there",
+      totalTipAmountCents: 0,
+      inReplyToMessageId: null,
+      inReplyToRootMessageId: null,
+    },
+    {
+      conversationId: conversation.id,
+      platformAccountId: input.pageId,
+      platformMessageId: "crm-msg-002",
+      senderPlatformUserId: "fan-001",
+      senderRole: "fan",
+      createdAt: new Date("2026-03-13T08:15:00.000Z"),
+      content: "hi!",
+      totalTipAmountCents: 0,
+      inReplyToMessageId: "crm-msg-001",
+      inReplyToRootMessageId: "crm-msg-001",
+    },
+    {
+      conversationId: conversation.id,
+      platformAccountId: input.pageId,
+      platformMessageId: "crm-msg-003",
+      senderPlatformUserId: "acct-lana",
+      senderRole: "model",
+      createdAt: new Date("2026-03-13T08:30:00.000Z"),
+      content: "absolutely",
+      totalTipAmountCents: 0,
+      inReplyToMessageId: "crm-msg-002",
+      inReplyToRootMessageId: "crm-msg-001",
+    },
+    {
+      conversationId: conversation.id,
+      platformAccountId: input.pageId,
+      platformMessageId: "crm-msg-004",
+      senderPlatformUserId: "fan-001",
+      senderRole: "fan",
+      createdAt: new Date("2026-03-14T08:00:00.000Z"),
+      content: "Need help with anything else?",
+      totalTipAmountCents: 125,
+      inReplyToMessageId: null,
+      inReplyToRootMessageId: null,
+    },
+  ]);
+
+  await finalizePageDmConversationMessageSync(input.testDb.db, {
+    conversationId: conversation.id,
+    messageBackfillComplete: true,
+    lastMessageSyncAt: new Date("2026-03-17T11:45:00.000Z"),
+  });
+
+  await upsertFanPage(input.testDb.db, {
+    fanId: reactivationFan.id,
+    platformAccountId: input.pageId,
+    isSubscriber: false,
+    subscriberSince: new Date("2026-01-01T12:00:00.000Z"),
+    subscriptionExpiresAt: new Date("2026-02-01T12:00:00.000Z"),
+    autoRenew: false,
+  });
+  await upsertTransaction(input.testDb.db, {
+    platformAccountId: input.pageId,
+    fanId: reactivationFan.id,
+    transactionId: "tx-crm-reactivation",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 12000n,
+    sourceDestinationAmountMills: 12000n,
+    creatorNetAmountMills: 12000n,
+    occurredAt: new Date("2026-02-15T12:00:00.000Z"),
+  });
+  await recalculateFanPageSpend(input.testDb.db, input.pageId);
+
+  await input.testDb.db.insert(syncStreamState).values([
+    {
+      platformAccountId: input.pageId,
+      stream: "dm_conversations",
+      cadenceSeconds: 1800,
+      slotOffsetSeconds: 0,
+      nextDueAt: new Date("2026-03-17T12:30:00.000Z"),
+      basePriority: 30,
+      effectivePriority: 30,
+      desiredRevision: 3,
+      satisfiedRevision: 3,
+      lastSucceededAt: new Date("2026-03-17T11:50:00.000Z"),
+    },
+    {
+      platformAccountId: input.pageId,
+      stream: "dm_messages",
+      cadenceSeconds: 7200,
+      slotOffsetSeconds: 0,
+      nextDueAt: new Date("2026-03-17T14:00:00.000Z"),
+      basePriority: 25,
+      effectivePriority: 25,
+      desiredRevision: 2,
+      satisfiedRevision: 2,
+      lastSucceededAt: new Date("2026-03-17T11:45:00.000Z"),
+    },
+  ]);
+
+  await input.testDb.db.insert(syncCheckpoints).values({
+    platformAccountId: input.pageId,
+    stream: "dm_conversations",
+    state: {
+      version: 1,
+      lastFullSweepCompletedAt: "2026-03-17T09:00:00.000Z",
+    },
+    lastSuccessfulAt: new Date("2026-03-17T11:50:00.000Z"),
+  });
+
+  return {
+    subscriberFan,
+    reactivationFan,
+    conversation,
+  };
 }
 
 async function waitForCondition(check: () => Promise<boolean>, timeoutMs = 5_000) {
@@ -3547,5 +3761,189 @@ describe("api integration", () => {
     const ofGrowth = body.pages.find((p: any) => p.pageId === ofPage.id);
     expect(ofGrowth).toBeDefined();
     expect(ofGrowth.newFollowers).toBe(0);
+  });
+
+  it("serves CRM summary, queues, and previews from stored Fansly DM data", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-17T12:00:00.000Z"));
+
+    await seedCrmApiFixture({
+      testDb,
+      pageId: fixture.lanaPage.id,
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const summary = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/summary",
+      headers: { cookie },
+    });
+    expect(summary.statusCode).toBe(200);
+    expect(summary.json()).toMatchObject({
+      page: {
+        label: "lana",
+        platform: "fansly",
+      },
+      retention: {
+        total: 1,
+        countsByTouchpoint: {
+          "3d": 1,
+        },
+      },
+      reactivation: {
+        total: 1,
+      },
+      freshness: {
+        lastConversationChunkSucceededAt: "2026-03-17T11:50:00.000Z",
+        lastConversationFullSweepAt: "2026-03-17T09:00:00.000Z",
+        lastMessageChunkSucceededAt: "2026-03-17T11:45:00.000Z",
+      },
+      coverage: {
+        pendingMessageBackfillCount: 0,
+        previewReadyConversationCount: 1,
+      },
+    });
+
+    const retention = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/retention?limit=10&offset=0",
+      headers: { cookie },
+    });
+    expect(retention.statusCode).toBe(200);
+    expect(retention.json()).toMatchObject({
+      total: 1,
+      items: [
+        {
+          fan: {
+            platformUserId: "fan-001",
+          },
+          platformConversationId: "crm-conv-001",
+          touchpointCode: "3d",
+          isHandled: false,
+          conversation: {
+            unreadCount: 2,
+            storedMessageCount: 4,
+            messageBackfillComplete: true,
+          },
+        },
+      ],
+      summary: {
+        freshness: {
+          lastConversationChunkSucceededAt: "2026-03-17T11:50:00.000Z",
+        },
+      },
+    });
+
+    const reactivation = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/reactivation?limit=10&offset=0",
+      headers: { cookie },
+    });
+    expect(reactivation.statusCode).toBe(200);
+    expect(reactivation.json()).toMatchObject({
+      total: 1,
+      items: [
+        {
+          fan: {
+            platformUserId: "fan-777",
+          },
+          platformConversationId: null,
+          noDmHistory: true,
+          silenceDays: 30,
+          reactivationScore: 360,
+        },
+      ],
+    });
+
+    const preview = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/conversations/crm-conv-001/preview?limit=3",
+      headers: { cookie },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({
+      conversation: {
+        platformConversationId: "crm-conv-001",
+        storedMessageCount: 4,
+        messageBackfillComplete: true,
+        lastMessageSyncAt: "2026-03-17T11:45:00.000Z",
+      },
+    });
+    expect(preview.json().messages.map((message: { platformMessageId: string }) => message.platformMessageId)).toEqual([
+      "crm-msg-002",
+      "crm-msg-003",
+      "crm-msg-004",
+    ]);
+
+    const missingPreview = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/conversations/missing/preview?limit=3",
+      headers: { cookie },
+    });
+    expect(missingPreview.statusCode).toBe(404);
+  });
+
+  it("enforces CRM page access and rejects non-Fansly pages", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const ofPage = await createOnlyFansPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-of-crm",
+    });
+    await updatePageMetadata(testDb.db, ofPage.id, {
+      platformAccountIdValue: "of-crm",
+      username: "lana_of_crm",
+      displayName: "Lana OF CRM",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "lead", password: "lead-secret" },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+
+    const forbidden = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lily1/crm/summary",
+      headers: { cookie: leadCookie },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const nonFansly = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-of-crm/crm/summary",
+      headers: { cookie: ownerCookie },
+    });
+    expect(nonFansly.statusCode).toBe(400);
+    expect(nonFansly.json()).toMatchObject({
+      message: "CRM is only supported for Fansly pages",
+    });
   });
 });

@@ -20,6 +20,11 @@ import type {
   FanslyAccount,
   FanslyAccountMeResponse,
   FanslyFollowersPage,
+  FanslyGroupDetail,
+  FanslyMessagesPage,
+  FanslyMessagesPageResponse,
+  FanslyMessagingGroupsPage,
+  FanslyMessagingGroupsPageResponse,
   FanslyRequestContext,
   FanslySubscribersPage,
   FanslyTransactionsPage,
@@ -255,6 +260,128 @@ export class FanslyAdapter {
       offset: params.offset ?? 0,
       done: response.parsed.followers.length < limit,
       accounts: response.parsed.aggregationData?.accounts ?? [],
+      raw: response.raw,
+    };
+  }
+
+  async getMessagingGroupsPage(
+    context: FanslyRequestContext,
+    params: {
+      offset?: number;
+      limit?: number;
+      sortOrder?: number;
+      flags?: number;
+      search?: string;
+      subscriptionTierId?: string | null;
+      listIds?: string | null;
+    },
+  ): Promise<FanslyMessagingGroupsPageResponse> {
+    const response = await this.request<FanslyMessagingGroupsPage>(context, "/messaging/groups", {
+      operation: "messaging_groups",
+      endpointTemplate: "/messaging/groups",
+      query: {
+        offset: params.offset ? String(params.offset) : undefined,
+        limit: params.limit ? String(params.limit) : undefined,
+        sortOrder: params.sortOrder !== undefined ? String(params.sortOrder) : undefined,
+        flags: params.flags !== undefined ? String(params.flags) : undefined,
+        search: params.search ?? undefined,
+        subscriptionTierId: params.subscriptionTierId ?? undefined,
+        listIds: params.listIds ?? undefined,
+      },
+      category: "dm_conversations",
+      requestShape: {
+        offset: params.offset ?? 0,
+        limit: params.limit ?? 100,
+        sortOrder: params.sortOrder ?? 1,
+        flags: params.flags ?? 0,
+        hasSearch: Boolean(params.search),
+        hasSubscriptionTierId: Boolean(params.subscriptionTierId),
+        hasListIds: Boolean(params.listIds),
+      },
+      pagination: {
+        offset: params.offset ?? 0,
+        limit: params.limit ?? 100,
+      },
+      summarizeResponse: (parsed) => ({
+        total: parsed.aggregationData?.total ?? null,
+        returnedItems: parsed.data.length,
+        accountCount: parsed.aggregationData?.accounts?.length ?? 0,
+        groupCount: parsed.aggregationData?.groups?.length ?? 0,
+        done: parsed.data.length < (params.limit ?? 100),
+      }),
+    });
+
+    const limit = params.limit ?? 100;
+    return {
+      total: response.parsed.aggregationData?.total,
+      items: response.parsed.data,
+      offset: params.offset ?? 0,
+      done: response.parsed.data.length < limit,
+      accounts: response.parsed.aggregationData?.accounts ?? [],
+      groups: response.parsed.aggregationData?.groups ?? [],
+      raw: response.raw,
+    };
+  }
+
+  async getGroupDetail(
+    context: FanslyRequestContext,
+    groupId: string,
+  ) {
+    return this.request<FanslyGroupDetail>(context, `/group/${groupId}`, {
+      operation: "group_detail",
+      endpointTemplate: "/group/:groupId",
+      category: "dm_conversations",
+      requestShape: {
+        groupId,
+      },
+      summarizeResponse: (parsed) => ({
+        id: parsed.id,
+        type: parsed.type,
+        userCount: parsed.users.length,
+        hasLastMessage: Boolean(parsed.lastMessage),
+      }),
+    });
+  }
+
+  async getMessagesPage(
+    context: FanslyRequestContext,
+    params: {
+      groupId: string;
+      limit?: number;
+      before?: string | null;
+    },
+  ): Promise<FanslyMessagesPageResponse> {
+    const response = await this.request<FanslyMessagesPage>(context, "/message", {
+      operation: "messages",
+      endpointTemplate: "/message",
+      query: {
+        groupId: params.groupId,
+        limit: params.limit ? String(params.limit) : undefined,
+        before: params.before ?? undefined,
+      },
+      category: "dm_messages",
+      requestShape: {
+        groupId: params.groupId,
+        limit: params.limit ?? 25,
+        hasBefore: Boolean(params.before),
+      },
+      pagination: {
+        cursorPresent: Boolean(params.before),
+        limit: params.limit ?? 25,
+      },
+      summarizeResponse: (parsed) => ({
+        groupId: params.groupId,
+        returnedItems: parsed.messages.length,
+        done: parsed.messages.length < (params.limit ?? 25),
+      }),
+    });
+
+    const limit = params.limit ?? 25;
+    return {
+      items: response.parsed.messages,
+      groupId: params.groupId,
+      before: params.before ?? null,
+      done: response.parsed.messages.length < limit,
       raw: response.raw,
     };
   }
@@ -505,6 +632,12 @@ export class FanslyAdapter {
       { provider: "fansly", scope: "global", egressKey: "global" },
       ...(category === "followers" && minDelayMs > 0
         ? [{ provider: "fansly", scope: "followers_page", egressKey: "global" } as const]
+        : []),
+      ...(category === "dm_conversations"
+        ? [{ provider: "fansly", scope: "dm_conversations", egressKey: "global" } as const]
+        : []),
+      ...(category === "dm_messages"
+        ? [{ provider: "fansly", scope: "dm_messages", egressKey: "global" } as const]
         : []),
     ]);
 

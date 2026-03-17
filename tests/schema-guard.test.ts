@@ -26,7 +26,7 @@ describe("runtime schema guard", () => {
 
     try {
       await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
-        "missing latest migration 0018_performance_indexes.sql",
+        "missing latest migration 0019_fansly_crm_dm.sql",
       );
     } finally {
       await testDb.stop();

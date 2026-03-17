@@ -45,6 +45,21 @@ const spenderSortByEnum = z.enum([
   "displayName",
 ]);
 const fanSearchMatchKindEnum = z.enum(["platformUserId", "username", "alias", "displayName"]);
+const crmTouchpointEnum = z.enum(["21d", "14d", "7d", "5d", "3d", "1d"]);
+const crmRetentionSortByEnum = z.enum([
+  "touchpoint",
+  "subscriptionExpiresAt",
+  "lifetimeSpendUsd",
+  "lastContactAt",
+  "unreadCount",
+]);
+const crmReactivationSortByEnum = z.enum([
+  "reactivationScore",
+  "lifetimeSpendUsd",
+  "silenceDays",
+  "lastContactAt",
+]);
+const crmSubscriberStateEnum = z.enum(["current", "former", "never"]);
 const queryBooleanSchema = z.preprocess((value) => {
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
@@ -303,6 +318,37 @@ export const fansSearchQuerySchema = spenderScopeFieldsSchema
       });
     }
   });
+
+export const crmSummaryQuerySchema = z.object({});
+
+export const crmRetentionQuerySchema = paginationQuerySchema.extend({
+  query: z.string().min(1).optional(),
+  touchpoint: crmTouchpointEnum.optional(),
+  autoRenew: queryBooleanSchema.optional(),
+  unreadOnly: queryBooleanSchema.optional(),
+  showHandled: queryBooleanSchema.optional(),
+  sortBy: crmRetentionSortByEnum.optional(),
+  sortDir: sortDirEnum.optional(),
+});
+
+export const crmReactivationQuerySchema = paginationQuerySchema.extend({
+  query: z.string().min(1).optional(),
+  minSpendUsd: z.coerce.number().min(0).optional(),
+  minSilenceDays: z.coerce.number().int().min(0).max(365).optional(),
+  unreadOnly: queryBooleanSchema.optional(),
+  noDmHistoryOnly: queryBooleanSchema.optional(),
+  subscriberState: crmSubscriberStateEnum.optional(),
+  sortBy: crmReactivationSortByEnum.optional(),
+  sortDir: sortDirEnum.optional(),
+});
+
+export const crmConversationPreviewParamsSchema = pageParamsSchema.extend({
+  platformConversationId: z.string().min(1),
+});
+
+export const crmConversationPreviewQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(20).default(10),
+});
 
 export const assignedPageSchema = pageRefSchema.extend({
   username: z.string().nullable(),
@@ -739,6 +785,146 @@ export const fansSearchResponseSchema = z.object({
   limit: z.number().int(),
   offset: z.number().int(),
   total: z.number().int(),
+});
+
+const crmFreshnessSchema = z.object({
+  lastConversationChunkSucceededAt: isoTimestamp.nullable(),
+  lastConversationFullSweepAt: isoTimestamp.nullable(),
+  lastMessageChunkSucceededAt: isoTimestamp.nullable(),
+});
+
+const crmCoverageSchema = z.object({
+  pendingMessageBackfillCount: z.number().int(),
+  previewReadyConversationCount: z.number().int(),
+});
+
+const crmFanIdentitySchema = z.object({
+  fanId: intId,
+  platform: z.literal("fansly"),
+  platformUserId: z.string(),
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+});
+
+const crmSpendSummarySchema = z.object({
+  creatorNetAmountMills: mills,
+  creatorNetAmountUsd: z.number(),
+});
+
+const crmSubscriptionSummarySchema = z.object({
+  isSubscriber: z.boolean(),
+  subscriberSince: isoTimestamp.nullable().optional(),
+  subscriptionExpiresAt: isoTimestamp.nullable(),
+  autoRenew: z.boolean().nullable(),
+  subscriptionTierName: z.string().nullable(),
+});
+
+const crmConversationSummarySchema = z.object({
+  platformConversationId: z.string().nullable(),
+  unreadCount: z.number().int(),
+  lastMessageAt: isoTimestamp.nullable(),
+  lastMessagePreview: z.string().nullable(),
+  messageBackfillComplete: z.boolean(),
+  storedMessageCount: z.number().int(),
+});
+
+const crmRetentionItemSchema = z.object({
+  fan: crmFanIdentitySchema,
+  spend: crmSpendSummarySchema,
+  subscription: crmSubscriptionSummarySchema,
+  conversation: crmConversationSummarySchema,
+  platformConversationId: z.string().nullable(),
+  touchpointCode: crmTouchpointEnum,
+  touchpointLabel: z.string(),
+  isSoftTouchpoint: z.boolean(),
+  isHandled: z.boolean(),
+  lastContactAt: isoTimestamp.nullable(),
+  touchpointDueAt: isoTimestamp,
+});
+
+const crmReactivationItemSchema = z.object({
+  fan: crmFanIdentitySchema,
+  spend: crmSpendSummarySchema,
+  subscription: crmSubscriptionSummarySchema,
+  conversation: crmConversationSummarySchema,
+  platformConversationId: z.string().nullable(),
+  noDmHistory: z.boolean(),
+  silenceDays: z.number().int(),
+  reactivationScore: z.number(),
+});
+
+const crmRetentionSummarySchema = z.object({
+  freshness: crmFreshnessSchema,
+  coverage: crmCoverageSchema,
+  countsByTouchpoint: z.object({
+    "21d": z.number().int(),
+    "14d": z.number().int(),
+    "7d": z.number().int(),
+    "5d": z.number().int(),
+    "3d": z.number().int(),
+    "1d": z.number().int(),
+  }),
+});
+
+const crmReactivationSummarySchema = z.object({
+  freshness: crmFreshnessSchema,
+  coverage: crmCoverageSchema,
+});
+
+export const crmSummaryResponseSchema = z.object({
+  page: assignedPageSchema,
+  retention: z.object({
+    total: z.number().int(),
+    countsByTouchpoint: crmRetentionSummarySchema.shape.countsByTouchpoint,
+  }),
+  reactivation: z.object({
+    total: z.number().int(),
+  }),
+  freshness: crmFreshnessSchema,
+  coverage: crmCoverageSchema,
+});
+
+export const crmRetentionResponseSchema = z.object({
+  page: assignedPageSchema,
+  items: z.array(crmRetentionItemSchema),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  total: z.number().int(),
+  summary: crmRetentionSummarySchema,
+});
+
+export const crmReactivationResponseSchema = z.object({
+  page: assignedPageSchema,
+  items: z.array(crmReactivationItemSchema),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  total: z.number().int(),
+  summary: crmReactivationSummarySchema,
+});
+
+const crmPreviewConversationSchema = z.object({
+  platformConversationId: z.string(),
+  storedMessageCount: z.number().int(),
+  messageBackfillComplete: z.boolean(),
+  lastMessageSyncAt: isoTimestamp.nullable(),
+  unreadCount: z.number().int(),
+  lastMessageAt: isoTimestamp.nullable(),
+});
+
+const crmPreviewMessageSchema = z.object({
+  platformMessageId: z.string(),
+  senderPlatformUserId: z.string().nullable(),
+  senderRole: z.enum(["fan", "model", "system", "unknown"]),
+  createdAt: isoTimestamp,
+  content: z.string(),
+  totalTipAmountCents: z.number().int(),
+});
+
+export const crmConversationPreviewResponseSchema = z.object({
+  page: assignedPageSchema,
+  fan: crmFanIdentitySchema.nullable(),
+  conversation: crmPreviewConversationSchema,
+  messages: z.array(crmPreviewMessageSchema),
 });
 
 // --- Phase 4: Dashboard schemas ---
@@ -1467,6 +1653,62 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  crmSummary: {
+    tags: ["crm"],
+    summary: "Get CRM freshness, coverage, and queue totals for one Fansly page",
+    security: cookieOrBearerSecurity,
+    params: pageParamsSchema,
+    querystring: crmSummaryQuerySchema,
+    response: {
+      200: crmSummaryResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  crmRetention: {
+    tags: ["crm"],
+    summary: "List retention CRM candidates for one Fansly page",
+    security: cookieOrBearerSecurity,
+    params: pageParamsSchema,
+    querystring: crmRetentionQuerySchema,
+    response: {
+      200: crmRetentionResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  crmReactivation: {
+    tags: ["crm"],
+    summary: "List reactivation CRM candidates for one Fansly page",
+    security: cookieOrBearerSecurity,
+    params: pageParamsSchema,
+    querystring: crmReactivationQuerySchema,
+    response: {
+      200: crmReactivationResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  crmConversationPreview: {
+    tags: ["crm"],
+    summary: "Return locally cached DM preview rows for one conversation",
+    security: cookieOrBearerSecurity,
+    params: crmConversationPreviewParamsSchema,
+    querystring: crmConversationPreviewQuerySchema,
+    response: {
+      200: crmConversationPreviewResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   // --- Phase 4: Dashboard routes ---
   overview: {
     tags: ["dashboard"],
@@ -1887,6 +2129,15 @@ export type SetFanFlagsBody = z.infer<typeof setFanFlagsBodySchema>;
 export type FanFlagsResponse = z.infer<typeof fanFlagsResponseSchema>;
 export type FansSearchQuery = z.infer<typeof fansSearchQuerySchema>;
 export type FansSearchResponse = z.infer<typeof fansSearchResponseSchema>;
+export type CrmSummaryQuery = z.infer<typeof crmSummaryQuerySchema>;
+export type CrmSummaryResponse = z.infer<typeof crmSummaryResponseSchema>;
+export type CrmRetentionQuery = z.infer<typeof crmRetentionQuerySchema>;
+export type CrmRetentionResponse = z.infer<typeof crmRetentionResponseSchema>;
+export type CrmReactivationQuery = z.infer<typeof crmReactivationQuerySchema>;
+export type CrmReactivationResponse = z.infer<typeof crmReactivationResponseSchema>;
+export type CrmConversationPreviewParams = z.infer<typeof crmConversationPreviewParamsSchema>;
+export type CrmConversationPreviewQuery = z.infer<typeof crmConversationPreviewQuerySchema>;
+export type CrmConversationPreviewResponse = z.infer<typeof crmConversationPreviewResponseSchema>;
 export type SpenderBatchBody = z.infer<typeof spenderBatchBodySchema>;
 export type SpenderBatchResponse = z.infer<typeof spenderBatchResponseSchema>;
 export type SpenderDetailQuery = z.infer<typeof spenderDetailQuerySchema>;
