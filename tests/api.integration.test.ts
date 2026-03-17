@@ -2439,6 +2439,7 @@ describe("api integration", () => {
         username: "auto_sync_user",
         displayName: "Auto Sync User",
       }),
+      syncSharedRateLimitEnabled: true,
     });
     server = await buildApiServer(appContext);
     await server.ready();
@@ -2498,7 +2499,7 @@ describe("api integration", () => {
           order by sr.stream asc
         `);
 
-        return rows.rows.length >= 4
+        return rows.rows.length >= 7
           && rows.rows.every((row) => row.status === "success");
       });
 
@@ -2520,6 +2521,8 @@ describe("api integration", () => {
         "transactions",
         "subscribers",
         "followers_reconcile",
+        "dm_conversations",
+        "dm_messages",
       ]);
       expect(syncRunRows.rows.every((row) => row.status === "success")).toBe(true);
       expect(syncRunRows.rows.every((row) => row.trigger === "onboarding")).toBe(true);
@@ -3006,7 +3009,7 @@ describe("api integration", () => {
       return;
     }
 
-    const emittedAt = new Date("2026-03-10T12:00:00.000Z");
+    const emittedAt = new Date(Date.now() - 60 * 60 * 1000);
     const migrationCreatedAtMs = 1_710_000_000_000;
     const run = await startSyncRun(testDb.db, {
       platformAccountId: fixture.lanaPage.id,

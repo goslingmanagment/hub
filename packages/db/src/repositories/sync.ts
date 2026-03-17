@@ -957,8 +957,19 @@ export async function getLatestSyncRunPerPage(
 }
 
 type SeedSyncStreamPageRow = {
-  platformAccountId: number;
+  platformAccountId: NumericValue;
   platform: "fansly" | "onlyfans";
+  lastLightSyncAt: TimestampValue;
+  lastFollowerSyncAt: TimestampValue;
+  followerCount: NumericValue;
+  activeFollowerCount: NumericValue;
+};
+
+type NormalizedSeedSyncStreamPageRow = Omit<
+  SeedSyncStreamPageRow,
+  "platformAccountId" | "lastLightSyncAt" | "lastFollowerSyncAt" | "followerCount" | "activeFollowerCount"
+> & {
+  platformAccountId: number;
   lastLightSyncAt: Date | null;
   lastFollowerSyncAt: Date | null;
   followerCount: number;
@@ -990,8 +1001,25 @@ function normalizeSyncStreamStateRows(rows: unknown[]) {
   return rows.map((row) => normalizeSyncStreamStateRow(row as any));
 }
 
+function normalizeSeedSyncStreamPageRow<T extends SeedSyncStreamPageRow>(row: T): Omit<T, "platformAccountId" | "lastLightSyncAt" | "lastFollowerSyncAt" | "followerCount" | "activeFollowerCount"> & {
+  platformAccountId: number;
+  lastLightSyncAt: Date | null;
+  lastFollowerSyncAt: Date | null;
+  followerCount: number;
+  activeFollowerCount: number;
+} {
+  return {
+    ...row,
+    platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
+    lastLightSyncAt: parseTimestamp(row.lastLightSyncAt, "lastLightSyncAt"),
+    lastFollowerSyncAt: parseTimestamp(row.lastFollowerSyncAt, "lastFollowerSyncAt"),
+    followerCount: normalizeNumber(row.followerCount, "followerCount"),
+    activeFollowerCount: normalizeNumber(row.activeFollowerCount, "activeFollowerCount"),
+  };
+}
+
 function buildSeedSyncStreamStateValue(
-  page: SeedSyncStreamPageRow,
+  page: NormalizedSeedSyncStreamPageRow,
   stream: SyncControlStream,
   now: Date,
   onboarding: boolean,
@@ -1153,7 +1181,9 @@ export async function ensureSyncStreamStateRows(
     ? { platformAccountId: input.platformAccountId }
     : undefined);
   const existingKeys = new Set(existingRows.map((row) => `${row.platformAccountId}:${row.stream}`));
-  const values = pageRows.rows.flatMap((page) =>
+  const values = pageRows.rows
+    .map((row) => normalizeSeedSyncStreamPageRow(row))
+    .flatMap((page) =>
     getSyncStreamsForPlatform(page.platform).flatMap((stream) => {
       const key = `${page.platformAccountId}:${stream}`;
       if (existingKeys.has(key)) {
@@ -1162,7 +1192,7 @@ export async function ensureSyncStreamStateRows(
 
       return [buildSeedSyncStreamStateValue(page, stream, now, input?.onboarding ?? false)];
     })
-  );
+    );
 
   if (values.length === 0) {
     return existingRows;

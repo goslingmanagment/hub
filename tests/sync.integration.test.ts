@@ -7,6 +7,7 @@ import {
   pageFollows,
   pageSubscriptions,
   syncRuns,
+  updatePageMetadata,
 } from "@agency_hub_core/db";
 import { PgBoss } from "pg-boss";
 
@@ -194,6 +195,45 @@ describe("sync integration", () => {
 
   afterEach(async () => {
     // PgBoss owns transient state in pgboss; resetIntegrationDatabase clears it between tests.
+  });
+
+  it("queues sync revisions when the page already has a follower sync timestamp", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const { page } = await seedFanslyPage(testDb.db, Buffer.alloc(32, 7));
+    await updatePageMetadata(testDb.db, page.id, {
+      platformAccountIdValue: "acct-sync",
+      username: "sync_user",
+      displayName: "Sync User",
+      followerCount: 1,
+      subscriberCount: 1,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "followers",
+    });
+
+    const app = createTestAppContext(testDb, {
+      databaseUrl: testDb.connectionString,
+      adapter: createFanslySyncAdapter() as never,
+    });
+
+    try {
+      const request = await requestPageSync(app, {
+        send: async () => "job-1",
+      }, {
+        pageLabel: page.label,
+        scope: "light",
+        reason: "manual",
+      });
+
+      expect(request.page.id).toBe(page.id);
+      expect(request.revisions).toHaveLength(4);
+    } finally {
+      await app.close();
+    }
   });
 
   it("converges a Fansly all-scope sync through sync_stream_state and executor wakeups", async (context) => {

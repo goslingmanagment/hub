@@ -279,7 +279,7 @@ pnpm cli page remove-proxy --page lora-main
 
 ### `sync`
 
-Run sync jobs manually. For Fansly, `all` runs the same light and follower sync services used by the worker. For OnlyFans, `all` runs revenue sync only and skips followers.
+Run sync jobs manually. For Fansly, `light` includes DM conversation metadata sync and `all` runs the same light, transactions, subscribers, DM, and follower services used by the worker. Fansly DM sync requires `SYNC_SHARED_RATE_LIMIT_ENABLED=true`. For OnlyFans, `all` runs revenue sync only and skips followers.
 
 ```bash
 pnpm cli sync --page lora-main --scope all

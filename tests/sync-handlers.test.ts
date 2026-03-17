@@ -81,6 +81,18 @@ function createTelemetry() {
   };
 }
 
+async function recordStartedRequest(requestObserver: { onRequestEvent(event: unknown): Promise<void> } | null | undefined, operation: string) {
+  await requestObserver?.onRequestEvent({
+    requestId: `${operation}-request`,
+    operation,
+    endpointTemplate: `/${operation}`,
+    method: "GET",
+    attemptNumber: 1,
+    timestamp: new Date("2026-03-10T00:00:00.000Z"),
+    state: "started",
+  });
+}
+
 describe("sync executor handlers", () => {
   beforeEach(() => {
     for (const mock of Object.values(dbMocks)) {
@@ -389,7 +401,9 @@ describe("sync executor handlers", () => {
 
   it("resumes dm_conversations from versioned checkpoint state regardless of desired revision", async () => {
     const telemetry = createTelemetry();
-    const getMessagingGroupsPage = vi.fn(async () => ({
+    const getMessagingGroupsPage = vi.fn(async (requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {
+      await recordStartedRequest(requestContext.requestObserver, "dm_conversations");
+      return {
       total: 200,
       items: [],
       accounts: [],
@@ -404,7 +418,8 @@ describe("sync executor handlers", () => {
           groups: [],
         },
       },
-    }));
+      };
+    });
     const app = {
       db: {
         query: {
@@ -452,7 +467,7 @@ describe("sync executor handlers", () => {
       },
       syncRunId: 900,
       telemetry: telemetry as never,
-      budget: new SyncChunkBudget(),
+      budget: new SyncChunkBudget(1),
     } as never);
 
     expect(result.satisfied).toBe(true);
@@ -461,7 +476,7 @@ describe("sync executor handlers", () => {
       limit: 100,
     }));
     expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
-    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith({}, expect.objectContaining({
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       platformAccountId: 55,
       stream: "dm_conversations",
       lastSuccessfulRunId: 900,
@@ -475,7 +490,9 @@ describe("sync executor handlers", () => {
 
   it("resumes dm_messages from checkpoint state regardless of desired revision", async () => {
     const telemetry = createTelemetry();
-    const getMessagesPage = vi.fn(async () => ({
+    const getMessagesPage = vi.fn(async (requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {
+      await recordStartedRequest(requestContext.requestObserver, "dm_messages");
+      return {
       items: [{
         id: "msg-79",
         type: 1,
@@ -499,7 +516,8 @@ describe("sync executor handlers", () => {
       raw: {
         messages: [],
       },
-    }));
+      };
+    });
     const app = {
       db: {},
       config: {
@@ -582,7 +600,7 @@ describe("sync executor handlers", () => {
       },
       syncRunId: 901,
       telemetry: telemetry as never,
-      budget: new SyncChunkBudget(),
+      budget: new SyncChunkBudget(1),
     } as never);
 
     expect(result.satisfied).toBe(true);
