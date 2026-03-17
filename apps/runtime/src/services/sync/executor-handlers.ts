@@ -1386,20 +1386,9 @@ export async function executeDmConversationsChunk(
     );
   }
 
-  const completedCheckpoint = await upsertCheckpoint(app.db, {
-    platformAccountId: input.pageContext.page.id,
-    stream: "dm_conversations",
-    state,
-    lastSuccessfulRunId: input.syncRunId,
-  });
-  await input.telemetry.recordCheckpointAdvanced(
-    "dm_conversations",
-    summarizeCheckpoint(completedCheckpoint),
-  );
-
   return {
-    satisfied: true,
-    yieldReason: null,
+    satisfied: false,
+    yieldReason: input.budget.resolveYieldReason(),
     stats: {
       generation: state.generation,
       offset: state.offset,
@@ -1459,6 +1448,7 @@ export async function executeDmMessagesChunk(
   let processedMessages = 0;
   let completedConversations = 0;
   let overlapHits = 0;
+  let exhaustedEligibleConversations = false;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
     let conversation = state.currentConversationId
@@ -1470,11 +1460,13 @@ export async function executeDmMessagesChunk(
         platformAccountId: input.pageContext.page.id,
       });
       if (!candidate) {
+        exhaustedEligibleConversations = true;
         break;
       }
 
       conversation = await getPageDmConversationById(app.db, candidate.id);
       if (!conversation) {
+        exhaustedEligibleConversations = true;
         break;
       }
 
@@ -1507,6 +1499,7 @@ export async function executeDmMessagesChunk(
     }
 
     if (!conversation || !state.currentMode) {
+      exhaustedEligibleConversations = true;
       break;
     }
 
@@ -1614,6 +1607,21 @@ export async function executeDmMessagesChunk(
         break;
       }
     }
+  }
+
+  if (!exhaustedEligibleConversations) {
+    return {
+      satisfied: false,
+      yieldReason: input.budget.resolveYieldReason(),
+      stats: {
+        currentConversationId: state.currentConversationId,
+        currentBeforeMessageId: state.currentBeforeMessageId,
+        currentMode: state.currentMode,
+        processedMessages,
+        completedConversations,
+        overlapHits,
+      },
+    } satisfies StreamChunkResult;
   }
 
   const completedCheckpoint = await upsertCheckpoint(app.db, {

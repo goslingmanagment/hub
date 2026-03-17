@@ -617,4 +617,235 @@ describe("sync executor handlers", () => {
       },
     }));
   });
+
+  it("yields dm_conversations when the chunk budget is exhausted mid-sweep", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {
+      await context.requestObserver?.onRequestEvent({ state: "started" });
+      return {
+        total: 200,
+        items: [{
+          groupId: "group-1",
+          partnerAccountId: "fan-1",
+          partnerUsername: "fan_1",
+          flags: 0,
+          unreadCount: 2,
+          subscriptionTierId: null,
+          lastMessageId: "msg-80",
+          lastUnreadMessageId: "msg-80",
+        }],
+        accounts: [{
+          id: "fan-1",
+          username: "fan_1",
+          displayName: "Fan 1",
+          createdAt: 1_770_000_000_000,
+        }],
+        groups: [{
+          id: "group-1",
+          users: [
+            { groupId: "group-1", userId: "acct-dm", type: 1, permissionFlags: 0 },
+            { groupId: "group-1", userId: "fan-1", type: 1, permissionFlags: 0 },
+          ],
+          lastMessage: {
+            id: "msg-80",
+            type: 1,
+            dataVersion: 1,
+            content: "hello there",
+            groupId: "group-1",
+            senderId: "fan-1",
+            correlationId: null,
+            inReplyTo: null,
+            inReplyToRoot: null,
+            createdAt: 1_770_000_000,
+            attachments: [],
+            embeds: [],
+            interactions: [],
+            likes: [],
+            totalTipAmount: 0,
+          },
+        }],
+        offset: 100,
+        done: false,
+        raw: {
+          data: [],
+          aggregationData: {
+            total: 200,
+            accounts: [],
+            groups: [],
+          },
+        },
+      };
+    });
+    const app = {
+      db: {
+        query: {
+          pageDmConversations: {
+            findFirst: vi.fn(async () => null),
+          },
+        },
+      },
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-1" }]);
+
+    const result = await executeDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 1,
+      },
+      syncRunId: 902,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(1),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: false,
+      yieldReason: "request_budget",
+    });
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenLastCalledWith({}, expect.objectContaining({
+      platformAccountId: 55,
+      stream: "dm_conversations",
+      state: expect.objectContaining({
+        offset: 100,
+      }),
+    }));
+  });
+
+  it("yields dm_messages when the chunk budget is exhausted mid-conversation", async () => {
+    const telemetry = createTelemetry();
+    const getMessagesPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {
+      await context.requestObserver?.onRequestEvent({ state: "started" });
+      return {
+        items: [{
+          id: "msg-79",
+          type: 1,
+          dataVersion: 1,
+          content: "hey there",
+          groupId: "group-1",
+          senderId: "fan-1",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_770_000_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 25,
+        }],
+        groupId: "group-1",
+        before: null,
+        done: false,
+        raw: {
+          messages: [],
+        },
+      };
+    });
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagesPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValue({
+      id: 777,
+      platformConversationId: "group-1",
+      fanId: 101,
+      partnerPlatformUserId: "fan-1",
+      unreadCount: 2,
+      lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastMessageId: "msg-80",
+      newestStoredMessageId: null,
+      storedMessageCount: 0,
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+    });
+    dbMocks.getPageDmConversationById.mockResolvedValue({
+      id: 777,
+      platformAccountId: 55,
+      fanId: 101,
+      platformConversationId: "group-1",
+      partnerPlatformUserId: "fan-1",
+      partnerUsername: "fan_1",
+      partnerDisplayName: "Fan 1",
+      conversationFlags: 0,
+      unreadCount: 2,
+      subscriptionTierId: null,
+      lastMessageId: "msg-80",
+      lastUnreadMessageId: "msg-80",
+      lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastMessageSenderId: "fan-1",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "previous",
+      lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: 0,
+      newestStoredMessageId: null,
+      oldestStoredMessageId: null,
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
+      lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+      metadata: {},
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-03-10T00:00:00.000Z"),
+    });
+
+    const result = await executeDmMessagesChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 1,
+      },
+      syncRunId: 903,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(1),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: expect.objectContaining({
+        currentConversationId: 777,
+        currentBeforeMessageId: "msg-79",
+        currentMode: "backfill",
+      }),
+    });
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+  });
 });
