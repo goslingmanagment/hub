@@ -409,7 +409,6 @@ describe("sync executor handlers", () => {
       accounts: [],
       groups: [],
       offset: 100,
-      done: false,
       raw: {
         data: [],
         aggregationData: {
@@ -418,16 +417,18 @@ describe("sync executor handlers", () => {
           groups: [],
         },
       },
+      done: true,
       };
     });
-    const app = {
-      db: {
-        query: {
-          pageDmConversations: {
-            findFirst: vi.fn(async () => null),
-          },
+    const db = {
+      query: {
+        pageDmConversations: {
+          findFirst: vi.fn(async () => null),
         },
       },
+    };
+    const app = {
+      db,
       config: {
         syncSharedRateLimitEnabled: true,
       },
@@ -475,15 +476,17 @@ describe("sync executor handlers", () => {
       offset: 100,
       limit: 100,
     }));
-    expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
-    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+    expect(dbMocks.markPageDmConversationsInvisibleByGeneration).toHaveBeenCalledWith(db, {
+      platformAccountId: 55,
+      generation: 7,
+    });
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(db, expect.objectContaining({
       platformAccountId: 55,
       stream: "dm_conversations",
       lastSuccessfulRunId: 900,
       state: expect.objectContaining({
         version: 1,
-        generation: 7,
-        offset: 200,
+        lastFullSweepCompletedAt: expect.any(String),
       }),
     }));
   });
@@ -600,11 +603,13 @@ describe("sync executor handlers", () => {
       },
       syncRunId: 901,
       telemetry: telemetry as never,
-      budget: new SyncChunkBudget(1),
+      budget: new SyncChunkBudget(2),
     } as never);
 
     expect(result.satisfied).toBe(true);
-    expect(dbMocks.selectNextPageDmMessageSyncCandidate).not.toHaveBeenCalled();
+    expect(dbMocks.selectNextPageDmMessageSyncCandidate).toHaveBeenCalledWith({}, {
+      platformAccountId: 55,
+    });
     expect(dbMocks.getPageDmConversationById).toHaveBeenCalledWith({}, 777);
     expect(getMessagesPage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       groupId: "group-1",
@@ -694,14 +699,15 @@ describe("sync executor handlers", () => {
         },
       };
     });
-    const app = {
-      db: {
-        query: {
-          pageDmConversations: {
-            findFirst: vi.fn(async () => null),
-          },
+    const db = {
+      query: {
+        pageDmConversations: {
+          findFirst: vi.fn(async () => null),
         },
       },
+    };
+    const app = {
+      db,
       config: {
         syncSharedRateLimitEnabled: true,
       },
@@ -738,7 +744,7 @@ describe("sync executor handlers", () => {
       yieldReason: "request_budget",
     });
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
-    expect(dbMocks.upsertCheckpointProgress).toHaveBeenLastCalledWith({}, expect.objectContaining({
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenLastCalledWith(db, expect.objectContaining({
       platformAccountId: 55,
       stream: "dm_conversations",
       state: expect.objectContaining({
