@@ -1345,6 +1345,7 @@ export async function executeDmConversationsChunk(
       });
       const completedState = {
         version: 1,
+        generation: state.generation,
         lastFullSweepCompletedAt: new Date().toISOString(),
       };
       const completedCheckpoint = await upsertCheckpoint(app.db, {

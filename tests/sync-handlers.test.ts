@@ -487,6 +487,7 @@ describe("sync executor handlers", () => {
       lastSuccessfulRunId: 900,
       state: expect.objectContaining({
         version: 1,
+        generation: 7,
         lastFullSweepCompletedAt: expect.any(String),
       }),
     }));
