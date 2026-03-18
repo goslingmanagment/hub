@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PAGE_DM_MESSAGE_HISTORY_LIMIT } from "@agency_hub_core/db";
 
 const dbMocks = vi.hoisted(() => ({
   countActivePageFollows: vi.fn(),
@@ -559,7 +560,7 @@ describe("sync executor handlers", () => {
       lastMessagePreview: "previous",
       lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
       lastModelMessageAt: null,
-      storedMessageCount: 74,
+      storedMessageCount: PAGE_DM_MESSAGE_HISTORY_LIMIT - 1,
       newestStoredMessageId: "msg-80",
       oldestStoredMessageId: "msg-65",
       messageBackfillComplete: false,
@@ -578,7 +579,7 @@ describe("sync executor handlers", () => {
       },
       deletedCount: 0,
       summary: {
-        storedMessageCount: 75,
+        storedMessageCount: PAGE_DM_MESSAGE_HISTORY_LIMIT,
         newestStoredMessageId: "msg-80",
         oldestStoredMessageId: "msg-79",
         lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),

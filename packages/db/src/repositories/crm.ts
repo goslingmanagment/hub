@@ -13,6 +13,8 @@ import {
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | string | bigint | null | undefined;
 
+export const PAGE_DM_MESSAGE_HISTORY_LIMIT = 25;
+
 function parseTimestamp(value: TimestampValue) {
   if (value === null || value === undefined) {
     return null;
@@ -342,7 +344,10 @@ export async function prunePageDmMessagesToLimit(
     limit?: number;
   },
 ) {
-  const limit = input.limit ?? 75;
+  const limit = Math.min(
+    input.limit ?? PAGE_DM_MESSAGE_HISTORY_LIMIT,
+    PAGE_DM_MESSAGE_HISTORY_LIMIT,
+  );
   const result = await db.execute<{ deletedCount: number }>(sql`
     with ranked as (
       select id,
@@ -431,7 +436,7 @@ export async function finalizePageDmConversationMessageSync(
     const database = tx as unknown as Database;
     const deletedCount = await prunePageDmMessagesToLimit(database, {
       conversationId: input.conversationId,
-      limit: 75,
+      limit: PAGE_DM_MESSAGE_HISTORY_LIMIT,
     });
     const summary = await getPageDmMessageWindowSummary(database, input.conversationId);
 
@@ -1325,9 +1330,13 @@ export async function getCrmConversationPreview(
   input: {
     platformAccountId: number;
     platformConversationId: string;
-    limit: number;
+    limit?: number;
   },
 ) {
+  const limit = Math.min(
+    input.limit ?? PAGE_DM_MESSAGE_HISTORY_LIMIT,
+    PAGE_DM_MESSAGE_HISTORY_LIMIT,
+  );
   const conversation = await findVisiblePageDmConversationByPlatformConversationId(db, {
     platformAccountId: input.platformAccountId,
     platformConversationId: input.platformConversationId,
@@ -1361,7 +1370,7 @@ export async function getCrmConversationPreview(
         from page_dm_messages
         where conversation_id = ${conversation.id}
         order by created_at desc, platform_message_id desc, id desc
-        limit ${input.limit}
+        limit ${limit}
       ) newest
       order by created_at asc, platform_message_id asc
     `),

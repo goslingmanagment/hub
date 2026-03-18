@@ -9,6 +9,7 @@ import type {
   CrmSummaryResponse,
 } from "@agency_hub_core/contracts";
 import {
+  PAGE_DM_MESSAGE_HISTORY_LIMIT,
   findPageSummaryByLabel,
   getCrmConversationPreview,
   getCrmFreshnessCoverage,
@@ -278,7 +279,7 @@ export async function getCrmConversationPreviewReport(
   const preview = await getCrmConversationPreview(app.db, {
     platformAccountId: page.id,
     platformConversationId: params.platformConversationId,
-    limit: query.limit,
+    limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
   });
 
   if (!preview) {

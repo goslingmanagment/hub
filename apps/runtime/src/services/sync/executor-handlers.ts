@@ -8,6 +8,7 @@ import {
   getCheckpoint,
   getCurrentSubscribers,
   markPageDmConversationsInvisibleByGeneration,
+  PAGE_DM_MESSAGE_HISTORY_LIMIT,
   pageDmConversations,
   rebuildFollowerRollups,
   rebuildSubscriberRollups,
@@ -1553,7 +1554,7 @@ export async function executeDmMessagesChunk(
       const providerHistoryExhausted = page.done || !oldestMessageId;
       const hitWindowCap =
         state.currentMode === "backfill" &&
-        (conversation.storedMessageCount + collectedThisConversation) >= 75;
+        (conversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_MESSAGE_HISTORY_LIMIT;
       const shouldComplete = state.currentMode === "incremental"
         ? overlapFound || providerHistoryExhausted
         : overlapFound || providerHistoryExhausted || hitWindowCap;

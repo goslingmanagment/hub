@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  PAGE_DM_MESSAGE_HISTORY_LIMIT,
   createFanslyPage,
   createModel,
   finalizePageDmConversationMessageSync,
@@ -334,7 +335,7 @@ describe("crm repository integration", () => {
     expect(reactivation.items[0]?.reactivationScore).toBe(360);
   });
 
-  it("prunes message history to 75 and returns preview rows oldest-to-newest", async (context) => {
+  it(`prunes message history to ${PAGE_DM_MESSAGE_HISTORY_LIMIT} and returns preview rows oldest-to-newest`, async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -408,9 +409,9 @@ describe("crm repository integration", () => {
       limit: 10,
     });
 
-    expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(75);
+    expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_MESSAGE_HISTORY_LIMIT);
     expect(preview).not.toBeNull();
-    expect(preview?.conversation.storedMessageCount).toBe(75);
+    expect(preview?.conversation.storedMessageCount).toBe(PAGE_DM_MESSAGE_HISTORY_LIMIT);
     expect(preview?.conversation.messageBackfillComplete).toBe(true);
     expect(preview?.messages.map((message) => message.platformMessageId)).toEqual([
       "msg-071",
