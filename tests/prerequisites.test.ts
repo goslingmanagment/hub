@@ -12,6 +12,8 @@ describe("test prerequisite policy", () => {
   });
 
   it("fails fast by default when a prerequisite is unavailable", async () => {
+    delete process.env[ALLOW_MISSING_TEST_PREREQUISITES_ENV];
+
     await expect(acquireTestPrerequisite(async () => {
       throw new Error("docker socket unavailable");
     }, {

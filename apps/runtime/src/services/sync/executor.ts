@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import {
   ensureSyncStreamStateRows,
+  findPageById,
   listRunnableSyncStreamStatesForPage,
   markSyncPageAuthFailed,
   recordSyncStreamChunkFailure,
@@ -14,6 +15,7 @@ import {
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import { OnlyMonsterApiError } from "@agency_hub_core/onlyfans";
+import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -90,6 +92,21 @@ async function createChunkTelemetry(
     pageContext,
     run,
     telemetry,
+  };
+}
+
+async function resolveSyncPageWakeupTarget(
+  app: Pick<AppContext, "db">,
+  platformAccountId: number,
+) {
+  const page = await findPageById(app.db, platformAccountId);
+  if (!page) {
+    return null;
+  }
+
+  return {
+    provider: page.page.platform,
+    egressKey: buildProxyEgressKey(page.proxy ? { url: page.proxy.url } : null),
   };
 }
 
@@ -206,39 +223,55 @@ export async function processSyncPageExecuteJob(
   app: AppContext,
   boss: Pick<PgBoss, "complete" | "send">,
   input: {
-    job: Pick<JobWithMetadata<SyncPageExecutePayload>, "id" | "data">;
+    job: Pick<JobWithMetadata<SyncPageExecutePayload>, "id" | "data" | "groupId">;
   },
 ) {
   const result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
   await boss.complete(SYNC_PAGE_EXECUTE_QUEUE, input.job.id);
 
   if (result.needsContinuation && result.continuationPriority !== null) {
-    await sendSyncPageWakeup(boss as Pick<PgBoss, "send">, {
+    const wakeupTarget = await resolveSyncPageWakeupTarget(app, result.platformAccountId);
+    if (wakeupTarget) {
+      await sendSyncPageWakeup(boss, {
       platformAccountId: result.platformAccountId,
       priority: result.continuationPriority,
-    });
+        provider: wakeupTarget.provider,
+        egressKey: wakeupTarget.egressKey,
+      });
+    }
   }
 
   return result;
 }
 
-export async function startSyncPageExecutor(
+async function runSyncPageExecutorWorker(
   app: AppContext,
-  boss: PageExecuteBoss,
-  input?: {
+  boss: Pick<PgBoss, "complete" | "fail" | "fetch" | "send" | "touch">,
+  input: {
     signal?: AbortSignal;
+    localActiveGroups: Set<string>;
   },
-) {
-  while (!input?.signal?.aborted) {
+): Promise<void> {
+  while (!input.signal?.aborted) {
     try {
+      const activeGroupIds = Array.from(input.localActiveGroups);
       const jobs = await boss.fetch<SyncPageExecutePayload>(SYNC_PAGE_EXECUTE_QUEUE, {
         batchSize: 1,
         includeMetadata: true,
+        priority: true,
+        orderByCreatedOn: true,
+        groupConcurrency: 1,
+        ignoreGroups: activeGroupIds.length > 0 ? activeGroupIds : null,
       });
       const job = jobs[0];
       if (!job) {
         await delay(PAGE_EXECUTOR_IDLE_POLL_MS);
         continue;
+      }
+
+      const trackedGroupId = typeof job.groupId === "string" ? job.groupId : null;
+      if (trackedGroupId) {
+        input.localActiveGroups.add(trackedGroupId);
       }
 
       const heartbeat = setInterval(() => {
@@ -256,9 +289,12 @@ export async function startSyncPageExecutor(
         });
       } finally {
         clearInterval(heartbeat);
+        if (trackedGroupId) {
+          input.localActiveGroups.delete(trackedGroupId);
+        }
       }
     } catch (error) {
-      if (input?.signal?.aborted) {
+      if (input.signal?.aborted) {
         break;
       }
 
@@ -266,6 +302,23 @@ export async function startSyncPageExecutor(
       await delay(PAGE_EXECUTOR_IDLE_POLL_MS);
     }
   }
+}
+
+export async function startSyncPageExecutor(
+  app: AppContext,
+  boss: PageExecuteBoss,
+  input?: {
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  const localActiveGroups = new Set<string>();
+  const workers = Array.from({ length: app.config.syncPageExecutorConcurrency }, () =>
+    runSyncPageExecutorWorker(app, boss, {
+      signal: input?.signal,
+      localActiveGroups,
+    }));
+
+  await Promise.all(workers);
 }
 
 export async function runSyncPageExecutorUntilIdle(

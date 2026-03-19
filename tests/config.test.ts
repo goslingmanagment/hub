@@ -22,19 +22,21 @@ afterAll(() => {
 });
 
 describe("config", () => {
-  it("defaults Fansly global delay to 2500ms", () => {
+  it("defaults Fansly and OnlyFans delays and executor concurrency", () => {
     const config = loadConfig(baseEnv);
 
-    expect(config.fanslyGlobalDelayMs).toBe(2500);
+    expect(config.fanslyDefaultDelayMs).toBe(2500);
+    expect(config.onlyFansDefaultDelayMs).toBe(1000);
+    expect(config.syncPageExecutorConcurrency).toBe(4);
   });
 
-  it("accepts an explicit Fansly global delay override", () => {
+  it("accepts an explicit Fansly default delay override", () => {
     const config = loadConfig({
       ...baseEnv,
-      FANSLY_GLOBAL_DELAY_MS: "3000",
+      FANSLY_DEFAULT_DELAY_MS: "3000",
     });
 
-    expect(config.fanslyGlobalDelayMs).toBe(3000);
+    expect(config.fanslyDefaultDelayMs).toBe(3000);
   });
 
   it("falls back to the deprecated account lookup delay alias when the global var is unset", () => {
@@ -43,16 +45,27 @@ describe("config", () => {
       FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "3000",
     });
 
-    expect(config.fanslyGlobalDelayMs).toBe(3000);
+    expect(config.fanslyDefaultDelayMs).toBe(3000);
   });
 
-  it("prefers FANSLY_GLOBAL_DELAY_MS over the deprecated alias when both are set", () => {
+  it("prefers FANSLY_DEFAULT_DELAY_MS over deprecated aliases", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      FANSLY_GLOBAL_DELAY_MS: "3000",
+      FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "3500",
+      FANSLY_DEFAULT_DELAY_MS: "2800",
+    });
+
+    expect(config.fanslyDefaultDelayMs).toBe(2800);
+  });
+
+  it("prefers FANSLY_GLOBAL_DELAY_MS over the legacy account lookup alias when canonical is unset", () => {
     const config = loadConfig({
       ...baseEnv,
       FANSLY_GLOBAL_DELAY_MS: "3000",
       FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "3500",
     });
 
-    expect(config.fanslyGlobalDelayMs).toBe(3000);
+    expect(config.fanslyDefaultDelayMs).toBe(3000);
   });
 });

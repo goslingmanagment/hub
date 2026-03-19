@@ -6,9 +6,13 @@ export function createTestAppContext(
   overrides?: {
     adapter?: AppContext["adapter"];
     databaseUrl?: string;
+    fanslyDefaultDelayMs?: number;
+    followerPageDelayMs?: number;
     logger?: StartedTestDatabase["logger"];
+    onlyFansDefaultDelayMs?: number;
     onlyFansAdapter?: AppContext["onlyFansAdapter"];
     sessionTtlDays?: number;
+    syncPageExecutorConcurrency?: number;
     syncSharedRateLimitEnabled?: boolean;
   },
 ) {
@@ -27,11 +31,13 @@ export function createTestAppContext(
       fanslyBaseUrl: "https://example.invalid",
       onlyMonsterBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
-      fanslyGlobalDelayMs: 2500,
-      followerPageDelayMs: 0,
+      fanslyDefaultDelayMs: overrides?.fanslyDefaultDelayMs ?? 2500,
+      followerPageDelayMs: overrides?.followerPageDelayMs ?? 0,
+      onlyFansDefaultDelayMs: overrides?.onlyFansDefaultDelayMs ?? 1000,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
       syncSharedRateLimitEnabled: overrides?.syncSharedRateLimitEnabled ?? false,
+      syncPageExecutorConcurrency: overrides?.syncPageExecutorConcurrency ?? 1,
       syncObservabilityRetentionDays: 30,
     },
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),

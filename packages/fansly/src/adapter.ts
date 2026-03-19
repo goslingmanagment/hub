@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fetch, type Dispatcher } from "undici";
 
 import {
+  buildProxyEgressKey,
   buildProxyDispatcherCacheKey,
   classifyTransportError,
   createProxyRequestDispatcher,
@@ -59,8 +60,6 @@ export class FanslyAdapter {
   private readonly proxyAgents = new Map<string, Dispatcher>();
   private readonly retiringDispatchers = new Set<Promise<void>>();
   private directDispatcher: Dispatcher = createRequestDispatcher();
-  private globalRequestTimestamp: number | null = null;
-  private globalRateLimitChain: Promise<void> | null = null;
 
   constructor(private readonly options: AdapterOptions) {}
 
@@ -628,30 +627,39 @@ export class FanslyAdapter {
     category: string,
     minDelayMs: number,
   ) {
-    await context.rateLimitWaiter?.([
-      { provider: "fansly", scope: "global", egressKey: "global" },
+    const scopes: Array<{ provider: "fansly" | "onlyfans"; scope: string }> = [
+      { provider: "fansly", scope: "global" },
       ...(category === "followers" && minDelayMs > 0
-        ? [{ provider: "fansly", scope: "followers_page", egressKey: "global" } as const]
+        ? [{ provider: "fansly", scope: "followers_page" } as const]
         : []),
       ...(category === "dm_conversations"
-        ? [{ provider: "fansly", scope: "dm_conversations", egressKey: "global" } as const]
+        ? [{ provider: "fansly", scope: "dm_conversations" } as const]
         : []),
       ...(category === "dm_messages"
-        ? [{ provider: "fansly", scope: "dm_messages", egressKey: "global" } as const]
+        ? [{ provider: "fansly", scope: "dm_messages" } as const]
         : []),
-    ]);
+    ];
 
-    const categoryGate = this.enterRateLimitChain(this.rateLimitChains.get(category) ?? Promise.resolve());
-    this.rateLimitChains.set(category, categoryGate.chain);
+    if (context.rateLimitWaiter) {
+      await context.rateLimitWaiter(scopes);
+      return 0;
+    }
+
+    const egressKey = buildProxyEgressKey(context.proxy);
+    const categoryKey = `${egressKey}:${category}`;
+    const globalKey = egressKey;
+
+    const categoryGate = this.enterRateLimitChain(this.rateLimitChains.get(categoryKey) ?? Promise.resolve());
+    this.rateLimitChains.set(categoryKey, categoryGate.chain);
 
     await categoryGate.previous;
     try {
       const categoryWaitMs = await this.waitForMinimumDelay(
-        this.requestTimestamps.get(category),
+        this.requestTimestamps.get(categoryKey),
         minDelayMs,
       );
-      const globalGate = this.enterRateLimitChain(this.globalRateLimitChain ?? Promise.resolve());
-      this.globalRateLimitChain = globalGate.chain;
+      const globalGate = this.enterRateLimitChain(this.rateLimitChains.get(globalKey) ?? Promise.resolve());
+      this.rateLimitChains.set(globalKey, globalGate.chain);
 
       await globalGate.previous;
       try {
@@ -660,23 +668,23 @@ export class FanslyAdapter {
           ? configuredGlobalDelayMs + GLOBAL_DELAY_SAFETY_MARGIN_MS
           : 0;
         const globalWaitMs = await this.waitForMinimumDelay(
-          this.globalRequestTimestamp,
+          this.requestTimestamps.get(globalKey),
           effectiveGlobalDelayMs,
         );
         const startedAt = Date.now();
-        this.requestTimestamps.set(category, startedAt);
-        this.globalRequestTimestamp = startedAt;
+        this.requestTimestamps.set(categoryKey, startedAt);
+        this.requestTimestamps.set(globalKey, startedAt);
         return categoryWaitMs + globalWaitMs;
       } finally {
         globalGate.release();
-        if (this.globalRateLimitChain === globalGate.chain) {
-          this.globalRateLimitChain = null;
+        if (this.rateLimitChains.get(globalKey) === globalGate.chain) {
+          this.rateLimitChains.delete(globalKey);
         }
       }
     } finally {
       categoryGate.release();
-      if (this.rateLimitChains.get(category) === categoryGate.chain) {
-        this.rateLimitChains.delete(category);
+      if (this.rateLimitChains.get(categoryKey) === categoryGate.chain) {
+        this.rateLimitChains.delete(categoryKey);
       }
     }
   }

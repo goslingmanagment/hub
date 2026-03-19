@@ -1,4 +1,5 @@
 import type { PgBoss, Queue } from "pg-boss";
+import { buildSyncPageExecuteGroupId } from "@agency_hub_core/shared";
 
 export const SYNC_PLANNER_QUEUE = "sync.planner";
 export const SYNC_PLANNER_DLQ_QUEUE = "sync.planner.dlq";
@@ -21,6 +22,9 @@ export interface QueueCreationClient {
     options?: {
       singletonKey?: string;
       priority?: number;
+      group?: {
+        id: string;
+      };
     },
   ): Promise<string | null | unknown>;
 }
@@ -94,14 +98,19 @@ export async function sendSyncPageWakeup(
   input: {
     platformAccountId: number;
     priority: number;
+    provider: "fansly" | "onlyfans";
+    egressKey: string;
   },
-) {
+): Promise<string | null | unknown> {
   return boss.send(
     SYNC_PAGE_EXECUTE_QUEUE,
     { platformAccountId: input.platformAccountId } satisfies SyncPageExecutePayload,
     {
       singletonKey: String(input.platformAccountId),
       priority: input.priority,
+      group: {
+        id: buildSyncPageExecuteGroupId(input.provider, input.egressKey),
+      },
     },
   );
 }

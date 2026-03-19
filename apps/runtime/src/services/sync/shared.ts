@@ -5,7 +5,7 @@ import {
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
 import { ONLYMONSTER_MAPPER_VERSION } from "@agency_hub_core/onlyfans";
-import { toMills } from "@agency_hub_core/shared";
+import { buildProxyEgressKey, toMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
@@ -267,7 +267,9 @@ export async function refreshPageMetadata(
   syncType?: "light" | "followers",
   telemetry?: SyncRunTelemetry,
 ) {
-  const rateLimitWaiter = createSyncRateLimitWaiter(app);
+  const rateLimitWaiter = createSyncRateLimitWaiter(app, {
+    egressKey: buildProxyEgressKey(pageContext.proxy),
+  });
 
   if (pageContext.platform === "fansly") {
     const accountMe = await app.adapter.getAccountMe({

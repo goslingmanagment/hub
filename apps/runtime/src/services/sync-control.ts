@@ -12,6 +12,7 @@ import {
   type SyncControlStream,
   type SyncRequestReason,
 } from "@agency_hub_core/db";
+import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -110,6 +111,8 @@ export async function requestPageSync(
   const wakeupId = await sendSyncPageWakeup(boss, {
     platformAccountId: storedPage.page.id,
     priority,
+    provider: storedPage.page.platform,
+    egressKey: buildProxyEgressKey(storedPage.proxy ? { url: storedPage.proxy.url } : null),
   });
 
   return {

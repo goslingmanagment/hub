@@ -12,7 +12,11 @@ import type {
   FanslyRequestContext,
   FanslySubscriber,
 } from "@agency_hub_core/fansly";
-import { createLogger, loadConfig } from "@agency_hub_core/shared";
+import {
+  createLogger,
+  loadConfig,
+  resolveFanslyDefaultDelayEnvSource,
+} from "@agency_hub_core/shared";
 
 import type { ProviderAdapter } from "./services/provider.ts";
 
@@ -64,6 +68,24 @@ export interface AppContext {
 export async function createAppContext(): Promise<AppContext> {
   const config = loadConfig();
   const logger = createLogger(config.logLevel);
+
+  const deprecatedFanslyDelayAlias = resolveFanslyDefaultDelayEnvSource(process.env);
+  if (
+    deprecatedFanslyDelayAlias &&
+    deprecatedFanslyDelayAlias !== "FANSLY_DEFAULT_DELAY_MS"
+  ) {
+    logger.warn(
+      { envVar: deprecatedFanslyDelayAlias },
+      "Deprecated Fansly delay env var in use; prefer FANSLY_DEFAULT_DELAY_MS",
+    );
+  }
+
+  if (config.syncPageExecutorConcurrency > 1 && !config.syncSharedRateLimitEnabled) {
+    throw new Error(
+      "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true",
+    );
+  }
+
   const pool = createPool(config.databaseUrl);
   try {
     await assertRuntimeSchemaReady(pool);
@@ -71,11 +93,11 @@ export async function createAppContext(): Promise<AppContext> {
     const db = createDb(pool);
     const adapter = new FanslyAdapter({
       baseUrl: config.fanslyBaseUrl,
-      globalDelayMs: config.fanslyGlobalDelayMs,
+      globalDelayMs: config.fanslyDefaultDelayMs,
     });
     const onlyFansAdapter = new OnlyFansAdapter({
       baseUrl: config.onlyMonsterBaseUrl,
-      defaultDelayMs: 1000,
+      defaultDelayMs: config.onlyFansDefaultDelayMs,
     });
 
     return {

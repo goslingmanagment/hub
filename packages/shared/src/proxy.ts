@@ -116,6 +116,22 @@ export function buildProxyDispatcherCacheKey(proxy: ProxyConfig) {
   return `${normalized.protocol}//${normalized.host}#${hash}`;
 }
 
+export function buildProxyEgressKey(proxy: ProxyConfig | null | undefined): string {
+  if (!proxy) {
+    return "direct";
+  }
+
+  const normalized = normalizeProxyConfigWithMetadata(proxy);
+  return `${normalized.protocol}//${normalized.hostname}:${normalized.port}`;
+}
+
+export function buildSyncPageExecuteGroupId(
+  provider: "fansly" | "onlyfans",
+  egressKey: string,
+) {
+  return `${provider}:${egressKey}`;
+}
+
 export function formatMaskedProxyUrl(
   proxy: ProxyConfig | {
     url: string;

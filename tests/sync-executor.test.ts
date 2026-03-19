@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 const dbMocks = vi.hoisted(() => ({
   ensureSyncStreamStateRows: vi.fn(),
+  findPageById: vi.fn(),
   listRunnableSyncStreamStatesForPage: vi.fn(),
   markSyncPageAuthFailed: vi.fn(),
   recordSyncStreamChunkFailure: vi.fn(),
@@ -46,7 +47,11 @@ vi.mock("../apps/runtime/src/services/sync/observability.ts", () => ({
   },
 }));
 
-import { executeNextSyncPageChunk, processSyncPageExecuteJob } from "../apps/runtime/src/services/sync/executor.ts";
+import {
+  executeNextSyncPageChunk,
+  processSyncPageExecuteJob,
+  startSyncPageExecutor,
+} from "../apps/runtime/src/services/sync/executor.ts";
 
 describe("sync executor", () => {
   const streamState = {
@@ -76,6 +81,10 @@ describe("sync executor", () => {
     updatedAt: new Date("2026-03-14T12:00:00.000Z"),
   } as const;
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     for (const mock of Object.values(dbMocks)) {
       mock.mockReset();
@@ -88,6 +97,15 @@ describe("sync executor", () => {
     dbMocks.startSyncRun.mockResolvedValue({
       id: 777,
       startedAt: new Date("2026-03-14T12:00:00.000Z"),
+    });
+    dbMocks.findPageById.mockResolvedValue({
+      page: {
+        id: 55,
+        platform: "fansly",
+      },
+      proxy: {
+        url: "socks5://proxy.example",
+      },
     });
     handlerMocks.resolveExecutorPageContext.mockResolvedValue({
       platform: "fansly",
@@ -126,6 +144,7 @@ describe("sync executor", () => {
       job: {
         id: "job-1",
         data: { platformAccountId: 55 },
+        groupId: "fansly:direct",
       },
     });
 
@@ -135,7 +154,13 @@ describe("sync executor", () => {
     expect(boss.send).toHaveBeenCalledWith(
       "sync.page.execute",
       { platformAccountId: 55 },
-      { singletonKey: "55", priority: 45 },
+      {
+        singletonKey: "55",
+        priority: 45,
+        group: {
+          id: "fansly:socks5://proxy.example:1080",
+        },
+      },
     );
     expect(boss.complete.mock.invocationCallOrder[0]).toBeLessThan(boss.send.mock.invocationCallOrder[0]);
   });
@@ -164,5 +189,79 @@ describe("sync executor", () => {
       platformAccountId: 55,
       needsContinuation: false,
     });
+  });
+
+  it("executor workers fetch with groupConcurrency and ignore active groups", async () => {
+    vi.useFakeTimers();
+
+    const abortController = new AbortController();
+    let releaseChunk!: () => void;
+    const chunkGate = new Promise<void>((resolve) => {
+      releaseChunk = resolve;
+    });
+
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+      config: { syncPageExecutorConcurrency: 2 },
+    } as never;
+    const boss = {
+      complete: vi.fn(async () => {}),
+      fail: vi.fn(async () => {}),
+      fetch: vi.fn(async (_queueName: string, options: Record<string, unknown>) => {
+        const callNumber = boss.fetch.mock.calls.length;
+        if (callNumber === 1) {
+          expect(options).toMatchObject({
+            batchSize: 1,
+            includeMetadata: true,
+            priority: true,
+            orderByCreatedOn: true,
+            groupConcurrency: 1,
+            ignoreGroups: null,
+          });
+          return [{
+            id: "job-1",
+            data: { platformAccountId: 55 },
+            groupId: "fansly:direct",
+          }];
+        }
+
+        expect(options).toMatchObject({
+          batchSize: 1,
+          includeMetadata: true,
+          priority: true,
+          orderByCreatedOn: true,
+          groupConcurrency: 1,
+          ignoreGroups: ["fansly:direct"],
+        });
+        abortController.abort();
+        releaseChunk();
+        return [];
+      }),
+      send: vi.fn(async () => null),
+      touch: vi.fn(async () => {}),
+    };
+
+    dbMocks.listRunnableSyncStreamStatesForPage
+      .mockResolvedValueOnce([streamState])
+      .mockResolvedValueOnce([]);
+    handlerMocks.executeStreamChunk.mockImplementation(async () => {
+      await chunkGate;
+      return {
+        satisfied: true,
+        stats: { processedThisChunk: 1 },
+      };
+    });
+
+    const executorPromise = startSyncPageExecutor(app, boss as never, {
+      signal: abortController.signal,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await executorPromise;
+
+    expect(boss.fetch.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
+    expect(boss.fail).not.toHaveBeenCalled();
   });
 });

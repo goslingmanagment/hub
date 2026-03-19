@@ -34,7 +34,11 @@ import {
   FANSLY_MAPPER_VERSION,
   mapFanslySubscriptionStatus,
 } from "@agency_hub_core/fansly";
-import { fanslyFollowIdToDate, toMills } from "@agency_hub_core/shared";
+import {
+  buildProxyEgressKey,
+  fanslyFollowIdToDate,
+  toMills,
+} from "@agency_hub_core/shared";
 import { and, eq } from "drizzle-orm";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -63,6 +67,15 @@ type ExecutorRequestContext = {
   pageContext: ResolvedPageContext;
   telemetry: SyncRunTelemetry;
 };
+
+function createPageRateLimitWaiter(
+  app: AppContext,
+  pageContext: ResolvedPageContext,
+) {
+  return createSyncRateLimitWaiter(app, {
+    egressKey: buildProxyEgressKey(pageContext.proxy),
+  });
+}
 
 export type StreamChunkResult = {
   satisfied: boolean;
@@ -311,7 +324,7 @@ function buildOnlyFansRequestContext(app: AppContext, input: ExecutorRequestCont
     auth: input.pageContext.auth,
     proxy: input.pageContext.proxy,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createSyncRateLimitWaiter(app),
+    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
 }
 
@@ -479,7 +492,7 @@ export async function executeTransactionsChunk(
         session: input.pageContext.session,
         proxy: input.pageContext.proxy,
         requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-        rateLimitWaiter: createSyncRateLimitWaiter(app),
+        rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
       },
       syncRunId: input.syncRunId,
       telemetry: input.telemetry,
@@ -536,7 +549,7 @@ export async function executeSubscribersChunk(
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createSyncRateLimitWaiter(app),
+    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "subscribers");
   await input.telemetry.recordCheckpointLoaded("subscribers", summarizeCheckpoint(checkpoint));
@@ -732,7 +745,7 @@ export async function executeFollowersChunk(
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createSyncRateLimitWaiter(app),
+    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "followers");
   await input.telemetry.recordCheckpointLoaded("followers", summarizeCheckpoint(checkpoint));
@@ -922,7 +935,7 @@ export async function executeFollowersReconcileChunk(
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createSyncRateLimitWaiter(app),
+    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "followers_reconcile");
   await input.telemetry.recordCheckpointLoaded("followers_reconcile", summarizeCheckpoint(checkpoint));
@@ -1107,7 +1120,7 @@ export async function executeDmConversationsChunk(
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createSyncRateLimitWaiter(app),
+    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_conversations");
   await input.telemetry.recordCheckpointLoaded("dm_conversations", summarizeCheckpoint(checkpoint));
@@ -1421,7 +1434,7 @@ export async function executeDmMessagesChunk(
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createSyncRateLimitWaiter(app),
+    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_messages");
   await input.telemetry.recordCheckpointLoaded("dm_messages", summarizeCheckpoint(checkpoint));

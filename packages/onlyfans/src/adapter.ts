@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fetch, type Dispatcher } from "undici";
 
 import {
+  buildProxyEgressKey,
   buildProxyDispatcherCacheKey,
   classifyTransportError,
   createProxyRequestDispatcher,
@@ -396,21 +397,26 @@ export class OnlyFansAdapter {
     category: string,
     minDelayMs: number,
   ) {
-    await context.rateLimitWaiter?.([
-      { provider: "onlyfans", scope: "global", egressKey: "global" },
-    ]);
+    if (context.rateLimitWaiter) {
+      await context.rateLimitWaiter([
+        { provider: "onlyfans", scope: "global" },
+      ]);
+      return 0;
+    }
 
-    const previous = this.rateLimitChains.get(category) ?? Promise.resolve();
+    const rateLimitKey = `${buildProxyEgressKey(context.proxy)}:${category}`;
+
+    const previous = this.rateLimitChains.get(rateLimitKey) ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
     const chain = previous.then(() => gate);
-    this.rateLimitChains.set(category, chain);
+    this.rateLimitChains.set(rateLimitKey, chain);
 
     await previous;
     try {
-      const lastStartedAt = this.requestTimestamps.get(category);
+      const lastStartedAt = this.requestTimestamps.get(rateLimitKey);
       const now = Date.now();
       let waitedMs = 0;
       if (lastStartedAt !== undefined) {
@@ -420,12 +426,12 @@ export class OnlyFansAdapter {
           await delay(waitedMs);
         }
       }
-      this.requestTimestamps.set(category, Date.now());
+      this.requestTimestamps.set(rateLimitKey, Date.now());
       return waitedMs;
     } finally {
       release();
-      if (this.rateLimitChains.get(category) === chain) {
-        this.rateLimitChains.delete(category);
+      if (this.rateLimitChains.get(rateLimitKey) === chain) {
+        this.rateLimitChains.delete(rateLimitKey);
       }
     }
   }

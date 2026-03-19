@@ -7,7 +7,6 @@ export interface FanslyRequestContext {
   rateLimitWaiter?: ((scopes: Array<{
     provider: "fansly" | "onlyfans";
     scope: string;
-    egressKey: string;
   }>) => Promise<void>) | null;
 }
 

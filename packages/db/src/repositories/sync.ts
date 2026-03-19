@@ -3,6 +3,7 @@ import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
 import {
   platformAccounts,
+  platformAccountProxies,
   rawPayloads,
   syncCheckpoints,
   syncProviderRateLimits,
@@ -976,10 +977,12 @@ type NormalizedSeedSyncStreamPageRow = Omit<
   activeFollowerCount: number;
 };
 
-type SyncPageWakeupRow = {
+export type SyncPageWakeupRow = {
   platformAccountId: number;
+  platform: "fansly" | "onlyfans";
   priority: number;
   desiredAt: Date | null;
+  proxyUrl: string | null;
 };
 
 function streamOrderSql(columnName: string) {
@@ -999,6 +1002,14 @@ function streamOrderSql(columnName: string) {
 
 function normalizeSyncStreamStateRows(rows: unknown[]) {
   return rows.map((row) => normalizeSyncStreamStateRow(row as any));
+}
+
+function normalizePlatformValue(value: unknown, field: string) {
+  if (value === "fansly" || value === "onlyfans") {
+    return value;
+  }
+
+  throw new Error(`Expected ${field} to be a supported platform`);
 }
 
 function normalizeSeedSyncStreamPageRow<T extends SeedSyncStreamPageRow>(row: T): Omit<T, "platformAccountId" | "lastLightSyncAt" | "lastFollowerSyncAt" | "followerCount" | "activeFollowerCount"> & {
@@ -1266,25 +1277,31 @@ export async function promoteDueSyncStreamStateRows(
 export async function listRunnableSyncPages(
   db: Database,
   now = new Date(),
-) {
+): Promise<SyncPageWakeupRow[]> {
   const result = await db.execute<SyncPageWakeupRow>(sql`
     select platform_account_id as "platformAccountId",
+           pa.platform as "platform",
            max(effective_priority)::int as "priority",
-           min(desired_at) as "desiredAt"
-    from sync_stream_state
+           min(desired_at) as "desiredAt",
+           pap.url as "proxyUrl"
+    from sync_stream_state sss
+    inner join platform_accounts pa on pa.id = sss.platform_account_id
+    left join platform_account_proxies pap on pap.platform_account_id = sss.platform_account_id
     where status = 'active'
       and desired_revision > satisfied_revision
       and backoff_until <= ${now}
-    group by platform_account_id
+    group by sss.platform_account_id, pa.platform, pap.url
     order by max(effective_priority) desc,
              min(desired_at) asc nulls last,
-             platform_account_id asc
+             sss.platform_account_id asc
   `);
 
   return result.rows.map((row) => ({
     platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
+    platform: normalizePlatformValue(row.platform, "platform"),
     priority: normalizeNumber(row.priority, "priority"),
     desiredAt: parseTimestamp(row.desiredAt, "desiredAt"),
+    proxyUrl: typeof row.proxyUrl === "string" ? row.proxyUrl : null,
   }));
 }
 
@@ -1610,6 +1627,43 @@ export async function updateLegacySyncTimestamp(
     .where(eq(platformAccounts.id, input.platformAccountId));
 }
 
+export async function ensureSyncProviderRateLimitProfile(
+  db: Database,
+  input: {
+    provider: "fansly" | "onlyfans";
+    egressKey: string;
+    scopes: Array<{ scope: string; minSpacingMs: number }>;
+    now?: Date;
+  },
+): Promise<void> {
+  if (input.scopes.length === 0) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const values = input.scopes.map((scope) => sql`(
+    ${input.provider},
+    ${scope.scope},
+    ${input.egressKey},
+    ${scope.minSpacingMs},
+    ${now}
+  )`);
+
+  await db.execute(sql`
+    insert into sync_provider_rate_limits (
+      provider,
+      scope,
+      egress_key,
+      min_spacing_ms,
+      updated_at
+    )
+    values ${sql.join(values, sql`, `)}
+    on conflict (provider, scope, egress_key) do update
+    set min_spacing_ms = excluded.min_spacing_ms,
+        updated_at = excluded.updated_at
+  `);
+}
+
 export async function reserveSyncProviderRateLimit(
   db: Database,
   input: {
@@ -1626,6 +1680,18 @@ export async function reserveSyncProviderRateLimit(
     return now;
   }
 
+  const sortedScopes = [...input.scopes].sort((left, right) => {
+    if (left.provider !== right.provider) {
+      return left.provider.localeCompare(right.provider);
+    }
+
+    if (left.scope !== right.scope) {
+      return left.scope.localeCompare(right.scope);
+    }
+
+    return left.egressKey.localeCompare(right.egressKey);
+  });
+
   const scheduledAt = await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     const lockedRows = [] as Array<{
@@ -1636,7 +1702,7 @@ export async function reserveSyncProviderRateLimit(
       nextAvailableAt: Date;
     }>;
 
-    for (const scope of input.scopes) {
+    for (const scope of sortedScopes) {
       const result = await database.execute<{
         provider: "fansly" | "onlyfans";
         scope: string;

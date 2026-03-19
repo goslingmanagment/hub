@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   captureEvents,
@@ -59,5 +59,48 @@ describe("adapter hardening", () => {
       new Date(String(startedEvents[0]?.timestamp)).getTime(),
     ).toBeGreaterThanOrEqual(100);
     expect(events.some((event) => event.state === "retry")).toBe(false);
+  });
+
+  it("skips in-memory serialization when a shared DB waiter is present", async () => {
+    const {
+      FanslyAdapter,
+    } = await loadAdapters();
+    const waiter = vi.fn(async () => {});
+
+    const adapter = new FanslyAdapter({
+      baseUrl: "https://fansly.example",
+      globalDelayMs: 5,
+    });
+    const waitMs = await (adapter as any).waitForRateLimit({
+      proxy: null,
+      rateLimitWaiter: waiter,
+    }, "transactions", 0);
+
+    expect(waitMs).toBe(0);
+    expect(waiter).toHaveBeenCalledWith([
+      { provider: "fansly", scope: "global" },
+    ]);
+  });
+
+  it("keeps fallback pacing scoped to the current egress", async () => {
+    const {
+      FanslyAdapter,
+    } = await loadAdapters();
+
+    const adapter = new FanslyAdapter({
+      baseUrl: "https://fansly.example",
+      globalDelayMs: 5,
+    });
+
+    await (adapter as any).waitForRateLimit({
+      proxy: null,
+    }, "account", 0);
+    const waitMs = await (adapter as any).waitForRateLimit({
+      proxy: {
+        url: "socks5://proxy-b.example",
+      },
+    }, "account", 0);
+
+    expect(waitMs).toBe(0);
   });
 });

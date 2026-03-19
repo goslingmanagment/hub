@@ -7,6 +7,11 @@ const bootstrapMocks = vi.hoisted(() => {
   const db = {
     kind: "db",
   };
+  const logger = {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+  };
   const adapter = {
     close: vi.fn(async () => {}),
   };
@@ -18,10 +23,11 @@ const bootstrapMocks = vi.hoisted(() => {
     adapter,
     assertRuntimeSchemaReady: vi.fn(),
     createDb: vi.fn(() => db),
-    createLogger: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn() })),
+    createLogger: vi.fn(() => logger),
     createPool: vi.fn(() => pool),
     db,
     FanslyAdapter: vi.fn(() => adapter),
+    logger,
     loadConfig: vi.fn(() => ({
       databaseUrl: "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
       encryptionKey: Buffer.alloc(32, 7),
@@ -33,11 +39,13 @@ const bootstrapMocks = vi.hoisted(() => {
       fanslyBaseUrl: "https://example.invalid",
       onlyMonsterBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
-      fanslyGlobalDelayMs: 2500,
+      fanslyDefaultDelayMs: 2500,
       followerPageDelayMs: 0,
+      onlyFansDefaultDelayMs: 1000,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
       syncSharedRateLimitEnabled: false,
+      syncPageExecutorConcurrency: 1,
       syncObservabilityRetentionDays: 30,
     })),
     onlyFansAdapter,
@@ -84,6 +92,9 @@ vi.mock("@agency_hub_core/onlyfans", async (importOriginal) => {
 describe("bootstrap", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    delete process.env.FANSLY_DEFAULT_DELAY_MS;
+    delete process.env.FANSLY_GLOBAL_DELAY_MS;
+    delete process.env.FANSLY_ACCOUNT_LOOKUP_DELAY_MS;
   });
 
   it("verifies runtime schema readiness before returning the app context", async () => {
@@ -99,6 +110,10 @@ describe("bootstrap", () => {
     expect(bootstrapMocks.FanslyAdapter).toHaveBeenCalledWith({
       baseUrl: "https://example.invalid",
       globalDelayMs: 2500,
+    });
+    expect(bootstrapMocks.OnlyFansAdapter).toHaveBeenCalledWith({
+      baseUrl: "https://example.invalid",
+      defaultDelayMs: 1000,
     });
     expect(app.db).toBe(bootstrapMocks.db);
     expect(app.adapter).toBe(bootstrapMocks.adapter);
@@ -120,6 +135,39 @@ describe("bootstrap", () => {
 
     expect(bootstrapMocks.pool.end).toHaveBeenCalledTimes(1);
     expect(bootstrapMocks.FanslyAdapter).not.toHaveBeenCalled();
+  });
+
+  it("warns when a deprecated Fansly delay alias is the active source", async () => {
+    process.env.FANSLY_GLOBAL_DELAY_MS = "3000";
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
+    bootstrapMocks.loadConfig.mockReturnValueOnce({
+      ...bootstrapMocks.loadConfig(),
+      fanslyDefaultDelayMs: 3000,
+    });
+    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+
+    const app = await createAppContext();
+    await app.close();
+
+    expect(bootstrapMocks.logger.warn).toHaveBeenCalledWith(
+      { envVar: "FANSLY_GLOBAL_DELAY_MS" },
+      "Deprecated Fansly delay env var in use; prefer FANSLY_DEFAULT_DELAY_MS",
+    );
+  });
+
+  it("rejects executor concurrency above 1 when shared limiting is disabled", async () => {
+    bootstrapMocks.loadConfig.mockReturnValueOnce({
+      ...bootstrapMocks.loadConfig(),
+      syncSharedRateLimitEnabled: false,
+      syncPageExecutorConcurrency: 4,
+    });
+    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+
+    await expect(createAppContext()).rejects.toThrow(
+      "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true",
+    );
+
+    expect(bootstrapMocks.createPool).not.toHaveBeenCalled();
   });
 });
 

@@ -1,19 +1,29 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  createFanslyPage,
+  createModel,
+  createOnlyFansPage,
+  ensureSyncStreamStateRows,
   getCurrentSubscribers,
   getFollowersForPage,
   listSyncStreamStateRows,
   pageFollows,
   pageSubscriptions,
+  requestSyncStreamRevisions,
+  resolveSyncRequestPriority,
+  storeFanslySession,
+  storePlatformCredentials,
+  storeProxyConfig,
   syncRuns,
   updatePageMetadata,
 } from "@agency_hub_core/db";
+import { buildProxyEgressKey, encryptJson } from "@agency_hub_core/shared";
 import { PgBoss } from "pg-boss";
 
 import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
 import { requestPageSync, waitForRequestedSyncRevisions } from "../apps/runtime/src/services/sync-control.ts";
-import { ensureSyncQueues } from "../apps/runtime/src/services/sync-queue.ts";
+import { ensureSyncQueues, sendSyncPageWakeup } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   resetIntegrationDatabase,
   seedFanslyPage,
@@ -172,6 +182,206 @@ function createFanslySyncAdapter() {
   };
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function createConcurrencyProbe() {
+  let inFlight = 0;
+  let maxInFlight = 0;
+
+  return {
+    async run<T>(work: () => Promise<T>) {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        return await work();
+      } finally {
+        inFlight -= 1;
+      }
+    },
+    get maxInFlight() {
+      return maxInFlight;
+    },
+  };
+}
+
+function buildFanslyAccountPayload(accountId: string) {
+  return {
+    parsed: {
+      account: {
+        id: accountId,
+        username: `user_${accountId}`,
+        displayName: `User ${accountId}`,
+        createdAt: 1_770_000_000_000,
+        followCount: 0,
+        subscriberCount: 0,
+        earningsWallet: null,
+        walls: [],
+        subscriptionTiers: [],
+      },
+    },
+    raw: {},
+  };
+}
+
+function createInstrumentedFanslyLightAdapter(probe: ReturnType<typeof createConcurrencyProbe>) {
+  return {
+    async verifySession(context: { session: { authorization: string } }) {
+      return buildFanslyAccountPayload(`acct-${context.session.authorization}`);
+    },
+    async getAccountMe(context: { session: { authorization: string } }) {
+      return probe.run(async () => {
+        await sleep(75);
+        return buildFanslyAccountPayload(`acct-${context.session.authorization}`);
+      });
+    },
+  };
+}
+
+function createInstrumentedOnlyFansLightAdapter(probe: ReturnType<typeof createConcurrencyProbe>) {
+  return {
+    async getAccount(_context: unknown, accountId: number) {
+      return probe.run(async () => {
+        await sleep(75);
+        return {
+          parsed: {
+            account: {
+              id: accountId,
+              platform_account_id: `of-${accountId}`,
+              platform: "onlyfans" as const,
+              name: `OnlyFans ${accountId}`,
+              email: `of-${accountId}@example.com`,
+              avatar: "https://example.com/avatar.png",
+              username: `of_${accountId}`,
+              organisation_id: "org-1",
+              subscribe_price: 10,
+              subscription_expiration_date: "2026-04-01T00:00:00.000Z",
+            },
+          },
+          raw: {},
+        };
+      });
+    },
+  };
+}
+
+async function createFanslyLightPage(
+  testDb: StartedTestDatabase,
+  input: {
+    modelId: number;
+    label: string;
+    authorization: string;
+    proxyUrl?: string | null;
+  },
+) {
+  const page = await createFanslyPage(testDb.db, {
+    modelId: input.modelId,
+    label: input.label,
+  });
+  const session = {
+    authorization: input.authorization,
+    fanslyClientId: "client-id",
+    fanslyClientCheck: "client-check",
+    fanslySessionId: `session-${input.authorization}`,
+  };
+
+  await storeFanslySession(
+    testDb.db,
+    page.id,
+    JSON.stringify(encryptJson(session, Buffer.alloc(32, 7), 1)),
+    1,
+  );
+
+  if (input.proxyUrl) {
+    await storeProxyConfig(testDb.db, page.id, {
+      url: input.proxyUrl,
+      encryptedAuth: null,
+      keyVersion: null,
+    });
+  }
+
+  return page;
+}
+
+async function createOnlyFansLightPage(
+  testDb: StartedTestDatabase,
+  input: {
+    modelId: number;
+    label: string;
+    token: string;
+    accountId: number;
+    proxyUrl?: string | null;
+  },
+) {
+  const page = await createOnlyFansPage(testDb.db, {
+    modelId: input.modelId,
+    label: input.label,
+  });
+
+  await storePlatformCredentials(testDb.db, {
+    platformAccountId: page.id,
+    encryptedSession: JSON.stringify(encryptJson({ token: input.token }, Buffer.alloc(32, 7), 1)),
+    keyVersion: 1,
+  });
+
+  if (input.proxyUrl) {
+    await storeProxyConfig(testDb.db, page.id, {
+      url: input.proxyUrl,
+      encryptedAuth: null,
+      keyVersion: null,
+    });
+  }
+
+  await updatePageMetadata(testDb.db, page.id, {
+    platformAccountIdValue: `of-${input.accountId}`,
+    username: `of_${input.accountId}`,
+    displayName: `OnlyFans ${input.accountId}`,
+    followerCount: 0,
+    subscriberCount: 0,
+    earningsBalanceMills: 0n,
+    metadata: {
+      onlyMonsterAccountId: input.accountId,
+      accountCreatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    syncType: "light",
+  });
+
+  return page;
+}
+
+async function requestLightSync(
+  app: ReturnType<typeof createTestAppContext>,
+  boss: Pick<PgBoss, "send">,
+  input: {
+    platformAccountId: number;
+    provider: "fansly" | "onlyfans";
+    proxyUrl?: string | null;
+  },
+) {
+  await ensureSyncStreamStateRows(app.db, {
+    platformAccountId: input.platformAccountId,
+    now: new Date(),
+  });
+
+  const revisions = await requestSyncStreamRevisions(app.db, {
+    platformAccountId: input.platformAccountId,
+    streams: ["light"],
+    reason: "manual",
+  });
+
+  await sendSyncPageWakeup(boss, {
+    platformAccountId: input.platformAccountId,
+    priority: resolveSyncRequestPriority("light", "manual"),
+    provider: input.provider,
+    egressKey: buildProxyEgressKey(input.proxyUrl ? { url: input.proxyUrl } : null),
+  });
+
+  return revisions;
+}
+
 describe("sync integration", () => {
   let testDb: StartedTestDatabase | null = null;
 
@@ -296,6 +506,170 @@ describe("sync integration", () => {
       }).from(syncRuns);
       expect(runRows).toHaveLength(7);
       expect(runRows.every((row) => row.status === "success")).toBe(true);
+    } finally {
+      abortController.abort();
+      await executorPromise;
+      await boss.stop();
+      await app.close();
+    }
+  }, 20_000);
+
+  it("serializes two direct Fansly pages on the same egress even with parallel workers", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "serial-fansly",
+      name: "Serial Fansly",
+    });
+    const firstPage = await createFanslyLightPage(testDb, {
+      modelId: model.id,
+      label: "serial-a",
+      authorization: "serial-a",
+    });
+    const secondPage = await createFanslyLightPage(testDb, {
+      modelId: model.id,
+      label: "serial-b",
+      authorization: "serial-b",
+    });
+    const probe = createConcurrencyProbe();
+    const app = createTestAppContext(testDb, {
+      adapter: createInstrumentedFanslyLightAdapter(probe) as never,
+      fanslyDefaultDelayMs: 1,
+      syncPageExecutorConcurrency: 4,
+      syncSharedRateLimitEnabled: true,
+    });
+    const boss = new PgBoss({ connectionString: testDb.connectionString });
+    const abortController = new AbortController();
+
+    await boss.start();
+    await ensureSyncQueues(boss);
+    const executorPromise = startSyncPageExecutor(app, boss, {
+      signal: abortController.signal,
+    });
+
+    try {
+      const firstRevisions = await requestLightSync(app, boss, {
+        platformAccountId: firstPage.id,
+        provider: "fansly",
+      });
+      const secondRevisions = await requestLightSync(app, boss, {
+        platformAccountId: secondPage.id,
+        provider: "fansly",
+      });
+
+      await Promise.all([
+        waitForRequestedSyncRevisions(app, {
+          platformAccountId: firstPage.id,
+          revisions: firstRevisions,
+          timeoutMs: 10_000,
+          pollMs: 50,
+        }),
+        waitForRequestedSyncRevisions(app, {
+          platformAccountId: secondPage.id,
+          revisions: secondRevisions,
+          timeoutMs: 10_000,
+          pollMs: 50,
+        }),
+      ]);
+
+      expect(probe.maxInFlight).toBe(1);
+    } finally {
+      abortController.abort();
+      await executorPromise;
+      await boss.stop();
+      await app.close();
+    }
+  }, 20_000);
+
+  it("overlaps pages on different egresses and across direct Fansly vs direct OnlyFans", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const fanslyModel = await createModel(testDb.db, {
+      slug: "parallel-fansly",
+      name: "Parallel Fansly",
+    });
+    const onlyFansModel = await createModel(testDb.db, {
+      slug: "parallel-onlyfans",
+      name: "Parallel OnlyFans",
+    });
+    const directFanslyPage = await createFanslyLightPage(testDb, {
+      modelId: fanslyModel.id,
+      label: "parallel-direct",
+      authorization: "parallel-direct",
+    });
+    const proxiedFanslyPage = await createFanslyLightPage(testDb, {
+      modelId: fanslyModel.id,
+      label: "parallel-proxy",
+      authorization: "parallel-proxy",
+      proxyUrl: "socks5://proxy-parallel.example",
+    });
+    const onlyFansPage = await createOnlyFansLightPage(testDb, {
+      modelId: onlyFansModel.id,
+      label: "parallel-onlyfans",
+      token: "parallel-onlyfans",
+      accountId: 42,
+    });
+    const probe = createConcurrencyProbe();
+    const app = createTestAppContext(testDb, {
+      adapter: createInstrumentedFanslyLightAdapter(probe) as never,
+      onlyFansAdapter: createInstrumentedOnlyFansLightAdapter(probe) as never,
+      fanslyDefaultDelayMs: 1,
+      onlyFansDefaultDelayMs: 1,
+      syncPageExecutorConcurrency: 4,
+      syncSharedRateLimitEnabled: true,
+    });
+    const boss = new PgBoss({ connectionString: testDb.connectionString });
+    const abortController = new AbortController();
+
+    await boss.start();
+    await ensureSyncQueues(boss);
+    const executorPromise = startSyncPageExecutor(app, boss, {
+      signal: abortController.signal,
+    });
+
+    try {
+      const directFanslyRevisions = await requestLightSync(app, boss, {
+        platformAccountId: directFanslyPage.id,
+        provider: "fansly",
+      });
+      const proxiedFanslyRevisions = await requestLightSync(app, boss, {
+        platformAccountId: proxiedFanslyPage.id,
+        provider: "fansly",
+        proxyUrl: "socks5://proxy-parallel.example",
+      });
+      const onlyFansRevisions = await requestLightSync(app, boss, {
+        platformAccountId: onlyFansPage.id,
+        provider: "onlyfans",
+      });
+
+      await Promise.all([
+        waitForRequestedSyncRevisions(app, {
+          platformAccountId: directFanslyPage.id,
+          revisions: directFanslyRevisions,
+          timeoutMs: 10_000,
+          pollMs: 50,
+        }),
+        waitForRequestedSyncRevisions(app, {
+          platformAccountId: proxiedFanslyPage.id,
+          revisions: proxiedFanslyRevisions,
+          timeoutMs: 10_000,
+          pollMs: 50,
+        }),
+        waitForRequestedSyncRevisions(app, {
+          platformAccountId: onlyFansPage.id,
+          revisions: onlyFansRevisions,
+          timeoutMs: 10_000,
+          pollMs: 50,
+        }),
+      ]);
+
+      expect(probe.maxInFlight).toBeGreaterThanOrEqual(2);
     } finally {
       abortController.abort();
       await executorPromise;

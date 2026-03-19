@@ -4,7 +4,11 @@ import net, { type Server as NetServer, type Socket } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildProxyDispatcherCacheKey } from "../packages/shared/src/proxy.ts";
+import {
+  buildProxyDispatcherCacheKey,
+  buildProxyEgressKey,
+  buildSyncPageExecuteGroupId,
+} from "../packages/shared/src/proxy.ts";
 import { listenOnLoopback } from "./helpers/network.ts";
 
 const sharedHttpClientRequire = createRequire(new URL("../packages/shared/src/http-client.ts", import.meta.url));
@@ -330,6 +334,19 @@ describe("shared http client helpers", () => {
     expect(key).toContain("socks5://127.0.0.1:1080#");
     expect(key).not.toContain("proxy-user");
     expect(key).not.toContain("proxy-pass");
+  });
+
+  it("builds canonical egress keys and queue group ids", () => {
+    expect(buildProxyEgressKey(null)).toBe("direct");
+    expect(buildProxyEgressKey({
+      url: "socks5://proxy-user:proxy-pass@[2001:db8::1]",
+    })).toBe("socks5://[2001:db8::1]:1080");
+    expect(buildProxyEgressKey({
+      url: "socks5://proxy.example",
+    })).toBe("socks5://proxy.example:1080");
+    expect(buildSyncPageExecuteGroupId("fansly", "socks5://proxy.example:1080")).toBe(
+      "fansly:socks5://proxy.example:1080",
+    );
   });
 
   it("dispatches requests through an HTTP proxy", async () => {

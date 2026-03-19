@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   captureEvents,
@@ -62,5 +62,31 @@ describe("adapter hardening", () => {
     });
     expect(proxyDispatchers[0]?.close).toHaveBeenCalled();
     expect(directDispatchers[0]?.close).toHaveBeenCalled();
+  });
+
+  it("skips in-memory fallback pacing when a shared DB waiter is present", async () => {
+    const {
+      OnlyFansAdapter,
+    } = await loadAdapters();
+    const waiter = vi.fn(async () => {});
+
+    const adapter = new OnlyFansAdapter({
+      baseUrl: "https://onlyfans.example",
+      defaultDelayMs: 25,
+    });
+    const waitMs = await (adapter as any).waitForRateLimit({
+      auth: {
+        token: "om-token",
+      },
+      proxy: {
+        url: "http://proxy.example:8080",
+      },
+      rateLimitWaiter: waiter,
+    }, "accounts", 25);
+
+    expect(waitMs).toBe(0);
+    expect(waiter).toHaveBeenCalledWith([
+      { provider: "onlyfans", scope: "global" },
+    ]);
   });
 });
