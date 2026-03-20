@@ -245,13 +245,15 @@ describe("telegram revenue report integration", () => {
     }));
     expect(report.overflow?.metrics.yesterday.currentMills).toBe(15_000n);
 
+    expect(report.pages[0]?.modelLabel).toBe("Alpha Model");
+
     expect(report.parseMode).toBe("HTML");
     expect(report.text).toContain("📊 <b>Revenue Report</b>");
     expect(report.text).toContain("2026-03-19");
+    // Models as section headers with pages grouped below
     expect(report.text).toContain("<b>Alpha Model</b>");
     expect(report.text).toContain("$200.00");
-    expect(report.text).toContain("<b>alpha-fansly</b>");
-    expect(report.text).toContain("$120.00");
+    expect(report.text).toContain("alpha-fansly $120.00");
     expect(report.text).toContain(`+${report.overflow?.pageCount} more`);
     expect(report.text).toContain("—");
     expect(report.text).not.toContain("$999.00");

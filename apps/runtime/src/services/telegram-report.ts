@@ -34,6 +34,7 @@ interface ReportRow {
 
 interface RankedPageRow extends ReportRow {
   pageId: number;
+  modelLabel: string;
 }
 
 export interface DailyRevenueTelegramReport {
@@ -41,7 +42,7 @@ export interface DailyRevenueTelegramReport {
   generatedAt: string;
   agency: ReportRow;
   models: ReportRow[];
-  pages: ReportRow[];
+  pages: (ReportRow & { modelLabel: string })[];
   overflow: (ReportRow & { pageCount: number }) | null;
   text: string;
   parseMode: "HTML";
@@ -172,6 +173,14 @@ function createReportRow(
   };
 }
 
+function directionEmoji(deltaPct: number | null): string {
+  if (deltaPct === null || Math.abs(deltaPct) < 0.05) {
+    return "";
+  }
+
+  return deltaPct > 0 ? "🟢 " : "🔴 ";
+}
+
 function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramReport, "text" | "parseMode">) {
   const lines: string[] = [];
   const agencyYesterday = report.agency.metrics.yesterday;
@@ -181,41 +190,42 @@ function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramRepor
   lines.push(report.reportDate);
   lines.push("");
 
-  // Agency total
+  // Agency total with color indicator
   lines.push(
-    `<b>${formatUsdFromMills(agencyYesterday.currentMills)}</b> ${formatDelta(agencyYesterday.deltaPct)}`,
+    `${directionEmoji(agencyYesterday.deltaPct)}<b>${formatUsdFromMills(agencyYesterday.currentMills)}</b> ${formatDelta(agencyYesterday.deltaPct)}`,
   );
   lines.push(
     `7d ${formatMetric(report.agency.metrics.days7)} · 30d ${formatMetric(report.agency.metrics.days30)}`,
   );
 
-  // Models — compact: name + share + yesterday on line 1, 7d/30d on line 2
-  lines.push("");
-  lines.push("👤 <b>Models</b>");
+  // Group pages by model
+  const pagesByModel = new Map<string, typeof report.pages>();
+  for (const page of report.pages) {
+    const existing = pagesByModel.get(page.modelLabel) ?? [];
+    existing.push(page);
+    pagesByModel.set(page.modelLabel, existing);
+  }
 
+  // Each model as a section with its pages nested below
   if (report.models.length === 0) {
+    lines.push("");
     lines.push("No models");
   } else {
     for (const model of report.models) {
       const share = formatShare(model.metrics.yesterday.currentMills, agencyYesterday.currentMills);
+      lines.push("");
       lines.push(`<b>${escapeHtml(model.label)}</b> (${share}) ${formatMetric(model.metrics.yesterday)}`);
       lines.push(`  7d ${formatMetric(model.metrics.days7)} · 30d ${formatMetric(model.metrics.days30)}`);
-    }
-  }
 
-  // Pages — one line each, yesterday only
-  lines.push("");
-  lines.push("📄 <b>Top Pages</b>");
-
-  if (report.pages.length === 0) {
-    lines.push("No pages");
-  } else {
-    for (const page of report.pages) {
-      lines.push(`<b>${escapeHtml(page.label)}</b> ${formatMetric(page.metrics.yesterday)}`);
+      const modelPages = pagesByModel.get(model.label) ?? [];
+      for (const page of modelPages) {
+        lines.push(`  ${escapeHtml(page.label)} ${formatMetric(page.metrics.yesterday)}`);
+      }
     }
   }
 
   if (report.overflow) {
+    lines.push("");
     lines.push(`<i>+${report.overflow.pageCount} more</i> ${formatMetric(report.overflow.metrics.yesterday)}`);
   }
 
@@ -283,6 +293,11 @@ export async function buildDailyRevenueTelegramReport(
     modelPageIds.set(page.modelSlug, current);
   }
 
+  const modelSlugToLabel = new Map<string, string>();
+  for (const [slug, model] of modelPageIds.entries()) {
+    modelSlugToLabel.set(slug, model.name || slug);
+  }
+
   const models = Array.from(modelPageIds.entries())
     .map(([modelSlug, model]) => createReportRow(model.name || modelSlug, model.pageIds, totalsByWindow))
     .sort(sortByYesterday);
@@ -290,6 +305,7 @@ export async function buildDailyRevenueTelegramReport(
   const rankedPages = pageRows
     .map((page) => ({
       pageId: page.id,
+      modelLabel: modelSlugToLabel.get(page.modelSlug) ?? page.modelSlug,
       ...createReportRow(page.label, [page.id], totalsByWindow),
     } satisfies RankedPageRow))
     .sort(sortByYesterday);
