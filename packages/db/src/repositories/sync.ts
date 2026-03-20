@@ -866,6 +866,100 @@ export async function listSyncRequestAttempts(
   return result.rows.map((row) => normalizeSyncRequestAttemptRow(row));
 }
 
+export async function listSyncMonitorRecentRequests(
+  db: Database,
+  input?: {
+    pageIds?: number[];
+    since?: Date;
+    limit?: number;
+  },
+) {
+  if (input?.pageIds !== undefined && input.pageIds.length === 0) {
+    return [] as Array<{
+      attemptId: number;
+      runId: number;
+      pageId: number;
+      platformAccountId: number;
+      pageLabel: string;
+      provider: "fansly" | "onlyfans";
+      stream: SyncAuditStream;
+      operation: string;
+      attemptNumber: number;
+      state: "started" | "success" | "retry" | "failed";
+      httpStatus: number | null;
+      durationMs: number | null;
+      startedAt: Date;
+      finishedAt: Date | null;
+      requestShape: Record<string, unknown> | null;
+    }>;
+  }
+
+  const pageClauses = [sql`true`];
+  if (input?.pageIds !== undefined) {
+    pageClauses.push(inArray(platformAccounts.id, input.pageIds));
+  }
+
+  const requestClauses = [sql`true`];
+  if (input?.since) {
+    requestClauses.push(sql`a.started_at >= ${input.since}`);
+  }
+
+  const result = await db.execute<{
+    attemptId: NumericValue;
+    runId: NumericValue;
+    pageId: NumericValue;
+    platformAccountId: NumericValue;
+    pageLabel: string;
+    provider: "fansly" | "onlyfans";
+    stream: string;
+    operation: string;
+    attemptNumber: number;
+    state: "started" | "success" | "retry" | "failed";
+    httpStatus: number | null;
+    durationMs: number | null;
+    startedAt: Date | string;
+    finishedAt: TimestampValue;
+    requestShape: Record<string, unknown> | null;
+  }>(sql`
+    with visible_pages as (
+      select ${platformAccounts.id} as "pageId",
+             ${platformAccounts.label} as "pageLabel"
+      from ${platformAccounts}
+      where ${and(...pageClauses)}
+    )
+    select a.id as "attemptId",
+           a.sync_run_id as "runId",
+           vp."pageId" as "pageId",
+           a.platform_account_id as "platformAccountId",
+           vp."pageLabel" as "pageLabel",
+           a.provider as "provider",
+           a.stream as "stream",
+           a.operation as "operation",
+           a.attempt_number as "attemptNumber",
+           a.state as "state",
+           a.http_status as "httpStatus",
+           a.duration_ms as "durationMs",
+           a.started_at as "startedAt",
+           a.finished_at as "finishedAt",
+           a.request_shape as "requestShape"
+    from ${syncRequestAttempts} a
+    inner join visible_pages vp on vp."pageId" = a.platform_account_id
+    where ${and(...requestClauses)}
+    order by a.started_at desc, a.id desc
+    limit ${input?.limit ?? 100}
+  `);
+
+  return result.rows.map((row) => {
+    const normalized = normalizeSyncRequestAttemptRow(row);
+    return {
+      ...normalized,
+      pageId: normalizeNumber(row.pageId, "pageId"),
+      stream: asSyncAuditStream(row.stream),
+      requestShape: normalizeNullableJsonRecord(row.requestShape, "requestShape"),
+    };
+  });
+}
+
 export async function listRunningSyncRuns(
   db: Database,
   input?: {

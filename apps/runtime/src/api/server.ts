@@ -104,7 +104,7 @@ import {
   getCrmRetentionReport,
   getCrmSummaryReport,
 } from "../services/crm.ts";
-import { getSyncMonitorSnapshot } from "../services/sync-monitor.ts";
+import { getSyncMonitorRecentRequests, getSyncMonitorSnapshot } from "../services/sync-monitor.ts";
 import {
   getSpenderBatch,
   getSpenderDetail,
@@ -812,6 +812,19 @@ export async function buildApiServer(appContext: AppContext) {
       pageLabel: query.pageLabel,
       windowHours: query.windowHours,
       eventLimit: query.eventLimit,
+    });
+  });
+
+  server.get("/api/v1/sync/requests", {
+    schema: routeSchemas.syncRequests,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+
+    return getSyncMonitorRecentRequests(appContext, {
+      pageIds: pageScopeFor(principal),
+      since: request.query.since,
+      limit: request.query.limit,
     });
   });
 

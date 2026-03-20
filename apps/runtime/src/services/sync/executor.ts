@@ -83,6 +83,7 @@ async function createChunkTelemetry(
     provider: pageContext.platform,
     stream: streamState.stream,
     trigger: streamState.pendingReason,
+    egressKey: buildProxyEgressKey(pageContext.proxy),
   }, {
     runStartedAt: run.startedAt,
   });

@@ -25,6 +25,7 @@ import type {
   ConnectionItem,
   SyncRunItem,
   SyncMonitorResponse,
+  SyncRequestsResponse,
   FanNoteResponse,
   FanFlagsResponse,
   FanListResponse,
@@ -373,6 +374,19 @@ export function useSyncMonitor(params: { pageLabel?: string; windowHours?: numbe
     queryKey: ["syncMonitor", params],
     queryFn: () => api.get<SyncMonitorResponse>(`/api/v1/sync/status${qs(params)}`),
     refetchInterval: 10_000,
+  });
+}
+
+export function useSyncRequests(
+  params: { since?: string; limit?: number } = {},
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["syncRequests", params],
+    queryFn: () => api.get<SyncRequestsResponse>(`/api/v1/sync/requests${qs(params)}`),
+    enabled: options.enabled ?? true,
+    refetchInterval: 3_000,
+    placeholderData: (previousData) => previousData,
   });
 }
 

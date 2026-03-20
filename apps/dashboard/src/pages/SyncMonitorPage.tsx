@@ -1,6 +1,6 @@
-import { useState } from "react";
-import type { SyncMonitorResponse } from "@agency_hub_core/contracts";
-import { useSyncMonitor } from "@/api/queries";
+import { useLayoutEffect, useRef, useState } from "react";
+import type { SyncMonitorResponse, SyncRequestsResponse } from "@agency_hub_core/contracts";
+import { useSyncMonitor, useSyncRequests } from "@/api/queries";
 import { PLATFORM_COLORS } from "@/lib/constants";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
@@ -11,6 +11,8 @@ import { formatDateTime, formatRelativeTime } from "@/lib/format";
 type StreamItem = SyncMonitorResponse["pages"][number]["streams"][number];
 type PageItem = SyncMonitorResponse["pages"][number];
 type EventItem = SyncMonitorResponse["recentEvents"][number];
+type RequestItem = SyncRequestsResponse[number];
+type ActivityTab = "events" | "requests";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -24,6 +26,7 @@ const STREAM_LABELS: Record<string, string> = {
   dm_messages: "DM Messages",
   followers: "Followers",
   followers_reconcile: "Followers Reconcile",
+  cleanup: "Cleanup",
 };
 
 /* ------------------------------------------------------------------ */
@@ -77,6 +80,52 @@ function computeEta(stream: StreamItem): string | null {
 
 function num(v: number): string {
   return v.toLocaleString();
+}
+
+function formatRequestTimestamp(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatRequestMetric(ms: number): string {
+  if (ms < 1_000) return `${ms}ms`;
+  if (ms < 10_000) return `${(ms / 1_000).toFixed(1)}s`;
+  if (ms < 60_000) return `${Math.round(ms / 1_000)}s`;
+  return formatDuration(ms);
+}
+
+function requestRowClasses(item: RequestItem): string {
+  if (item.httpStatusCode === 429) {
+    return "bg-warning/10";
+  }
+  if (item.httpStatusCode !== null && item.httpStatusCode >= 500) {
+    return "bg-danger/10";
+  }
+  return "bg-card";
+}
+
+function requestBadgeClasses(item: RequestItem): string {
+  if (item.httpStatusCode === 429) {
+    return "border-warning/40 bg-warning/12 text-warning-dark";
+  }
+  if (item.httpStatusCode !== null && item.httpStatusCode >= 500) {
+    return "border-danger/30 bg-danger/12 text-danger";
+  }
+  return "border-border bg-hover-alt text-text-secondary";
+}
+
+function requestBadgeText(item: RequestItem): string {
+  if (item.httpStatusCode !== null) {
+    return String(item.httpStatusCode);
+  }
+  return item.status.toUpperCase();
 }
 
 /* ------------------------------------------------------------------ */
@@ -480,12 +529,192 @@ function EventTimeline({ events }: { events: EventItem[] }) {
   );
 }
 
+function LiveRequestsPanel({
+  items,
+  isLoading,
+}: {
+  items: RequestItem[];
+  isLoading: boolean;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const pinnedToTopRef = useRef(true);
+  const previousMetricsRef = useRef({
+    itemCount: 0,
+    scrollHeight: 0,
+  });
+
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+
+    const previousMetrics = previousMetricsRef.current;
+    const nextScrollHeight = element.scrollHeight;
+
+    if (previousMetrics.itemCount > 0) {
+      if (pinnedToTopRef.current || element.scrollTop <= 24) {
+        element.scrollTop = 0;
+      } else {
+        const scrollDelta = nextScrollHeight - previousMetrics.scrollHeight;
+        if (scrollDelta > 0) {
+          element.scrollTop += scrollDelta;
+        }
+      }
+    }
+
+    previousMetricsRef.current = {
+      itemCount: items.length,
+      scrollHeight: nextScrollHeight,
+    };
+  }, [items]);
+
+  if (isLoading && items.length === 0) {
+    return (
+      <div className="rounded-xl border border-border bg-card px-6 py-8 text-center text-[13px] text-text-muted">
+        Loading live requests…
+      </div>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="rounded-xl border border-border bg-card px-6 py-8 text-center text-[13px] text-text-muted">
+        No recent requests
+      </div>
+    );
+  }
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
+        <div>
+          <h2 className="text-[15px] font-bold text-text-primary">Live Requests</h2>
+          <p className="mt-0.5 text-[12px] text-text-muted">Polling every 3s</p>
+        </div>
+        <span className="text-[12px] text-text-muted">{items.length} shown</span>
+      </div>
+      <div
+        ref={scrollRef}
+        onScroll={(event) => {
+          pinnedToTopRef.current = event.currentTarget.scrollTop <= 24;
+        }}
+        className="max-h-[460px] overflow-y-auto"
+      >
+        <div className="divide-y divide-border-light">
+          {items.map((item) => (
+            <div key={`${item.timestamp}:${item.pageLabel}:${item.operation}:${item.attemptNumber}`} className={`px-5 py-3.5 ${requestRowClasses(item)}`}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-text-muted">
+                    <span>{formatRequestTimestamp(item.timestamp)}</span>
+                    <span>·</span>
+                    <span className="font-medium text-text-secondary">{item.pageLabel}</span>
+                    <span>·</span>
+                    <span>{STREAM_LABELS[item.stream] ?? item.stream}</span>
+                    <span>/</span>
+                    <span>{item.operation}</span>
+                  </div>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-text-muted">
+                    <span className="rounded-md border border-border bg-hover-alt px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
+                      {item.method}
+                    </span>
+                    <span className="min-w-0 truncate font-mono text-[11px] text-text-secondary">
+                      {item.endpoint}
+                    </span>
+                    {item.groupId && (
+                      <span className="rounded-md border border-border bg-hover-alt px-2 py-0.5 text-[10px] font-medium text-text-secondary">
+                        group {item.groupId}
+                      </span>
+                    )}
+                    {item.proxyGapMs !== null && item.proxyGapMs > 0 && (
+                      <span className="rounded-md border border-border bg-hover-alt px-2 py-0.5 text-[10px] font-medium text-text-secondary">
+                        gap {formatRequestMetric(item.proxyGapMs)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                  <span className={`inline-flex rounded-md border px-2.5 py-1 text-[11px] font-semibold tabular-nums ${requestBadgeClasses(item)}`}>
+                    {requestBadgeText(item)}
+                  </span>
+                  {item.durationMs !== null && (
+                    <span className="text-[12px] tabular-nums text-text-secondary">
+                      {formatRequestMetric(item.durationMs)}
+                    </span>
+                  )}
+                  {item.rateLimitWaitMs !== null && item.rateLimitWaitMs > 0 && (
+                    <span className="rounded-md border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning-dark">
+                      wait {formatRequestMetric(item.rateLimitWaitMs)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ActivitySection({
+  activeTab,
+  onChange,
+  events,
+  requests,
+  requestsLoading,
+}: {
+  activeTab: ActivityTab;
+  onChange: (tab: ActivityTab) => void;
+  events: EventItem[];
+  requests: RequestItem[];
+  requestsLoading: boolean;
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onChange("events")}
+          className={`rounded-button px-4 py-2 text-sm font-medium transition-colors ${
+            activeTab === "events"
+              ? "bg-[#1a1a1a] text-white"
+              : "border border-border bg-card text-text-secondary hover:bg-hover"
+          }`}
+        >
+          Events
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange("requests")}
+          className={`rounded-button px-4 py-2 text-sm font-medium transition-colors ${
+            activeTab === "requests"
+              ? "bg-[#1a1a1a] text-white"
+              : "border border-border bg-card text-text-secondary hover:bg-hover"
+          }`}
+        >
+          Live Requests
+        </button>
+      </div>
+      {activeTab === "events"
+        ? <EventTimeline events={events} />
+        : <LiveRequestsPanel items={requests} isLoading={requestsLoading} />}
+    </section>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
 
 export function SyncMonitorPage() {
+  const [activityTab, setActivityTab] = useState<ActivityTab>("events");
   const { data, isLoading } = useSyncMonitor();
+  const { data: requests = [], isLoading: requestsLoading } = useSyncRequests(
+    { limit: 100 },
+    { enabled: activityTab === "requests" },
+  );
 
   if (isLoading || !data) {
     return (
@@ -504,7 +733,13 @@ export function SyncMonitorPage() {
           <PageCard key={page.pageId} page={page} />
         ))}
       </section>
-      <EventTimeline events={data.recentEvents} />
+      <ActivitySection
+        activeTab={activityTab}
+        onChange={setActivityTab}
+        events={data.recentEvents}
+        requests={requests}
+        requestsLoading={requestsLoading}
+      />
     </div>
   );
 }

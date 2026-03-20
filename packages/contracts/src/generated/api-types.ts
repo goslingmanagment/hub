@@ -3482,6 +3482,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sync/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get recent visible sync worker HTTP requests */
+        get: {
+            parameters: {
+                query?: {
+                    since?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            timestamp: string;
+                            pageLabel: string;
+                            /** @enum {string} */
+                            platform: "fansly" | "onlyfans";
+                            /** @enum {string} */
+                            stream: "light" | "followers" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile" | "cleanup";
+                            operation: string;
+                            endpoint: string;
+                            method: string;
+                            attemptNumber: number;
+                            /** @enum {string} */
+                            status: "started" | "success" | "retry" | "failed";
+                            httpStatusCode: number | null;
+                            durationMs: number | null;
+                            rateLimitWaitMs: number | null;
+                            groupId: string | null;
+                            proxyGapMs: number | null;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/overview/revenue/daily": {
         parameters: {
             query?: never;

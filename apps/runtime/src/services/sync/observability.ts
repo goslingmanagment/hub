@@ -340,6 +340,7 @@ export class SyncRunTelemetry {
       provider: SyncProvider;
       stream: SyncStream;
       trigger: string;
+      egressKey: string;
     },
     input?: {
       runStartedAt?: Date | string | null;
@@ -682,6 +683,7 @@ export class SyncRunTelemetry {
 
   private buildRequestShape(event: HttpRequestEvent) {
     return compactRecord({
+      egressKey: this.metadata.egressKey,
       endpointTemplate: event.endpointTemplate,
       method: event.method,
       rateLimitWaitMs: event.rateLimitWaitMs ?? undefined,

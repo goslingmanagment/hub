@@ -62,10 +62,13 @@ describe("sync observability", () => {
         provider: "fansly",
         stream: "light",
         trigger: "cli",
+        egressKey: "direct",
       },
     );
 
-    vi.spyOn(dbRepo, "insertSyncRequestAttempt").mockRejectedValueOnce(new Error("telemetry down"));
+    const insertAttemptSpy = vi
+      .spyOn(dbRepo, "insertSyncRequestAttempt")
+      .mockRejectedValueOnce(new Error("telemetry down"));
     vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({
       id: 1,
     } as never);
@@ -98,6 +101,11 @@ describe("sync observability", () => {
     });
 
     expect(logger.warn).toHaveBeenCalled();
+    expect(insertAttemptSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      requestShape: expect.objectContaining({
+        egressKey: "direct",
+      }),
+    }));
     expect(stdoutLines).toHaveLength(2);
     expect(stdoutLines.join("")).toContain("\"component\":\"sync_http\"");
     expect(telemetry.getRequestTotalsSnapshot()).toMatchObject({
@@ -147,13 +155,14 @@ describe("sync observability", () => {
         provider: "onlyfans",
         stream: "dm_messages",
         trigger: "worker",
+        egressKey: "shared-proxy",
       },
       {
         runStartedAt: new Date("2026-03-10T12:00:00.000Z"),
       },
     );
 
-    vi.spyOn(dbRepo, "insertSyncRequestAttempt").mockResolvedValue({ id: 11 } as never);
+    const insertAttemptSpy = vi.spyOn(dbRepo, "insertSyncRequestAttempt").mockResolvedValue({ id: 11 } as never);
     vi.spyOn(dbRepo, "finishSyncRequestAttempt").mockResolvedValue({ id: 11 } as never);
     vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 12 } as never);
     vi.spyOn(dbRepo, "finishSyncRun").mockResolvedValue({ id: 73 } as never);
@@ -209,6 +218,11 @@ describe("sync observability", () => {
     });
     await telemetry.finish("success", null, {});
 
+    expect(insertAttemptSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      requestShape: expect.objectContaining({
+        egressKey: "shared-proxy",
+      }),
+    }));
     const fileContents = await readFile(traceFile, "utf8");
     expect(fileContents).toContain("\"component\":\"sync_http\"");
     expect(fileContents).toContain("\"component\":\"sync_http_summary\"");
@@ -216,6 +230,7 @@ describe("sync observability", () => {
     expect(fileContents).toContain("\"pageIndex\":0");
     expect(fileContents).toContain("\"cursorPresent\":false");
     expect(fileContents).not.toContain("x-om-auth-token");
+    expect(fileContents).not.toContain("shared-proxy");
 
     await rm(traceDir, { recursive: true, force: true });
   });

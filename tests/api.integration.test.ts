@@ -580,33 +580,43 @@ async function seedMonitorAttempt(
     pageId: number;
     stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile";
     startedAt: Date;
-    finishedAt: Date;
-    state: "success" | "retry" | "failed";
+    finishedAt?: Date;
+    state: "started" | "success" | "retry" | "failed";
     httpStatus?: number | null;
     failureKind?: "timeout" | "transport" | "http" | "provider" | null;
     errorMessage?: string | null;
+    attemptNumber?: number;
+    operation?: string;
+    provider?: "fansly" | "onlyfans";
+    requestShape?: Record<string, unknown>;
   },
 ) {
   const attempt = await insertSyncRequestAttempt(testDb.db, {
     syncRunId: input.runId,
     platformAccountId: input.pageId,
-    provider: "fansly",
+    provider: input.provider ?? "fansly",
     stream: input.stream,
-    operation: `${input.stream}_request`,
+    operation: input.operation ?? `${input.stream}_request`,
     logicalRequestId: `${input.stream}:${input.runId}:${input.startedAt.toISOString()}`,
-    attemptNumber: 1,
-    requestShape: {},
+    attemptNumber: input.attemptNumber ?? 1,
+    requestShape: input.requestShape ?? {},
     startedAt: input.startedAt,
   });
+  if (input.state === "started") {
+    return attempt;
+  }
+
   await finishSyncRequestAttempt(testDb.db, attempt.id, {
     state: input.state,
     httpStatus: input.httpStatus ?? null,
     failureKind: input.failureKind ?? null,
     errorMessage: input.errorMessage ?? null,
-    durationMs: Math.max(1, input.finishedAt.getTime() - input.startedAt.getTime()),
+    durationMs: Math.max(1, (input.finishedAt ?? input.startedAt).getTime() - input.startedAt.getTime()),
     responseShape: {},
-    finishedAt: input.finishedAt,
+    finishedAt: input.finishedAt ?? input.startedAt,
   });
+
+  return attempt;
 }
 
 async function seedSyncMonitorScenario(
@@ -1131,6 +1141,149 @@ async function seedSyncMonitorScenario(
     last5xxAt,
     lightRunningEventAt,
     lightRunningStartedAt,
+  };
+}
+
+async function seedSyncRequestsScenario(
+  testDb: StartedTestDatabase,
+  input: {
+    lanaPageId: number;
+    lilyPageId: number;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const secondsAgo = (seconds: number) => new Date(now.getTime() - seconds * 1_000);
+
+  const lanaStartedAt = secondsAgo(3);
+  const lilySharedAt = secondsAgo(4);
+  const lanaRetryAt = secondsAgo(8);
+  const lanaFailedAt = secondsAgo(14);
+  const oldAttemptAt = secondsAgo(75);
+
+  const lanaMessagesRun = await seedMonitorRunningRun(testDb, {
+    pageId: input.lanaPageId,
+    stream: "dm_messages",
+    startedAt: secondsAgo(6),
+  });
+  const lilyFollowersRun = await seedMonitorCompletedRun(testDb, {
+    pageId: input.lilyPageId,
+    stream: "followers",
+    status: "success",
+    startedAt: secondsAgo(10),
+    finishedAt: secondsAgo(2),
+  });
+  const lanaTransactionsRun = await seedMonitorCompletedRun(testDb, {
+    pageId: input.lanaPageId,
+    stream: "transactions",
+    status: "partial",
+    startedAt: secondsAgo(12),
+    finishedAt: secondsAgo(7),
+  });
+  const lanaFollowersRun = await seedMonitorCompletedRun(testDb, {
+    pageId: input.lanaPageId,
+    stream: "followers",
+    status: "failed",
+    startedAt: secondsAgo(20),
+    finishedAt: secondsAgo(13),
+  });
+  const lilyOldRun = await seedMonitorCompletedRun(testDb, {
+    pageId: input.lilyPageId,
+    stream: "light",
+    status: "success",
+    startedAt: secondsAgo(90),
+    finishedAt: secondsAgo(70),
+  });
+
+  await seedMonitorAttempt(testDb, {
+    runId: lanaMessagesRun.id,
+    pageId: input.lanaPageId,
+    stream: "dm_messages",
+    operation: "messages",
+    startedAt: lanaStartedAt,
+    state: "started",
+    requestShape: {
+      endpointTemplate: "/message",
+      method: "GET",
+      rateLimitWaitMs: 1_200,
+      groupId: "group-live-1",
+      egressKey: "proxy-a",
+    },
+  });
+  await seedMonitorAttempt(testDb, {
+    runId: lilyFollowersRun.id,
+    pageId: input.lilyPageId,
+    stream: "followers",
+    operation: "followers",
+    startedAt: lilySharedAt,
+    finishedAt: new Date(lilySharedAt.getTime() + 240),
+    state: "success",
+    httpStatus: 200,
+    requestShape: {
+      endpointTemplate: "/account/:accountId/followersnew",
+      method: "GET",
+      egressKey: "proxy-a",
+    },
+  });
+  await seedMonitorAttempt(testDb, {
+    runId: lanaTransactionsRun.id,
+    pageId: input.lanaPageId,
+    stream: "transactions",
+    operation: "earnings_transactions",
+    attemptNumber: 2,
+    startedAt: lanaRetryAt,
+    finishedAt: new Date(lanaRetryAt.getTime() + 650),
+    state: "retry",
+    httpStatus: 429,
+    failureKind: "http",
+    errorMessage: "Rate limited",
+    requestShape: {
+      endpointTemplate: "/account/wallets/earnings/transactions",
+      method: "GET",
+      rateLimitWaitMs: 2_500,
+      egressKey: "proxy-a",
+    },
+  });
+  await seedMonitorAttempt(testDb, {
+    runId: lanaFollowersRun.id,
+    pageId: input.lanaPageId,
+    stream: "followers",
+    operation: "followers",
+    startedAt: lanaFailedAt,
+    finishedAt: new Date(lanaFailedAt.getTime() + 900),
+    state: "failed",
+    httpStatus: 500,
+    failureKind: "http",
+    errorMessage: "Provider error",
+    requestShape: {
+      endpointTemplate: "/account/:accountId/followersnew",
+      method: "GET",
+      egressKey: "proxy-c",
+    },
+  });
+  await seedMonitorAttempt(testDb, {
+    runId: lilyOldRun.id,
+    pageId: input.lilyPageId,
+    stream: "light",
+    operation: "account_me",
+    startedAt: oldAttemptAt,
+    finishedAt: new Date(oldAttemptAt.getTime() + 180),
+    state: "success",
+    httpStatus: 200,
+    requestShape: {
+      endpointTemplate: "/account/me",
+      method: "GET",
+      egressKey: "proxy-old",
+    },
+  });
+
+  return {
+    now,
+    lanaStartedAt,
+    lilySharedAt,
+    lanaRetryAt,
+    lanaFailedAt,
+    oldAttemptAt,
   };
 }
 
@@ -4821,4 +4974,206 @@ describe("api integration", () => {
     expect(filtered.statusCode).toBe(200);
     expect(filtered.json().pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
   }, 15_000);
+
+  it("lists recent sync requests with field mapping, scope-aware proxy gaps, and since filtering", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const currentTestDb = testDb;
+    const currentFixture = fixture;
+    const now = new Date();
+    const seeded = await seedSyncRequestsScenario(currentTestDb, {
+      lanaPageId: currentFixture.lanaPage.id,
+      lilyPageId: currentFixture.lilyPage.id,
+      now,
+    });
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const ownerResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/requests?limit=10",
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(ownerResponse.statusCode).toBe(200);
+    const ownerBody = ownerResponse.json();
+    expect(ownerBody).toHaveLength(4);
+    expect(ownerBody.map((item: { timestamp: string }) => item.timestamp)).toEqual([
+      seeded.lanaStartedAt.toISOString(),
+      seeded.lilySharedAt.toISOString(),
+      seeded.lanaRetryAt.toISOString(),
+      seeded.lanaFailedAt.toISOString(),
+    ]);
+    expect(ownerBody[0]).toMatchObject({
+      timestamp: seeded.lanaStartedAt.toISOString(),
+      pageLabel: "lana",
+      platform: "fansly",
+      stream: "dm_messages",
+      operation: "messages",
+      endpoint: "/message",
+      method: "GET",
+      attemptNumber: 1,
+      status: "started",
+      httpStatusCode: null,
+      durationMs: null,
+      rateLimitWaitMs: 1200,
+      groupId: "group-live-1",
+      proxyGapMs: null,
+    });
+    expect(ownerBody[1]).toMatchObject({
+      timestamp: seeded.lilySharedAt.toISOString(),
+      pageLabel: "lily1",
+      platform: "fansly",
+      stream: "followers",
+      operation: "followers",
+      endpoint: "/account/:accountId/followersnew",
+      method: "GET",
+      attemptNumber: 1,
+      status: "success",
+      httpStatusCode: 200,
+      durationMs: 240,
+      rateLimitWaitMs: null,
+      groupId: null,
+      proxyGapMs: 1000,
+    });
+    expect(ownerBody[2]).toMatchObject({
+      timestamp: seeded.lanaRetryAt.toISOString(),
+      pageLabel: "lana",
+      platform: "fansly",
+      stream: "transactions",
+      operation: "earnings_transactions",
+      endpoint: "/account/wallets/earnings/transactions",
+      method: "GET",
+      attemptNumber: 2,
+      status: "retry",
+      httpStatusCode: 429,
+      durationMs: 650,
+      rateLimitWaitMs: 2500,
+      groupId: null,
+      proxyGapMs: 4000,
+    });
+    expect(ownerBody[3]).toMatchObject({
+      timestamp: seeded.lanaFailedAt.toISOString(),
+      pageLabel: "lana",
+      stream: "followers",
+      status: "failed",
+      httpStatusCode: 500,
+      durationMs: 900,
+      proxyGapMs: null,
+    });
+
+    const withOlderSince = await server.inject({
+      method: "GET",
+      url: `/api/v1/sync/requests?since=${encodeURIComponent(new Date(now.getTime() - 120_000).toISOString())}&limit=10`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(withOlderSince.statusCode).toBe(200);
+    expect(withOlderSince.json()).toHaveLength(5);
+    expect(withOlderSince.json().at(-1)).toMatchObject({
+      timestamp: seeded.oldAttemptAt.toISOString(),
+      endpoint: "/account/me",
+      method: "GET",
+      status: "success",
+    });
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "lead", password: "lead-secret" },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+    const leadResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/requests?limit=10",
+      headers: { cookie: leadCookie },
+    });
+
+    expect(leadResponse.statusCode).toBe(200);
+    const leadBody = leadResponse.json();
+    expect(leadBody.map((item: { pageLabel: string }) => item.pageLabel)).toEqual([
+      "lana",
+      "lana",
+      "lana",
+    ]);
+    expect(leadBody[0]?.proxyGapMs).toBeNull();
+    expect(leadBody[1]).toMatchObject({
+      timestamp: seeded.lanaRetryAt.toISOString(),
+      proxyGapMs: 5000,
+    });
+
+    await unassignPageFromUser(createTestAppContext(currentTestDb), {
+      username: "lead",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const noScopeResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/requests?limit=10",
+      headers: { cookie: leadCookie },
+    });
+    expect(noScopeResponse.statusCode).toBe(200);
+    expect(noScopeResponse.json()).toEqual([]);
+  }, 15_000);
+
+  it("clamps sync request limits to 500 rows", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const currentTestDb = testDb;
+    const currentFixture = fixture;
+    const now = new Date();
+    const bulkRun = await seedMonitorRunningRun(currentTestDb, {
+      pageId: currentFixture.lanaPage.id,
+      stream: "light",
+      startedAt: new Date(now.getTime() - 10_000),
+    });
+
+    await Promise.all(
+      Array.from({ length: 510 }, (_, index) => seedMonitorAttempt(currentTestDb, {
+        runId: bulkRun.id,
+        pageId: currentFixture.lanaPage.id,
+        stream: "light",
+        operation: "account_me",
+        startedAt: new Date(now.getTime() - index),
+        state: "started",
+        requestShape: {
+          endpointTemplate: "/account/me",
+          method: "GET",
+          egressKey: "bulk-proxy",
+        },
+      })),
+    );
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/v1/sync/requests?since=${encodeURIComponent(new Date(now.getTime() - 120_000).toISOString())}&limit=999`,
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body).toHaveLength(500);
+    expect(body[0]).toMatchObject({
+      timestamp: now.toISOString(),
+      endpoint: "/account/me",
+    });
+    expect(body.at(-1)?.timestamp).toBe(new Date(now.getTime() - 499).toISOString());
+  }, 30_000);
 });

@@ -1375,6 +1375,39 @@ export const syncStatusResponseSchema = z.object({
   recentEvents: z.array(syncMonitorRecentEventSchema),
 });
 
+export const syncRequestsQuerySchema = z.object({
+  since: z.string().optional(),
+  limit: z.coerce.number().int().min(1).default(100),
+});
+
+export const syncRequestItemSchema = z.object({
+  timestamp: isoTimestamp,
+  pageLabel: z.string(),
+  platform: platformEnum,
+  stream: z.enum([
+    "light",
+    "followers",
+    "transactions",
+    "subscribers",
+    "dm_conversations",
+    "dm_messages",
+    "followers_reconcile",
+    "cleanup",
+  ]),
+  operation: z.string(),
+  endpoint: z.string(),
+  method: z.string(),
+  attemptNumber: z.number().int(),
+  status: z.enum(["started", "success", "retry", "failed"]),
+  httpStatusCode: z.number().int().nullable(),
+  durationMs: z.number().int().nullable(),
+  rateLimitWaitMs: z.number().int().nullable(),
+  groupId: z.string().nullable(),
+  proxyGapMs: z.number().int().nullable(),
+});
+
+export const syncRequestsResponseSchema = z.array(syncRequestItemSchema);
+
 export const syncTriggerBodySchema = z.object({
   pageLabel: z.string().min(1),
   scope: syncTriggerScopeEnum,
@@ -1911,6 +1944,18 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  syncRequests: {
+    tags: ["dashboard"],
+    summary: "Get recent visible sync worker HTTP requests",
+    security: cookieOnlySecurity,
+    querystring: syncRequestsQuerySchema,
+    response: {
+      200: syncRequestsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   overviewRevenueDaily: {
     tags: ["dashboard"],
     summary: "Get agency-wide revenue daily series",
@@ -2347,6 +2392,9 @@ export type SyncRunItem = z.infer<typeof syncRunItemSchema>;
 export type SyncRunDetailResponse = z.infer<typeof syncRunDetailResponseSchema>;
 export type SyncStatusQuery = z.infer<typeof syncStatusQuerySchema>;
 export type SyncMonitorResponse = z.infer<typeof syncStatusResponseSchema>;
+export type SyncRequestsQuery = z.infer<typeof syncRequestsQuerySchema>;
+export type SyncRequestItem = z.infer<typeof syncRequestItemSchema>;
+export type SyncRequestsResponse = z.infer<typeof syncRequestsResponseSchema>;
 export type SyncTriggerBody = z.infer<typeof syncTriggerBodySchema>;
 export type SyncTriggerResponse = z.infer<typeof syncTriggerResponseSchema>;
 export type SyncTriggerAllResponse = z.infer<typeof syncTriggerAllResponseSchema>;
