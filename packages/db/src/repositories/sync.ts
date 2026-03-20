@@ -1279,20 +1279,20 @@ export async function listRunnableSyncPages(
   now = new Date(),
 ): Promise<SyncPageWakeupRow[]> {
   const result = await db.execute<SyncPageWakeupRow>(sql`
-    select platform_account_id as "platformAccountId",
+    select sss.platform_account_id as "platformAccountId",
            pa.platform as "platform",
-           max(effective_priority)::int as "priority",
-           min(desired_at) as "desiredAt",
+           max(sss.effective_priority)::int as "priority",
+           min(sss.desired_at) as "desiredAt",
            pap.url as "proxyUrl"
     from sync_stream_state sss
     inner join platform_accounts pa on pa.id = sss.platform_account_id
     left join platform_account_proxies pap on pap.platform_account_id = sss.platform_account_id
-    where status = 'active'
-      and desired_revision > satisfied_revision
-      and backoff_until <= ${now}
+    where sss.status = 'active'
+      and sss.desired_revision > sss.satisfied_revision
+      and sss.backoff_until <= ${now}
     group by sss.platform_account_id, pa.platform, pap.url
-    order by max(effective_priority) desc,
-             min(desired_at) asc nulls last,
+    order by max(sss.effective_priority) desc,
+             min(sss.desired_at) asc nulls last,
              sss.platform_account_id asc
   `);
 

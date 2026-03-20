@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -18,12 +18,13 @@ import {
   syncRuns,
   updatePageMetadata,
 } from "@agency_hub_core/db";
-import { buildProxyEgressKey, encryptJson } from "@agency_hub_core/shared";
+import { buildProxyEgressKey, buildSyncPageExecuteGroupId, encryptJson } from "@agency_hub_core/shared";
 import { PgBoss } from "pg-boss";
 
 import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
+import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.ts";
 import { requestPageSync, waitForRequestedSyncRevisions } from "../apps/runtime/src/services/sync-control.ts";
-import { ensureSyncQueues, sendSyncPageWakeup } from "../apps/runtime/src/services/sync-queue.ts";
+import { ensureSyncQueues, sendSyncPageWakeup, SYNC_PAGE_EXECUTE_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   resetIntegrationDatabase,
   seedFanslyPage,
@@ -444,6 +445,73 @@ describe("sync integration", () => {
     } finally {
       await app.close();
     }
+  });
+
+  it("runs the planner query through joined sync state rows without ambiguous column errors", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "planner-regression",
+      name: "Planner Regression",
+    });
+    const proxyUrl = "socks5://planner-proxy.example";
+    const page = await createFanslyLightPage(testDb, {
+      modelId: model.id,
+      label: "planner-regression-page",
+      authorization: "planner-regression",
+      proxyUrl,
+    });
+    const app = createTestAppContext(testDb, {
+      databaseUrl: testDb.connectionString,
+    });
+    const now = new Date("2026-03-20T12:00:00.000Z");
+
+    await ensureSyncStreamStateRows(app.db, {
+      platformAccountId: page.id,
+      now,
+    });
+    await requestSyncStreamRevisions(app.db, {
+      platformAccountId: page.id,
+      streams: ["light"],
+      reason: "manual",
+      now,
+    });
+
+    const boss = {
+      send: vi.fn(async () => "planner-job-1"),
+    };
+
+    const pages = await runSyncPlannerCycle(app, boss as never, now);
+
+    expect(pages).toHaveLength(1);
+    expect(pages[0]).toMatchObject({
+      platformAccountId: page.id,
+      platform: "fansly",
+      priority: resolveSyncRequestPriority("light", "manual"),
+      proxyUrl,
+    });
+    expect(pages[0]?.desiredAt?.toISOString()).toBe(now.toISOString());
+    expect(boss.send).toHaveBeenCalledWith(
+      SYNC_PAGE_EXECUTE_QUEUE,
+      { platformAccountId: page.id },
+      {
+        singletonKey: String(page.id),
+        priority: resolveSyncRequestPriority("light", "manual"),
+        group: {
+          id: buildSyncPageExecuteGroupId("fansly", buildProxyEgressKey({ url: proxyUrl })),
+        },
+      },
+    );
+
+    const stateRows = await listSyncStreamStateRows(app.db, {
+      platformAccountId: page.id,
+      streams: ["light"],
+    });
+    expect(stateRows).toHaveLength(1);
+    expect(stateRows[0]?.lastEnqueuedAt?.toISOString()).toBe(now.toISOString());
   });
 
   it("converges a Fansly all-scope sync through sync_stream_state and executor wakeups", async (context) => {

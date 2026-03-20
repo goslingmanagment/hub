@@ -46,7 +46,7 @@ import {
   listSubscribers,
 } from "./services/sync.ts";
 import { resolvePageContext } from "./services/page-context.ts";
-import { ensureSyncQueues } from "./services/sync-queue.ts";
+import { ensureSyncQueues, sendSyncPlannerWakeup } from "./services/sync-queue.ts";
 import {
   buildStatusRows,
   listStalledRuns,
@@ -236,6 +236,20 @@ async function queueInitialFullSyncAfterPageCreate(
   }
 }
 
+async function queuePlannerRecovery(
+  databaseUrl: string,
+) {
+  const boss = new PgBoss({ connectionString: databaseUrl });
+
+  try {
+    await boss.start();
+    await ensureSyncQueues(boss);
+    return await sendSyncPlannerWakeup(boss);
+  } finally {
+    await boss.stop().catch(() => undefined);
+  }
+}
+
 const revenueLabels: Record<TransactionType, string> = {
   subscription: "Subscriptions",
   tip: "Tips",
@@ -351,6 +365,7 @@ export function buildProgram() {
 
   const page = program.command("page");
   const pageAdd = page.command("add");
+  const queue = program.command("queue");
   const user = program.command("user");
   const apiKey = program.command("apikey");
 
@@ -543,6 +558,23 @@ export function buildProgram() {
         } finally {
           await boss.stop().catch(() => undefined);
         }
+      } finally {
+        await app.close();
+      }
+    });
+
+  queue
+    .command("planner-recover")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const jobId = await queuePlannerRecovery(app.config.databaseUrl);
+        if (jobId === null) {
+          console.log("sync.planner is already queued or active");
+          return;
+        }
+
+        console.log(`Queued sync.planner recovery job ${jobId}`);
       } finally {
         await app.close();
       }

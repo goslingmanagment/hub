@@ -8,6 +8,7 @@ import type { ConstructorOptions, Queue, SendOptions, StopOptions } from "pg-bos
 const cliMocks = vi.hoisted(() => {
   const bossBehavior = {
     sendError: null as Error | null,
+    sendResult: "job-1" as string | null,
   };
   const bossInstances: Array<{
     createQueue: ReturnType<typeof vi.fn>;
@@ -23,6 +24,8 @@ const cliMocks = vi.hoisted(() => {
       if (bossBehavior.sendError) {
         throw bossBehavior.sendError;
       }
+
+      return bossBehavior.sendResult;
     });
     stop = vi.fn(async (_options?: StopOptions) => {});
 
@@ -81,6 +84,7 @@ vi.mock("../apps/runtime/src/services/sync.ts", async () => {
 });
 
 import { buildProgram } from "../apps/runtime/src/cli.ts";
+import { SYNC_PLANNER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   renderStatusDetail,
   renderWatchEventLine,
@@ -119,6 +123,7 @@ describe("CLI parsing", () => {
 
   beforeEach(() => {
     cliMocks.bossBehavior.sendError = null;
+    cliMocks.bossBehavior.sendResult = "job-1";
     cliMocks.bossInstances.length = 0;
     cliMocks.createAppContext.mockReset();
     cliMocks.listPages.mockReset();
@@ -415,6 +420,48 @@ describe("CLI parsing", () => {
 
     expect(cliMocks.waitForRequestedSyncRevisions).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith("Queued followers sync for lora-main");
+  });
+
+  it("queues a fresh sync.planner recovery job", async () => {
+    cliMocks.bossBehavior.sendResult = "planner-job-1";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "queue",
+      "planner-recover",
+    ], { from: "user" });
+
+    const boss = cliMocks.bossInstances[0];
+    const app = await cliMocks.createAppContext.mock.results[0]?.value;
+    expect(boss).toBeDefined();
+    expect(boss.start).toHaveBeenCalledTimes(1);
+    expect(boss.createQueue).toHaveBeenCalled();
+    expect(boss.send).toHaveBeenCalledWith(SYNC_PLANNER_QUEUE);
+    expect(boss.stop).toHaveBeenCalledTimes(1);
+    expect(app?.close).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith("Queued sync.planner recovery job planner-job-1");
+  });
+
+  it("reports when sync.planner is already queued or active", async () => {
+    cliMocks.bossBehavior.sendResult = null;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "queue",
+      "planner-recover",
+    ], { from: "user" });
+
+    const boss = cliMocks.bossInstances[0];
+    const app = await cliMocks.createAppContext.mock.results[0]?.value;
+    expect(boss).toBeDefined();
+    expect(boss.start).toHaveBeenCalledTimes(1);
+    expect(boss.createQueue).toHaveBeenCalled();
+    expect(boss.send).toHaveBeenCalledWith(SYNC_PLANNER_QUEUE);
+    expect(boss.stop).toHaveBeenCalledTimes(1);
+    expect(app?.close).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith("sync.planner is already queued or active");
   });
 
   it("sets a proxy on an existing page", async () => {

@@ -93,6 +93,12 @@ export async function ensurePlannerSchedule(
   await boss.schedule(SYNC_PLANNER_QUEUE, "* * * * *");
 }
 
+export async function sendSyncPlannerWakeup(
+  boss: Pick<PgBoss, "send">,
+): Promise<string | null> {
+  return boss.send(SYNC_PLANNER_QUEUE);
+}
+
 export async function sendSyncPageWakeup(
   boss: Pick<PgBoss, "send">,
   input: {
