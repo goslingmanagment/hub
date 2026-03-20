@@ -173,6 +173,14 @@ function createReportRow(
   };
 }
 
+function directionEmoji(deltaPct: number | null): string {
+  if (deltaPct === null || Math.abs(deltaPct) < 0.05) {
+    return "";
+  }
+
+  return deltaPct > 0 ? "🟢 " : "🔴 ";
+}
+
 function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramReport, "text" | "parseMode">) {
   const lines: string[] = [];
   const agencyYesterday = report.agency.metrics.yesterday;
@@ -182,9 +190,9 @@ function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramRepor
   lines.push(report.reportDate);
   lines.push("");
 
-  // Agency total
+  // Agency total with color indicator
   lines.push(
-    `<b>${formatUsdFromMills(agencyYesterday.currentMills)}</b> ${formatDelta(agencyYesterday.deltaPct)}`,
+    `${directionEmoji(agencyYesterday.deltaPct)}<b>${formatUsdFromMills(agencyYesterday.currentMills)}</b> ${formatDelta(agencyYesterday.deltaPct)}`,
   );
   lines.push(
     `7d ${formatMetric(report.agency.metrics.days7)} · 30d ${formatMetric(report.agency.metrics.days30)}`,
