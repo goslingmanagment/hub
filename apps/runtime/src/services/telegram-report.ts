@@ -44,6 +44,7 @@ export interface DailyRevenueTelegramReport {
   pages: ReportRow[];
   overflow: (ReportRow & { pageCount: number }) | null;
   text: string;
+  parseMode: "HTML";
 }
 
 function sumMills(values: Iterable<bigint>) {
@@ -62,9 +63,13 @@ function computeDeltaPct(currentMills: bigint, previousMills: bigint) {
   return (Number(currentMills - previousMills) / Number(previousMills < 0n ? -previousMills : previousMills)) * 100;
 }
 
+function escapeHtml(text: string) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function formatDelta(deltaPct: number | null) {
   if (deltaPct === null) {
-    return "n/a";
+    return "—";
   }
 
   if (Math.abs(deltaPct) < 0.05) {
@@ -78,13 +83,18 @@ function formatMetric(metric: RevenueMetric) {
   return `${formatUsdFromMills(metric.currentMills)} ${formatDelta(metric.deltaPct)}`;
 }
 
-function formatRow(label: string, row: ReportRow) {
-  return [
-    label,
-    `Y ${formatMetric(row.metrics.yesterday)}`,
-    `7d ${formatMetric(row.metrics.days7)}`,
-    `30d ${formatMetric(row.metrics.days30)}`,
-  ].join(" | ");
+function formatShare(partMills: bigint, totalMills: bigint): string {
+  if (totalMills === 0n) {
+    return "0%";
+  }
+
+  const pct = Math.round(Number(partMills) / Number(totalMills) * 100);
+
+  if (pct === 0 && partMills > 0n) {
+    return "&lt;1%";
+  }
+
+  return `${pct}%`;
 }
 
 function groupPageIdsByPlatform(
@@ -162,27 +172,56 @@ function createReportRow(
   };
 }
 
-function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramReport, "text">) {
-  const lines = [
-    "📈 Daily Revenue Report",
-    `${report.reportDate} UTC`,
-    "",
-    "🏢 Agency",
-    formatRow("Total", report.agency),
-    "",
-    "👤 Models",
-    ...(report.models.length > 0
-      ? report.models.map((row) => formatRow(row.label, row))
-      : ["No models"]),
-    "",
-    "📄 Top Pages",
-    ...(report.pages.length > 0
-      ? report.pages.map((row) => formatRow(row.label, row))
-      : ["No pages"]),
-  ];
+function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramReport, "text" | "parseMode">) {
+  const lines: string[] = [];
+  const agencyYesterday = report.agency.metrics.yesterday;
+
+  // Header
+  lines.push("📊 <b>Revenue Report</b>");
+  lines.push(report.reportDate);
+  lines.push("");
+
+  // Agency total — yesterday prominent, 7d/30d on second line
+  lines.push(
+    `<b>${formatUsdFromMills(agencyYesterday.currentMills)}</b> ${formatDelta(agencyYesterday.deltaPct)}`,
+  );
+  lines.push(
+    `7d ${formatMetric(report.agency.metrics.days7)} · 30d ${formatMetric(report.agency.metrics.days30)}`,
+  );
+
+  // Models
+  lines.push("");
+  lines.push("👤 <b>Models</b>");
+
+  if (report.models.length === 0) {
+    lines.push("No models");
+  } else {
+    for (const model of report.models) {
+      const share = formatShare(model.metrics.yesterday.currentMills, agencyYesterday.currentMills);
+      lines.push("");
+      lines.push(`▸ <b>${escapeHtml(model.label)}</b> · ${share}`);
+      lines.push(`  ${formatMetric(model.metrics.yesterday)}`);
+      lines.push(`  7d ${formatMetric(model.metrics.days7)} · 30d ${formatMetric(model.metrics.days30)}`);
+    }
+  }
+
+  // Pages
+  lines.push("");
+  lines.push("📄 <b>Top Pages</b>");
+
+  if (report.pages.length === 0) {
+    lines.push("No pages");
+  } else {
+    lines.push("");
+    for (const page of report.pages) {
+      lines.push(`<b>${escapeHtml(page.label)}</b> ${formatMetric(page.metrics.yesterday)}`);
+      lines.push(`  7d ${formatMetric(page.metrics.days7)} · 30d ${formatMetric(page.metrics.days30)}`);
+    }
+  }
 
   if (report.overflow) {
-    lines.push(formatRow(`+${report.overflow.pageCount} more pages`, report.overflow));
+    lines.push(`<i>+${report.overflow.pageCount} more</i> ${formatMetric(report.overflow.metrics.yesterday)}`);
+    lines.push(`  7d ${formatMetric(report.overflow.metrics.days7)} · 30d ${formatMetric(report.overflow.metrics.days30)}`);
   }
 
   return lines.join("\n");
@@ -277,11 +316,12 @@ export async function buildDailyRevenueTelegramReport(
     models,
     pages: topPages,
     overflow,
-  } satisfies Omit<DailyRevenueTelegramReport, "text">;
+  } satisfies Omit<DailyRevenueTelegramReport, "text" | "parseMode">;
 
   return {
     ...report,
     text: renderDailyRevenueTelegramReport(report),
+    parseMode: "HTML" as const,
   };
 }
 
@@ -308,6 +348,7 @@ export async function sendDailyRevenueTelegramReport(
   const report = await buildDailyRevenueTelegramReport(app, now);
   const delivery = await sendTelegramMessage(app, {
     text: report.text,
+    parseMode: report.parseMode,
   });
 
   if (delivery.status === "sent" || delivery.status === "failed") {
@@ -336,6 +377,7 @@ export async function sendManualDailyRevenueTelegramReport(
   const report = await buildDailyRevenueTelegramReport(app, now);
   const delivery = await sendTelegramMessage(app, {
     text: report.text,
+    parseMode: report.parseMode,
   });
 
   if (delivery.status === "sent" || delivery.status === "failed") {

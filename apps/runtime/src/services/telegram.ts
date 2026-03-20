@@ -57,6 +57,7 @@ export async function sendTelegramMessage(
   app: Pick<AppContext, "config" | "logger" | "db">,
   input: {
     text: string;
+    parseMode?: "HTML" | "MarkdownV2";
     credentials?: ResolvedTelegramCredentials;
   },
 ): Promise<TelegramSendResult> {
@@ -83,6 +84,7 @@ export async function sendTelegramMessage(
       body: JSON.stringify({
         chat_id: creds.chatId,
         text: input.text,
+        ...(input.parseMode && { parse_mode: input.parseMode }),
         disable_web_page_preview: true,
       }),
     });
