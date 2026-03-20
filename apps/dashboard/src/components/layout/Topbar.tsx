@@ -176,6 +176,8 @@ function buildBreadcrumbs(
       crumbs.push({ label: "Followers" });
     } else if (parts[2] === "top-supporters") {
       crumbs.push({ label: "Top Supporters" });
+    } else if (parts[2] === "crm") {
+      crumbs.push({ label: "CRM" });
     } else if (parts[2] === "fans" && parts[3] && parts[4]) {
       crumbs.push({ label: parts[4] });
     }

@@ -10,6 +10,7 @@ const SubscribersPage = lazy(() => import("./pages/SubscribersPage").then((m) =>
 const FollowersPage = lazy(() => import("./pages/FollowersPage").then((m) => ({ default: m.FollowersPage })));
 const FanProfilePage = lazy(() => import("./pages/FanProfilePage").then((m) => ({ default: m.FanProfilePage })));
 const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage").then((m) => ({ default: m.TopSupportersPage })));
+const CrmPage = lazy(() => import("./pages/CrmPage").then((m) => ({ default: m.CrmPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const LogPage = lazy(() => import("./pages/dev/LogPage").then((m) => ({ default: m.LogPage })));
 const SyncStatusPage = lazy(() => import("./pages/dev/SyncStatusPage").then((m) => ({ default: m.SyncStatusPage })));
@@ -32,6 +33,7 @@ export function App() {
           <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
           <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />
           <Route path="pages/:pageLabel/top-supporters" element={<TopSupportersPage />} />
+          <Route path="pages/:pageLabel/crm" element={<CrmPage />} />
           <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
           <Route
             path="settings"

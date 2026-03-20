@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Settings, Users, Heart, Trophy, Terminal, RefreshCw, ListTodo, Database, AlertTriangle, Code2, ChevronDown } from "lucide-react";
+import { BarChart3, Settings, Users, Heart, Trophy, MessageSquare, Terminal, RefreshCw, ListTodo, Database, AlertTriangle, Code2, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { useOverview } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -117,6 +117,18 @@ export function Sidebar({ user }: SidebarProps) {
                       >
                         <Trophy size={12} /> Top Supporters
                       </NavLink>
+                      {page.platform === "fansly" && (
+                        <NavLink
+                          to={`/pages/${page.label}/crm`}
+                          className={({ isActive }) =>
+                            `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
+                              isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
+                            }`
+                          }
+                        >
+                          <MessageSquare size={12} /> CRM
+                        </NavLink>
+                      )}
                     </div>
                   )}
                 </div>

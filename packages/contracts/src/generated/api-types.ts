@@ -1718,7 +1718,7 @@ export interface paths {
                     limit?: number;
                     offset?: number;
                     query?: string;
-                    touchpoint?: "21d" | "14d" | "7d" | "5d" | "3d" | "1d";
+                    touchpoint?: ("21d" | "14d" | "7d" | "5d" | "3d" | "1d")[];
                     autoRenew?: boolean;
                     unreadOnly?: boolean;
                     showHandled?: boolean;
@@ -1781,6 +1781,7 @@ export interface paths {
                                     lastMessagePreview: string | null;
                                     messageBackfillComplete: boolean;
                                     storedMessageCount: number;
+                                    lastMessageSenderRole: ("fan" | "model" | "system" | "unknown") | null;
                                 };
                                 platformConversationId: string | null;
                                 /** @enum {string} */
@@ -1956,6 +1957,7 @@ export interface paths {
                                     lastMessagePreview: string | null;
                                     messageBackfillComplete: boolean;
                                     storedMessageCount: number;
+                                    lastMessageSenderRole: ("fan" | "model" | "system" | "unknown") | null;
                                 };
                                 platformConversationId: string | null;
                                 noDmHistory: boolean;

@@ -4989,15 +4989,18 @@
           },
           {
             "schema": {
-              "type": "string",
-              "enum": [
-                "21d",
-                "14d",
-                "7d",
-                "5d",
-                "3d",
-                "1d"
-              ]
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "21d",
+                  "14d",
+                  "7d",
+                  "5d",
+                  "3d",
+                  "1d"
+                ]
+              }
             },
             "in": "query",
             "name": "touchpoint",
@@ -5340,6 +5343,22 @@
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
+                              },
+                              "lastMessageSenderRole": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "fan",
+                                      "model",
+                                      "system",
+                                      "unknown"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -5348,7 +5367,8 @@
                               "lastMessageAt",
                               "lastMessagePreview",
                               "messageBackfillComplete",
-                              "storedMessageCount"
+                              "storedMessageCount",
+                              "lastMessageSenderRole"
                             ],
                             "additionalProperties": false
                           },
@@ -6074,6 +6094,22 @@
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
+                              },
+                              "lastMessageSenderRole": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "fan",
+                                      "model",
+                                      "system",
+                                      "unknown"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -6082,7 +6118,8 @@
                               "lastMessageAt",
                               "lastMessagePreview",
                               "messageBackfillComplete",
-                              "storedMessageCount"
+                              "storedMessageCount",
+                              "lastMessageSenderRole"
                             ],
                             "additionalProperties": false
                           },

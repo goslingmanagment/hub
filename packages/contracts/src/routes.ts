@@ -323,7 +323,10 @@ export const crmSummaryQuerySchema = z.object({});
 
 export const crmRetentionQuerySchema = paginationQuerySchema.extend({
   query: z.string().min(1).optional(),
-  touchpoint: crmTouchpointEnum.optional(),
+  touchpoint: z.preprocess(
+    (val) => (val == null ? undefined : Array.isArray(val) ? val : [val]),
+    z.array(crmTouchpointEnum),
+  ).optional(),
   autoRenew: queryBooleanSchema.optional(),
   unreadOnly: queryBooleanSchema.optional(),
   showHandled: queryBooleanSchema.optional(),
@@ -826,6 +829,7 @@ const crmConversationSummarySchema = z.object({
   lastMessagePreview: z.string().nullable(),
   messageBackfillComplete: z.boolean(),
   storedMessageCount: z.number().int(),
+  lastMessageSenderRole: z.enum(["fan", "model", "system", "unknown"]).nullable(),
 });
 
 const crmRetentionItemSchema = z.object({

@@ -704,7 +704,7 @@ export interface CrmRetentionListInput {
   limit: number;
   offset: number;
   query?: string;
-  touchpoint?: "21d" | "14d" | "7d" | "5d" | "3d" | "1d";
+  touchpoint?: Array<"21d" | "14d" | "7d" | "5d" | "3d" | "1d">;
   autoRenew?: boolean;
   unreadOnly?: boolean;
   showHandled?: boolean;
@@ -733,6 +733,7 @@ export interface CrmRetentionRow {
   touchpointDueAt: Date;
   isSoftTouchpoint: boolean;
   isHandled: boolean;
+  lastMessageSenderRole: DmSenderRole | null;
 }
 
 function retentionBaseQuery(input: CrmRetentionListInput) {
@@ -761,8 +762,8 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
       )
     `
     : sql``;
-  const touchpointFilter = input.touchpoint
-    ? sql`and touchpoint_code = ${input.touchpoint}`
+  const touchpointFilter = input.touchpoint?.length
+    ? sql`and touchpoint_code = any(${input.touchpoint})`
     : sql``;
   const autoRenewFilter = input.autoRenew !== undefined
     ? sql`and auto_renew = ${input.autoRenew}`
@@ -818,6 +819,7 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
              pc.last_message_preview as last_message_preview,
              coalesce(pc.message_backfill_complete, false) as message_backfill_complete,
              coalesce(pc.stored_message_count, 0)::int as stored_message_count,
+             pc.last_message_sender_role as last_message_sender_role,
              coalesce(
                case
                  when pc.last_fan_message_at is null and pc.last_model_message_at is null then null
@@ -918,6 +920,7 @@ export async function listCrmRetention(
     platformConversationId: string | null;
     messageBackfillComplete: boolean;
     storedMessageCount: NumericValue;
+    lastMessageSenderRole: string | null;
     touchpointCode: CrmRetentionRow["touchpointCode"];
     touchpointDueAt: TimestampValue;
     isSoftTouchpoint: boolean;
@@ -939,6 +942,7 @@ export async function listCrmRetention(
            platform_conversation_id as "platformConversationId",
            message_backfill_complete as "messageBackfillComplete",
            stored_message_count as "storedMessageCount",
+           last_message_sender_role as "lastMessageSenderRole",
            touchpoint_code as "touchpointCode",
            touchpoint_due_at as "touchpointDueAt",
            is_soft_touchpoint as "isSoftTouchpoint",
@@ -971,6 +975,7 @@ export async function listCrmRetention(
       platformConversationId: row.platformConversationId,
       messageBackfillComplete: row.messageBackfillComplete,
       storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
+      lastMessageSenderRole: (row.lastMessageSenderRole as DmSenderRole) ?? null,
       touchpointCode: row.touchpointCode,
       touchpointDueAt: requireTimestamp(row.touchpointDueAt, "touchpointDueAt"),
       isSoftTouchpoint: row.isSoftTouchpoint,
@@ -1042,6 +1047,7 @@ export interface CrmReactivationRow {
   noDmHistory: boolean;
   silenceDays: number;
   reactivationScore: number;
+  lastMessageSenderRole: DmSenderRole | null;
 }
 
 function reactivationBaseQuery(input: CrmReactivationListInput) {
@@ -1123,6 +1129,7 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
              pc.last_message_preview as last_message_preview,
              coalesce(pc.message_backfill_complete, false) as message_backfill_complete,
              coalesce(pc.stored_message_count, 0)::int as stored_message_count,
+             pc.last_message_sender_role as last_message_sender_role,
              (pc.id is null) as no_dm_history,
              coalesce(
                pc.last_message_at,
@@ -1200,6 +1207,7 @@ export async function listCrmReactivation(
     platformConversationId: string | null;
     messageBackfillComplete: boolean;
     storedMessageCount: NumericValue;
+    lastMessageSenderRole: string | null;
     noDmHistory: boolean;
     silenceDays: NumericValue;
     reactivationScore: number;
@@ -1221,6 +1229,7 @@ export async function listCrmReactivation(
            platform_conversation_id as "platformConversationId",
            message_backfill_complete as "messageBackfillComplete",
            stored_message_count as "storedMessageCount",
+           last_message_sender_role as "lastMessageSenderRole",
            no_dm_history as "noDmHistory",
            silence_days as "silenceDays",
            reactivation_score as "reactivationScore"
@@ -1249,6 +1258,7 @@ export async function listCrmReactivation(
       platformConversationId: row.platformConversationId,
       messageBackfillComplete: row.messageBackfillComplete,
       storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
+      lastMessageSenderRole: (row.lastMessageSenderRole as DmSenderRole) ?? null,
       noDmHistory: row.noDmHistory,
       silenceDays: normalizeNumber(row.silenceDays, "silenceDays"),
       reactivationScore: row.reactivationScore,

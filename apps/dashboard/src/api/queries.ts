@@ -28,13 +28,25 @@ import type {
   FanFlagsResponse,
   FanListResponse,
   VerifyCredentialsBody,
+  CrmSummaryResponse,
+  CrmRetentionResponse,
+  CrmReactivationResponse,
+  CrmConversationPreviewResponse,
 } from "@agency_hub_core/contracts";
 import { api } from "./client";
 
-function qs(params: Record<string, string | number | boolean | undefined>): string {
-  const entries = Object.entries(params).filter(([, v]) => v !== undefined);
-  if (entries.length === 0) return "";
-  return "?" + new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString();
+function qs(params: Record<string, string | number | boolean | Array<string | number | boolean> | undefined>): string {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) searchParams.append(key, String(v));
+    } else {
+      searchParams.append(key, String(value));
+    }
+  }
+  const str = searchParams.toString();
+  return str ? `?${str}` : "";
 }
 
 // Auth
@@ -406,5 +418,71 @@ export function useAdminIncidents(params: { severity?: string; code?: string; li
     queryKey: ["admin", "incidents", params],
     queryFn: () => api.get<{ summary: any[]; items: any[] }>(`/api/v1/admin/incidents${qs(params)}`),
     refetchInterval: 30_000,
+  });
+}
+
+// CRM
+export function useCrmSummary(pageLabel: string) {
+  return useQuery({
+    queryKey: ["crmSummary", pageLabel],
+    queryFn: () => api.get<CrmSummaryResponse>(`/api/v1/pages/${pageLabel}/crm/summary`),
+  });
+}
+
+export function useCrmRetention(
+  pageLabel: string,
+  params: {
+    limit?: number;
+    offset?: number;
+    query?: string;
+    touchpoint?: string[];
+    autoRenew?: boolean;
+    unreadOnly?: boolean;
+    showHandled?: boolean;
+    sortBy?: string;
+    sortDir?: string;
+  } = {},
+) {
+  return useQuery({
+    queryKey: ["crmRetention", pageLabel, params],
+    queryFn: () => api.get<CrmRetentionResponse>(`/api/v1/pages/${pageLabel}/crm/retention${qs(params)}`),
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useCrmReactivation(
+  pageLabel: string,
+  params: {
+    limit?: number;
+    offset?: number;
+    query?: string;
+    minSpendUsd?: number;
+    minSilenceDays?: number;
+    unreadOnly?: boolean;
+    noDmHistoryOnly?: boolean;
+    subscriberState?: string;
+    sortBy?: string;
+    sortDir?: string;
+  } = {},
+) {
+  return useQuery({
+    queryKey: ["crmReactivation", pageLabel, params],
+    queryFn: () => api.get<CrmReactivationResponse>(`/api/v1/pages/${pageLabel}/crm/reactivation${qs(params)}`),
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useCrmConversationPreview(
+  pageLabel: string,
+  platformConversationId: string | null,
+  params: { limit?: number } = {},
+) {
+  return useQuery({
+    queryKey: ["crmPreview", pageLabel, platformConversationId],
+    queryFn: () =>
+      api.get<CrmConversationPreviewResponse>(
+        `/api/v1/pages/${pageLabel}/crm/conversations/${platformConversationId}/preview${qs(params)}`,
+      ),
+    enabled: !!platformConversationId,
   });
 }
