@@ -34,6 +34,8 @@ import { getModelRevenueReport, getPageRevenueReport } from "./services/reportin
 import { loadFanslySessionBundleFromFile, loadOnlyMonsterTokenBundleFromFile } from "./services/page-context.ts";
 import { requestPageSync, waitForRequestedSyncRevisions } from "./services/sync-control.ts";
 import { refreshPageMetadata } from "./services/sync/shared.ts";
+import { getSyncMonitorSnapshot } from "./services/sync-monitor.ts";
+import { renderSyncMonitor } from "./services/sync-monitor-view.ts";
 import {
   fanSpendForPage,
   getStatusDetail,
@@ -193,6 +195,50 @@ async function watchStatus(
       }
 
       await delay(2000);
+    }
+  } finally {
+    await app.close();
+    process.removeListener("SIGINT", handleStop);
+    process.removeListener("SIGTERM", handleStop);
+  }
+}
+
+async function watchSyncMonitor(
+  options: {
+    page?: string;
+    windowHours: number;
+    intervalSeconds: number;
+  },
+) {
+  const app = await createAppContext();
+  let stopped = false;
+  const handleStop = () => {
+    stopped = true;
+  };
+
+  process.once("SIGINT", handleStop);
+  process.once("SIGTERM", handleStop);
+
+  try {
+    while (!stopped) {
+      const snapshot = await getSyncMonitorSnapshot(app, {
+        pageLabel: options.page,
+        windowHours: options.windowHours,
+      });
+
+      if (process.stdout.isTTY) {
+        process.stdout.write("\u001bc");
+        console.log(renderSyncMonitor(snapshot));
+      } else {
+        console.log(renderSyncMonitor(snapshot));
+        console.log("");
+      }
+
+      if (stopped) {
+        break;
+      }
+
+      await delay(Math.max(1, options.intervalSeconds) * 1000);
     }
   } finally {
     await app.close();
@@ -365,6 +411,8 @@ export function buildProgram() {
 
   const page = program.command("page");
   const pageAdd = page.command("add");
+  const sync = program.command("sync");
+  sync.enablePositionalOptions();
   const queue = program.command("queue");
   const user = program.command("user");
   const apiKey = program.command("apikey");
@@ -520,13 +568,16 @@ export function buildProgram() {
       }
     });
 
-  program
-    .command("sync")
-    .requiredOption("--page <label>")
+  sync
+    .option("--page <label>")
     .option("--scope <scope>", "light|followers|all", "all")
     .option("--transactions-start <iso>", "OnlyFans-only manual rescan start", parseDateOption)
     .option("--no-wait", "queue the sync and return without waiting")
     .action(async (options) => {
+      if (!options.page) {
+        throw new Error("required option '--page <label>' not specified");
+      }
+
       const app = await createAppContext();
       try {
         if (options.scope === "followers" && options.transactionsStart) {
@@ -558,6 +609,37 @@ export function buildProgram() {
         } finally {
           await boss.stop().catch(() => undefined);
         }
+      } finally {
+        await app.close();
+      }
+    });
+
+  sync
+    .command("status")
+    .option("--page <label>")
+    .option("--watch", "watch aggregated sync monitor output")
+    .option("--interval <seconds>", "watch refresh interval", parsePositiveInt, 10)
+    .option("--window-hours <n>", "recent window in hours", parsePositiveInt, 24)
+    .action(async (options, command) => {
+      const parentOptions = command.parent?.opts() as { page?: string } | undefined;
+      const page = options.page ?? parentOptions?.page;
+
+      if (options.watch) {
+        await watchSyncMonitor({
+          page,
+          windowHours: options.windowHours,
+          intervalSeconds: options.interval,
+        });
+        return;
+      }
+
+      const app = await createAppContext();
+      try {
+        const snapshot = await getSyncMonitorSnapshot(app, {
+          pageLabel: page,
+          windowHours: options.windowHours,
+        });
+        console.log(renderSyncMonitor(snapshot));
       } finally {
         await app.close();
       }

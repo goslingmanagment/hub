@@ -3252,6 +3252,236 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sync/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get aggregated sync monitor data for visible pages */
+        get: {
+            parameters: {
+                query?: {
+                    pageLabel?: string;
+                    windowHours?: number;
+                    eventLimit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            generatedAt: string;
+                            window: {
+                                hours: number;
+                                startedAt: string;
+                            };
+                            overall: {
+                                pages: number;
+                                streams: number;
+                                runningStreams: number;
+                                failedStreams: number;
+                                stalledStreams: number;
+                                pendingStreams: number;
+                                backoffStreams: number;
+                                counts: {
+                                    fans: number;
+                                    followers: number;
+                                    subscribers: number;
+                                    transactions: number;
+                                    conversations: number;
+                                    messages: number;
+                                };
+                                recentRuns: {
+                                    running: number;
+                                    success: number;
+                                    partial: number;
+                                    failed: number;
+                                    skipped: number;
+                                };
+                                recentErrors: {
+                                    total429s: number;
+                                    total5xxs: number;
+                                    failedRuns: number;
+                                    failedAttempts: number;
+                                    retryAttempts: number;
+                                    last429At: string | null;
+                                    last5xxAt: string | null;
+                                };
+                                providers: {
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    rateHealth: {
+                                        /** @enum {string} */
+                                        state: "healthy" | "warning" | "limited";
+                                        last429At: string | null;
+                                        nextAvailableAt: string | null;
+                                    };
+                                    recent429s: number;
+                                    recent5xxs: number;
+                                }[];
+                            };
+                            pages: {
+                                pageId: number;
+                                pageLabel: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                                counts: {
+                                    fans: number;
+                                    followers: number;
+                                    subscribers: number;
+                                    transactions: number;
+                                    conversations: number;
+                                    messages: number;
+                                };
+                                summary: {
+                                    runningStreams: number;
+                                    failedStreams: number;
+                                    stalledStreams: number;
+                                    pendingStreams: number;
+                                    backoffStreams: number;
+                                };
+                                streams: {
+                                    /** @enum {string} */
+                                    stream: "light" | "followers" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                    /** @enum {string} */
+                                    status: "running" | "idle" | "completed" | "failed" | "paused" | "auth_failed" | "disabled";
+                                    stalled: boolean;
+                                    pending: boolean;
+                                    backoffUntil: string | null;
+                                    progress: {
+                                        label: string;
+                                        current: number;
+                                        total: number | null;
+                                        unit: string;
+                                        percent: number | null;
+                                    } | null;
+                                    recentRuns: {
+                                        running: number;
+                                        success: number;
+                                        partial: number;
+                                        failed: number;
+                                        skipped: number;
+                                    };
+                                    recentErrors: {
+                                        total429s: number;
+                                        total5xxs: number;
+                                        failedRuns: number;
+                                        failedAttempts: number;
+                                        retryAttempts: number;
+                                        last429At: string | null;
+                                        last5xxAt: string | null;
+                                    };
+                                    rateHealth: {
+                                        /** @enum {string} */
+                                        state: "healthy" | "warning" | "limited";
+                                        last429At: string | null;
+                                        nextAvailableAt: string | null;
+                                    };
+                                    activeRun: {
+                                        runId: number;
+                                        trigger: string;
+                                        startedAt: string;
+                                        lastActivityAt: string;
+                                    } | null;
+                                    lastCompletion: {
+                                        runId: number;
+                                        trigger: string;
+                                        /** @enum {string} */
+                                        status: "success" | "partial" | "failed" | "skipped";
+                                        startedAt: string;
+                                        finishedAt: string;
+                                        durationMs: number | null;
+                                        errorSummary: string | null;
+                                    } | null;
+                                    lastSuccessAt: string | null;
+                                    lastFailureAt: string | null;
+                                    lastErrorSummary: string | null;
+                                }[];
+                            }[];
+                            recentEvents: {
+                                id: number;
+                                runId: number;
+                                pageId: number;
+                                pageLabel: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                /** @enum {string} */
+                                stream: "light" | "followers" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                eventType: string;
+                                /** @enum {string} */
+                                severity: "info" | "warn" | "error";
+                                message: string;
+                                details: {
+                                    [key: string]: unknown;
+                                };
+                                emittedAt: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/overview/revenue/daily": {
         parameters: {
             query?: never;

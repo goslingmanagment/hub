@@ -24,6 +24,7 @@ import type {
   SpenderBatchResponse,
   ConnectionItem,
   SyncRunItem,
+  SyncMonitorResponse,
   FanNoteResponse,
   FanFlagsResponse,
   FanListResponse,
@@ -364,6 +365,14 @@ export function useAdminSyncRuns(params: { pageLabel?: string; limit?: number; s
   return useQuery({
     queryKey: ["admin", "syncRuns", params],
     queryFn: () => api.get<SyncRunItem[]>(`/api/v1/admin/sync/runs${qs(params)}`),
+  });
+}
+
+export function useSyncMonitor(params: { pageLabel?: string; windowHours?: number; eventLimit?: number } = {}) {
+  return useQuery({
+    queryKey: ["syncMonitor", params],
+    queryFn: () => api.get<SyncMonitorResponse>(`/api/v1/sync/status${qs(params)}`),
+    refetchInterval: 10_000,
   });
 }
 

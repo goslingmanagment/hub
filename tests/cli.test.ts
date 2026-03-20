@@ -185,7 +185,7 @@ describe("CLI parsing", () => {
     });
     await expect(
       invalidSyncCommand!.parseAsync(["--account", "lora-main"], { from: "user" }),
-    ).rejects.toThrow("required option '--page <label>' not specified");
+    ).rejects.toThrow("unknown option '--account'");
   });
 
   it("documents apikey create as username-only with optional page assignment", () => {

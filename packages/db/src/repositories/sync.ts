@@ -1,7 +1,15 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 
+import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
+
 import type { Database } from "../client.ts";
 import {
+  fanPages,
+  models,
+  pageDmConversations,
+  pageDmMessages,
+  pageFollows,
+  pageSubscriptions,
   platformAccounts,
   platformAccountProxies,
   rawPayloads,
@@ -11,6 +19,7 @@ import {
   syncStreamState,
   syncRunEvents,
   syncRuns,
+  transactions,
 } from "../schema.ts";
 
 export const SYNC_CONTROL_STREAMS = [
@@ -94,6 +103,14 @@ function normalizeNumber(value: NumericValue, field: string) {
   }
 
   throw new Error(`Expected ${field} to be a number`);
+}
+
+function normalizeNullableNumber(value: NumericValue, field: string) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return normalizeNumber(value, field);
 }
 
 function parseTimestamp(value: TimestampValue, field: string) {
@@ -916,6 +933,456 @@ export async function listRunningSyncRuns(
   return result.rows.map((row) => normalizeRunningSyncRunRow(row));
 }
 
+export async function listSyncMonitorStreamRows(
+  db: Database,
+  input?: {
+    pageIds?: number[];
+    pageLabel?: string;
+    windowStart?: Date;
+  },
+) {
+  if (input?.pageIds !== undefined && input.pageIds.length === 0) {
+    return [] as SyncMonitorStreamRow[];
+  }
+
+  const pageClauses = [sql`true`];
+  if (input?.pageIds !== undefined) {
+    pageClauses.push(inArray(platformAccounts.id, input.pageIds));
+  }
+  if (input?.pageLabel) {
+    pageClauses.push(eq(platformAccounts.label, input.pageLabel));
+  }
+
+  const windowStart = input?.windowStart ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const fanslyStreams = SYNC_CONTROL_STREAMS.map((stream) => `'${stream}'`).join(", ");
+  const onlyFansStreams = ["light", "transactions"].map((stream) => `'${stream}'`).join(", ");
+
+  const result = await db.execute<{
+    pageId: NumericValue;
+    pageLabel: string;
+    platform: unknown;
+    modelSlug: string;
+    modelName: string;
+    username: string | null;
+    displayName: string | null;
+    fanCount: NumericValue;
+    followerCount: NumericValue;
+    subscriberCount: NumericValue;
+    transactionCount: NumericValue;
+    dmConversationCount: NumericValue;
+    dmMessageCount: NumericValue;
+    dmEligibleConversationCount: NumericValue;
+    dmBackfillCompleteConversationCount: NumericValue;
+    dmLaggingConversationCount: NumericValue;
+    stream: string;
+    targetStatus: string | null;
+    cadenceSeconds: NumericValue;
+    nextDueAt: TimestampValue;
+    desiredRevision: NumericValue;
+    satisfiedRevision: NumericValue;
+    desiredAt: TimestampValue;
+    backoffUntil: TimestampValue;
+    lastEnqueuedAt: TimestampValue;
+    lastStartedAt: TimestampValue;
+    lastFinishedAt: TimestampValue;
+    lastSucceededAt: TimestampValue;
+    lastFailedAt: TimestampValue;
+    consecutiveFailures: NumericValue;
+    lastErrorCode: string | null;
+    lastErrorSummary: string | null;
+    checkpointCursorText: string | null;
+    checkpointCursorTimestamp: TimestampValue;
+    checkpointState: unknown;
+    checkpointLastSuccessfulAt: TimestampValue;
+    checkpointLastSuccessfulRunId: NumericValue;
+    runningRunId: NumericValue;
+    runningTrigger: string | null;
+    runningStartedAt: TimestampValue;
+    runningLastActivityAt: TimestampValue;
+    runningStats: unknown;
+    runningErrorSummary: string | null;
+    lastCompletedRunId: NumericValue;
+    lastCompletedTrigger: string | null;
+    lastCompletedStatus: "success" | "partial" | "failed" | "skipped" | null;
+    lastCompletedStartedAt: TimestampValue;
+    lastCompletedFinishedAt: TimestampValue;
+    lastCompletedDurationMs: NumericValue;
+    lastCompletedStats: unknown;
+    lastCompletedErrorSummary: string | null;
+    recentRunningCount: NumericValue;
+    recentSuccessCount: NumericValue;
+    recentPartialCount: NumericValue;
+    recentFailedCount: NumericValue;
+    recentSkippedCount: NumericValue;
+    recent429Count: NumericValue;
+    recent5xxCount: NumericValue;
+    recentFailedAttemptCount: NumericValue;
+    recentRetryCount: NumericValue;
+    last429At: TimestampValue;
+    last5xxAt: TimestampValue;
+    providerNextAvailableAt: TimestampValue;
+    providerMinSpacingMs: NumericValue;
+  }>(sql`
+    with visible_pages as (
+      select ${platformAccounts.id} as "pageId",
+             ${platformAccounts.label} as "pageLabel",
+             ${platformAccounts.platform} as "platform",
+             ${platformAccounts.username} as "username",
+             ${platformAccounts.displayName} as "displayName",
+             ${models.slug} as "modelSlug",
+             ${models.name} as "modelName"
+      from ${platformAccounts}
+      inner join ${models} on ${models.id} = ${platformAccounts.modelId}
+      where ${and(...pageClauses)}
+    ),
+    page_streams as (
+      select vp."pageId",
+             vp."pageLabel",
+             vp."platform",
+             vp."username",
+             vp."displayName",
+             vp."modelSlug",
+             vp."modelName",
+             s.stream::sync_stream as "stream"
+      from visible_pages vp
+      cross join lateral unnest(
+        case
+          when vp."platform" = 'fansly'
+            then ARRAY[${sql.raw(fanslyStreams)}]::sync_stream[]
+          else ARRAY[${sql.raw(onlyFansStreams)}]::sync_stream[]
+        end
+      ) as s(stream)
+    ),
+    fan_counts as (
+      select fp.platform_account_id as "pageId",
+             count(distinct fp.fan_id)::int as "fanCount"
+      from ${fanPages} fp
+      inner join visible_pages vp on vp."pageId" = fp.platform_account_id
+      group by fp.platform_account_id
+    ),
+    follower_counts as (
+      select pf.platform_account_id as "pageId",
+             count(*) filter (where pf.is_active = true)::int as "followerCount"
+      from ${pageFollows} pf
+      inner join visible_pages vp on vp."pageId" = pf.platform_account_id
+      group by pf.platform_account_id
+    ),
+    subscriber_counts as (
+      select ps.platform_account_id as "pageId",
+             count(*) filter (where ps.is_current = true)::int as "subscriberCount"
+      from ${pageSubscriptions} ps
+      inner join visible_pages vp on vp."pageId" = ps.platform_account_id
+      group by ps.platform_account_id
+    ),
+    transaction_counts as (
+      select t.platform_account_id as "pageId",
+             count(*)::int as "transactionCount"
+      from ${transactions} t
+      inner join visible_pages vp on vp."pageId" = t.platform_account_id
+      group by t.platform_account_id
+    ),
+    dm_conversation_counts as (
+      select c.platform_account_id as "pageId",
+             count(*) filter (where c.is_visible = true)::int as "dmConversationCount",
+             count(*) filter (
+               where c.is_visible = true
+                 and c.fan_id is not null
+                 and ${dmMessageSyncEligibleSql("c")}
+             )::int as "dmEligibleConversationCount",
+             count(*) filter (
+               where c.is_visible = true
+                 and c.fan_id is not null
+                 and ${dmMessageSyncEligibleSql("c")}
+                 and c.message_backfill_complete = true
+             )::int as "dmBackfillCompleteConversationCount",
+             count(*) filter (
+               where c.is_visible = true
+                 and c.fan_id is not null
+                 and ${dmMessageSyncEligibleSql("c")}
+                 and c.last_message_id is distinct from c.newest_stored_message_id
+                 and (
+                   c.last_message_sync_at is null
+                   or (c.last_message_at is not null and c.last_message_sync_at < c.last_message_at)
+                 )
+             )::int as "dmLaggingConversationCount"
+      from ${pageDmConversations} c
+      inner join visible_pages vp on vp."pageId" = c.platform_account_id
+      group by c.platform_account_id
+    ),
+    dm_message_counts as (
+      select m.platform_account_id as "pageId",
+             count(*)::int as "dmMessageCount"
+      from ${pageDmMessages} m
+      inner join visible_pages vp on vp."pageId" = m.platform_account_id
+      group by m.platform_account_id
+    ),
+    request_activity as (
+      select a.sync_run_id as "runId",
+             max(coalesce(a.finished_at, a.started_at)) as "lastAttemptAt"
+      from ${syncRequestAttempts} a
+      inner join visible_pages vp on vp."pageId" = a.platform_account_id
+      group by a.sync_run_id
+    ),
+    event_activity as (
+      select e.sync_run_id as "runId",
+             max(e.emitted_at) as "lastEventAt"
+      from ${syncRunEvents} e
+      inner join visible_pages vp on vp."pageId" = e.platform_account_id
+      group by e.sync_run_id
+    ),
+    running_runs as (
+      select ranked.*
+      from (
+        select sr.platform_account_id as "pageId",
+               sr.stream as "stream",
+               sr.id as "runningRunId",
+               sr.trigger as "runningTrigger",
+               sr.started_at as "runningStartedAt",
+               greatest(
+                 sr.started_at,
+                 coalesce(ra."lastAttemptAt", sr.started_at),
+                 coalesce(ea."lastEventAt", sr.started_at)
+               ) as "runningLastActivityAt",
+               sr.stats as "runningStats",
+               sr.error_summary as "runningErrorSummary",
+               row_number() over (
+                 partition by sr.platform_account_id, sr.stream
+                 order by sr.started_at desc, sr.id desc
+               ) as "rank"
+        from ${syncRuns} sr
+        inner join visible_pages vp on vp."pageId" = sr.platform_account_id
+        left join request_activity ra on ra."runId" = sr.id
+        left join event_activity ea on ea."runId" = sr.id
+        where sr.status = 'running'
+      ) ranked
+      where ranked."rank" = 1
+    ),
+    completed_runs as (
+      select ranked.*
+      from (
+        select sr.platform_account_id as "pageId",
+               sr.stream as "stream",
+               sr.id as "lastCompletedRunId",
+               sr.trigger as "lastCompletedTrigger",
+               sr.status as "lastCompletedStatus",
+               sr.started_at as "lastCompletedStartedAt",
+               sr.finished_at as "lastCompletedFinishedAt",
+               greatest(
+                 0,
+                 floor(extract(epoch from (sr.finished_at - sr.started_at)) * 1000)
+               )::int as "lastCompletedDurationMs",
+               sr.stats as "lastCompletedStats",
+               sr.error_summary as "lastCompletedErrorSummary",
+               row_number() over (
+                 partition by sr.platform_account_id, sr.stream
+                 order by sr.finished_at desc, sr.id desc
+               ) as "rank"
+        from ${syncRuns} sr
+        inner join visible_pages vp on vp."pageId" = sr.platform_account_id
+        where sr.status <> 'running'
+          and sr.finished_at is not null
+      ) ranked
+      where ranked."rank" = 1
+    ),
+    recent_run_counts as (
+      select sr.platform_account_id as "pageId",
+             sr.stream as "stream",
+             count(*) filter (where sr.status = 'running')::int as "recentRunningCount",
+             count(*) filter (where sr.status = 'success')::int as "recentSuccessCount",
+             count(*) filter (where sr.status = 'partial')::int as "recentPartialCount",
+             count(*) filter (where sr.status = 'failed')::int as "recentFailedCount",
+             count(*) filter (where sr.status = 'skipped')::int as "recentSkippedCount"
+      from ${syncRuns} sr
+      inner join visible_pages vp on vp."pageId" = sr.platform_account_id
+      where sr.started_at >= ${windowStart}
+      group by sr.platform_account_id, sr.stream
+    ),
+    recent_attempt_counts as (
+      select a.platform_account_id as "pageId",
+             a.stream as "stream",
+             count(*) filter (where a.http_status = 429)::int as "recent429Count",
+             count(*) filter (where a.http_status >= 500 and a.http_status < 600)::int as "recent5xxCount",
+             count(*) filter (where a.state = 'failed')::int as "recentFailedAttemptCount",
+             count(*) filter (where a.state = 'retry')::int as "recentRetryCount",
+             max(a.started_at) filter (where a.http_status = 429) as "last429At",
+             max(a.started_at) filter (
+               where a.http_status >= 500 and a.http_status < 600
+             ) as "last5xxAt"
+      from ${syncRequestAttempts} a
+      inner join visible_pages vp on vp."pageId" = a.platform_account_id
+      where a.started_at >= ${windowStart}
+      group by a.platform_account_id, a.stream
+    ),
+    provider_rate_limits as (
+      select rl.provider as "platform",
+             max(rl.next_available_at) as "providerNextAvailableAt",
+             max(rl.min_spacing_ms)::int as "providerMinSpacingMs"
+      from ${syncProviderRateLimits} rl
+      group by rl.provider
+    )
+    select ps."pageId" as "pageId",
+           ps."pageLabel" as "pageLabel",
+           ps."platform" as "platform",
+           ps."modelSlug" as "modelSlug",
+           ps."modelName" as "modelName",
+           ps."username" as "username",
+           ps."displayName" as "displayName",
+           coalesce(fc."fanCount", 0)::int as "fanCount",
+           coalesce(foc."followerCount", 0)::int as "followerCount",
+           coalesce(scnt."subscriberCount", 0)::int as "subscriberCount",
+           coalesce(tc."transactionCount", 0)::int as "transactionCount",
+           coalesce(dcc."dmConversationCount", 0)::int as "dmConversationCount",
+           coalesce(dmc."dmMessageCount", 0)::int as "dmMessageCount",
+           coalesce(dcc."dmEligibleConversationCount", 0)::int as "dmEligibleConversationCount",
+           coalesce(dcc."dmBackfillCompleteConversationCount", 0)::int as "dmBackfillCompleteConversationCount",
+           coalesce(dcc."dmLaggingConversationCount", 0)::int as "dmLaggingConversationCount",
+           ps."stream" as "stream",
+           sss.status as "targetStatus",
+           sss.cadence_seconds as "cadenceSeconds",
+           sss.next_due_at as "nextDueAt",
+           sss.desired_revision as "desiredRevision",
+           sss.satisfied_revision as "satisfiedRevision",
+           sss.desired_at as "desiredAt",
+           sss.backoff_until as "backoffUntil",
+           sss.last_enqueued_at as "lastEnqueuedAt",
+           sss.last_started_at as "lastStartedAt",
+           sss.last_finished_at as "lastFinishedAt",
+           sss.last_succeeded_at as "lastSucceededAt",
+           sss.last_failed_at as "lastFailedAt",
+           coalesce(sss.consecutive_failures, 0)::int as "consecutiveFailures",
+           sss.last_error_code as "lastErrorCode",
+           sss.last_error_summary as "lastErrorSummary",
+           cp.cursor_text as "checkpointCursorText",
+           cp.cursor_timestamp as "checkpointCursorTimestamp",
+           cp.state as "checkpointState",
+           cp.last_successful_at as "checkpointLastSuccessfulAt",
+           cp.last_successful_run_id as "checkpointLastSuccessfulRunId",
+           rr."runningRunId" as "runningRunId",
+           rr."runningTrigger" as "runningTrigger",
+           rr."runningStartedAt" as "runningStartedAt",
+           rr."runningLastActivityAt" as "runningLastActivityAt",
+           rr."runningStats" as "runningStats",
+           rr."runningErrorSummary" as "runningErrorSummary",
+           cr."lastCompletedRunId" as "lastCompletedRunId",
+           cr."lastCompletedTrigger" as "lastCompletedTrigger",
+           cr."lastCompletedStatus" as "lastCompletedStatus",
+           cr."lastCompletedStartedAt" as "lastCompletedStartedAt",
+           cr."lastCompletedFinishedAt" as "lastCompletedFinishedAt",
+           cr."lastCompletedDurationMs" as "lastCompletedDurationMs",
+           cr."lastCompletedStats" as "lastCompletedStats",
+           cr."lastCompletedErrorSummary" as "lastCompletedErrorSummary",
+           coalesce(rrc."recentRunningCount", 0)::int as "recentRunningCount",
+           coalesce(rrc."recentSuccessCount", 0)::int as "recentSuccessCount",
+           coalesce(rrc."recentPartialCount", 0)::int as "recentPartialCount",
+           coalesce(rrc."recentFailedCount", 0)::int as "recentFailedCount",
+           coalesce(rrc."recentSkippedCount", 0)::int as "recentSkippedCount",
+           coalesce(rac."recent429Count", 0)::int as "recent429Count",
+           coalesce(rac."recent5xxCount", 0)::int as "recent5xxCount",
+           coalesce(rac."recentFailedAttemptCount", 0)::int as "recentFailedAttemptCount",
+           coalesce(rac."recentRetryCount", 0)::int as "recentRetryCount",
+           rac."last429At" as "last429At",
+           rac."last5xxAt" as "last5xxAt",
+           prl."providerNextAvailableAt" as "providerNextAvailableAt",
+           prl."providerMinSpacingMs" as "providerMinSpacingMs"
+    from page_streams ps
+    left join ${syncStreamState} sss
+      on sss.platform_account_id = ps."pageId"
+     and sss.stream = ps."stream"
+    left join ${syncCheckpoints} cp
+      on cp.platform_account_id = ps."pageId"
+     and cp.stream = ps."stream"
+    left join running_runs rr
+      on rr."pageId" = ps."pageId"
+     and rr."stream" = ps."stream"
+    left join completed_runs cr
+      on cr."pageId" = ps."pageId"
+     and cr."stream" = ps."stream"
+    left join recent_run_counts rrc
+      on rrc."pageId" = ps."pageId"
+     and rrc."stream" = ps."stream"
+    left join recent_attempt_counts rac
+      on rac."pageId" = ps."pageId"
+     and rac."stream" = ps."stream"
+    left join provider_rate_limits prl on prl."platform" = ps."platform"
+    left join fan_counts fc on fc."pageId" = ps."pageId"
+    left join follower_counts foc on foc."pageId" = ps."pageId"
+    left join subscriber_counts scnt on scnt."pageId" = ps."pageId"
+    left join transaction_counts tc on tc."pageId" = ps."pageId"
+    left join dm_conversation_counts dcc on dcc."pageId" = ps."pageId"
+    left join dm_message_counts dmc on dmc."pageId" = ps."pageId"
+    order by ps."pageLabel" asc, ${streamOrderSql('ps."stream"')} asc
+  `);
+
+  return result.rows.map((row) => normalizeSyncMonitorStreamRow(row));
+}
+
+export async function listSyncMonitorRecentEvents(
+  db: Database,
+  input?: {
+    pageIds?: number[];
+    pageLabel?: string;
+    since?: Date;
+    limit?: number;
+  },
+) {
+  if (input?.pageIds !== undefined && input.pageIds.length === 0) {
+    return [] as SyncMonitorRecentEventRow[];
+  }
+
+  const pageClauses = [sql`true`];
+  if (input?.pageIds !== undefined) {
+    pageClauses.push(inArray(platformAccounts.id, input.pageIds));
+  }
+  if (input?.pageLabel) {
+    pageClauses.push(eq(platformAccounts.label, input.pageLabel));
+  }
+
+  const eventClauses = [sql`true`];
+  if (input?.since) {
+    eventClauses.push(sql`e.emitted_at >= ${input.since}`);
+  }
+
+  const result = await db.execute<{
+    id: NumericValue;
+    runId: NumericValue;
+    pageId: NumericValue;
+    pageLabel: string;
+    provider: unknown;
+    stream: string;
+    eventType: string;
+    severity: "info" | "warn" | "error";
+    message: string;
+    details: Record<string, unknown>;
+    emittedAt: Date | string;
+  }>(sql`
+    with visible_pages as (
+      select ${platformAccounts.id} as "pageId",
+             ${platformAccounts.label} as "pageLabel"
+      from ${platformAccounts}
+      where ${and(...pageClauses)}
+    )
+    select e.id as "id",
+           e.sync_run_id as "runId",
+           vp."pageId" as "pageId",
+           vp."pageLabel" as "pageLabel",
+           e.provider as "provider",
+           e.stream as "stream",
+           e.event_type as "eventType",
+           e.severity as "severity",
+           e.message as "message",
+           e.details as "details",
+           e.emitted_at as "emittedAt"
+    from ${syncRunEvents} e
+    inner join visible_pages vp on vp."pageId" = e.platform_account_id
+    where ${and(...eventClauses)}
+      and e.stream <> 'cleanup'
+    order by e.emitted_at desc, e.id desc
+    limit ${input?.limit ?? 50}
+  `);
+
+  return result.rows.map((row) => normalizeSyncMonitorRecentEventRow(row));
+}
+
 export async function getLatestSyncRunPerPage(
   db: Database,
   pageIds: number[],
@@ -1010,6 +1477,299 @@ function normalizePlatformValue(value: unknown, field: string) {
   }
 
   throw new Error(`Expected ${field} to be a supported platform`);
+}
+
+function dmMessageSyncEligibleSql(alias: string) {
+  return sql`coalesce(${sql.raw(alias)}.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') = ''`;
+}
+
+export interface SyncMonitorStreamRow {
+  pageId: number;
+  pageLabel: string;
+  platform: "fansly" | "onlyfans";
+  modelSlug: string;
+  modelName: string;
+  username: string | null;
+  displayName: string | null;
+  fanCount: number;
+  followerCount: number;
+  subscriberCount: number;
+  transactionCount: number;
+  dmConversationCount: number;
+  dmMessageCount: number;
+  dmEligibleConversationCount: number;
+  dmBackfillCompleteConversationCount: number;
+  dmLaggingConversationCount: number;
+  stream: SyncControlStream;
+  targetStatus: SyncTargetStatus | null;
+  cadenceSeconds: number | null;
+  nextDueAt: Date | null;
+  desiredRevision: number | null;
+  satisfiedRevision: number | null;
+  desiredAt: Date | null;
+  backoffUntil: Date | null;
+  lastEnqueuedAt: Date | null;
+  lastStartedAt: Date | null;
+  lastFinishedAt: Date | null;
+  lastSucceededAt: Date | null;
+  lastFailedAt: Date | null;
+  consecutiveFailures: number;
+  lastErrorCode: string | null;
+  lastErrorSummary: string | null;
+  checkpointCursorText: string | null;
+  checkpointCursorTimestamp: Date | null;
+  checkpointState: Record<string, unknown> | null;
+  checkpointLastSuccessfulAt: Date | null;
+  checkpointLastSuccessfulRunId: number | null;
+  runningRunId: number | null;
+  runningTrigger: string | null;
+  runningStartedAt: Date | null;
+  runningLastActivityAt: Date | null;
+  runningStats: Record<string, unknown> | null;
+  runningErrorSummary: string | null;
+  lastCompletedRunId: number | null;
+  lastCompletedTrigger: string | null;
+  lastCompletedStatus: "success" | "partial" | "failed" | "skipped" | null;
+  lastCompletedStartedAt: Date | null;
+  lastCompletedFinishedAt: Date | null;
+  lastCompletedDurationMs: number | null;
+  lastCompletedStats: Record<string, unknown> | null;
+  lastCompletedErrorSummary: string | null;
+  recentRunningCount: number;
+  recentSuccessCount: number;
+  recentPartialCount: number;
+  recentFailedCount: number;
+  recentSkippedCount: number;
+  recent429Count: number;
+  recent5xxCount: number;
+  recentFailedAttemptCount: number;
+  recentRetryCount: number;
+  last429At: Date | null;
+  last5xxAt: Date | null;
+  providerNextAvailableAt: Date | null;
+  providerMinSpacingMs: number | null;
+}
+
+export interface SyncMonitorRecentEventRow {
+  id: number;
+  runId: number;
+  pageId: number;
+  pageLabel: string;
+  provider: "fansly" | "onlyfans";
+  stream: SyncControlStream;
+  eventType: string;
+  severity: "info" | "warn" | "error";
+  message: string;
+  details: Record<string, unknown>;
+  emittedAt: Date;
+}
+
+function normalizeSyncMonitorStreamRow(row: {
+  pageId: NumericValue;
+  pageLabel: string;
+  platform: unknown;
+  modelSlug: string;
+  modelName: string;
+  username: string | null;
+  displayName: string | null;
+  fanCount: NumericValue;
+  followerCount: NumericValue;
+  subscriberCount: NumericValue;
+  transactionCount: NumericValue;
+  dmConversationCount: NumericValue;
+  dmMessageCount: NumericValue;
+  dmEligibleConversationCount: NumericValue;
+  dmBackfillCompleteConversationCount: NumericValue;
+  dmLaggingConversationCount: NumericValue;
+  stream: string;
+  targetStatus: string | null;
+  cadenceSeconds: NumericValue;
+  nextDueAt: TimestampValue;
+  desiredRevision: NumericValue;
+  satisfiedRevision: NumericValue;
+  desiredAt: TimestampValue;
+  backoffUntil: TimestampValue;
+  lastEnqueuedAt: TimestampValue;
+  lastStartedAt: TimestampValue;
+  lastFinishedAt: TimestampValue;
+  lastSucceededAt: TimestampValue;
+  lastFailedAt: TimestampValue;
+  consecutiveFailures: NumericValue;
+  lastErrorCode: string | null;
+  lastErrorSummary: string | null;
+  checkpointCursorText: string | null;
+  checkpointCursorTimestamp: TimestampValue;
+  checkpointState: unknown;
+  checkpointLastSuccessfulAt: TimestampValue;
+  checkpointLastSuccessfulRunId: NumericValue;
+  runningRunId: NumericValue;
+  runningTrigger: string | null;
+  runningStartedAt: TimestampValue;
+  runningLastActivityAt: TimestampValue;
+  runningStats: unknown;
+  runningErrorSummary: string | null;
+  lastCompletedRunId: NumericValue;
+  lastCompletedTrigger: string | null;
+  lastCompletedStatus: "success" | "partial" | "failed" | "skipped" | null;
+  lastCompletedStartedAt: TimestampValue;
+  lastCompletedFinishedAt: TimestampValue;
+  lastCompletedDurationMs: NumericValue;
+  lastCompletedStats: unknown;
+  lastCompletedErrorSummary: string | null;
+  recentRunningCount: NumericValue;
+  recentSuccessCount: NumericValue;
+  recentPartialCount: NumericValue;
+  recentFailedCount: NumericValue;
+  recentSkippedCount: NumericValue;
+  recent429Count: NumericValue;
+  recent5xxCount: NumericValue;
+  recentFailedAttemptCount: NumericValue;
+  recentRetryCount: NumericValue;
+  last429At: TimestampValue;
+  last5xxAt: TimestampValue;
+  providerNextAvailableAt: TimestampValue;
+  providerMinSpacingMs: NumericValue;
+}): SyncMonitorStreamRow {
+  const stream = asSyncAuditStream(row.stream);
+  if (stream === "cleanup") {
+    throw new Error("Sync monitor rows cannot contain cleanup stream");
+  }
+
+  return {
+    pageId: normalizeNumber(row.pageId, "pageId"),
+    pageLabel: row.pageLabel,
+    platform: normalizePlatformValue(row.platform, "platform"),
+    modelSlug: row.modelSlug,
+    modelName: row.modelName,
+    username: row.username ?? null,
+    displayName: row.displayName ?? null,
+    fanCount: normalizeNumber(row.fanCount, "fanCount"),
+    followerCount: normalizeNumber(row.followerCount, "followerCount"),
+    subscriberCount: normalizeNumber(row.subscriberCount, "subscriberCount"),
+    transactionCount: normalizeNumber(row.transactionCount, "transactionCount"),
+    dmConversationCount: normalizeNumber(row.dmConversationCount, "dmConversationCount"),
+    dmMessageCount: normalizeNumber(row.dmMessageCount, "dmMessageCount"),
+    dmEligibleConversationCount: normalizeNumber(
+      row.dmEligibleConversationCount,
+      "dmEligibleConversationCount",
+    ),
+    dmBackfillCompleteConversationCount: normalizeNumber(
+      row.dmBackfillCompleteConversationCount,
+      "dmBackfillCompleteConversationCount",
+    ),
+    dmLaggingConversationCount: normalizeNumber(
+      row.dmLaggingConversationCount,
+      "dmLaggingConversationCount",
+    ),
+    stream,
+    targetStatus: row.targetStatus ? row.targetStatus as SyncTargetStatus : null,
+    cadenceSeconds: normalizeNullableNumber(row.cadenceSeconds, "cadenceSeconds"),
+    nextDueAt: parseTimestamp(row.nextDueAt, "nextDueAt"),
+    desiredRevision: normalizeNullableNumber(row.desiredRevision, "desiredRevision"),
+    satisfiedRevision: normalizeNullableNumber(row.satisfiedRevision, "satisfiedRevision"),
+    desiredAt: parseTimestamp(row.desiredAt, "desiredAt"),
+    backoffUntil: parseTimestamp(row.backoffUntil, "backoffUntil"),
+    lastEnqueuedAt: parseTimestamp(row.lastEnqueuedAt, "lastEnqueuedAt"),
+    lastStartedAt: parseTimestamp(row.lastStartedAt, "lastStartedAt"),
+    lastFinishedAt: parseTimestamp(row.lastFinishedAt, "lastFinishedAt"),
+    lastSucceededAt: parseTimestamp(row.lastSucceededAt, "lastSucceededAt"),
+    lastFailedAt: parseTimestamp(row.lastFailedAt, "lastFailedAt"),
+    consecutiveFailures: normalizeNumber(row.consecutiveFailures, "consecutiveFailures"),
+    lastErrorCode: row.lastErrorCode ?? null,
+    lastErrorSummary: row.lastErrorSummary ?? null,
+    checkpointCursorText: row.checkpointCursorText ?? null,
+    checkpointCursorTimestamp: parseTimestamp(
+      row.checkpointCursorTimestamp,
+      "checkpointCursorTimestamp",
+    ),
+    checkpointState: normalizeNullableJsonRecord(row.checkpointState, "checkpointState"),
+    checkpointLastSuccessfulAt: parseTimestamp(
+      row.checkpointLastSuccessfulAt,
+      "checkpointLastSuccessfulAt",
+    ),
+    checkpointLastSuccessfulRunId: normalizeNullableNumber(
+      row.checkpointLastSuccessfulRunId,
+      "checkpointLastSuccessfulRunId",
+    ),
+    runningRunId: normalizeNullableNumber(row.runningRunId, "runningRunId"),
+    runningTrigger: row.runningTrigger ?? null,
+    runningStartedAt: parseTimestamp(row.runningStartedAt, "runningStartedAt"),
+    runningLastActivityAt: parseTimestamp(row.runningLastActivityAt, "runningLastActivityAt"),
+    runningStats: normalizeNullableJsonRecord(row.runningStats, "runningStats"),
+    runningErrorSummary: row.runningErrorSummary ?? null,
+    lastCompletedRunId: normalizeNullableNumber(row.lastCompletedRunId, "lastCompletedRunId"),
+    lastCompletedTrigger: row.lastCompletedTrigger ?? null,
+    lastCompletedStatus: row.lastCompletedStatus ?? null,
+    lastCompletedStartedAt: parseTimestamp(
+      row.lastCompletedStartedAt,
+      "lastCompletedStartedAt",
+    ),
+    lastCompletedFinishedAt: parseTimestamp(
+      row.lastCompletedFinishedAt,
+      "lastCompletedFinishedAt",
+    ),
+    lastCompletedDurationMs: normalizeNullableNumber(
+      row.lastCompletedDurationMs,
+      "lastCompletedDurationMs",
+    ),
+    lastCompletedStats: normalizeNullableJsonRecord(
+      row.lastCompletedStats,
+      "lastCompletedStats",
+    ),
+    lastCompletedErrorSummary: row.lastCompletedErrorSummary ?? null,
+    recentRunningCount: normalizeNumber(row.recentRunningCount, "recentRunningCount"),
+    recentSuccessCount: normalizeNumber(row.recentSuccessCount, "recentSuccessCount"),
+    recentPartialCount: normalizeNumber(row.recentPartialCount, "recentPartialCount"),
+    recentFailedCount: normalizeNumber(row.recentFailedCount, "recentFailedCount"),
+    recentSkippedCount: normalizeNumber(row.recentSkippedCount, "recentSkippedCount"),
+    recent429Count: normalizeNumber(row.recent429Count, "recent429Count"),
+    recent5xxCount: normalizeNumber(row.recent5xxCount, "recent5xxCount"),
+    recentFailedAttemptCount: normalizeNumber(
+      row.recentFailedAttemptCount,
+      "recentFailedAttemptCount",
+    ),
+    recentRetryCount: normalizeNumber(row.recentRetryCount, "recentRetryCount"),
+    last429At: parseTimestamp(row.last429At, "last429At"),
+    last5xxAt: parseTimestamp(row.last5xxAt, "last5xxAt"),
+    providerNextAvailableAt: parseTimestamp(
+      row.providerNextAvailableAt,
+      "providerNextAvailableAt",
+    ),
+    providerMinSpacingMs: normalizeNullableNumber(row.providerMinSpacingMs, "providerMinSpacingMs"),
+  };
+}
+
+function normalizeSyncMonitorRecentEventRow(row: {
+  id: NumericValue;
+  runId: NumericValue;
+  pageId: NumericValue;
+  pageLabel: string;
+  provider: unknown;
+  stream: string;
+  eventType: string;
+  severity: "info" | "warn" | "error";
+  message: string;
+  details: Record<string, unknown>;
+  emittedAt: Date | string;
+}): SyncMonitorRecentEventRow {
+  const stream = asSyncAuditStream(row.stream);
+  if (stream === "cleanup") {
+    throw new Error("Sync monitor events cannot contain cleanup stream");
+  }
+
+  return {
+    id: normalizeNumber(row.id, "id"),
+    runId: normalizeNumber(row.runId, "runId"),
+    pageId: normalizeNumber(row.pageId, "pageId"),
+    pageLabel: row.pageLabel,
+    provider: normalizePlatformValue(row.provider, "provider"),
+    stream,
+    eventType: row.eventType,
+    severity: row.severity,
+    message: row.message,
+    details: row.details ?? {},
+    emittedAt: requireTimestamp(row.emittedAt, "emittedAt"),
+  };
 }
 
 function normalizeSeedSyncStreamPageRow<T extends SeedSyncStreamPageRow>(row: T): Omit<T, "platformAccountId" | "lastLightSyncAt" | "lastFollowerSyncAt" | "followerCount" | "activeFollowerCount"> & {

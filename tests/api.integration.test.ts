@@ -7,13 +7,16 @@ import {
   createFanslyPage,
   createModel,
   finalizePageDmConversationMessageSync,
+  finishSyncRequestAttempt,
   finishSyncRun,
+  insertSyncRequestAttempt,
   insertSyncRunEvent,
   recalculateFanPageSpend,
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
   syncCheckpoints,
+  syncProviderRateLimits,
   syncStreamState,
   startSyncRun,
   updatePageMetadata,
@@ -26,6 +29,7 @@ import {
   upsertTransaction,
 } from "@agency_hub_core/db";
 import { PgBoss } from "pg-boss";
+import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -511,6 +515,623 @@ async function waitForCondition(check: () => Promise<boolean>, timeoutMs = 5_000
   }
 
   throw new Error(`Condition was not met within ${timeoutMs}ms`);
+}
+
+async function setSyncRunTimes(
+  testDb: StartedTestDatabase,
+  runId: number,
+  startedAt: Date,
+  finishedAt: Date | null,
+) {
+  await testDb.pool.query(
+    "update sync_runs set started_at = $1, finished_at = $2 where id = $3",
+    [startedAt, finishedAt, runId],
+  );
+}
+
+async function seedMonitorCompletedRun(
+  testDb: StartedTestDatabase,
+  input: {
+    pageId: number;
+    stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile";
+    startedAt: Date;
+    finishedAt: Date;
+    trigger?: string;
+    status: "success" | "partial" | "failed" | "skipped";
+    errorSummary?: string | null;
+  },
+) {
+  const run = await startSyncRun(testDb.db, {
+    platformAccountId: input.pageId,
+    stream: input.stream,
+    trigger: input.trigger ?? "worker",
+  });
+  await finishSyncRun(testDb.db, run.id, {
+    status: input.status,
+    errorSummary: input.errorSummary ?? null,
+    stats: {},
+  });
+  await setSyncRunTimes(testDb, run.id, input.startedAt, input.finishedAt);
+  return run;
+}
+
+async function seedMonitorRunningRun(
+  testDb: StartedTestDatabase,
+  input: {
+    pageId: number;
+    stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile";
+    startedAt: Date;
+    trigger?: string;
+  },
+) {
+  const run = await startSyncRun(testDb.db, {
+    platformAccountId: input.pageId,
+    stream: input.stream,
+    trigger: input.trigger ?? "worker",
+  });
+  await setSyncRunTimes(testDb, run.id, input.startedAt, null);
+  return run;
+}
+
+async function seedMonitorAttempt(
+  testDb: StartedTestDatabase,
+  input: {
+    runId: number;
+    pageId: number;
+    stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile";
+    startedAt: Date;
+    finishedAt: Date;
+    state: "success" | "retry" | "failed";
+    httpStatus?: number | null;
+    failureKind?: "timeout" | "transport" | "http" | "provider" | null;
+    errorMessage?: string | null;
+  },
+) {
+  const attempt = await insertSyncRequestAttempt(testDb.db, {
+    syncRunId: input.runId,
+    platformAccountId: input.pageId,
+    provider: "fansly",
+    stream: input.stream,
+    operation: `${input.stream}_request`,
+    logicalRequestId: `${input.stream}:${input.runId}:${input.startedAt.toISOString()}`,
+    attemptNumber: 1,
+    requestShape: {},
+    startedAt: input.startedAt,
+  });
+  await finishSyncRequestAttempt(testDb.db, attempt.id, {
+    state: input.state,
+    httpStatus: input.httpStatus ?? null,
+    failureKind: input.failureKind ?? null,
+    errorMessage: input.errorMessage ?? null,
+    durationMs: Math.max(1, input.finishedAt.getTime() - input.startedAt.getTime()),
+    responseShape: {},
+    finishedAt: input.finishedAt,
+  });
+}
+
+async function seedSyncMonitorScenario(
+  testDb: StartedTestDatabase,
+  pageId: number,
+  now = new Date(),
+) {
+  const minutesAgo = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
+  const hoursAgo = (hours: number) => new Date(now.getTime() - hours * 60 * 60_000);
+  const minutesFromNow = (minutes: number) => new Date(now.getTime() + minutes * 60_000);
+
+  const completedMessageCreatedAt = minutesAgo(80);
+  const completedLastMessageAt = minutesAgo(76);
+  const completedSyncAt = minutesAgo(75);
+  const laggingLastMessageAt = minutesAgo(50);
+  const laggingLastMessageSyncAt = minutesAgo(120);
+  const pendingConversationAt = minutesAgo(45);
+  const excludedConversationAt = minutesAgo(60);
+  const authFailedAt = minutesAgo(60);
+  const lightRunningStartedAt = hoursAgo(2);
+  const lightRunningEventAt = minutesAgo(115);
+  const transactionsStartedAt = hoursAgo(3);
+  const transactionsFinishedAt = minutesAgo(173);
+  const last429At = minutesAgo(178);
+  const transactionsEventAt = minutesAgo(177);
+  const followersLastSucceededAt = hoursAgo(30);
+  const followersStartedAt = minutesAgo(45);
+  const followersFailedAt = minutesAgo(40);
+  const last5xxAt = minutesAgo(44);
+  const oldLightStartedAt = hoursAgo(30);
+  const oldLightFinishedAt = new Date(oldLightStartedAt.getTime() + 2 * 60_000);
+  const oldLight429At = new Date(oldLightStartedAt.getTime() + 60_000);
+  const backoffUntil = minutesFromNow(4);
+
+  const [fanA, fanB, fanC, fanD] = await upsertFans(testDb.db, [
+    {
+      platform: "fansly",
+      platformUserId: "monitor-fan-a",
+      username: "monitor_a",
+      displayName: "Monitor A",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "monitor-fan-b",
+      username: "monitor_b",
+      displayName: "Monitor B",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "monitor-fan-c",
+      username: "monitor_c",
+      displayName: "Monitor C",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "monitor-fan-d",
+      username: "monitor_d",
+      displayName: "Monitor D",
+    },
+  ]);
+
+  for (const fan of [fanA, fanB, fanC, fanD]) {
+    await upsertFanPage(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: pageId,
+      isFollower: false,
+      isSubscriber: false,
+    });
+  }
+
+  const completedConversation = await upsertPageDmConversation(testDb.db, {
+    platformAccountId: pageId,
+    fanId: fanA.id,
+    platformConversationId: "monitor-conv-complete",
+    partnerPlatformUserId: "monitor-fan-a",
+    partnerUsername: "monitor_a",
+    partnerDisplayName: "Monitor A",
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: "monitor-msg-002",
+    lastUnreadMessageId: null,
+    lastMessageAt: completedLastMessageAt,
+    lastMessageSenderId: "monitor-fan-a",
+    lastMessageSenderRole: "fan",
+    lastMessagePreview: "Latest stored message",
+    lastFanMessageAt: completedLastMessageAt,
+    lastModelMessageAt: completedMessageCreatedAt,
+    newestStoredMessageId: "monitor-msg-002",
+    oldestStoredMessageId: "monitor-msg-001",
+    storedMessageCount: 2,
+    messageBackfillComplete: true,
+    lastMessageSyncAt: completedSyncAt,
+    isVisible: true,
+    lastSeenGeneration: 1,
+    metadata: {},
+  });
+  await upsertPageDmMessages(testDb.db, [
+    {
+      conversationId: completedConversation.id,
+      platformAccountId: pageId,
+      platformMessageId: "monitor-msg-001",
+      senderPlatformUserId: "acct-lana",
+      senderRole: "model",
+      createdAt: completedMessageCreatedAt,
+      content: "Opening line",
+      totalTipAmountCents: 0,
+      inReplyToMessageId: null,
+      inReplyToRootMessageId: null,
+    },
+    {
+      conversationId: completedConversation.id,
+      platformAccountId: pageId,
+      platformMessageId: "monitor-msg-002",
+      senderPlatformUserId: "monitor-fan-a",
+      senderRole: "fan",
+      createdAt: completedLastMessageAt,
+      content: "Latest stored message",
+      totalTipAmountCents: 0,
+      inReplyToMessageId: null,
+      inReplyToRootMessageId: null,
+    },
+  ]);
+  await finalizePageDmConversationMessageSync(testDb.db, {
+    conversationId: completedConversation.id,
+    messageBackfillComplete: true,
+    lastMessageSyncAt: completedSyncAt,
+  });
+
+  await upsertPageDmConversation(testDb.db, {
+    platformAccountId: pageId,
+    fanId: fanB.id,
+    platformConversationId: "monitor-conv-lagging",
+    partnerPlatformUserId: "monitor-fan-b",
+    partnerUsername: "monitor_b",
+    partnerDisplayName: "Monitor B",
+    conversationFlags: 0,
+    unreadCount: 1,
+    subscriptionTierId: null,
+    lastMessageId: "monitor-lagging-003",
+    lastUnreadMessageId: "monitor-lagging-003",
+    lastMessageAt: laggingLastMessageAt,
+    lastMessageSenderId: "monitor-fan-b",
+    lastMessageSenderRole: "fan",
+    lastMessagePreview: "Lagging conversation",
+    lastFanMessageAt: laggingLastMessageAt,
+    lastModelMessageAt: null,
+    newestStoredMessageId: "monitor-lagging-002",
+    oldestStoredMessageId: "monitor-lagging-001",
+    storedMessageCount: 2,
+    messageBackfillComplete: false,
+    lastMessageSyncAt: laggingLastMessageSyncAt,
+    isVisible: true,
+    lastSeenGeneration: 1,
+    metadata: {},
+  });
+
+  await upsertPageDmConversation(testDb.db, {
+    platformAccountId: pageId,
+    fanId: fanC.id,
+    platformConversationId: "monitor-conv-pending",
+    partnerPlatformUserId: "monitor-fan-c",
+    partnerUsername: "monitor_c",
+    partnerDisplayName: "Monitor C",
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: "monitor-pending-001",
+    lastUnreadMessageId: null,
+    lastMessageAt: pendingConversationAt,
+    lastMessageSenderId: "acct-lana",
+    lastMessageSenderRole: "model",
+    lastMessagePreview: "Pending backfill",
+    lastFanMessageAt: null,
+    lastModelMessageAt: pendingConversationAt,
+    newestStoredMessageId: "monitor-pending-001",
+    oldestStoredMessageId: "monitor-pending-001",
+    storedMessageCount: 1,
+    messageBackfillComplete: false,
+    lastMessageSyncAt: pendingConversationAt,
+    isVisible: true,
+    lastSeenGeneration: 1,
+    metadata: {},
+  });
+
+  await upsertPageDmConversation(testDb.db, {
+    platformAccountId: pageId,
+    fanId: fanD.id,
+    platformConversationId: "monitor-conv-excluded",
+    partnerPlatformUserId: "monitor-fan-d",
+    partnerUsername: "monitor_d",
+    partnerDisplayName: "Monitor D",
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: "monitor-excluded-001",
+    lastUnreadMessageId: null,
+    lastMessageAt: excludedConversationAt,
+    lastMessageSenderId: "monitor-fan-d",
+    lastMessageSenderRole: "fan",
+    lastMessagePreview: "Excluded conversation",
+    lastFanMessageAt: excludedConversationAt,
+    lastModelMessageAt: null,
+    newestStoredMessageId: null,
+    oldestStoredMessageId: null,
+    storedMessageCount: 0,
+    messageBackfillComplete: false,
+    lastMessageSyncAt: null,
+    isVisible: true,
+    lastSeenGeneration: 1,
+    metadata: {
+      [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]: "message sync disabled",
+    },
+  });
+
+  await testDb.db.insert(syncStreamState).values([
+    {
+      platformAccountId: pageId,
+      stream: "light",
+      status: "active",
+      cadenceSeconds: 3600,
+      slotOffsetSeconds: 0,
+      nextDueAt: minutesFromNow(30),
+      basePriority: 60,
+      effectivePriority: 60,
+      desiredRevision: 3,
+      satisfiedRevision: 3,
+      lastStartedAt: lightRunningStartedAt,
+    },
+    {
+      platformAccountId: pageId,
+      stream: "transactions",
+      status: "active",
+      cadenceSeconds: 3600,
+      slotOffsetSeconds: 0,
+      nextDueAt: minutesFromNow(15),
+      basePriority: 50,
+      effectivePriority: 50,
+      desiredRevision: 4,
+      satisfiedRevision: 3,
+      backoffUntil,
+    },
+    {
+      platformAccountId: pageId,
+      stream: "subscribers",
+      status: "paused",
+      cadenceSeconds: 3600,
+      slotOffsetSeconds: 0,
+      nextDueAt: minutesFromNow(60),
+      basePriority: 40,
+      effectivePriority: 40,
+      desiredRevision: 1,
+      satisfiedRevision: 1,
+    },
+    {
+      platformAccountId: pageId,
+      stream: "dm_conversations",
+      status: "auth_failed",
+      cadenceSeconds: 1800,
+      slotOffsetSeconds: 0,
+      nextDueAt: minutesFromNow(10),
+      basePriority: 30,
+      effectivePriority: 30,
+      desiredRevision: 2,
+      satisfiedRevision: 1,
+      lastFailedAt: authFailedAt,
+      lastErrorCode: "auth_failed",
+      lastErrorSummary: "Session expired",
+    },
+    {
+      platformAccountId: pageId,
+      stream: "dm_messages",
+      status: "active",
+      cadenceSeconds: 7200,
+      slotOffsetSeconds: 0,
+      nextDueAt: hoursAgo(-2),
+      basePriority: 25,
+      effectivePriority: 25,
+      desiredRevision: 2,
+      satisfiedRevision: 2,
+      lastSucceededAt: completedSyncAt,
+    },
+    {
+      platformAccountId: pageId,
+      stream: "followers",
+      status: "active",
+      cadenceSeconds: 43200,
+      slotOffsetSeconds: 0,
+      nextDueAt: hoursAgo(-12),
+      basePriority: 20,
+      effectivePriority: 20,
+      desiredRevision: 6,
+      satisfiedRevision: 6,
+      lastSucceededAt: followersLastSucceededAt,
+      lastFailedAt: followersFailedAt,
+      consecutiveFailures: 2,
+      lastErrorCode: "http_500",
+      lastErrorSummary: "Followers sync failed",
+    },
+    {
+      platformAccountId: pageId,
+      stream: "followers_reconcile",
+      status: "disabled",
+      cadenceSeconds: 172800,
+      slotOffsetSeconds: 0,
+      nextDueAt: hoursAgo(-48),
+      basePriority: 10,
+      effectivePriority: 10,
+      desiredRevision: 1,
+      satisfiedRevision: 1,
+    },
+  ]);
+
+  await testDb.db.insert(syncCheckpoints).values([
+    {
+      platformAccountId: pageId,
+      stream: "transactions",
+      state: {
+        mode: "backfill",
+        completed: false,
+        provider: "fansly",
+        phase: "transactions",
+        snapshotEnd: hoursAgo(5).toISOString(),
+        newestSeenAt: hoursAgo(5).toISOString(),
+        dirtyFrom: null,
+        processedTransactions: 15,
+        processedChargebacks: 2,
+        transactionPages: 3,
+        chargebackPages: 0,
+        offset: 15,
+      },
+    },
+    {
+      platformAccountId: pageId,
+      stream: "subscribers",
+      state: {
+        revision: 1,
+        generation: 1,
+        offset: 2,
+        pageCount: 1,
+        providerReportedTotal: 5,
+      },
+    },
+    {
+      platformAccountId: pageId,
+      stream: "dm_conversations",
+      state: {
+        version: 1,
+        mode: "full_scan",
+        generation: 1,
+        offset: 2,
+        pageCount: 1,
+        providerReportedTotal: 4,
+        unchangedPageStreak: 0,
+        fullSweepStartedAt: hoursAgo(4).toISOString(),
+        lastFullSweepCompletedAt: null,
+      },
+    },
+    {
+      platformAccountId: pageId,
+      stream: "dm_messages",
+      state: {
+        version: 1,
+        currentConversationId: completedConversation.id,
+        currentPlatformConversationId: "monitor-conv-complete",
+        currentBeforeMessageId: null,
+        currentMode: "backfill",
+      },
+      lastSuccessfulAt: completedSyncAt,
+    },
+    {
+      platformAccountId: pageId,
+      stream: "followers",
+      state: {
+        revision: 6,
+        knownFollowId: "monitor-follow-004",
+        newestFollowId: "monitor-follow-010",
+        offset: 4,
+        pageCount: 2,
+        sourceFollowerCount: 10,
+      },
+      lastSuccessfulAt: followersLastSucceededAt,
+    },
+    {
+      platformAccountId: pageId,
+      stream: "followers_reconcile",
+      state: {
+        revision: 1,
+        generation: 1,
+        offset: 2,
+        pageCount: 1,
+        sourceFollowerCount: 10,
+      },
+    },
+  ]);
+
+  const runningLightRun = await seedMonitorRunningRun(testDb, {
+    pageId,
+    stream: "light",
+    startedAt: lightRunningStartedAt,
+  });
+  await insertSyncRunEvent(testDb.db, {
+    syncRunId: runningLightRun.id,
+    platformAccountId: pageId,
+    provider: "fansly",
+    stream: "light",
+    eventType: "phase_started",
+    severity: "info",
+    message: "Light sync is active",
+    emittedAt: lightRunningEventAt,
+  });
+
+  const transactionsRun = await seedMonitorCompletedRun(testDb, {
+    pageId,
+    stream: "transactions",
+    status: "partial",
+    startedAt: transactionsStartedAt,
+    finishedAt: transactionsFinishedAt,
+  });
+  await seedMonitorAttempt(testDb, {
+    runId: transactionsRun.id,
+    pageId,
+    stream: "transactions",
+    startedAt: last429At,
+    finishedAt: new Date(last429At.getTime() + 30_000),
+    state: "retry",
+    httpStatus: 429,
+    failureKind: "http",
+    errorMessage: "Rate limited",
+  });
+  await insertSyncRunEvent(testDb.db, {
+    syncRunId: transactionsRun.id,
+    platformAccountId: pageId,
+    provider: "fansly",
+    stream: "transactions",
+    eventType: "backfill_progress",
+    severity: "warn",
+    message: "Transactions backfill slowed by 429s",
+    emittedAt: transactionsEventAt,
+  });
+
+  const dmMessagesRun = await seedMonitorCompletedRun(testDb, {
+    pageId,
+    stream: "dm_messages",
+    status: "success",
+    startedAt: completedMessageCreatedAt,
+    finishedAt: completedSyncAt,
+  });
+  await insertSyncRunEvent(testDb.db, {
+    syncRunId: dmMessagesRun.id,
+    platformAccountId: pageId,
+    provider: "fansly",
+    stream: "dm_messages",
+    eventType: "run_finished",
+    severity: "info",
+    message: "DM message sync completed",
+    emittedAt: completedSyncAt,
+  });
+
+  const failedFollowersRun = await seedMonitorCompletedRun(testDb, {
+    pageId,
+    stream: "followers",
+    status: "failed",
+    startedAt: followersStartedAt,
+    finishedAt: followersFailedAt,
+    errorSummary: "Followers sync failed",
+  });
+  await seedMonitorAttempt(testDb, {
+    runId: failedFollowersRun.id,
+    pageId,
+    stream: "followers",
+    startedAt: last5xxAt,
+    finishedAt: new Date(last5xxAt.getTime() + 30_000),
+    state: "failed",
+    httpStatus: 500,
+    failureKind: "http",
+    errorMessage: "Internal server error",
+  });
+  await insertSyncRunEvent(testDb.db, {
+    syncRunId: failedFollowersRun.id,
+    platformAccountId: pageId,
+    provider: "fansly",
+    stream: "followers",
+    eventType: "run_failed",
+    severity: "error",
+    message: "Followers sync failed",
+    emittedAt: followersFailedAt,
+  });
+
+  const oldLightRun = await seedMonitorCompletedRun(testDb, {
+    pageId,
+    stream: "light",
+    status: "success",
+    startedAt: oldLightStartedAt,
+    finishedAt: oldLightFinishedAt,
+  });
+  await seedMonitorAttempt(testDb, {
+    runId: oldLightRun.id,
+    pageId,
+    stream: "light",
+    startedAt: oldLight429At,
+    finishedAt: new Date(oldLight429At.getTime() + 20_000),
+    state: "retry",
+    httpStatus: 429,
+    failureKind: "http",
+    errorMessage: "Old rate limit",
+  });
+
+  await testDb.db.insert(syncProviderRateLimits).values({
+    provider: "fansly",
+    scope: "global",
+    egressKey: "shared",
+    minSpacingMs: 1_000,
+    nextAvailableAt: backoffUntil,
+  });
+
+  return {
+    backoffUntil,
+    completedSyncAt,
+    followersFailedAt,
+    last429At,
+    last5xxAt,
+    lightRunningEventAt,
+    lightRunningStartedAt,
+  };
 }
 
 describe("api integration", () => {
@@ -3949,4 +4570,255 @@ describe("api integration", () => {
       message: "CRM is only supported for Fansly pages",
     });
   });
+
+  it("returns scoped sync monitor snapshots with derived statuses, progress, and recent aggregates", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const seeded = await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, new Date());
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const ownerResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/status",
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(ownerResponse.statusCode).toBe(200);
+    const ownerBody = ownerResponse.json();
+    expect(typeof ownerBody.generatedAt).toBe("string");
+    expect(ownerBody.window.hours).toBe(24);
+    expect(ownerBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana", "lily1"]);
+    expect(ownerBody.overall.pages).toBe(2);
+    expect(ownerBody.overall.recentRuns).toMatchObject({
+      running: 1,
+      success: 1,
+      partial: 1,
+      failed: 1,
+      skipped: 0,
+    });
+    expect(ownerBody.overall.recentErrors).toMatchObject({
+      total429s: 1,
+      total5xxs: 1,
+      failedRuns: 1,
+      failedAttempts: 1,
+      retryAttempts: 1,
+      last429At: seeded.last429At.toISOString(),
+      last5xxAt: seeded.last5xxAt.toISOString(),
+    });
+    expect(ownerBody.overall.providers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        platform: "fansly",
+        recent429s: 1,
+        recent5xxs: 1,
+        rateHealth: expect.objectContaining({
+          state: "limited",
+          nextAvailableAt: seeded.backoffUntil.toISOString(),
+        }),
+      }),
+    ]));
+
+    const lana = ownerBody.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana");
+    expect(lana).toBeTruthy();
+    expect(lana.summary).toMatchObject({
+      runningStreams: 1,
+      failedStreams: 2,
+      stalledStreams: 1,
+      pendingStreams: 1,
+      backoffStreams: 1,
+    });
+    expect(lana.counts).toMatchObject({
+      fans: 5,
+      followers: 1,
+      subscribers: 1,
+      transactions: 3,
+      conversations: 4,
+      messages: 2,
+    });
+
+    const streams = new Map(
+      lana.streams.map((stream: { stream: string }) => [stream.stream, stream]),
+    );
+
+    expect(streams.get("light")).toMatchObject({
+      status: "running",
+      stalled: true,
+      pending: false,
+      activeRun: expect.objectContaining({
+        startedAt: seeded.lightRunningStartedAt.toISOString(),
+        lastActivityAt: seeded.lightRunningEventAt.toISOString(),
+      }),
+      recentRuns: expect.objectContaining({
+        running: 1,
+        success: 0,
+      }),
+      rateHealth: expect.objectContaining({
+        state: "limited",
+      }),
+    });
+    expect(streams.get("transactions")).toMatchObject({
+      status: "idle",
+      pending: true,
+      backoffUntil: seeded.backoffUntil.toISOString(),
+      progress: {
+        label: "17 items backfilled",
+        current: 17,
+        total: null,
+        unit: "items",
+        percent: null,
+      },
+      recentRuns: expect.objectContaining({
+        partial: 1,
+      }),
+      recentErrors: expect.objectContaining({
+        total429s: 1,
+        total5xxs: 0,
+      }),
+      rateHealth: expect.objectContaining({
+        state: "limited",
+        last429At: seeded.last429At.toISOString(),
+      }),
+    });
+    expect(streams.get("subscribers")).toMatchObject({
+      status: "paused",
+      progress: {
+        label: "2/5 subscribers",
+        current: 2,
+        total: 5,
+        unit: "subscribers",
+        percent: 40,
+      },
+    });
+    expect(streams.get("dm_conversations")).toMatchObject({
+      status: "auth_failed",
+      lastErrorSummary: "Session expired",
+      progress: {
+        label: "2/4 conversations",
+        current: 2,
+        total: 4,
+        unit: "conversations",
+        percent: 50,
+      },
+    });
+    expect(streams.get("dm_messages")).toMatchObject({
+      status: "completed",
+      lastSuccessAt: seeded.completedSyncAt.toISOString(),
+      progress: {
+        label: "1/3 conversations backfilled, 1 lagging",
+        current: 1,
+        total: 3,
+        unit: "conversations",
+        percent: 33.3,
+      },
+    });
+    expect(streams.get("followers")).toMatchObject({
+      status: "failed",
+      lastFailureAt: seeded.followersFailedAt.toISOString(),
+      lastErrorSummary: "Followers sync failed",
+      recentErrors: expect.objectContaining({
+        total5xxs: 1,
+        failedRuns: 1,
+        failedAttempts: 1,
+      }),
+      progress: {
+        label: "4/10 followers",
+        current: 4,
+        total: 10,
+        unit: "followers",
+        percent: 40,
+      },
+    });
+    expect(streams.get("followers_reconcile")).toMatchObject({
+      status: "disabled",
+      progress: {
+        label: "2/10 followers",
+        current: 2,
+        total: 10,
+        unit: "followers",
+        percent: 20,
+      },
+    });
+
+    expect(ownerBody.recentEvents.map((event: { message: string }) => event.message)).toEqual([
+      "Followers sync failed",
+      "DM message sync completed",
+      "Light sync is active",
+      "Transactions backfill slowed by 429s",
+    ]);
+    const dmMessagesStream = streams.get("dm_messages") as
+      | { lastCompletion?: { durationMs?: number | null } }
+      | undefined;
+    expect(typeof dmMessagesStream?.lastCompletion?.durationMs).toBe("number");
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "lead", password: "lead-secret" },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+    const leadResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/status",
+      headers: { cookie: leadCookie },
+    });
+
+    expect(leadResponse.statusCode).toBe(200);
+    const leadBody = leadResponse.json();
+    expect(leadBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
+    expect(leadBody.overall.pages).toBe(1);
+    expect(leadBody.overall.streams).toBe(7);
+  }, 15_000);
+
+  it("enforces sync monitor page scoping and missing-page handling", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, new Date());
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "lead", password: "lead-secret" },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+
+    const forbidden = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/status?pageLabel=lily1",
+      headers: { cookie: leadCookie },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const missing = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/status?pageLabel=missing-page",
+      headers: { cookie: ownerCookie },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    const filtered = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/status?pageLabel=lana",
+      headers: { cookie: ownerCookie },
+    });
+    expect(filtered.statusCode).toBe(200);
+    expect(filtered.json().pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
+  }, 15_000);
 });

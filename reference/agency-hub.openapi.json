@@ -10944,6 +10944,1061 @@
         }
       }
     },
+    "/api/v1/sync/status": {
+      "get": {
+        "summary": "Get aggregated sync monitor data for visible pages",
+        "tags": [
+          "dashboard"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "query",
+            "name": "pageLabel",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 24,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 336
+            },
+            "in": "query",
+            "name": "windowHours",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "in": "query",
+            "name": "eventLimit",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "hours": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "startedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "hours",
+                        "startedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "overall": {
+                      "type": "object",
+                      "properties": {
+                        "pages": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "streams": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "runningStreams": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "failedStreams": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "stalledStreams": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "pendingStreams": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "backoffStreams": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "counts": {
+                          "type": "object",
+                          "properties": {
+                            "fans": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "followers": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "subscribers": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "transactions": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "conversations": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "messages": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "fans",
+                            "followers",
+                            "subscribers",
+                            "transactions",
+                            "conversations",
+                            "messages"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "recentRuns": {
+                          "type": "object",
+                          "properties": {
+                            "running": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "success": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "partial": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "failed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "skipped": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "running",
+                            "success",
+                            "partial",
+                            "failed",
+                            "skipped"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "recentErrors": {
+                          "type": "object",
+                          "properties": {
+                            "total429s": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "total5xxs": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "failedRuns": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "failedAttempts": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "retryAttempts": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "last429At": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "last5xxAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "total429s",
+                            "total5xxs",
+                            "failedRuns",
+                            "failedAttempts",
+                            "retryAttempts",
+                            "last429At",
+                            "last5xxAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "providers": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "platform": {
+                                "type": "string",
+                                "enum": [
+                                  "fansly",
+                                  "onlyfans"
+                                ]
+                              },
+                              "rateHealth": {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "healthy",
+                                      "warning",
+                                      "limited"
+                                    ]
+                                  },
+                                  "last429At": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "nextAvailableAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "last429At",
+                                  "nextAvailableAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "recent429s": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "recent5xxs": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "platform",
+                              "rateHealth",
+                              "recent429s",
+                              "recent5xxs"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "pages",
+                        "streams",
+                        "runningStreams",
+                        "failedStreams",
+                        "stalledStreams",
+                        "pendingStreams",
+                        "backoffStreams",
+                        "counts",
+                        "recentRuns",
+                        "recentErrors",
+                        "providers"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "pages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pageId": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
+                          },
+                          "modelSlug": {
+                            "type": "string"
+                          },
+                          "modelName": {
+                            "type": "string"
+                          },
+                          "username": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "displayName": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "counts": {
+                            "type": "object",
+                            "properties": {
+                              "fans": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "followers": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "subscribers": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "transactions": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "conversations": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "messages": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "fans",
+                              "followers",
+                              "subscribers",
+                              "transactions",
+                              "conversations",
+                              "messages"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "summary": {
+                            "type": "object",
+                            "properties": {
+                              "runningStreams": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedStreams": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "stalledStreams": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "pendingStreams": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "backoffStreams": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "runningStreams",
+                              "failedStreams",
+                              "stalledStreams",
+                              "pendingStreams",
+                              "backoffStreams"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "streams": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "stream": {
+                                  "type": "string",
+                                  "enum": [
+                                    "light",
+                                    "followers",
+                                    "transactions",
+                                    "subscribers",
+                                    "dm_conversations",
+                                    "dm_messages",
+                                    "followers_reconcile"
+                                  ]
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "running",
+                                    "idle",
+                                    "completed",
+                                    "failed",
+                                    "paused",
+                                    "auth_failed",
+                                    "disabled"
+                                  ]
+                                },
+                                "stalled": {
+                                  "type": "boolean"
+                                },
+                                "pending": {
+                                  "type": "boolean"
+                                },
+                                "backoffUntil": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "progress": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string"
+                                        },
+                                        "current": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "total": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "unit": {
+                                          "type": "string"
+                                        },
+                                        "percent": {
+                                          "anyOf": [
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "label",
+                                        "current",
+                                        "total",
+                                        "unit",
+                                        "percent"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "recentRuns": {
+                                  "type": "object",
+                                  "properties": {
+                                    "running": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "success": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "partial": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "failed": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "skipped": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "running",
+                                    "success",
+                                    "partial",
+                                    "failed",
+                                    "skipped"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "recentErrors": {
+                                  "type": "object",
+                                  "properties": {
+                                    "total429s": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "total5xxs": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "failedRuns": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "failedAttempts": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "retryAttempts": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "last429At": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "last5xxAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "total429s",
+                                    "total5xxs",
+                                    "failedRuns",
+                                    "failedAttempts",
+                                    "retryAttempts",
+                                    "last429At",
+                                    "last5xxAt"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "rateHealth": {
+                                  "type": "object",
+                                  "properties": {
+                                    "state": {
+                                      "type": "string",
+                                      "enum": [
+                                        "healthy",
+                                        "warning",
+                                        "limited"
+                                      ]
+                                    },
+                                    "last429At": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "nextAvailableAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "state",
+                                    "last429At",
+                                    "nextAvailableAt"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "activeRun": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "runId": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "trigger": {
+                                          "type": "string"
+                                        },
+                                        "startedAt": {
+                                          "type": "string"
+                                        },
+                                        "lastActivityAt": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "runId",
+                                        "trigger",
+                                        "startedAt",
+                                        "lastActivityAt"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "lastCompletion": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "runId": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "trigger": {
+                                          "type": "string"
+                                        },
+                                        "status": {
+                                          "type": "string",
+                                          "enum": [
+                                            "success",
+                                            "partial",
+                                            "failed",
+                                            "skipped"
+                                          ]
+                                        },
+                                        "startedAt": {
+                                          "type": "string"
+                                        },
+                                        "finishedAt": {
+                                          "type": "string"
+                                        },
+                                        "durationMs": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "errorSummary": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "runId",
+                                        "trigger",
+                                        "status",
+                                        "startedAt",
+                                        "finishedAt",
+                                        "durationMs",
+                                        "errorSummary"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "lastSuccessAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "lastFailureAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "lastErrorSummary": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "stream",
+                                "status",
+                                "stalled",
+                                "pending",
+                                "backoffUntil",
+                                "progress",
+                                "recentRuns",
+                                "recentErrors",
+                                "rateHealth",
+                                "activeRun",
+                                "lastCompletion",
+                                "lastSuccessAt",
+                                "lastFailureAt",
+                                "lastErrorSummary"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "pageId",
+                          "pageLabel",
+                          "platform",
+                          "modelSlug",
+                          "modelName",
+                          "username",
+                          "displayName",
+                          "counts",
+                          "summary",
+                          "streams"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "recentEvents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "runId": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "pageId": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
+                          },
+                          "stream": {
+                            "type": "string",
+                            "enum": [
+                              "light",
+                              "followers",
+                              "transactions",
+                              "subscribers",
+                              "dm_conversations",
+                              "dm_messages",
+                              "followers_reconcile"
+                            ]
+                          },
+                          "eventType": {
+                            "type": "string"
+                          },
+                          "severity": {
+                            "type": "string",
+                            "enum": [
+                              "info",
+                              "warn",
+                              "error"
+                            ]
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "details": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {}
+                          },
+                          "emittedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "runId",
+                          "pageId",
+                          "pageLabel",
+                          "platform",
+                          "stream",
+                          "eventType",
+                          "severity",
+                          "message",
+                          "details",
+                          "emittedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "window",
+                    "overall",
+                    "pages",
+                    "recentEvents"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/overview/revenue/daily": {
       "get": {
         "summary": "Get agency-wide revenue daily series",

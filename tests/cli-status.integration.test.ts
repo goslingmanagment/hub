@@ -6,6 +6,9 @@ import {
   finishSyncRequestAttempt,
   finishSyncRun,
   insertSyncRequestAttempt,
+  syncCheckpoints,
+  syncProviderRateLimits,
+  syncStreamState,
   insertSyncRunEvent,
   startSyncRun,
 } from "@agency_hub_core/db";
@@ -198,6 +201,125 @@ async function seedRunningRun(
   return run;
 }
 
+const SYNC_MONITOR_NOW = new Date("2026-03-20T12:00:00.000Z");
+
+async function seedSyncMonitorRows(
+  testDb: StartedTestDatabase,
+  pageId: number,
+) {
+  const lightRun = await startSyncRun(testDb.db, {
+    platformAccountId: pageId,
+    stream: "light",
+    trigger: "worker",
+  });
+  await setRunTimes(
+    testDb,
+    lightRun.id,
+    new Date("2026-03-20T10:00:00.000Z"),
+    null,
+  );
+  await insertSyncRunEvent(testDb.db, {
+    syncRunId: lightRun.id,
+    platformAccountId: pageId,
+    provider: "fansly",
+    stream: "light",
+    eventType: "phase_started",
+    severity: "info",
+    message: "Light sync active",
+    emittedAt: new Date("2026-03-20T10:05:00.000Z"),
+  });
+
+  const transactionsRun = await startSyncRun(testDb.db, {
+    platformAccountId: pageId,
+    stream: "transactions",
+    trigger: "worker",
+  });
+  await finishSyncRun(testDb.db, transactionsRun.id, {
+    status: "partial",
+    stats: {},
+  });
+  await setRunTimes(
+    testDb,
+    transactionsRun.id,
+    new Date("2026-03-20T09:00:00.000Z"),
+    new Date("2026-03-20T09:04:00.000Z"),
+  );
+  const attempt = await insertSyncRequestAttempt(testDb.db, {
+    syncRunId: transactionsRun.id,
+    platformAccountId: pageId,
+    provider: "fansly",
+    stream: "transactions",
+    operation: "transaction_backfill",
+    logicalRequestId: `tx:${transactionsRun.id}`,
+    attemptNumber: 1,
+    requestShape: {},
+    startedAt: new Date("2026-03-20T09:02:00.000Z"),
+  });
+  await finishSyncRequestAttempt(testDb.db, attempt.id, {
+    state: "retry",
+    failureKind: "http",
+    httpStatus: 429,
+    durationMs: 500,
+    errorMessage: "Rate limited",
+    responseShape: {},
+    finishedAt: new Date("2026-03-20T09:02:00.500Z"),
+  });
+
+  await testDb.db.insert(syncStreamState).values([
+    {
+      platformAccountId: pageId,
+      stream: "light",
+      status: "active",
+      cadenceSeconds: 3600,
+      slotOffsetSeconds: 0,
+      nextDueAt: new Date("2026-03-20T12:15:00.000Z"),
+      basePriority: 60,
+      effectivePriority: 60,
+      desiredRevision: 2,
+      satisfiedRevision: 2,
+      lastStartedAt: new Date("2026-03-20T10:00:00.000Z"),
+    },
+    {
+      platformAccountId: pageId,
+      stream: "transactions",
+      status: "active",
+      cadenceSeconds: 3600,
+      slotOffsetSeconds: 0,
+      nextDueAt: new Date("2026-03-20T12:15:00.000Z"),
+      basePriority: 50,
+      effectivePriority: 50,
+      desiredRevision: 4,
+      satisfiedRevision: 3,
+      backoffUntil: new Date("2026-03-20T12:04:00.000Z"),
+    },
+  ]);
+  await testDb.db.insert(syncCheckpoints).values({
+    platformAccountId: pageId,
+    stream: "transactions",
+    state: {
+      mode: "backfill",
+      completed: false,
+      provider: "fansly",
+      phase: "transactions",
+      snapshotEnd: "2026-03-20T08:00:00.000Z",
+      newestSeenAt: "2026-03-20T07:55:00.000Z",
+      dirtyFrom: null,
+      processedTransactions: 8,
+      processedChargebacks: 1,
+      transactionPages: 2,
+      chargebackPages: 0,
+      offset: 8,
+    },
+  });
+  await testDb.db.insert(syncProviderRateLimits).values({
+    provider: "fansly",
+    scope: "global",
+    egressKey: "shared",
+    minSpacingMs: 1_000,
+    nextAvailableAt: new Date("2026-03-20T12:04:00.000Z"),
+  });
+}
+
 describe("CLI status flows", () => {
   let testDb: StartedTestDatabase | null = null;
   let lanaPage: Awaited<ReturnType<typeof createFanslyPage>> | null = null;
@@ -348,5 +470,42 @@ describe("CLI status flows", () => {
     expect(snapshot.events.length).toBeGreaterThan(0);
     expect(snapshot.events.every((event) => event.pageLabel === "lana")).toBe(true);
     expect(snapshot.events.every((event) => event.emittedAt instanceof Date)).toBe(true);
+  });
+
+  it("renders sync monitor output and supports page filtering", async (context) => {
+    if (!testDb || !lanaPage || !novaPage) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers();
+    vi.setSystemTime(SYNC_MONITOR_NOW);
+
+    const appContext = createTestAppContext(testDb);
+    await seedSyncMonitorRows(testDb, lanaPage.id);
+
+    const fullOutput = (await runCli(appContext, [
+      "sync",
+      "status",
+    ])).join("\n");
+    const filteredOutput = (await runCli(appContext, [
+      "sync",
+      "status",
+      "--page",
+      "lana",
+    ])).join("\n");
+
+    expect(fullOutput).toContain("Sync Monitor 2026-03-20T12:00:00.000Z");
+    expect(fullOutput).toContain("Pages=2 Streams=14");
+    expect(fullOutput).toContain("Providers: fansly:limited");
+    expect(fullOutput).toContain("lana");
+    expect(fullOutput).toContain("nova");
+    expect(fullOutput).toContain("pending,backoff");
+    expect(fullOutput).toContain("stalled");
+    expect(fullOutput).toContain("9 items backfilled");
+
+    expect(filteredOutput).toContain("lana");
+    expect(filteredOutput).toContain("Pages=1 Streams=7");
+    expect(filteredOutput).toContain("pending,backoff");
   });
 });

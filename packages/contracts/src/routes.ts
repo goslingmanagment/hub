@@ -1200,6 +1200,181 @@ export const syncRunDetailResponseSchema = z.object({
   })),
 });
 
+const syncMonitorStatusEnum = z.enum([
+  "running",
+  "idle",
+  "completed",
+  "failed",
+  "paused",
+  "auth_failed",
+  "disabled",
+]);
+const syncMonitorRateHealthEnum = z.enum(["healthy", "warning", "limited"]);
+
+export const syncMonitorProgressSchema = z.object({
+  label: z.string(),
+  current: z.number().int(),
+  total: z.number().int().nullable(),
+  unit: z.string(),
+  percent: z.number().nullable(),
+});
+
+export const syncMonitorRateHealthSchema = z.object({
+  state: syncMonitorRateHealthEnum,
+  last429At: isoTimestamp.nullable(),
+  nextAvailableAt: isoTimestamp.nullable(),
+});
+
+export const syncMonitorRecentRunsSchema = z.object({
+  running: z.number().int(),
+  success: z.number().int(),
+  partial: z.number().int(),
+  failed: z.number().int(),
+  skipped: z.number().int(),
+});
+
+export const syncMonitorRecentErrorsSchema = z.object({
+  total429s: z.number().int(),
+  total5xxs: z.number().int(),
+  failedRuns: z.number().int(),
+  failedAttempts: z.number().int(),
+  retryAttempts: z.number().int(),
+  last429At: isoTimestamp.nullable(),
+  last5xxAt: isoTimestamp.nullable(),
+});
+
+export const syncMonitorLastCompletionSchema = z.object({
+  runId: z.number().int(),
+  trigger: z.string(),
+  status: z.enum(["success", "partial", "failed", "skipped"]),
+  startedAt: isoTimestamp,
+  finishedAt: isoTimestamp,
+  durationMs: z.number().int().nullable(),
+  errorSummary: z.string().nullable(),
+});
+
+export const syncMonitorActiveRunSchema = z.object({
+  runId: z.number().int(),
+  trigger: z.string(),
+  startedAt: isoTimestamp,
+  lastActivityAt: isoTimestamp,
+});
+
+export const syncMonitorStreamItemSchema = z.object({
+  stream: z.enum([
+    "light",
+    "followers",
+    "transactions",
+    "subscribers",
+    "dm_conversations",
+    "dm_messages",
+    "followers_reconcile",
+  ]),
+  status: syncMonitorStatusEnum,
+  stalled: z.boolean(),
+  pending: z.boolean(),
+  backoffUntil: isoTimestamp.nullable(),
+  progress: syncMonitorProgressSchema.nullable(),
+  recentRuns: syncMonitorRecentRunsSchema,
+  recentErrors: syncMonitorRecentErrorsSchema,
+  rateHealth: syncMonitorRateHealthSchema,
+  activeRun: syncMonitorActiveRunSchema.nullable(),
+  lastCompletion: syncMonitorLastCompletionSchema.nullable(),
+  lastSuccessAt: isoTimestamp.nullable(),
+  lastFailureAt: isoTimestamp.nullable(),
+  lastErrorSummary: z.string().nullable(),
+});
+
+export const syncMonitorPageCountsSchema = z.object({
+  fans: z.number().int(),
+  followers: z.number().int(),
+  subscribers: z.number().int(),
+  transactions: z.number().int(),
+  conversations: z.number().int(),
+  messages: z.number().int(),
+});
+
+export const syncMonitorPageSummarySchema = z.object({
+  runningStreams: z.number().int(),
+  failedStreams: z.number().int(),
+  stalledStreams: z.number().int(),
+  pendingStreams: z.number().int(),
+  backoffStreams: z.number().int(),
+});
+
+export const syncMonitorPageItemSchema = z.object({
+  pageId: z.number().int(),
+  pageLabel: z.string(),
+  platform: platformEnum,
+  modelSlug: z.string(),
+  modelName: z.string(),
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+  counts: syncMonitorPageCountsSchema,
+  summary: syncMonitorPageSummarySchema,
+  streams: z.array(syncMonitorStreamItemSchema),
+});
+
+export const syncMonitorProviderSummarySchema = z.object({
+  platform: platformEnum,
+  rateHealth: syncMonitorRateHealthSchema,
+  recent429s: z.number().int(),
+  recent5xxs: z.number().int(),
+});
+
+export const syncMonitorOverallSchema = z.object({
+  pages: z.number().int(),
+  streams: z.number().int(),
+  runningStreams: z.number().int(),
+  failedStreams: z.number().int(),
+  stalledStreams: z.number().int(),
+  pendingStreams: z.number().int(),
+  backoffStreams: z.number().int(),
+  counts: syncMonitorPageCountsSchema,
+  recentRuns: syncMonitorRecentRunsSchema,
+  recentErrors: syncMonitorRecentErrorsSchema,
+  providers: z.array(syncMonitorProviderSummarySchema),
+});
+
+export const syncMonitorRecentEventSchema = z.object({
+  id: z.number().int(),
+  runId: z.number().int(),
+  pageId: z.number().int(),
+  pageLabel: z.string(),
+  platform: platformEnum,
+  stream: z.enum([
+    "light",
+    "followers",
+    "transactions",
+    "subscribers",
+    "dm_conversations",
+    "dm_messages",
+    "followers_reconcile",
+  ]),
+  eventType: z.string(),
+  severity: z.enum(["info", "warn", "error"]),
+  message: z.string(),
+  details: z.record(z.string(), z.unknown()),
+  emittedAt: isoTimestamp,
+});
+
+export const syncStatusQuerySchema = z.object({
+  pageLabel: z.string().min(1).optional(),
+  windowHours: z.coerce.number().int().min(1).max(24 * 14).default(24),
+  eventLimit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+export const syncStatusResponseSchema = z.object({
+  generatedAt: isoTimestamp,
+  window: z.object({
+    hours: z.number().int(),
+    startedAt: isoTimestamp,
+  }),
+  overall: syncMonitorOverallSchema,
+  pages: z.array(syncMonitorPageItemSchema),
+  recentEvents: z.array(syncMonitorRecentEventSchema),
+});
+
 export const syncTriggerBodySchema = z.object({
   pageLabel: z.string().min(1),
   scope: syncTriggerScopeEnum,
@@ -1724,6 +1899,18 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  syncStatus: {
+    tags: ["dashboard"],
+    summary: "Get aggregated sync monitor data for visible pages",
+    security: cookieOnlySecurity,
+    querystring: syncStatusQuerySchema,
+    response: {
+      200: syncStatusResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   overviewRevenueDaily: {
     tags: ["dashboard"],
     summary: "Get agency-wide revenue daily series",
@@ -2158,6 +2345,8 @@ export type ApiKeyItem = z.infer<typeof apiKeyItemSchema>;
 export type IssuedApiKeyResponse = z.infer<typeof issuedApiKeyResponseSchema>;
 export type SyncRunItem = z.infer<typeof syncRunItemSchema>;
 export type SyncRunDetailResponse = z.infer<typeof syncRunDetailResponseSchema>;
+export type SyncStatusQuery = z.infer<typeof syncStatusQuerySchema>;
+export type SyncMonitorResponse = z.infer<typeof syncStatusResponseSchema>;
 export type SyncTriggerBody = z.infer<typeof syncTriggerBodySchema>;
 export type SyncTriggerResponse = z.infer<typeof syncTriggerResponseSchema>;
 export type SyncTriggerAllResponse = z.infer<typeof syncTriggerAllResponseSchema>;

@@ -5,6 +5,7 @@ import { ProtectedLayout } from "./components/layout/ProtectedLayout";
 
 const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })));
 const OverviewPage = lazy(() => import("./pages/OverviewPage").then((m) => ({ default: m.OverviewPage })));
+const SyncMonitorPage = lazy(() => import("./pages/SyncMonitorPage").then((m) => ({ default: m.SyncMonitorPage })));
 const PageDetailPage = lazy(() => import("./pages/PageDetailPage").then((m) => ({ default: m.PageDetailPage })));
 const SubscribersPage = lazy(() => import("./pages/SubscribersPage").then((m) => ({ default: m.SubscribersPage })));
 const FollowersPage = lazy(() => import("./pages/FollowersPage").then((m) => ({ default: m.FollowersPage })));
@@ -29,6 +30,7 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route element={<ProtectedLayout />}>
           <Route index element={<OverviewPage />} />
+          <Route path="sync" element={<SyncMonitorPage />} />
           <Route path="pages/:pageLabel" element={<PageDetailPage />} />
           <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
           <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />

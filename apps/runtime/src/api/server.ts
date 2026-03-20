@@ -104,6 +104,7 @@ import {
   getCrmRetentionReport,
   getCrmSummaryReport,
 } from "../services/crm.ts";
+import { getSyncMonitorSnapshot } from "../services/sync-monitor.ts";
 import {
   getSpenderBatch,
   getSpenderDetail,
@@ -790,6 +791,28 @@ export async function buildApiServer(appContext: AppContext) {
         hasOnlyFansPages: pages.some((p) => p.platform === "onlyfans"),
       },
     };
+  });
+
+  server.get("/api/v1/sync/status", {
+    schema: routeSchemas.syncStatus,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const query = request.query;
+
+    if (query.pageLabel) {
+      const page = await getPageSummary(appContext, query.pageLabel);
+      if (!canAccessPage(principal, page.id)) {
+        throw new ForbiddenError("Page access denied");
+      }
+    }
+
+    return getSyncMonitorSnapshot(appContext, {
+      pageIds: pageScopeFor(principal),
+      pageLabel: query.pageLabel,
+      windowHours: query.windowHours,
+      eventLimit: query.eventLimit,
+    });
   });
 
   // Revenue daily endpoints
