@@ -1,0 +1,280 @@
+import {
+  clearSyncPageAuthFailed,
+  listSyncRequestAttempts,
+  openNotificationIncident,
+  resolveNotificationIncident,
+  type NotificationIncidentKind,
+  type SyncControlStream,
+} from "@agency_hub_core/db";
+import { redactSensitiveText } from "@agency_hub_core/shared";
+
+import type { AppContext } from "../bootstrap.ts";
+import { sendTelegramMessage } from "./telegram.ts";
+
+const STREAM_FAILURE_THRESHOLD = 3;
+
+function incidentKey(
+  input: {
+    kind: NotificationIncidentKind;
+    platformAccountId: number;
+    stream?: SyncControlStream | null;
+  },
+) {
+  return input.kind === "stream_failed_threshold" && input.stream
+    ? `${input.kind}:${input.platformAccountId}:${input.stream}`
+    : `${input.kind}:${input.platformAccountId}`;
+}
+
+function summarizeError(errorSummary: string | null | undefined) {
+  if (!errorSummary) {
+    return "Unknown error";
+  }
+
+  const sanitized = redactSensitiveText(errorSummary).trim();
+  return sanitized.length <= 240 ? sanitized : `${sanitized.slice(0, 237)}...`;
+}
+
+function openMessageForIncident(
+  input: {
+    kind: NotificationIncidentKind;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    stream?: SyncControlStream | null;
+    errorSummary: string | null;
+  },
+) {
+  const title = input.kind === "auth_failed"
+    ? "🚨 Auth failed"
+    : input.kind === "proxy_failed"
+      ? "🚨 Proxy failed"
+      : "🚨 Stream failed 3x in a row";
+
+  return [
+    title,
+    `Page: ${input.pageLabel} (${input.platform})`,
+    ...(input.stream ? [`Stream: ${input.stream}`] : []),
+    `Error: ${summarizeError(input.errorSummary)}`,
+  ].join("\n");
+}
+
+function resolveMessageForIncident(
+  input: {
+    kind: NotificationIncidentKind;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    stream?: SyncControlStream | null;
+  },
+) {
+  const detail = input.kind === "auth_failed"
+    ? "Auth failed"
+    : input.kind === "proxy_failed"
+      ? "Proxy failed"
+      : `Stream ${input.stream ?? "unknown"} recovered`;
+
+  return [
+    "✅ Resolved",
+    `${detail}: ${input.pageLabel} (${input.platform})`,
+  ].join("\n");
+}
+
+async function openIncidentAndNotify(
+  app: Pick<AppContext, "db" | "logger" | "config">,
+  input: {
+    kind: NotificationIncidentKind;
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    stream?: SyncControlStream | null;
+    errorCode?: string | null;
+    errorSummary?: string | null;
+  },
+) {
+  try {
+    const result = await openNotificationIncident(app.db, {
+      incidentKey: incidentKey(input),
+      kind: input.kind,
+      platformAccountId: input.platformAccountId,
+      stream: input.stream ?? null,
+      errorCode: input.errorCode ?? null,
+      errorSummary: summarizeError(input.errorSummary),
+      metadata: {
+        pageLabel: input.pageLabel,
+        platform: input.platform,
+        stream: input.stream ?? null,
+      },
+    });
+
+    if (result.transition === "existing") {
+      return;
+    }
+
+    await sendTelegramMessage(app, {
+      text: openMessageForIncident({
+        ...input,
+        errorSummary: input.errorSummary ?? null,
+      }),
+    });
+  } catch (error) {
+    app.logger.warn({
+      platformAccountId: input.platformAccountId,
+      incidentKind: input.kind,
+      err: error,
+    }, "Notification incident open failed; continuing");
+  }
+}
+
+async function resolveIncidentAndNotify(
+  app: Pick<AppContext, "db" | "logger" | "config">,
+  input: {
+    kind: NotificationIncidentKind;
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    stream?: SyncControlStream | null;
+  },
+) {
+  try {
+    const resolved = await resolveNotificationIncident(app.db, {
+      incidentKey: incidentKey(input),
+      metadata: {
+        pageLabel: input.pageLabel,
+        platform: input.platform,
+        stream: input.stream ?? null,
+      },
+    });
+
+    if (!resolved) {
+      return;
+    }
+
+    await sendTelegramMessage(app, {
+      text: resolveMessageForIncident(input),
+    });
+  } catch (error) {
+    app.logger.warn({
+      platformAccountId: input.platformAccountId,
+      incidentKind: input.kind,
+      err: error,
+    }, "Notification incident resolve failed; continuing");
+  }
+}
+
+async function hasTerminalProxyFailure(
+  app: Pick<AppContext, "db">,
+  runId: number,
+) {
+  const attempts = await listSyncRequestAttempts(app.db, {
+    runId,
+    limit: 2_000,
+  });
+
+  return attempts.some((attempt) =>
+    attempt.state === "failed" &&
+    (attempt.failureKind === "timeout" || attempt.failureKind === "transport"));
+}
+
+export async function notifyAuthFailedIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    errorCode?: string | null;
+    errorSummary: string;
+  },
+) {
+  await openIncidentAndNotify(app, {
+    ...input,
+    kind: "auth_failed",
+  });
+}
+
+export async function notifySyncChunkFailureIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    stream: SyncControlStream;
+    runId: number;
+    hasProxy: boolean;
+    previousConsecutiveFailures: number;
+    errorCode?: string | null;
+    errorSummary: string;
+  },
+) {
+  try {
+    if (input.hasProxy && await hasTerminalProxyFailure(app, input.runId)) {
+      await openIncidentAndNotify(app, {
+        ...input,
+        kind: "proxy_failed",
+      });
+      return;
+    }
+
+    if ((input.previousConsecutiveFailures + 1) !== STREAM_FAILURE_THRESHOLD) {
+      return;
+    }
+
+    await openIncidentAndNotify(app, {
+      ...input,
+      kind: "stream_failed_threshold",
+    });
+  } catch (error) {
+    app.logger.warn({
+      platformAccountId: input.platformAccountId,
+      stream: input.stream,
+      err: error,
+    }, "Sync chunk failure notification evaluation failed; continuing");
+  }
+}
+
+export async function resolveSyncChunkRecoveryIncidents(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    stream: SyncControlStream;
+  },
+) {
+  await resolveIncidentAndNotify(app, {
+    ...input,
+    kind: "auth_failed",
+  });
+  await resolveIncidentAndNotify(app, {
+    ...input,
+    kind: "proxy_failed",
+  });
+  await resolveIncidentAndNotify(app, {
+    ...input,
+    kind: "stream_failed_threshold",
+  });
+}
+
+export async function handleSuccessfulPageVerificationRecovery(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+  },
+) {
+  try {
+    await clearSyncPageAuthFailed(app.db, input.platformAccountId);
+  } catch (error) {
+    app.logger.warn({
+      platformAccountId: input.platformAccountId,
+      err: error,
+    }, "Failed to clear auth_failed during page verification recovery");
+  }
+
+  await resolveIncidentAndNotify(app, {
+    ...input,
+    kind: "auth_failed",
+  });
+  await resolveIncidentAndNotify(app, {
+    ...input,
+    kind: "proxy_failed",
+  });
+}

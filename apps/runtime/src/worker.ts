@@ -8,13 +8,16 @@ import {
 import { PgBoss } from "pg-boss";
 
 import { createAppContext, type AppContext } from "./bootstrap.ts";
+import { sendDailyRevenueTelegramReport } from "./services/telegram-report.ts";
 import { startSyncPageExecutor } from "./services/sync/executor.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
+  ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule,
   ensureSyncQueues,
   RAW_PAYLOAD_CLEANUP_QUEUE,
   SYNC_PLANNER_QUEUE,
+  TELEGRAM_DAILY_REPORT_QUEUE,
 } from "./services/sync-queue.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
@@ -52,10 +55,14 @@ export async function startWorkerServices(
 
   await boss.start();
   await ensureSyncQueues(boss, createdQueues);
-  await Promise.all([
+  const schedules = [
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
-  ]);
+  ];
+  if (app.config.telegramEnabled) {
+    schedules.push(ensureTelegramDailyReportSchedule(boss, app.config.telegramReportHourUtc));
+  }
+  await Promise.all(schedules);
 
   await boss.work(SYNC_PLANNER_QUEUE, {
     batchSize: 1,
@@ -70,6 +77,10 @@ export async function startWorkerServices(
       app.db,
       new Date(Date.now() - app.config.syncObservabilityRetentionDays * 24 * 60 * 60 * 1000),
     );
+  });
+
+  await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, { batchSize: 1 }, async () => {
+    await sendDailyRevenueTelegramReport(app);
   });
 
   const executorPromise = startSyncPageExecutor(app, boss, {

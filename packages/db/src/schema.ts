@@ -85,6 +85,15 @@ export const transactionStateEnum = pgEnum("transaction_state", [
 export const userRoleEnum = pgEnum("user_role", userRoles);
 export const fanFlagEnum = pgEnum("fan_flag", fanFlagTypes);
 export const dmSenderRoleEnum = pgEnum("dm_sender_role", ["fan", "model", "system", "unknown"]);
+export const notificationIncidentKindEnum = pgEnum("notification_incident_kind", [
+  "auth_failed",
+  "proxy_failed",
+  "stream_failed_threshold",
+]);
+export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
+  "open",
+  "resolved",
+]);
 
 export const models = pgTable("models", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
@@ -162,6 +171,37 @@ export const platformAccountProxies = pgTable("platform_account_proxies", {
   keyVersion: integer("key_version"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const notificationIncidents = pgTable(
+  "notification_incidents",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    incidentKey: text("incident_key").notNull().unique(),
+    kind: notificationIncidentKindEnum("kind").notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    stream: syncStreamEnum("stream"),
+    status: notificationIncidentStatusEnum("status").default("open").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    errorCode: text("error_code"),
+    errorSummary: text("error_summary"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    accountStatusIdx: index("notification_incidents_account_status_idx").on(
+      table.platformAccountId,
+      table.status,
+    ),
+    statusSeenIdx: index("notification_incidents_status_seen_idx").on(
+      table.status,
+      table.lastSeenAt,
+    ),
+  }),
+);
 
 export const syncRuns = pgTable(
   "sync_runs",

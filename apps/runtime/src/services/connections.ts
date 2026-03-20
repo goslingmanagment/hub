@@ -15,6 +15,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
+import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
 
@@ -212,6 +213,12 @@ export async function updatePageCredentials(
   if (proxy) {
     await saveProxy(app, stored.page.id, proxy);
   }
+
+  await handleSuccessfulPageVerificationRecovery(app, {
+    platformAccountId: stored.page.id,
+    pageLabel: stored.page.label,
+    platform: stored.page.platform,
+  });
 
   return { updated: true, verified: true };
 }

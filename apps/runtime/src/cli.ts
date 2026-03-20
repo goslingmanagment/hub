@@ -18,6 +18,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
+import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import {
@@ -31,6 +32,8 @@ import {
   unassignPageFromUser,
 } from "./services/auth.ts";
 import { getModelRevenueReport, getPageRevenueReport } from "./services/reporting.ts";
+import { sendDailyRevenueTelegramReport } from "./services/telegram-report.ts";
+import { sendTelegramTestMessage } from "./services/telegram.ts";
 import { loadFanslySessionBundleFromFile, loadOnlyMonsterTokenBundleFromFile } from "./services/page-context.ts";
 import { requestPageSync, waitForRequestedSyncRevisions } from "./services/sync-control.ts";
 import { refreshPageMetadata } from "./services/sync/shared.ts";
@@ -414,6 +417,7 @@ export function buildProgram() {
   const sync = program.command("sync");
   sync.enablePositionalOptions();
   const queue = program.command("queue");
+  const telegram = program.command("telegram");
   const user = program.command("user");
   const apiKey = program.command("apikey");
 
@@ -554,11 +558,21 @@ export function buildProgram() {
         const context = await resolvePageContext(app, options.page);
         if (context.platform === "fansly") {
           const verified = await refreshPageMetadata(app, context, "light");
+          await handleSuccessfulPageVerificationRecovery(app, {
+            platformAccountId: context.page.id,
+            pageLabel: context.page.label,
+            platform: context.platform,
+          });
           console.log(
             `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.id})`,
           );
         } else {
           const verified = await refreshPageMetadata(app, context, "light");
+          await handleSuccessfulPageVerificationRecovery(app, {
+            platformAccountId: context.page.id,
+            pageLabel: context.page.label,
+            platform: context.platform,
+          });
           console.log(
             `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.platform_account_id})`,
           );
@@ -657,6 +671,50 @@ export function buildProgram() {
         }
 
         console.log(`Queued sync.planner recovery job ${jobId}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  telegram
+    .command("test")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const result = await sendTelegramTestMessage(app);
+        if (result.status === "skipped") {
+          console.log("Telegram is not configured; skipping");
+          return;
+        }
+
+        if (result.status === "failed") {
+          console.log(`Telegram test delivery failed: ${result.error}`);
+          return;
+        }
+
+        console.log(`Sent Telegram test message to ${result.chatId}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  telegram
+    .command("report")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const result = await sendDailyRevenueTelegramReport(app);
+        if (result.delivery.status === "skipped") {
+          console.log("Telegram is not configured; skipping");
+          return;
+        }
+
+        if (result.delivery.status === "failed") {
+          console.log(`Telegram daily report delivery failed: ${result.delivery.error}`);
+          return;
+        }
+
+        console.log(`Sent Telegram daily report for ${result.report?.reportDate ?? "yesterday"}`);
       } finally {
         await app.close();
       }

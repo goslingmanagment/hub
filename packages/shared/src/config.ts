@@ -1,6 +1,24 @@
 import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
 
+const optionalTrimmedStringSchema = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  return value;
+}, z.string().min(1).optional());
+
+const optionalTelegramHourSchema = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  return value;
+}, z.coerce.number().int().min(0).max(23).optional());
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   APP_ENCRYPTION_KEY: z.string().min(1),
@@ -36,6 +54,9 @@ const envSchema = z.object({
   TRANSACTION_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
   TRANSACTION_RESCAN_CAP_DAYS: z.coerce.number().int().positive().default(30),
   SYNC_OBSERVABILITY_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
+  TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
+  TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -75,6 +96,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     parsed.FANSLY_GLOBAL_DELAY_MS ??
     parsed.FANSLY_ACCOUNT_LOOKUP_DELAY_MS ??
     2500;
+  const telegramBotToken = parsed.TELEGRAM_BOT_TOKEN ?? null;
+  const telegramChatId = parsed.TELEGRAM_CHAT_ID ?? null;
+  const telegramEnabled = telegramBotToken !== null && telegramChatId !== null;
 
   return {
     databaseUrl: parsed.DATABASE_URL,
@@ -97,5 +121,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     transactionLookbackDays: parsed.TRANSACTION_LOOKBACK_DAYS,
     transactionRescanCapDays: parsed.TRANSACTION_RESCAN_CAP_DAYS,
     syncObservabilityRetentionDays: parsed.SYNC_OBSERVABILITY_RETENTION_DAYS,
+    telegramBotToken,
+    telegramChatId,
+    telegramEnabled,
+    telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
   };
 }

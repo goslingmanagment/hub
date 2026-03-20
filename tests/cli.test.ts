@@ -39,12 +39,15 @@ const cliMocks = vi.hoisted(() => {
     bossBehavior,
     bossInstances,
     createAppContext: vi.fn(),
+    handleSuccessfulPageVerificationRecovery: vi.fn(),
     listPages: vi.fn(),
     onboardFanslyPage: vi.fn(),
     onboardOnlyFansPage: vi.fn(),
     requestPageSync: vi.fn(),
     waitForRequestedSyncRevisions: vi.fn(),
     removePageProxy: vi.fn(),
+    sendDailyRevenueTelegramReport: vi.fn(),
+    sendTelegramTestMessage: vi.fn(),
     setPageProxy: vi.fn(),
   };
 });
@@ -67,9 +70,21 @@ vi.mock("../apps/runtime/src/services/page-proxies.ts", () => ({
   removePageProxy: cliMocks.removePageProxy,
 }));
 
+vi.mock("../apps/runtime/src/services/notification-incidents.ts", () => ({
+  handleSuccessfulPageVerificationRecovery: cliMocks.handleSuccessfulPageVerificationRecovery,
+}));
+
 vi.mock("../apps/runtime/src/services/sync-control.ts", () => ({
   requestPageSync: cliMocks.requestPageSync,
   waitForRequestedSyncRevisions: cliMocks.waitForRequestedSyncRevisions,
+}));
+
+vi.mock("../apps/runtime/src/services/telegram.ts", () => ({
+  sendTelegramTestMessage: cliMocks.sendTelegramTestMessage,
+}));
+
+vi.mock("../apps/runtime/src/services/telegram-report.ts", () => ({
+  sendDailyRevenueTelegramReport: cliMocks.sendDailyRevenueTelegramReport,
 }));
 
 vi.mock("../apps/runtime/src/services/sync.ts", async () => {
@@ -132,7 +147,10 @@ describe("CLI parsing", () => {
     cliMocks.requestPageSync.mockReset();
     cliMocks.waitForRequestedSyncRevisions.mockReset();
     cliMocks.removePageProxy.mockReset();
+    cliMocks.sendDailyRevenueTelegramReport.mockReset();
+    cliMocks.sendTelegramTestMessage.mockReset();
     cliMocks.setPageProxy.mockReset();
+    cliMocks.handleSuccessfulPageVerificationRecovery.mockReset();
 
     cliMocks.createAppContext.mockResolvedValue({
       config: {
@@ -154,6 +172,18 @@ describe("CLI parsing", () => {
     cliMocks.waitForRequestedSyncRevisions.mockResolvedValue(undefined);
     cliMocks.removePageProxy.mockResolvedValue(undefined);
     cliMocks.setPageProxy.mockResolvedValue(undefined);
+    cliMocks.handleSuccessfulPageVerificationRecovery.mockResolvedValue(undefined);
+    cliMocks.sendTelegramTestMessage.mockResolvedValue({
+      status: "skipped",
+      reason: "unconfigured",
+    });
+    cliMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
+      delivery: {
+        status: "skipped",
+        reason: "unconfigured",
+      },
+      report: null,
+    });
   });
 
   afterEach(async () => {
@@ -221,6 +251,13 @@ describe("CLI parsing", () => {
     const revenueHelp = revenueCommand?.helpInformation();
     expect(revenueHelp).toContain("--slug <slug>");
     expect(revenueHelp).toContain("--period <period>");
+
+    const telegramCommand = helpProgram.commands.find((command) => command.name() === "telegram");
+    expect(telegramCommand).toBeDefined();
+    const testCommand = telegramCommand?.commands.find((command) => command.name() === "test");
+    const reportCommand = telegramCommand?.commands.find((command) => command.name() === "report");
+    expect(testCommand).toBeDefined();
+    expect(reportCommand).toBeDefined();
   });
 
   it("documents page proxy management commands", () => {
@@ -462,6 +499,84 @@ describe("CLI parsing", () => {
     expect(boss.stop).toHaveBeenCalledTimes(1);
     expect(app?.close).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith("sync.planner is already queued or active");
+  });
+
+  it("sends a Telegram test message when configured", async () => {
+    cliMocks.sendTelegramTestMessage.mockResolvedValue({
+      status: "sent",
+      chatId: "6065935464",
+      messageId: 123,
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "telegram",
+      "test",
+    ], { from: "user" });
+
+    const app = await cliMocks.createAppContext.mock.results[0]?.value;
+    expect(cliMocks.sendTelegramTestMessage).toHaveBeenCalledWith(expect.anything());
+    expect(app?.close).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith("Sent Telegram test message to 6065935464");
+  });
+
+  it("reports skipped Telegram test messages when unconfigured", async () => {
+    cliMocks.sendTelegramTestMessage.mockResolvedValue({
+      status: "skipped",
+      reason: "unconfigured",
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "telegram",
+      "test",
+    ], { from: "user" });
+
+    expect(logSpy).toHaveBeenCalledWith("Telegram is not configured; skipping");
+  });
+
+  it("sends the Telegram daily report when configured", async () => {
+    cliMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
+      delivery: {
+        status: "sent",
+        chatId: "6065935464",
+        messageId: 456,
+      },
+      report: {
+        reportDate: "2026-03-19",
+      },
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "telegram",
+      "report",
+    ], { from: "user" });
+
+    expect(cliMocks.sendDailyRevenueTelegramReport).toHaveBeenCalledWith(expect.anything());
+    expect(logSpy).toHaveBeenCalledWith("Sent Telegram daily report for 2026-03-19");
+  });
+
+  it("reports skipped Telegram daily reports when unconfigured", async () => {
+    cliMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
+      delivery: {
+        status: "skipped",
+        reason: "unconfigured",
+      },
+      report: null,
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "telegram",
+      "report",
+    ], { from: "user" });
+
+    expect(logSpy).toHaveBeenCalledWith("Telegram is not configured; skipping");
   });
 
   it("sets a proxy on an existing page", async () => {

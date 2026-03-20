@@ -81,4 +81,50 @@ describe("config", () => {
 
     expect(config.fanslyDefaultDelayMs).toBe(3000);
   });
+
+  it("enables Telegram delivery when bot token and chat id are configured", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "bot-token",
+      TELEGRAM_CHAT_ID: "6065935464",
+    });
+
+    expect(config.telegramBotToken).toBe("bot-token");
+    expect(config.telegramChatId).toBe("6065935464");
+    expect(config.telegramEnabled).toBe(true);
+    expect(config.telegramReportHourUtc).toBe(9);
+  });
+
+  it("treats blank Telegram values as unconfigured", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "   ",
+      TELEGRAM_CHAT_ID: "",
+    });
+
+    expect(config.telegramBotToken).toBeNull();
+    expect(config.telegramChatId).toBeNull();
+    expect(config.telegramEnabled).toBe(false);
+    expect(config.telegramReportHourUtc).toBe(9);
+  });
+
+  it("accepts an explicit Telegram report hour", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      TELEGRAM_BOT_TOKEN: "bot-token",
+      TELEGRAM_CHAT_ID: "-1001234567890",
+      TELEGRAM_REPORT_HOUR: "6",
+    });
+
+    expect(config.telegramEnabled).toBe(true);
+    expect(config.telegramChatId).toBe("-1001234567890");
+    expect(config.telegramReportHourUtc).toBe(6);
+  });
+
+  it("rejects Telegram report hours outside the UTC 0-23 range", () => {
+    expect(() => loadConfig({
+      ...baseEnv,
+      TELEGRAM_REPORT_HOUR: "24",
+    })).toThrow();
+  });
 });

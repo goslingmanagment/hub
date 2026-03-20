@@ -6,6 +6,7 @@ export const SYNC_PLANNER_DLQ_QUEUE = "sync.planner.dlq";
 export const SYNC_PAGE_EXECUTE_QUEUE = "sync.page.execute";
 export const SYNC_PAGE_EXECUTE_DLQ_QUEUE = "sync.page.execute.dlq";
 export const RAW_PAYLOAD_CLEANUP_QUEUE = "fansly.raw-payload-cleanup";
+export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 
 export type SyncTriggerScope = "light" | "followers" | "all";
 
@@ -15,7 +16,15 @@ export interface SyncPageExecutePayload {
 
 export interface QueueCreationClient {
   createQueue(name: string, options?: Omit<Queue, "name">): Promise<unknown>;
-  schedule?(name: string, cron: string, data?: object | null): Promise<unknown>;
+  schedule?(
+    name: string,
+    cron: string,
+    data?: object | null,
+    options?: {
+      tz?: string;
+      key?: string;
+    },
+  ): Promise<unknown>;
   send?(
     name: string,
     data?: object | null,
@@ -80,6 +89,12 @@ export async function ensureSyncQueues(
     ensureQueueCreated(boss, RAW_PAYLOAD_CLEANUP_QUEUE, {
       policy: "standard",
     }, createdQueues),
+    ensureQueueCreated(boss, TELEGRAM_DAILY_REPORT_QUEUE, {
+      policy: "standard",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+    }, createdQueues),
   ]);
 }
 
@@ -91,6 +106,19 @@ export async function ensurePlannerSchedule(
   }
 
   await boss.schedule(SYNC_PLANNER_QUEUE, "* * * * *");
+}
+
+export async function ensureTelegramDailyReportSchedule(
+  boss: QueueCreationClient,
+  hourUtc: number,
+) {
+  if (!boss.schedule) {
+    return;
+  }
+
+  await boss.schedule(TELEGRAM_DAILY_REPORT_QUEUE, `0 ${hourUtc} * * *`, null, {
+    tz: "UTC",
+  });
 }
 
 export async function sendSyncPlannerWakeup(

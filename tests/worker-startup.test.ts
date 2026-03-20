@@ -13,6 +13,7 @@ const executorMocks = vi.hoisted(() => ({
 const queueMocks = vi.hoisted(() => ({
   ensurePlannerSchedule: vi.fn(),
   ensureSyncQueues: vi.fn(),
+  ensureTelegramDailyReportSchedule: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", () => dbMocks);
@@ -24,10 +25,12 @@ vi.mock("../apps/runtime/src/services/sync/planner.ts", () => ({
   runSyncPlannerCycle: vi.fn(),
 }));
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
+  ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,
   ensureSyncQueues: queueMocks.ensureSyncQueues,
   RAW_PAYLOAD_CLEANUP_QUEUE: "raw-payload-cleanup",
   SYNC_PLANNER_QUEUE: "sync-planner",
+  TELEGRAM_DAILY_REPORT_QUEUE: "telegram.daily-report",
 }));
 
 import { startWorkerServices } from "../apps/runtime/src/worker.ts";
@@ -65,6 +68,8 @@ describe("worker startup", () => {
       },
       config: {
         syncObservabilityRetentionDays: 30,
+        telegramEnabled: false,
+        telegramReportHourUtc: 9,
       },
       close: vi.fn(async () => {
         order.push("app.close");
@@ -125,11 +130,53 @@ describe("worker startup", () => {
       orphanedRunFailed: 1,
       orphanedRunPartial: 1,
     }), "Orphaned sync run startup cleanup complete");
+    expect(queueMocks.ensureTelegramDailyReportSchedule).not.toHaveBeenCalled();
     expect(app.logger.info).toHaveBeenCalledWith("Worker started");
 
     await runtime.shutdown();
 
     expect(boss.stop).toHaveBeenCalledTimes(1);
     expect(app.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the Telegram daily report schedule when Telegram is enabled", async () => {
+    const app = {
+      db: {},
+      logger: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+      config: {
+        syncObservabilityRetentionDays: 30,
+        telegramEnabled: true,
+        telegramReportHourUtc: 7,
+      },
+      close: vi.fn(async () => {}),
+    };
+    const boss = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      schedule: vi.fn(async () => {}),
+      work: vi.fn(async () => {}),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      fetch: vi.fn(),
+      send: vi.fn(),
+      touch: vi.fn(),
+    };
+
+    const runtime = await startWorkerServices(app as never, boss as never);
+
+    expect(queueMocks.ensureSyncQueues).toHaveBeenCalledWith(boss, expect.any(Set));
+    expect(queueMocks.ensurePlannerSchedule).toHaveBeenCalledWith(boss);
+    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledTimes(1);
+    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledWith(boss, 7);
+    expect(boss.work).toHaveBeenCalledWith(
+      "telegram.daily-report",
+      { batchSize: 1 },
+      expect.any(Function),
+    );
+
+    await runtime.shutdown();
   });
 });

@@ -1,0 +1,312 @@
+import {
+  getRevenuePageTotals,
+  listVisiblePages,
+} from "@agency_hub_core/db";
+import {
+  addUtcDays,
+  formatUsdFromMills,
+  startOfBusinessDay,
+  toBusinessDate,
+  toMills,
+  UTC_TIME_ZONE,
+  type Platform,
+} from "@agency_hub_core/shared";
+
+import type { AppContext } from "../bootstrap.ts";
+import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
+
+export const TOP_PAGE_LIMIT = 10;
+
+type WindowKey = "yesterday" | "days7" | "days30";
+
+interface RevenueMetric {
+  currentMills: bigint;
+  previousMills: bigint;
+  deltaPct: number | null;
+}
+
+interface ReportRow {
+  label: string;
+  metrics: Record<WindowKey, RevenueMetric>;
+}
+
+interface RankedPageRow extends ReportRow {
+  pageId: number;
+}
+
+export interface DailyRevenueTelegramReport {
+  reportDate: string;
+  generatedAt: string;
+  agency: ReportRow;
+  models: ReportRow[];
+  pages: ReportRow[];
+  overflow: (ReportRow & { pageCount: number }) | null;
+  text: string;
+}
+
+function sumMills(values: Iterable<bigint>) {
+  let total = 0n;
+  for (const value of values) {
+    total += value;
+  }
+  return total;
+}
+
+function computeDeltaPct(currentMills: bigint, previousMills: bigint) {
+  if (previousMills === 0n) {
+    return null;
+  }
+
+  return (Number(currentMills - previousMills) / Number(previousMills < 0n ? -previousMills : previousMills)) * 100;
+}
+
+function formatDelta(deltaPct: number | null) {
+  if (deltaPct === null) {
+    return "n/a";
+  }
+
+  if (Math.abs(deltaPct) < 0.05) {
+    return "↔0.0%";
+  }
+
+  return `${deltaPct > 0 ? "↑" : "↓"}${Math.abs(deltaPct).toFixed(1)}%`;
+}
+
+function formatMetric(metric: RevenueMetric) {
+  return `${formatUsdFromMills(metric.currentMills)} ${formatDelta(metric.deltaPct)}`;
+}
+
+function formatRow(label: string, row: ReportRow) {
+  return [
+    label,
+    `Y ${formatMetric(row.metrics.yesterday)}`,
+    `7d ${formatMetric(row.metrics.days7)}`,
+    `30d ${formatMetric(row.metrics.days30)}`,
+  ].join(" | ");
+}
+
+function groupPageIdsByPlatform(
+  pages: Array<Awaited<ReturnType<typeof listVisiblePages>>[number]>,
+) {
+  const grouped = new Map<Platform, number[]>();
+
+  for (const page of pages) {
+    const current = grouped.get(page.platform) ?? [];
+    current.push(page.id);
+    grouped.set(page.platform, current);
+  }
+
+  return grouped;
+}
+
+async function loadPageTotalsForBounds(
+  app: Pick<AppContext, "db">,
+  groupedPageIds: Map<Platform, number[]>,
+  bounds: {
+    from: Date;
+    to: Date;
+  },
+) {
+  const totals = new Map<number, bigint>();
+  const groups = Array.from(groupedPageIds.entries());
+  const rows = await Promise.all(groups.map(([platform, pageIds]) => getRevenuePageTotals(app.db, {
+    platform,
+    pageIds,
+    period: {
+      from: bounds.from,
+      to: bounds.to,
+    },
+  })));
+
+  for (const group of rows) {
+    for (const row of group) {
+      totals.set(row.pageId, toMills(row.netEarningsMills));
+    }
+  }
+
+  return totals;
+}
+
+function buildMetric(
+  currentTotals: Map<number, bigint>,
+  previousTotals: Map<number, bigint>,
+  pageIds: number[],
+) {
+  const currentMills = sumMills(pageIds.map((pageId) => currentTotals.get(pageId) ?? 0n));
+  const previousMills = sumMills(pageIds.map((pageId) => previousTotals.get(pageId) ?? 0n));
+
+  return {
+    currentMills,
+    previousMills,
+    deltaPct: computeDeltaPct(currentMills, previousMills),
+  } satisfies RevenueMetric;
+}
+
+function createReportRow(
+  label: string,
+  pageIds: number[],
+  totalsByWindow: Record<WindowKey, {
+    current: Map<number, bigint>;
+    previous: Map<number, bigint>;
+  }>,
+): ReportRow {
+  return {
+    label,
+    metrics: {
+      yesterday: buildMetric(totalsByWindow.yesterday.current, totalsByWindow.yesterday.previous, pageIds),
+      days7: buildMetric(totalsByWindow.days7.current, totalsByWindow.days7.previous, pageIds),
+      days30: buildMetric(totalsByWindow.days30.current, totalsByWindow.days30.previous, pageIds),
+    },
+  };
+}
+
+function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramReport, "text">) {
+  const lines = [
+    "📈 Daily Revenue Report",
+    `${report.reportDate} UTC`,
+    "",
+    "🏢 Agency",
+    formatRow("Total", report.agency),
+    "",
+    "👤 Models",
+    ...(report.models.length > 0
+      ? report.models.map((row) => formatRow(row.label, row))
+      : ["No models"]),
+    "",
+    "📄 Top Pages",
+    ...(report.pages.length > 0
+      ? report.pages.map((row) => formatRow(row.label, row))
+      : ["No pages"]),
+  ];
+
+  if (report.overflow) {
+    lines.push(formatRow(`+${report.overflow.pageCount} more pages`, report.overflow));
+  }
+
+  return lines.join("\n");
+}
+
+function sortByYesterday(left: ReportRow, right: ReportRow) {
+  const delta = Number(right.metrics.yesterday.currentMills - left.metrics.yesterday.currentMills);
+  if (delta !== 0) {
+    return delta;
+  }
+
+  return left.label.localeCompare(right.label);
+}
+
+export async function buildDailyRevenueTelegramReport(
+  app: Pick<AppContext, "db">,
+  now = new Date(),
+): Promise<DailyRevenueTelegramReport> {
+  const todayStart = startOfBusinessDay(now, UTC_TIME_ZONE);
+  const yesterdayStart = addUtcDays(todayStart, -1);
+  const pageRows = await listVisiblePages(app.db);
+  const groupedPageIds = groupPageIdsByPlatform(pageRows);
+
+  const windows = {
+    yesterday: {
+      current: { from: yesterdayStart, to: todayStart },
+      previous: { from: addUtcDays(yesterdayStart, -1), to: yesterdayStart },
+    },
+    days7: {
+      current: { from: addUtcDays(todayStart, -7), to: todayStart },
+      previous: { from: addUtcDays(todayStart, -14), to: addUtcDays(todayStart, -7) },
+    },
+    days30: {
+      current: { from: addUtcDays(todayStart, -30), to: todayStart },
+      previous: { from: addUtcDays(todayStart, -60), to: addUtcDays(todayStart, -30) },
+    },
+  } satisfies Record<WindowKey, {
+    current: { from: Date; to: Date };
+    previous: { from: Date; to: Date };
+  }>;
+
+  const totalsByWindow = Object.fromEntries(await Promise.all(
+    Object.entries(windows).map(async ([key, bounds]) => [
+      key,
+      {
+        current: await loadPageTotalsForBounds(app, groupedPageIds, bounds.current),
+        previous: await loadPageTotalsForBounds(app, groupedPageIds, bounds.previous),
+      },
+    ]),
+  )) as Record<WindowKey, {
+    current: Map<number, bigint>;
+    previous: Map<number, bigint>;
+  }>;
+
+  const agency = createReportRow("Agency", pageRows.map((page) => page.id), totalsByWindow);
+  const modelPageIds = new Map<string, { name: string; pageIds: number[] }>();
+
+  for (const page of pageRows) {
+    const current = modelPageIds.get(page.modelSlug) ?? {
+      name: page.modelName,
+      pageIds: [],
+    };
+    current.pageIds.push(page.id);
+    modelPageIds.set(page.modelSlug, current);
+  }
+
+  const models = Array.from(modelPageIds.entries())
+    .map(([modelSlug, model]) => createReportRow(model.name || modelSlug, model.pageIds, totalsByWindow))
+    .sort(sortByYesterday);
+
+  const rankedPages = pageRows
+    .map((page) => ({
+      pageId: page.id,
+      ...createReportRow(page.label, [page.id], totalsByWindow),
+    } satisfies RankedPageRow))
+    .sort(sortByYesterday);
+  const topPages = rankedPages.slice(0, TOP_PAGE_LIMIT);
+  const overflowPageIds = rankedPages
+    .slice(TOP_PAGE_LIMIT)
+    .map((page) => page.pageId);
+  const overflow = overflowPageIds.length > 0
+    ? {
+      ...createReportRow("overflow", overflowPageIds, totalsByWindow),
+      pageCount: overflowPageIds.length,
+    }
+    : null;
+
+  const report = {
+    reportDate: toBusinessDate(yesterdayStart, UTC_TIME_ZONE),
+    generatedAt: now.toISOString(),
+    agency,
+    models,
+    pages: topPages,
+    overflow,
+  } satisfies Omit<DailyRevenueTelegramReport, "text">;
+
+  return {
+    ...report,
+    text: renderDailyRevenueTelegramReport(report),
+  };
+}
+
+export async function sendDailyRevenueTelegramReport(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  now = new Date(),
+): Promise<{
+  delivery: TelegramSendResult;
+  report: DailyRevenueTelegramReport | null;
+}> {
+  if (!app.config.telegramEnabled) {
+    return {
+      delivery: {
+        status: "skipped",
+        reason: "unconfigured",
+      },
+      report: null,
+    };
+  }
+
+  const report = await buildDailyRevenueTelegramReport(app, now);
+  const delivery = await sendTelegramMessage(app, {
+    text: report.text,
+  });
+
+  return {
+    delivery,
+    report,
+  };
+}

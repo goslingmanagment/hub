@@ -70,6 +70,10 @@ describe("db write safety", () => {
         syncSharedRateLimitEnabled: false,
         syncPageExecutorConcurrency: 1,
         syncObservabilityRetentionDays: 30,
+        telegramBotToken: null,
+        telegramChatId: null,
+        telegramEnabled: false,
+        telegramReportHourUtc: 9,
       },
       adapter: {
         async verifySession() {
@@ -115,6 +119,10 @@ describe("db write safety", () => {
         syncSharedRateLimitEnabled: false,
         syncPageExecutorConcurrency: 1,
         syncObservabilityRetentionDays: 30,
+        telegramBotToken: null,
+        telegramChatId: null,
+        telegramEnabled: false,
+        telegramReportHourUtc: 9,
       },
       onlyFansAdapter: {
         async listAccountsPage() {

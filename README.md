@@ -173,6 +173,9 @@ Configuration is loaded from environment variables and validated at startup.
 | `FANSLY_DM_MESSAGES_DELAY_MS` | No | Minimum spacing for Fansly shared rate-limit `dm_messages` reservations. Defaults to `7500`. |
 | `TRANSACTION_LOOKBACK_DAYS` | No | Backfill window applied to transaction checkpoint resyncs. Defaults to `7`. |
 | `TRANSACTION_RESCAN_CAP_DAYS` | No | Maximum age of pending-aware transaction rescans before the start cursor is clamped. Defaults to `30`. |
+| `TELEGRAM_BOT_TOKEN` | No | Telegram bot token for owner notifications. When unset, Telegram delivery is disabled. |
+| `TELEGRAM_CHAT_ID` | No | Telegram chat ID that receives owner notifications. Stored as a string so group IDs also work. |
+| `TELEGRAM_REPORT_HOUR` | No | UTC hour `0-23` for the daily revenue report. Defaults to `9`. |
 
 ## CLI Reference
 
@@ -251,6 +254,22 @@ Validate the stored Fansly session or OnlyMonster account access and refresh the
 
 ```bash
 pnpm cli page verify --page lora-main
+```
+
+### `telegram test`
+
+Send a verification message to the configured Telegram chat. If Telegram is not configured, the command exits successfully and prints a skip message.
+
+```bash
+pnpm cli telegram test
+```
+
+### `telegram report`
+
+Build and send the same compact daily revenue report that the worker sends on schedule.
+
+```bash
+pnpm cli telegram report
 ```
 
 ### `page list`

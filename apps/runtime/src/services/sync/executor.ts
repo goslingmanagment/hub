@@ -19,6 +19,11 @@ import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
+import {
+  notifyAuthFailedIncident,
+  notifySyncChunkFailureIncident,
+  resolveSyncChunkRecoveryIncidents,
+} from "../notification-incidents.ts";
 import { SYNC_PAGE_EXECUTE_QUEUE, sendSyncPageWakeup, type SyncPageExecutePayload } from "../sync-queue.ts";
 import { normalizeSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
@@ -40,6 +45,11 @@ export interface SyncPageChunkResult {
 }
 
 type PageExecuteBoss = Pick<PgBoss, "complete" | "fail" | "fetch" | "send" | "touch">;
+
+interface ExecutorCoordinator {
+  fetchLock: Promise<void>;
+  localActiveGroups: Set<string>;
+}
 
 function isAuthError(error: unknown) {
   if (error instanceof FanslyApiError || error instanceof OnlyMonsterApiError) {
@@ -158,6 +168,12 @@ export async function executeNextSyncPageChunk(
         },
         ...result.stats,
       });
+      await resolveSyncChunkRecoveryIncidents(app, {
+        platformAccountId,
+        pageLabel: pageContext.page.label,
+        platform: pageContext.platform,
+        stream: streamState.stream,
+      });
       const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
       return buildContinuationResult(platformAccountId, streamState.stream, run.id, "success", nextRows);
     }
@@ -170,6 +186,12 @@ export async function executeNextSyncPageChunk(
         elapsedMs: budget.elapsedMs,
       },
       ...result.stats,
+    });
+    await resolveSyncChunkRecoveryIncidents(app, {
+      platformAccountId,
+      pageLabel: pageContext.page.label,
+      platform: pageContext.platform,
+      stream: streamState.stream,
     });
     const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
     return buildContinuationResult(platformAccountId, streamState.stream, run.id, "yielded", nextRows);
@@ -196,6 +218,13 @@ export async function executeNextSyncPageChunk(
       await telemetry.finish("failed", failure, {
         chunkStatus: "auth_failed",
       });
+      await notifyAuthFailedIncident(app, {
+        platformAccountId,
+        pageLabel: pageContext.page.label,
+        platform: pageContext.platform,
+        errorCode: failure.error.code,
+        errorSummary: failure.summary,
+      });
       return {
         kind: "auth_failed",
         platformAccountId,
@@ -214,6 +243,17 @@ export async function executeNextSyncPageChunk(
     });
     await telemetry.finish("failed", failure, {
       chunkStatus: "failed",
+    });
+    await notifySyncChunkFailureIncident(app, {
+      platformAccountId,
+      pageLabel: pageContext.page.label,
+      platform: pageContext.platform,
+      stream: streamState.stream,
+      runId: run.id,
+      hasProxy: pageContext.proxy !== null,
+      previousConsecutiveFailures: streamState.consecutiveFailures,
+      errorCode: failure.error.code,
+      errorSummary: failure.summary,
     });
     const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
     return buildContinuationResult(platformAccountId, streamState.stream, run.id, "failed", nextRows);
@@ -250,29 +290,43 @@ async function runSyncPageExecutorWorker(
   boss: Pick<PgBoss, "complete" | "fail" | "fetch" | "send" | "touch">,
   input: {
     signal?: AbortSignal;
-    localActiveGroups: Set<string>;
+    coordinator: ExecutorCoordinator;
   },
 ): Promise<void> {
   while (!input.signal?.aborted) {
     try {
-      const activeGroupIds = Array.from(input.localActiveGroups);
-      const jobs = await boss.fetch<SyncPageExecutePayload>(SYNC_PAGE_EXECUTE_QUEUE, {
-        batchSize: 1,
-        includeMetadata: true,
-        priority: true,
-        orderByCreatedOn: true,
-        groupConcurrency: 1,
-        ignoreGroups: activeGroupIds.length > 0 ? activeGroupIds : null,
+      const previousFetch = input.coordinator.fetchLock;
+      let releaseFetchLock!: () => void;
+      input.coordinator.fetchLock = new Promise<void>((resolve) => {
+        releaseFetchLock = resolve;
       });
-      const job = jobs[0];
+
+      await previousFetch;
+
+      let trackedGroupId: string | null = null;
+      let job: JobWithMetadata<SyncPageExecutePayload> | null = null;
+      try {
+        const activeGroupIds = Array.from(input.coordinator.localActiveGroups);
+        const jobs = await boss.fetch<SyncPageExecutePayload>(SYNC_PAGE_EXECUTE_QUEUE, {
+          batchSize: 1,
+          includeMetadata: true,
+          priority: true,
+          orderByCreatedOn: true,
+          groupConcurrency: 1,
+          ignoreGroups: activeGroupIds.length > 0 ? activeGroupIds : null,
+        });
+        job = jobs[0] ?? null;
+        trackedGroupId = typeof job?.groupId === "string" ? job.groupId : null;
+        if (trackedGroupId) {
+          input.coordinator.localActiveGroups.add(trackedGroupId);
+        }
+      } finally {
+        releaseFetchLock();
+      }
+
       if (!job) {
         await delay(PAGE_EXECUTOR_IDLE_POLL_MS);
         continue;
-      }
-
-      const trackedGroupId = typeof job.groupId === "string" ? job.groupId : null;
-      if (trackedGroupId) {
-        input.localActiveGroups.add(trackedGroupId);
       }
 
       const heartbeat = setInterval(() => {
@@ -291,7 +345,7 @@ async function runSyncPageExecutorWorker(
       } finally {
         clearInterval(heartbeat);
         if (trackedGroupId) {
-          input.localActiveGroups.delete(trackedGroupId);
+          input.coordinator.localActiveGroups.delete(trackedGroupId);
         }
       }
     } catch (error) {
@@ -312,11 +366,14 @@ export async function startSyncPageExecutor(
     signal?: AbortSignal;
   },
 ): Promise<void> {
-  const localActiveGroups = new Set<string>();
+  const coordinator: ExecutorCoordinator = {
+    fetchLock: Promise.resolve(),
+    localActiveGroups: new Set<string>(),
+  };
   const workers = Array.from({ length: app.config.syncPageExecutorConcurrency }, () =>
     runSyncPageExecutorWorker(app, boss, {
       signal: input?.signal,
-      localActiveGroups,
+      coordinator,
     }));
 
   await Promise.all(workers);

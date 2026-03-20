@@ -6,15 +6,20 @@ import {
   createOnlyFansPage,
   createFanslyPage,
   createModel,
+  ensureSyncStreamStateRows,
   finalizePageDmConversationMessageSync,
   finishSyncRequestAttempt,
   finishSyncRun,
+  getNotificationIncidentByKey,
   insertSyncRequestAttempt,
   insertSyncRunEvent,
+  markSyncPageAuthFailed,
+  openNotificationIncident,
   recalculateFanPageSpend,
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
+  storeFanslySession,
   syncCheckpoints,
   syncProviderRateLimits,
   syncStreamState,
@@ -29,7 +34,7 @@ import {
   upsertTransaction,
 } from "@agency_hub_core/db";
 import { PgBoss } from "pg-boss";
-import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
+import { encryptJson, FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -4037,6 +4042,48 @@ describe("api integration", () => {
     server = await buildApiServer(appContext);
     await server.ready();
 
+    await storeFanslySession(
+      activeTestDb.db,
+      fixture!.lanaPage.id,
+      JSON.stringify(encryptJson({
+        platform: "fansly",
+        session: {
+          authorization: "verify-token",
+        },
+      }, Buffer.alloc(32, 7), 1)),
+      1,
+    );
+    await ensureSyncStreamStateRows(activeTestDb.db, {
+      platformAccountId: fixture!.lanaPage.id,
+    });
+    await markSyncPageAuthFailed(activeTestDb.db, {
+      platformAccountId: fixture!.lanaPage.id,
+      errorCode: "auth_failed",
+      errorSummary: "Session expired",
+    });
+    await openNotificationIncident(activeTestDb.db, {
+      incidentKey: `auth_failed:${fixture!.lanaPage.id}`,
+      kind: "auth_failed",
+      platformAccountId: fixture!.lanaPage.id,
+      errorCode: "auth_failed",
+      errorSummary: "Session expired",
+      metadata: {
+        pageLabel: fixture!.lanaPage.label,
+        platform: fixture!.lanaPage.platform,
+      },
+    });
+    await openNotificationIncident(activeTestDb.db, {
+      incidentKey: `proxy_failed:${fixture!.lanaPage.id}`,
+      kind: "proxy_failed",
+      platformAccountId: fixture!.lanaPage.id,
+      errorCode: "transport",
+      errorSummary: "Proxy unavailable",
+      metadata: {
+        pageLabel: fixture!.lanaPage.label,
+        platform: fixture!.lanaPage.platform,
+      },
+    });
+
     const login = await server.inject({
       method: "POST",
       url: "/api/v1/auth/login",
@@ -4064,6 +4111,132 @@ describe("api integration", () => {
       updated: true,
       verified: true,
     });
+
+    const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
+      select count(*)::int as count
+      from sync_stream_state
+      where platform_account_id = $1
+        and status = 'auth_failed'
+    `, [fixture!.lanaPage.id]);
+
+    expect(authBlockedRows.rows[0]?.count).toBe(0);
+    expect(await getNotificationIncidentByKey(
+      activeTestDb.db,
+      `auth_failed:${fixture!.lanaPage.id}`,
+    )).toEqual(expect.objectContaining({
+      status: "resolved",
+    }));
+    expect(await getNotificationIncidentByKey(
+      activeTestDb.db,
+      `proxy_failed:${fixture!.lanaPage.id}`,
+    )).toEqual(expect.objectContaining({
+      status: "resolved",
+    }));
+  });
+
+  it("clears auth_failed state and resolves incidents when owners verify a page", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const activeTestDb = testDb;
+    await server.close();
+    const appContext = createTestAppContext(activeTestDb, {
+      adapter: createAutoSyncFanslyAdapter({
+        accountId: "acct-lana",
+        username: "lana_page",
+        displayName: "Lana",
+      }),
+    });
+    server = await buildApiServer(appContext);
+    await server.ready();
+
+    await storeFanslySession(
+      activeTestDb.db,
+      fixture!.lanaPage.id,
+      JSON.stringify(encryptJson({
+        platform: "fansly",
+        session: {
+          authorization: "verify-token",
+        },
+      }, Buffer.alloc(32, 7), 1)),
+      1,
+    );
+    await ensureSyncStreamStateRows(activeTestDb.db, {
+      platformAccountId: fixture!.lanaPage.id,
+    });
+    await markSyncPageAuthFailed(activeTestDb.db, {
+      platformAccountId: fixture!.lanaPage.id,
+      errorCode: "auth_failed",
+      errorSummary: "Session expired",
+    });
+    await openNotificationIncident(activeTestDb.db, {
+      incidentKey: `auth_failed:${fixture!.lanaPage.id}`,
+      kind: "auth_failed",
+      platformAccountId: fixture!.lanaPage.id,
+      errorCode: "auth_failed",
+      errorSummary: "Session expired",
+      metadata: {
+        pageLabel: fixture!.lanaPage.label,
+        platform: fixture!.lanaPage.platform,
+      },
+    });
+    await openNotificationIncident(activeTestDb.db, {
+      incidentKey: `proxy_failed:${fixture!.lanaPage.id}`,
+      kind: "proxy_failed",
+      platformAccountId: fixture!.lanaPage.id,
+      errorCode: "transport",
+      errorSummary: "Proxy unavailable",
+      metadata: {
+        pageLabel: fixture!.lanaPage.label,
+        platform: fixture!.lanaPage.platform,
+      },
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/pages/lana/verify",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      verified: true,
+      username: "lana_page",
+      platform: "fansly",
+    });
+
+    const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
+      select count(*)::int as count
+      from sync_stream_state
+      where platform_account_id = $1
+        and status = 'auth_failed'
+    `, [fixture!.lanaPage.id]);
+
+    expect(authBlockedRows.rows[0]?.count).toBe(0);
+    expect(await getNotificationIncidentByKey(
+      activeTestDb.db,
+      `auth_failed:${fixture!.lanaPage.id}`,
+    )).toEqual(expect.objectContaining({
+      status: "resolved",
+    }));
+    expect(await getNotificationIncidentByKey(
+      activeTestDb.db,
+      `proxy_failed:${fixture!.lanaPage.id}`,
+    )).toEqual(expect.objectContaining({
+      status: "resolved",
+    }));
   });
 
   it("normalizes inline proxy credentials when updating page credentials via PATCH", async (context) => {

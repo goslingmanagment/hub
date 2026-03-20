@@ -80,6 +80,7 @@ import {
   ServiceUnavailableError,
   UnauthorizedError,
 } from "../services/errors.ts";
+import { handleSuccessfulPageVerificationRecovery } from "../services/notification-incidents.ts";
 import { resolvePageContext } from "../services/page-context.ts";
 import {
   getCrossPageFanDetailReport,
@@ -1518,6 +1519,11 @@ export async function buildApiServer(appContext: AppContext) {
       } else {
         await refreshPageMetadata(appContext, pageContext, "light");
       }
+      await handleSuccessfulPageVerificationRecovery(appContext, {
+        platformAccountId: pageContext.page.id,
+        pageLabel: pageContext.page.label,
+        platform: pageContext.platform,
+      });
       return {
         verified: true,
         username: pageContext.page.username,
