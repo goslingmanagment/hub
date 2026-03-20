@@ -34,6 +34,7 @@ import type {
   CrmRetentionResponse,
   CrmReactivationResponse,
   CrmConversationPreviewResponse,
+  PageConversationMessagesResponse,
 } from "@agency_hub_core/contracts";
 import { api } from "./client";
 
@@ -392,6 +393,12 @@ export function useSyncRequests(
         limit: params.limit,
       })}`);
     },
+    select: (items) => items.map((item) => ({
+      ...item,
+      partnerUsername: item.partnerUsername ?? null,
+      returnedItems: typeof item.returnedItems === "number" ? item.returnedItems : null,
+      syncDone: typeof item.syncDone === "boolean" ? item.syncDone : null,
+    })),
     enabled: options.enabled ?? true,
     refetchInterval: 3_000,
     placeholderData: (previousData) => previousData,
@@ -523,5 +530,22 @@ export function useCrmConversationPreview(
         `/api/v1/pages/${pageLabel}/crm/conversations/${platformConversationId}/preview${qs(params)}`,
       ),
     enabled: !!platformConversationId,
+  });
+}
+
+export function usePageConversationMessages(
+  pageLabel: string,
+  conversationId: string | null,
+  params: { limit?: number } = {},
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["pageConversationMessages", pageLabel, conversationId, params],
+    queryFn: () =>
+      api.get<PageConversationMessagesResponse>(
+        `/api/v1/pages/${pageLabel}/conversations/${conversationId}/messages${qs(params)}`,
+      ),
+    enabled: !!conversationId && (options.enabled ?? true),
+    meta: { suppressGlobalError: true },
   });
 }

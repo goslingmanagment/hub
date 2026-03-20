@@ -177,6 +177,9 @@ export interface SyncMonitorRequestItem {
   durationMs: number | null;
   rateLimitWaitMs: number | null;
   groupId: string | null;
+  partnerUsername: string | null;
+  returnedItems: number | null;
+  syncDone: boolean | null;
   proxyGapMs: number | null;
 }
 
@@ -864,6 +867,9 @@ function requestItemFor(
     durationMs: row.durationMs,
     rateLimitWaitMs: asNullableNumber(requestShape?.rateLimitWaitMs) ?? null,
     groupId: asNullableString(requestShape?.groupId),
+    partnerUsername: row.partnerUsername,
+    returnedItems: row.returnedItems,
+    syncDone: row.syncDone,
     proxyGapMs,
   };
 }

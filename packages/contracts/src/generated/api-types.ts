@@ -2176,6 +2176,123 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pages/{pageLabel}/conversations/{conversationId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return cached DM messages for one conversation */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    pageLabel: string;
+                    conversationId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            page: {
+                                id: number;
+                                label: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                                followerCount: number;
+                                subscriberCount: number;
+                                lastLightSyncAt: string | null;
+                                lastFollowerSyncAt: string | null;
+                            };
+                            conversationId: string;
+                            messages: {
+                                messageId: string;
+                                /** @enum {string} */
+                                senderRole: "fan" | "model" | "system" | "unknown";
+                                content: string;
+                                createdAt: string;
+                                tipAmountCents: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/fans/{platform}/{platformUserId}": {
         parameters: {
             query?: never;
@@ -3525,6 +3642,9 @@ export interface paths {
                             durationMs: number | null;
                             rateLimitWaitMs: number | null;
                             groupId: string | null;
+                            partnerUsername: string | null;
+                            returnedItems: number | null;
+                            syncDone: boolean | null;
                             proxyGapMs: number | null;
                         }[];
                     };

@@ -1,8 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { SyncMonitorResponse, SyncRequestsResponse } from "@agency_hub_core/contracts";
-import { useSyncMonitor, useSyncRequests } from "@/api/queries";
+import { ApiError } from "@/api/client";
+import { usePageConversationMessages, useSyncMonitor, useSyncRequests } from "@/api/queries";
 import { PLATFORM_COLORS } from "@/lib/constants";
-import { formatDateTime, formatRelativeTime } from "@/lib/format";
+import { formatDateTime, formatRelativeTime, formatUsdFromCents } from "@/lib/format";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -133,6 +134,27 @@ function requestBadgeText(item: RequestItem): string {
     return String(item.httpStatusCode);
   }
   return item.status.toUpperCase();
+}
+
+function requestRowKey(item: RequestItem): string {
+  return `${item.timestamp}:${item.pageLabel}:${item.stream}:${item.operation}:${item.attemptNumber}`;
+}
+
+function isExpandableRequest(item: RequestItem): boolean {
+  return item.operation === "messages" && item.groupId !== null;
+}
+
+function senderRoleLabel(role: "fan" | "model" | "system" | "unknown"): string {
+  switch (role) {
+    case "fan":
+      return "Fan";
+    case "model":
+      return "Model";
+    case "system":
+      return "System";
+    case "unknown":
+      return "Unknown";
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -536,6 +558,88 @@ function EventTimeline({ events }: { events: EventItem[] }) {
   );
 }
 
+function LiveRequestMessagesPanel({ item }: { item: RequestItem }) {
+  const { data, isLoading, error } = usePageConversationMessages(
+    item.pageLabel,
+    item.groupId,
+    { limit: 25 },
+  );
+
+  if (isLoading) {
+    return (
+      <div
+        className="mt-3 rounded-xl border border-border bg-hover/50 px-4 py-4 text-sm text-text-muted"
+        onClick={(event) => event.stopPropagation()}
+      >
+        Loading messages...
+      </div>
+    );
+  }
+
+  if (error) {
+    const missingConversation = error instanceof ApiError && error.status === 404;
+    return (
+      <div
+        className="mt-3 rounded-xl border border-border bg-hover/50 px-4 py-4 text-sm text-text-muted"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {missingConversation
+          ? "Conversation is not cached locally yet."
+          : "Unable to load cached conversation messages."}
+      </div>
+    );
+  }
+
+  if (!data || data.messages.length === 0) {
+    return (
+      <div
+        className="mt-3 rounded-xl border border-border bg-hover/50 px-4 py-4 text-sm text-text-muted"
+        onClick={(event) => event.stopPropagation()}
+      >
+        No cached messages to show.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="mt-3 rounded-xl border border-border bg-hover/50 px-4 py-4"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="max-h-[320px] space-y-2 overflow-y-auto">
+        {data.messages.map((message) => {
+          const isModel = message.senderRole === "model";
+          const bubbleClasses = isModel
+            ? "bg-accent/15 text-text-primary"
+            : message.senderRole === "fan"
+              ? "bg-hover text-text-primary"
+              : "border border-border bg-card text-text-primary";
+
+          return (
+            <div
+              key={message.messageId}
+              className={`flex ${isModel ? "justify-end" : "justify-start"}`}
+            >
+              <div className={`max-w-[78%] rounded-lg px-3 py-2 text-[13px] ${bubbleClasses}`}>
+                <div className="mb-1 flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  <span>{senderRoleLabel(message.senderRole)}</span>
+                  <span>{formatDateTime(message.createdAt)}</span>
+                  {message.tipAmountCents > 0 && (
+                    <span className="rounded-full bg-green/15 px-1.5 py-0.5 text-green">
+                      Tip {formatUsdFromCents(message.tipAmountCents)}
+                    </span>
+                  )}
+                </div>
+                <p className="whitespace-pre-wrap break-words">{message.content || " "}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function LiveRequestsPanel({
   items,
   isLoading,
@@ -553,6 +657,7 @@ function LiveRequestsPanel({
     itemCount: 0,
     scrollHeight: 0,
   });
+  const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
   const activeWindowLabel = LIVE_REQUEST_WINDOWS.find((window) => window.key === activeWindow)?.label ?? "Last 5m";
 
   useLayoutEffect(() => {
@@ -580,6 +685,12 @@ function LiveRequestsPanel({
       scrollHeight: nextScrollHeight,
     };
   }, [items]);
+
+  useLayoutEffect(() => {
+    if (expandedRowKey && !items.some((item) => requestRowKey(item) === expandedRowKey)) {
+      setExpandedRowKey(null);
+    }
+  }, [expandedRowKey, items]);
 
   if (isLoading && items.length === 0) {
     return (
@@ -632,56 +743,100 @@ function LiveRequestsPanel({
         className="max-h-[460px] overflow-y-auto"
       >
         <div className="divide-y divide-border-light">
-          {items.map((item) => (
-            <div key={`${item.timestamp}:${item.pageLabel}:${item.operation}:${item.attemptNumber}`} className={`px-5 py-3.5 ${requestRowClasses(item)}`}>
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-text-muted">
-                    <span>{formatRequestTimestamp(item.timestamp)}</span>
-                    <span>·</span>
-                    <span className="font-medium text-text-secondary">{item.pageLabel}</span>
-                    <span>·</span>
-                    <span>{STREAM_LABELS[item.stream] ?? item.stream}</span>
-                    <span>/</span>
-                    <span>{item.operation}</span>
+          {items.map((item) => {
+            const rowKey = requestRowKey(item);
+            const expandable = isExpandableRequest(item);
+            const expanded = expandedRowKey === rowKey;
+            const returnedItems = typeof item.returnedItems === "number" ? item.returnedItems : null;
+
+            return (
+              <div
+                key={rowKey}
+                className={`px-5 py-3.5 ${requestRowClasses(item)} ${
+                  expandable ? "cursor-pointer transition-colors hover:bg-hover/40" : ""
+                } ${expanded ? "border-l-2 border-l-accent" : ""}`}
+                onClick={() => {
+                  if (!expandable) {
+                    return;
+                  }
+                  setExpandedRowKey((current) => current === rowKey ? null : rowKey);
+                }}
+                onKeyDown={(event) => {
+                  if (!expandable) {
+                    return;
+                  }
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setExpandedRowKey((current) => current === rowKey ? null : rowKey);
+                  }
+                }}
+                role={expandable ? "button" : undefined}
+                tabIndex={expandable ? 0 : undefined}
+                aria-expanded={expandable ? expanded : undefined}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-text-muted">
+                      <span>{formatRequestTimestamp(item.timestamp)}</span>
+                      <span>·</span>
+                      <span className="font-medium text-text-secondary">{item.pageLabel}</span>
+                      <span>·</span>
+                      <span>{STREAM_LABELS[item.stream] ?? item.stream}</span>
+                      <span>/</span>
+                      <span>{item.operation}</span>
+                    </div>
+                    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-text-muted">
+                      <span className="rounded-md border border-border bg-hover-alt px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
+                        {item.method}
+                      </span>
+                      <span className="min-w-0 truncate font-mono text-[11px] text-text-secondary">
+                        {item.endpoint}
+                      </span>
+                      {item.groupId && (
+                        <span
+                          className={`rounded-md border border-border px-2 py-0.5 text-[10px] font-medium ${
+                            item.partnerUsername
+                              ? "bg-hover-alt text-text-secondary"
+                              : "bg-card text-text-muted"
+                          }`}
+                        >
+                          {item.partnerUsername ?? item.groupId}
+                        </span>
+                      )}
+                      {item.proxyGapMs !== null && item.proxyGapMs > 0 && (
+                        <span className="rounded-md border border-border bg-hover-alt px-2 py-0.5 text-[10px] font-medium text-text-secondary">
+                          gap {formatRequestMetric(item.proxyGapMs)}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-text-muted">
-                    <span className="rounded-md border border-border bg-hover-alt px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
-                      {item.method}
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                    <span className={`inline-flex rounded-md border px-2.5 py-1 text-[11px] font-semibold tabular-nums ${requestBadgeClasses(item)}`}>
+                      {requestBadgeText(item)}
                     </span>
-                    <span className="min-w-0 truncate font-mono text-[11px] text-text-secondary">
-                      {item.endpoint}
-                    </span>
-                    {item.groupId && (
-                      <span className="rounded-md border border-border bg-hover-alt px-2 py-0.5 text-[10px] font-medium text-text-secondary">
-                        group {item.groupId}
+                    {returnedItems !== null && (
+                      <span className="inline-flex rounded-md border border-border bg-hover-alt px-2 py-0.5 text-[10px] font-medium tabular-nums text-text-secondary">
+                        {returnedItems.toLocaleString()} msgs
+                        {item.syncDone === true && <span className="ml-1 opacity-70">✓</span>}
                       </span>
                     )}
-                    {item.proxyGapMs !== null && item.proxyGapMs > 0 && (
-                      <span className="rounded-md border border-border bg-hover-alt px-2 py-0.5 text-[10px] font-medium text-text-secondary">
-                        gap {formatRequestMetric(item.proxyGapMs)}
+                    {item.durationMs !== null && (
+                      <span className="text-[12px] tabular-nums text-text-secondary">
+                        {formatRequestMetric(item.durationMs)}
                       </span>
                     )}
+                    {item.rateLimitWaitMs !== null && item.rateLimitWaitMs > 0 && (
+                      <span className="rounded-md border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning-dark">
+                        wait {formatRequestMetric(item.rateLimitWaitMs)}
+                      </span>
+                    )}
+                    {expandable && <Chevron open={expanded} />}
                   </div>
                 </div>
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                  <span className={`inline-flex rounded-md border px-2.5 py-1 text-[11px] font-semibold tabular-nums ${requestBadgeClasses(item)}`}>
-                    {requestBadgeText(item)}
-                  </span>
-                  {item.durationMs !== null && (
-                    <span className="text-[12px] tabular-nums text-text-secondary">
-                      {formatRequestMetric(item.durationMs)}
-                    </span>
-                  )}
-                  {item.rateLimitWaitMs !== null && item.rateLimitWaitMs > 0 && (
-                    <span className="rounded-md border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning-dark">
-                      wait {formatRequestMetric(item.rateLimitWaitMs)}
-                    </span>
-                  )}
-                </div>
+                {expanded && <LiveRequestMessagesPanel item={item} />}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </section>

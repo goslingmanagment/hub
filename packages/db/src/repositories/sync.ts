@@ -416,6 +416,66 @@ export async function finishSyncRun(
   return run;
 }
 
+export interface CloseOrphanedSyncRunsResult {
+  totalCount: number;
+  failedCount: number;
+  partialCount: number;
+}
+
+export async function closeOrphanedSyncRuns(
+  db: Database,
+  input: {
+    startedBefore: Date;
+    finishedAt: Date;
+    errorSummary: string;
+  },
+): Promise<CloseOrphanedSyncRunsResult> {
+  const result = await db.execute<{
+    status: "failed" | "partial";
+  }>(sql`
+    with orphaned_runs as (
+      select sr.id,
+             case
+               when exists (
+                 select 1
+                 from ${syncRunEvents} e
+                 where e.sync_run_id = sr.id
+                   and e.event_type = 'checkpoint_advanced'
+               )
+               then 'partial'::sync_run_status
+               else 'failed'::sync_run_status
+             end as next_status
+      from ${syncRuns} sr
+      where sr.status = 'running'
+        and sr.started_at < ${input.startedBefore}
+    )
+    update ${syncRuns} sr
+    set status = orphaned_runs.next_status,
+        error_summary = ${input.errorSummary},
+        finished_at = ${input.finishedAt}
+    from orphaned_runs
+    where sr.id = orphaned_runs.id
+    returning sr.status as status
+  `);
+
+  let failedCount = 0;
+  let partialCount = 0;
+
+  for (const row of result.rows) {
+    if (row.status === "failed") {
+      failedCount += 1;
+    } else if (row.status === "partial") {
+      partialCount += 1;
+    }
+  }
+
+  return {
+    totalCount: failedCount + partialCount,
+    failedCount,
+    partialCount,
+  };
+}
+
 export async function getCheckpoint(
   db: Database,
   platformAccountId: number,
@@ -891,6 +951,10 @@ export async function listSyncMonitorRecentRequests(
       startedAt: Date;
       finishedAt: Date | null;
       requestShape: Record<string, unknown> | null;
+      responseShape: Record<string, unknown> | null;
+      partnerUsername: string | null;
+      returnedItems: number | null;
+      syncDone: boolean | null;
     }>;
   }
 
@@ -920,6 +984,10 @@ export async function listSyncMonitorRecentRequests(
     startedAt: Date | string;
     finishedAt: TimestampValue;
     requestShape: Record<string, unknown> | null;
+    responseShape: Record<string, unknown> | null;
+    partnerUsername: string | null;
+    returnedItems: NumericValue;
+    syncDone: boolean | null;
   }>(sql`
     with visible_pages as (
       select ${platformAccounts.id} as "pageId",
@@ -941,9 +1009,26 @@ export async function listSyncMonitorRecentRequests(
            a.duration_ms as "durationMs",
            a.started_at as "startedAt",
            a.finished_at as "finishedAt",
-           a.request_shape as "requestShape"
+           a.request_shape as "requestShape",
+           a.response_shape as "responseShape",
+           c.partner_username as "partnerUsername",
+           case
+             when jsonb_typeof(a.response_shape) = 'object'
+              and jsonb_typeof(a.response_shape -> 'returnedItems') = 'number'
+             then (a.response_shape ->> 'returnedItems')::integer
+             else null
+           end as "returnedItems",
+           case
+             when jsonb_typeof(a.response_shape) = 'object'
+              and jsonb_typeof(a.response_shape -> 'done') = 'boolean'
+             then (a.response_shape ->> 'done')::boolean
+             else null
+           end as "syncDone"
     from ${syncRequestAttempts} a
     inner join visible_pages vp on vp."pageId" = a.platform_account_id
+    left join ${pageDmConversations} c
+      on c.platform_account_id = a.platform_account_id
+     and c.platform_conversation_id = a.request_shape ->> 'groupId'
     where ${and(...requestClauses)}
     order by a.started_at desc, a.id desc
     limit ${input?.limit ?? 100}
@@ -956,6 +1041,10 @@ export async function listSyncMonitorRecentRequests(
       pageId: normalizeNumber(row.pageId, "pageId"),
       stream: asSyncAuditStream(row.stream),
       requestShape: normalizeNullableJsonRecord(row.requestShape, "requestShape"),
+      responseShape: normalizeNullableJsonRecord(row.responseShape, "responseShape"),
+      partnerUsername: row.partnerUsername,
+      returnedItems: normalizeNullableNumber(row.returnedItems, "returnedItems"),
+      syncDone: row.syncDone,
     };
   });
 }

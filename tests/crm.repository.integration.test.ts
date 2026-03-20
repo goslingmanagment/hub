@@ -7,6 +7,7 @@ import {
   finalizePageDmConversationMessageSync,
   getCrmFreshnessCoverage,
   getCrmConversationPreview,
+  getPageConversationMessages,
   listCrmReactivation,
   listCrmRetention,
   recalculateFanPageSpend,
@@ -830,9 +831,15 @@ describe("crm repository integration", () => {
       platformConversationId: "preview-conv",
       limit: 10,
     });
+    const newestFirst = await getPageConversationMessages(testDb.db, {
+      platformAccountId: page.id,
+      platformConversationId: "preview-conv",
+      limit: 10,
+    });
 
     expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_MESSAGE_HISTORY_LIMIT);
     expect(preview).not.toBeNull();
+    expect(newestFirst).not.toBeNull();
     expect(preview?.conversation.storedMessageCount).toBe(PAGE_DM_MESSAGE_HISTORY_LIMIT);
     expect(preview?.conversation.messageBackfillComplete).toBe(true);
     expect(preview?.messages.map((message) => message.platformMessageId)).toEqual([
@@ -849,5 +856,18 @@ describe("crm repository integration", () => {
     ]);
     expect(preview?.messages[0]?.content).toBe("message 71");
     expect(preview?.messages[9]?.totalTipAmountCents).toBe(500);
+    expect(newestFirst?.messages.map((message) => message.messageId)).toEqual([
+      "msg-080",
+      "msg-079",
+      "msg-078",
+      "msg-077",
+      "msg-076",
+      "msg-075",
+      "msg-074",
+      "msg-073",
+      "msg-072",
+      "msg-071",
+    ]);
+    expect(newestFirst?.messages[0]?.tipAmountCents).toBe(500);
   });
 });

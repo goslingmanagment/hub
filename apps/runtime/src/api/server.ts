@@ -100,6 +100,7 @@ import {
 } from "../services/reporting.ts";
 import {
   getCrmConversationPreviewReport,
+  getPageConversationMessagesReport,
   getCrmReactivationReport,
   getCrmRetentionReport,
   getCrmSummaryReport,
@@ -552,6 +553,13 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     return getCrmConversationPreviewReport(appContext, principal, request.params, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/conversations/:conversationId/messages", {
+    schema: routeSchemas.pageConversationMessages,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getPageConversationMessagesReport(appContext, principal, request.params, request.query);
   });
 
   server.get("/api/v1/fans/:platform/:platformUserId", {

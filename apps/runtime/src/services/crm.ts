@@ -7,6 +7,9 @@ import type {
   CrmRetentionQuery,
   CrmRetentionResponse,
   CrmSummaryResponse,
+  PageConversationMessagesParams,
+  PageConversationMessagesQuery,
+  PageConversationMessagesResponse,
 } from "@agency_hub_core/contracts";
 import {
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
@@ -14,13 +17,14 @@ import {
   getCrmConversationPreview,
   getCrmFreshnessCoverage,
   getCrmSummary,
+  getPageConversationMessages,
   listCrmReactivation,
   listCrmRetention,
 } from "@agency_hub_core/db";
 import { millsToNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { canAccessPage, type AuthPrincipal } from "./auth.ts";
+import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 
 function serializeTimestamp(value: Date | string | null | undefined) {
@@ -314,6 +318,37 @@ export async function getCrmConversationPreviewReport(
       createdAt: message.createdAt.toISOString(),
       content: message.content,
       totalTipAmountCents: message.totalTipAmountCents,
+    })),
+  };
+}
+
+export async function getPageConversationMessagesReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  params: PageConversationMessagesParams,
+  query: PageConversationMessagesQuery,
+): Promise<PageConversationMessagesResponse> {
+  requireDashboardUser(principal);
+  const page = await resolveCrmPage(app, principal, params.pageLabel);
+  const conversation = await getPageConversationMessages(app.db, {
+    platformAccountId: page.id,
+    platformConversationId: params.conversationId,
+    limit: query.limit,
+  });
+
+  if (!conversation) {
+    throw new NotFoundError("Conversation messages were not found");
+  }
+
+  return {
+    page: serializePage(page),
+    conversationId: conversation.conversationId,
+    messages: conversation.messages.map((message) => ({
+      messageId: message.messageId,
+      senderRole: message.senderRole,
+      content: message.content,
+      createdAt: message.createdAt.toISOString(),
+      tipAmountCents: message.tipAmountCents,
     })),
   };
 }

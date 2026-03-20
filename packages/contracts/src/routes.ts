@@ -353,6 +353,14 @@ export const crmConversationPreviewQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(10),
 });
 
+export const pageConversationMessagesParamsSchema = pageParamsSchema.extend({
+  conversationId: z.string().min(1),
+});
+
+export const pageConversationMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).default(25),
+});
+
 export const assignedPageSchema = pageRefSchema.extend({
   username: z.string().nullable(),
   displayName: z.string().nullable(),
@@ -931,6 +939,20 @@ export const crmConversationPreviewResponseSchema = z.object({
   messages: z.array(crmPreviewMessageSchema),
 });
 
+export const pageConversationMessageItemSchema = z.object({
+  messageId: z.string(),
+  senderRole: z.enum(["fan", "model", "system", "unknown"]),
+  content: z.string(),
+  createdAt: isoTimestamp,
+  tipAmountCents: z.number().int(),
+});
+
+export const pageConversationMessagesResponseSchema = z.object({
+  page: assignedPageSchema,
+  conversationId: z.string(),
+  messages: z.array(pageConversationMessageItemSchema),
+});
+
 // --- Phase 4: Dashboard schemas ---
 
 const connectionStatusEnum = z.enum([
@@ -1403,6 +1425,9 @@ export const syncRequestItemSchema = z.object({
   durationMs: z.number().int().nullable(),
   rateLimitWaitMs: z.number().int().nullable(),
   groupId: z.string().nullable(),
+  partnerUsername: z.string().nullable(),
+  returnedItems: z.number().int().nullable(),
+  syncDone: z.boolean().nullable(),
   proxyGapMs: z.number().int().nullable(),
 });
 
@@ -1921,6 +1946,20 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  pageConversationMessages: {
+    tags: ["crm"],
+    summary: "Return cached DM messages for one conversation",
+    security: cookieOnlySecurity,
+    params: pageConversationMessagesParamsSchema,
+    querystring: pageConversationMessagesQuerySchema,
+    response: {
+      200: pageConversationMessagesResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   // --- Phase 4: Dashboard routes ---
   overview: {
     tags: ["dashboard"],
@@ -2374,6 +2413,9 @@ export type CrmReactivationResponse = z.infer<typeof crmReactivationResponseSche
 export type CrmConversationPreviewParams = z.infer<typeof crmConversationPreviewParamsSchema>;
 export type CrmConversationPreviewQuery = z.infer<typeof crmConversationPreviewQuerySchema>;
 export type CrmConversationPreviewResponse = z.infer<typeof crmConversationPreviewResponseSchema>;
+export type PageConversationMessagesParams = z.infer<typeof pageConversationMessagesParamsSchema>;
+export type PageConversationMessagesQuery = z.infer<typeof pageConversationMessagesQuerySchema>;
+export type PageConversationMessagesResponse = z.infer<typeof pageConversationMessagesResponseSchema>;
 export type SpenderBatchBody = z.infer<typeof spenderBatchBodySchema>;
 export type SpenderBatchResponse = z.infer<typeof spenderBatchResponseSchema>;
 export type SpenderDetailQuery = z.infer<typeof spenderDetailQuerySchema>;

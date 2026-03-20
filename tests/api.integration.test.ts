@@ -589,6 +589,7 @@ async function seedMonitorAttempt(
     operation?: string;
     provider?: "fansly" | "onlyfans";
     requestShape?: Record<string, unknown>;
+    responseShape?: Record<string, unknown>;
   },
 ) {
   const attempt = await insertSyncRequestAttempt(testDb.db, {
@@ -612,7 +613,7 @@ async function seedMonitorAttempt(
     failureKind: input.failureKind ?? null,
     errorMessage: input.errorMessage ?? null,
     durationMs: Math.max(1, (input.finishedAt ?? input.startedAt).getTime() - input.startedAt.getTime()),
-    responseShape: {},
+    responseShape: input.responseShape ?? {},
     finishedAt: input.finishedAt ?? input.startedAt,
   });
 
@@ -1157,9 +1158,33 @@ async function seedSyncRequestsScenario(
 
   const lanaStartedAt = secondsAgo(3);
   const lilySharedAt = secondsAgo(4);
+  const lilyGhostAt = secondsAgo(5);
   const lanaRetryAt = secondsAgo(8);
   const lanaFailedAt = secondsAgo(14);
   const oldAttemptAt = secondsAgo(75);
+
+  await upsertPageDmConversation(testDb.db, {
+    platformAccountId: input.lanaPageId,
+    fanId: null,
+    platformConversationId: "group-live-1",
+    partnerPlatformUserId: "fan-live-1",
+    partnerUsername: "fan_live",
+    partnerDisplayName: "Fan Live",
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: "dm-live-001",
+    lastUnreadMessageId: null,
+    lastMessageAt: lanaStartedAt,
+    lastMessageSenderId: "fan-live-1",
+    lastMessageSenderRole: "fan",
+    lastMessagePreview: "hello there",
+    lastFanMessageAt: lanaStartedAt,
+    lastModelMessageAt: null,
+    isVisible: true,
+    lastSeenGeneration: 1,
+    metadata: {},
+  });
 
   const lanaMessagesRun = await seedMonitorRunningRun(testDb, {
     pageId: input.lanaPageId,
@@ -1172,6 +1197,13 @@ async function seedSyncRequestsScenario(
     status: "success",
     startedAt: secondsAgo(10),
     finishedAt: secondsAgo(2),
+  });
+  const lilyGhostMessagesRun = await seedMonitorCompletedRun(testDb, {
+    pageId: input.lilyPageId,
+    stream: "dm_messages",
+    status: "success",
+    startedAt: secondsAgo(9),
+    finishedAt: secondsAgo(4),
   });
   const lanaTransactionsRun = await seedMonitorCompletedRun(testDb, {
     pageId: input.lanaPageId,
@@ -1223,6 +1255,26 @@ async function seedSyncRequestsScenario(
       endpointTemplate: "/account/:accountId/followersnew",
       method: "GET",
       egressKey: "proxy-a",
+    },
+  });
+  await seedMonitorAttempt(testDb, {
+    runId: lilyGhostMessagesRun.id,
+    pageId: input.lilyPageId,
+    stream: "dm_messages",
+    operation: "messages",
+    startedAt: lilyGhostAt,
+    finishedAt: new Date(lilyGhostAt.getTime() + 320),
+    state: "success",
+    httpStatus: 200,
+    requestShape: {
+      endpointTemplate: "/message",
+      method: "GET",
+      groupId: "group-ghost-1",
+      egressKey: "proxy-b",
+    },
+    responseShape: {
+      returnedItems: 2,
+      done: true,
     },
   });
   await seedMonitorAttempt(testDb, {
@@ -1281,6 +1333,7 @@ async function seedSyncRequestsScenario(
     now,
     lanaStartedAt,
     lilySharedAt,
+    lilyGhostAt,
     lanaRetryAt,
     lanaFailedAt,
     oldAttemptAt,
@@ -4663,12 +4716,53 @@ describe("api integration", () => {
       "crm-msg-004",
     ]);
 
+    const messages = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/conversations/crm-conv-001/messages",
+      headers: { cookie },
+    });
+    expect(messages.statusCode).toBe(200);
+    expect(messages.json()).toMatchObject({
+      page: {
+        label: "lana",
+        platform: "fansly",
+      },
+      conversationId: "crm-conv-001",
+    });
+    expect(messages.json().messages.map((message: { messageId: string }) => message.messageId)).toEqual([
+      "crm-msg-004",
+      "crm-msg-003",
+      "crm-msg-002",
+      "crm-msg-001",
+    ]);
+    expect(messages.json().messages[0]).toMatchObject({
+      messageId: "crm-msg-004",
+      senderRole: "fan",
+      tipAmountCents: 125,
+      createdAt: "2026-03-14T08:00:00.000Z",
+    });
+
+    const clampedMessages = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/conversations/crm-conv-001/messages?limit=999",
+      headers: { cookie },
+    });
+    expect(clampedMessages.statusCode).toBe(200);
+    expect(clampedMessages.json().messages).toHaveLength(4);
+
     const missingPreview = await server.inject({
       method: "GET",
       url: "/api/v1/pages/lana/crm/conversations/missing/preview?limit=3",
       headers: { cookie },
     });
     expect(missingPreview.statusCode).toBe(404);
+
+    const missingMessages = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/conversations/missing/messages",
+      headers: { cookie },
+    });
+    expect(missingMessages.statusCode).toBe(404);
   });
 
   it("enforces CRM page access and rejects non-Fansly pages", async (context) => {
@@ -4706,6 +4800,13 @@ describe("api integration", () => {
     });
     expect(forbidden.statusCode).toBe(403);
 
+    const forbiddenMessages = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lily1/conversations/crm-conv-001/messages",
+      headers: { cookie: leadCookie },
+    });
+    expect(forbiddenMessages.statusCode).toBe(403);
+
     const ownerLogin = await server.inject({
       method: "POST",
       url: "/api/v1/auth/login",
@@ -4721,6 +4822,34 @@ describe("api integration", () => {
     expect(nonFansly.statusCode).toBe(400);
     expect(nonFansly.json()).toMatchObject({
       message: "CRM is only supported for Fansly pages",
+    });
+
+    const nonFanslyMessages = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-of-crm/conversations/any/messages",
+      headers: { cookie: ownerCookie },
+    });
+    expect(nonFanslyMessages.statusCode).toBe(400);
+    expect(nonFanslyMessages.json()).toMatchObject({
+      message: "CRM is only supported for Fansly pages",
+    });
+
+    const appContext = createTestAppContext(testDb);
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const apiKeyMessages = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/conversations/crm-conv-001/messages",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(apiKeyMessages.statusCode).toBe(403);
+    expect(apiKeyMessages.json()).toMatchObject({
+      message: "Dashboard routes require a cookie session",
     });
   });
 
@@ -5005,10 +5134,11 @@ describe("api integration", () => {
 
     expect(ownerResponse.statusCode).toBe(200);
     const ownerBody = ownerResponse.json();
-    expect(ownerBody).toHaveLength(4);
+    expect(ownerBody).toHaveLength(5);
     expect(ownerBody.map((item: { timestamp: string }) => item.timestamp)).toEqual([
       seeded.lanaStartedAt.toISOString(),
       seeded.lilySharedAt.toISOString(),
+      seeded.lilyGhostAt.toISOString(),
       seeded.lanaRetryAt.toISOString(),
       seeded.lanaFailedAt.toISOString(),
     ]);
@@ -5026,6 +5156,9 @@ describe("api integration", () => {
       durationMs: null,
       rateLimitWaitMs: 1200,
       groupId: "group-live-1",
+      partnerUsername: "fan_live",
+      returnedItems: null,
+      syncDone: null,
       proxyGapMs: null,
     });
     expect(ownerBody[1]).toMatchObject({
@@ -5045,6 +5178,25 @@ describe("api integration", () => {
       proxyGapMs: 1000,
     });
     expect(ownerBody[2]).toMatchObject({
+      timestamp: seeded.lilyGhostAt.toISOString(),
+      pageLabel: "lily1",
+      platform: "fansly",
+      stream: "dm_messages",
+      operation: "messages",
+      endpoint: "/message",
+      method: "GET",
+      attemptNumber: 1,
+      status: "success",
+      httpStatusCode: 200,
+      durationMs: 320,
+      rateLimitWaitMs: null,
+      groupId: "group-ghost-1",
+      partnerUsername: null,
+      returnedItems: 2,
+      syncDone: true,
+      proxyGapMs: null,
+    });
+    expect(ownerBody[3]).toMatchObject({
       timestamp: seeded.lanaRetryAt.toISOString(),
       pageLabel: "lana",
       platform: "fansly",
@@ -5060,7 +5212,7 @@ describe("api integration", () => {
       groupId: null,
       proxyGapMs: 4000,
     });
-    expect(ownerBody[3]).toMatchObject({
+    expect(ownerBody[4]).toMatchObject({
       timestamp: seeded.lanaFailedAt.toISOString(),
       pageLabel: "lana",
       stream: "followers",
@@ -5076,7 +5228,7 @@ describe("api integration", () => {
       headers: { cookie: ownerCookie },
     });
     expect(withOlderSince.statusCode).toBe(200);
-    expect(withOlderSince.json()).toHaveLength(5);
+    expect(withOlderSince.json()).toHaveLength(6);
     expect(withOlderSince.json().at(-1)).toMatchObject({
       timestamp: seeded.oldAttemptAt.toISOString(),
       endpoint: "/account/me",

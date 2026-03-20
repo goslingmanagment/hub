@@ -1347,6 +1347,66 @@ export interface CrmConversationPreview {
   messages: CrmPreviewMessageRow[];
 }
 
+export interface PageConversationMessageRow {
+  messageId: string;
+  senderRole: DmSenderRole;
+  content: string;
+  createdAt: Date;
+  tipAmountCents: number;
+}
+
+export interface PageConversationMessages {
+  conversationId: string;
+  messages: PageConversationMessageRow[];
+}
+
+export async function getPageConversationMessages(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    platformConversationId: string;
+    limit?: number;
+  },
+) {
+  const limit = Math.min(Math.max(input.limit ?? 25, 1), 100);
+  const conversation = await findVisiblePageDmConversationByPlatformConversationId(db, {
+    platformAccountId: input.platformAccountId,
+    platformConversationId: input.platformConversationId,
+  });
+  if (!conversation) {
+    return null;
+  }
+
+  const messagesResult = await db.execute<{
+    messageId: string;
+    senderRole: DmSenderRole;
+    createdAt: TimestampValue;
+    content: string;
+    tipAmountCents: NumericValue;
+  }>(sql`
+    select platform_message_id as "messageId",
+           sender_role as "senderRole",
+           created_at as "createdAt",
+           content as "content",
+           total_tip_amount_cents as "tipAmountCents"
+    from page_dm_messages
+    where conversation_id = ${conversation.id}
+    order by created_at desc, platform_message_id desc, id desc
+    limit ${limit}
+  `);
+
+  return {
+    conversationId: conversation.platformConversationId,
+    messages: messagesResult.rows.map((row) => ({
+      messageId: row.messageId,
+      senderRole: row.senderRole,
+      content: row.content,
+      createdAt: requireTimestamp(row.createdAt, "createdAt"),
+      tipAmountCents: normalizeNumber(row.tipAmountCents, "tipAmountCents"),
+    })),
+  } satisfies PageConversationMessages;
+}
+
 export async function getCrmConversationPreview(
   db: Database,
   input: {
