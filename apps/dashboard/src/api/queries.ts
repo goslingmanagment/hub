@@ -422,10 +422,14 @@ export function useAdminIncidents(params: { severity?: string; code?: string; li
 }
 
 // CRM
-export function useCrmSummary(pageLabel: string) {
+export function useCrmSummary(
+  pageLabel: string,
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: ["crmSummary", pageLabel],
     queryFn: () => api.get<CrmSummaryResponse>(`/api/v1/pages/${pageLabel}/crm/summary`),
+    enabled: options.enabled ?? true,
   });
 }
 
@@ -442,11 +446,13 @@ export function useCrmRetention(
     sortBy?: string;
     sortDir?: string;
   } = {},
+  options: { enabled?: boolean } = {},
 ) {
   return useQuery({
     queryKey: ["crmRetention", pageLabel, params],
     queryFn: () => api.get<CrmRetentionResponse>(`/api/v1/pages/${pageLabel}/crm/retention${qs(params)}`),
     placeholderData: (prev) => prev,
+    enabled: options.enabled ?? true,
   });
 }
 
@@ -464,11 +470,13 @@ export function useCrmReactivation(
     sortBy?: string;
     sortDir?: string;
   } = {},
+  options: { enabled?: boolean } = {},
 ) {
   return useQuery({
     queryKey: ["crmReactivation", pageLabel, params],
     queryFn: () => api.get<CrmReactivationResponse>(`/api/v1/pages/${pageLabel}/crm/reactivation${qs(params)}`),
     placeholderData: (prev) => prev,
+    enabled: options.enabled ?? true,
   });
 }
 

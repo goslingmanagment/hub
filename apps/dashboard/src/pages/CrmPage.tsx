@@ -14,11 +14,9 @@ export function CrmPage() {
   const { pageLabel } = useParams();
   const { data: overview } = useOverview();
   const page = overview?.pages.find((p) => p.label === pageLabel);
-
-  // Redirect if not fansly
-  if (overview && page && page.platform !== "fansly") {
-    return <Navigate to={`/pages/${pageLabel}`} replace />;
-  }
+  const resolvedPageLabel = page?.label ?? pageLabel ?? "";
+  const isFanslyPage = page?.platform === "fansly";
+  const canLoadCrm = isFanslyPage && resolvedPageLabel.length > 0;
 
   const [tab, setTab] = useState<Tab>("retention");
   const [expandedConversationId, setExpandedConversationId] = useState<string | null>(null);
@@ -83,18 +81,28 @@ export function CrmPage() {
     sortDir: reactSortDir,
   }), [reactOffset, reactSearch, reactMinSpend, reactSilence, reactUnreadOnly, reactNoDmHistory, reactSubState, reactSortBy, reactSortDir]);
 
-  const { data: summary } = useCrmSummary(pageLabel!);
-  const { data: retention, isLoading: retLoading } = useCrmRetention(pageLabel!, retentionParams);
-  const { data: reactivation, isLoading: reactLoading } = useCrmReactivation(pageLabel!, reactivationParams);
+  const { data: summary } = useCrmSummary(resolvedPageLabel, {
+    enabled: canLoadCrm,
+  });
+  const { data: retention, isLoading: retLoading } = useCrmRetention(
+    resolvedPageLabel,
+    retentionParams,
+    { enabled: canLoadCrm },
+  );
+  const { data: reactivation, isLoading: reactLoading } = useCrmReactivation(
+    resolvedPageLabel,
+    reactivationParams,
+    { enabled: canLoadCrm },
+  );
 
   const retentionVm = useMemo(
-    () => retention?.items.map((item) => mapRetentionRowVm(pageLabel!, item)) ?? [],
-    [retention, pageLabel],
+    () => retention?.items.map((item) => mapRetentionRowVm(resolvedPageLabel, item)) ?? [],
+    [resolvedPageLabel, retention],
   );
 
   const reactivationVm = useMemo(
-    () => reactivation?.items.map((item) => mapReactivationRowVm(pageLabel!, item)) ?? [],
-    [reactivation, pageLabel],
+    () => reactivation?.items.map((item) => mapReactivationRowVm(resolvedPageLabel, item)) ?? [],
+    [reactivation, resolvedPageLabel],
   );
 
   function handleRetSortChange(field: string) {
@@ -123,11 +131,23 @@ export function CrmPage() {
     );
   }
 
+  if (!page) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <span className="text-text-muted text-sm">Page not found</span>
+      </div>
+    );
+  }
+
+  if (!isFanslyPage) {
+    return <Navigate to={`/pages/${page.label}`} replace />;
+  }
+
   return (
     <div>
       <div className="mb-5">
         <h1 className="text-xl font-extrabold text-text-primary">
-          CRM &mdash; {pageLabel}
+          CRM &mdash; {page.label}
         </h1>
         {summary && (
           <div className="mt-2">
@@ -191,7 +211,7 @@ export function CrmPage() {
             sortBy={retSortBy}
             sortDir={retSortDir}
             summary={summary}
-            pageLabel={pageLabel!}
+            pageLabel={page.label}
             onTouchpointChange={setRetTouchpoint}
             onAutoRenewChange={setRetAutoRenew}
             onShowHandledChange={setRetShowHandled}
@@ -222,7 +242,7 @@ export function CrmPage() {
             searchQuery={reactSearch}
             sortBy={reactSortBy}
             sortDir={reactSortDir}
-            pageLabel={pageLabel!}
+            pageLabel={page.label}
             onSilenceChange={setReactSilence}
             onMinSpendChange={setReactMinSpend}
             onNoDmHistoryChange={setReactNoDmHistory}
