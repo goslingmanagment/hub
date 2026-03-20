@@ -13,6 +13,7 @@ type PageItem = SyncMonitorResponse["pages"][number];
 type EventItem = SyncMonitorResponse["recentEvents"][number];
 type RequestItem = SyncRequestsResponse[number];
 type ActivityTab = "events" | "requests";
+type LiveRequestsWindow = "1m" | "5m" | "15m";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -28,6 +29,12 @@ const STREAM_LABELS: Record<string, string> = {
   followers_reconcile: "Followers Reconcile",
   cleanup: "Cleanup",
 };
+
+const LIVE_REQUEST_WINDOWS: Array<{ key: LiveRequestsWindow; label: string; windowMs: number }> = [
+  { key: "1m", label: "Last 1m", windowMs: 60_000 },
+  { key: "5m", label: "Last 5m", windowMs: 5 * 60_000 },
+  { key: "15m", label: "Last 15m", windowMs: 15 * 60_000 },
+];
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -532,9 +539,13 @@ function EventTimeline({ events }: { events: EventItem[] }) {
 function LiveRequestsPanel({
   items,
   isLoading,
+  activeWindow,
+  onWindowChange,
 }: {
   items: RequestItem[];
   isLoading: boolean;
+  activeWindow: LiveRequestsWindow;
+  onWindowChange: (window: LiveRequestsWindow) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pinnedToTopRef = useRef(true);
@@ -542,6 +553,7 @@ function LiveRequestsPanel({
     itemCount: 0,
     scrollHeight: 0,
   });
+  const activeWindowLabel = LIVE_REQUEST_WINDOWS.find((window) => window.key === activeWindow)?.label ?? "Last 5m";
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
@@ -590,9 +602,27 @@ function LiveRequestsPanel({
       <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
         <div>
           <h2 className="text-[15px] font-bold text-text-primary">Live Requests</h2>
-          <p className="mt-0.5 text-[12px] text-text-muted">Polling every 3s</p>
+          <p className="mt-0.5 text-[12px] text-text-muted">Polling every 3s · {activeWindowLabel}</p>
         </div>
-        <span className="text-[12px] text-text-muted">{items.length} shown</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            {LIVE_REQUEST_WINDOWS.map((window) => (
+              <button
+                key={window.key}
+                type="button"
+                onClick={() => onWindowChange(window.key)}
+                className={`rounded-button px-3 py-1.5 text-xs font-medium transition-colors ${
+                  activeWindow === window.key
+                    ? "bg-[#1a1a1a] text-white"
+                    : "border border-border bg-card text-text-secondary hover:bg-hover"
+                }`}
+              >
+                {window.label}
+              </button>
+            ))}
+          </div>
+          <span className="text-[12px] text-text-muted">{items.length} shown in {activeWindowLabel.toLowerCase()}</span>
+        </div>
       </div>
       <div
         ref={scrollRef}
@@ -664,12 +694,16 @@ function ActivitySection({
   events,
   requests,
   requestsLoading,
+  liveRequestsWindow,
+  onLiveRequestsWindowChange,
 }: {
   activeTab: ActivityTab;
   onChange: (tab: ActivityTab) => void;
   events: EventItem[];
   requests: RequestItem[];
   requestsLoading: boolean;
+  liveRequestsWindow: LiveRequestsWindow;
+  onLiveRequestsWindowChange: (window: LiveRequestsWindow) => void;
 }) {
   return (
     <section className="space-y-3">
@@ -699,7 +733,14 @@ function ActivitySection({
       </div>
       {activeTab === "events"
         ? <EventTimeline events={events} />
-        : <LiveRequestsPanel items={requests} isLoading={requestsLoading} />}
+        : (
+          <LiveRequestsPanel
+            items={requests}
+            isLoading={requestsLoading}
+            activeWindow={liveRequestsWindow}
+            onWindowChange={onLiveRequestsWindowChange}
+          />
+        )}
     </section>
   );
 }
@@ -710,9 +751,11 @@ function ActivitySection({
 
 export function SyncMonitorPage() {
   const [activityTab, setActivityTab] = useState<ActivityTab>("events");
+  const [liveRequestsWindow, setLiveRequestsWindow] = useState<LiveRequestsWindow>("5m");
   const { data, isLoading } = useSyncMonitor();
+  const selectedWindowMs = LIVE_REQUEST_WINDOWS.find((window) => window.key === liveRequestsWindow)?.windowMs ?? 300_000;
   const { data: requests = [], isLoading: requestsLoading } = useSyncRequests(
-    { limit: 100 },
+    { windowMs: selectedWindowMs, limit: 500 },
     { enabled: activityTab === "requests" },
   );
 
@@ -739,6 +782,8 @@ export function SyncMonitorPage() {
         events={data.recentEvents}
         requests={requests}
         requestsLoading={requestsLoading}
+        liveRequestsWindow={liveRequestsWindow}
+        onLiveRequestsWindowChange={setLiveRequestsWindow}
       />
     </div>
   );

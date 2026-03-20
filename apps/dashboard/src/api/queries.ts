@@ -378,12 +378,20 @@ export function useSyncMonitor(params: { pageLabel?: string; windowHours?: numbe
 }
 
 export function useSyncRequests(
-  params: { since?: string; limit?: number } = {},
+  params: { windowMs?: number; limit?: number } = {},
   options: { enabled?: boolean } = {},
 ) {
   return useQuery({
     queryKey: ["syncRequests", params],
-    queryFn: () => api.get<SyncRequestsResponse>(`/api/v1/sync/requests${qs(params)}`),
+    queryFn: () => {
+      const since = params.windowMs !== undefined
+        ? new Date(Date.now() - params.windowMs).toISOString()
+        : undefined;
+      return api.get<SyncRequestsResponse>(`/api/v1/sync/requests${qs({
+        since,
+        limit: params.limit,
+      })}`);
+    },
     enabled: options.enabled ?? true,
     refetchInterval: 3_000,
     placeholderData: (previousData) => previousData,
