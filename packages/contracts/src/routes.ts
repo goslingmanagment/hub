@@ -131,6 +131,14 @@ export const pageFanParamsSchema = pageParamsSchema.extend({
   platformUserId: z.string().min(1),
 });
 
+export const fanProfileVersionParamsSchema = pageFanParamsSchema.extend({
+  version: z.coerce.number().int().min(1),
+});
+
+export const pageConversationProfileParamsSchema = pageParamsSchema.extend({
+  conversationId: z.string().min(1),
+});
+
 const standardRevenueQuerySchema = z.object({
   period: nonCustomPeriodEnum,
   from: businessDate.optional(),
@@ -953,6 +961,31 @@ export const pageConversationMessagesResponseSchema = z.object({
   messages: z.array(pageConversationMessageItemSchema),
 });
 
+const fanProfileSourceEnum = z.enum(["chatmuse"]);
+
+export const fanProfileDocumentSchema = z.object({
+  version: z.number().int().positive(),
+  body: z.string(),
+  source: fanProfileSourceEnum,
+  createdAt: isoTimestamp,
+  createdByUserId: intId.nullable(),
+});
+
+export const fanProfileResponseSchema = z.object({
+  fan: fanBaseSchema,
+  profile: fanProfileDocumentSchema.nullable(),
+});
+
+export const fanProfileVersionListItemSchema = z.object({
+  version: z.number().int().positive(),
+  createdAt: isoTimestamp,
+  isCurrent: z.boolean(),
+});
+
+export const fanProfileVersionListResponseSchema = z.object({
+  items: z.array(fanProfileVersionListItemSchema),
+});
+
 // --- Phase 4: Dashboard schemas ---
 
 const connectionStatusEnum = z.enum([
@@ -1114,6 +1147,10 @@ export const crossPageFanTransactionListResponseSchema = z.object({
   limit: z.number().int(),
   offset: z.number().int(),
   total: z.number().int(),
+});
+
+export const upsertFanProfileBodySchema = z.object({
+  body: z.string().min(1).max(50_000),
 });
 
 export const createFanNoteBodySchema = z.object({
@@ -1711,6 +1748,7 @@ export const updateCredentialsResponseSchema = z.object({
 });
 
 const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
+const bearerOnlySecurity: Array<Record<string, string[]>> = [{ bearerAuth: [] }];
 const cookieOrBearerSecurity: Array<Record<string, string[]>> = [
   { cookieAuth: [] },
   { bearerAuth: [] },
@@ -1903,6 +1941,67 @@ export const routeSchemas = {
     params: pageFanParamsSchema,
     response: {
       200: pageFanDetailResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  pageFanProfile: {
+    tags: ["fans"],
+    summary: "Get the latest intelligence profile for one fan on one page",
+    security: cookieOrBearerSecurity,
+    params: pageFanParamsSchema,
+    response: {
+      200: fanProfileResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  pageConversationProfile: {
+    tags: ["fans"],
+    summary: "Get the latest intelligence profile for the fan mapped to one page conversation",
+    security: cookieOrBearerSecurity,
+    params: pageConversationProfileParamsSchema,
+    response: {
+      200: fanProfileResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  upsertFanProfile: {
+    tags: ["fans"],
+    summary: "Append a new intelligence profile version for one fan on one page",
+    security: bearerOnlySecurity,
+    params: pageFanParamsSchema,
+    body: upsertFanProfileBodySchema,
+    response: {
+      200: fanProfileDocumentSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  pageFanProfileVersions: {
+    tags: ["fans"],
+    summary: "List intelligence profile versions for one fan on one page",
+    security: cookieOnlySecurity,
+    params: pageFanParamsSchema,
+    response: {
+      200: fanProfileVersionListResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  pageFanProfileVersion: {
+    tags: ["fans"],
+    summary: "Get one intelligence profile version for one fan on one page",
+    security: cookieOnlySecurity,
+    params: fanProfileVersionParamsSchema,
+    response: {
+      200: fanProfileDocumentSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -2559,8 +2658,13 @@ export type OverviewGrowthResponse = z.infer<typeof overviewGrowthResponseSchema
 export type OverviewResponse = z.infer<typeof overviewResponseSchema>;
 export type OverviewRevenueResponse = z.infer<typeof overviewRevenueResponseSchema>;
 export type PageFanDetailResponse = z.infer<typeof pageFanDetailResponseSchema>;
+export type FanProfileDocument = z.infer<typeof fanProfileDocumentSchema>;
+export type FanProfileResponse = z.infer<typeof fanProfileResponseSchema>;
+export type FanProfileVersionListResponse = z.infer<typeof fanProfileVersionListResponseSchema>;
 export type PageFanParams = z.infer<typeof pageFanParamsSchema>;
+export type FanProfileVersionParams = z.infer<typeof fanProfileVersionParamsSchema>;
 export type PageParams = z.infer<typeof pageParamsSchema>;
+export type PageConversationProfileParams = z.infer<typeof pageConversationProfileParamsSchema>;
 export type PageRevenueResponse = z.infer<typeof pageRevenueResponseSchema>;
 export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 export type RevenueQuery = z.infer<typeof revenueQuerySchema>;
@@ -2580,6 +2684,7 @@ export type FanTransactionItem = z.infer<typeof fanTransactionItemSchema>;
 export type FanTransactionListResponse = z.infer<typeof fanTransactionListResponseSchema>;
 export type CrossPageFanTransactionItem = z.infer<typeof crossPageFanTransactionItemSchema>;
 export type CrossPageFanTransactionListResponse = z.infer<typeof crossPageFanTransactionListResponseSchema>;
+export type UpsertFanProfileBody = z.infer<typeof upsertFanProfileBodySchema>;
 export type CreateFanNoteBody = z.infer<typeof createFanNoteBodySchema>;
 export type FanNoteResponse = z.infer<typeof fanNoteResponseSchema>;
 export type SetFanFlagsBody = z.infer<typeof setFanFlagsBodySchema>;

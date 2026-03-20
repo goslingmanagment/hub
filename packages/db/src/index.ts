@@ -5,6 +5,7 @@ export * from "./repositories/catalog.ts";
 export * from "./repositories/crm.ts";
 export * from "./repositories/fans.ts";
 export * from "./repositories/auth.ts";
+export * from "./repositories/fan-profiles.ts";
 export * from "./repositories/fan-metadata.ts";
 export * from "./repositories/notifications.ts";
 export * from "./repositories/telegram-settings.ts";

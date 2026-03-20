@@ -18,6 +18,9 @@ import type {
   CrossPageFanTransactionListResponse,
   PageFanDetailResponse,
   CrossPageFanDetailResponse,
+  FanProfileResponse,
+  FanProfileDocument,
+  FanProfileVersionListResponse,
   SpenderListResponse,
   SpenderDetailResponse,
   SpenderBatchBody,
@@ -259,6 +262,50 @@ export function useFanDetail(platform: string, platformUserId: string) {
     queryFn: () =>
       api.get<CrossPageFanDetailResponse>(`/api/v1/fans/${platform}/${platformUserId}`),
     enabled: !!platformUserId,
+  });
+}
+
+export function usePageFanProfile(
+  pageLabel: string,
+  platformUserId: string,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["pageFanProfile", pageLabel, platformUserId],
+    queryFn: () =>
+      api.get<FanProfileResponse>(`/api/v1/pages/${pageLabel}/fans/${platformUserId}/profile`),
+    enabled: !!platformUserId && (options.enabled ?? true),
+  });
+}
+
+export function usePageFanProfileVersions(
+  pageLabel: string,
+  platformUserId: string,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["pageFanProfileVersions", pageLabel, platformUserId],
+    queryFn: () =>
+      api.get<FanProfileVersionListResponse>(
+        `/api/v1/pages/${pageLabel}/fans/${platformUserId}/profile/versions`,
+      ),
+    enabled: !!platformUserId && (options.enabled ?? true),
+  });
+}
+
+export function usePageFanProfileVersion(
+  pageLabel: string,
+  platformUserId: string,
+  version: number | null,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["pageFanProfileVersion", pageLabel, platformUserId, version],
+    queryFn: () =>
+      api.get<FanProfileDocument>(
+        `/api/v1/pages/${pageLabel}/fans/${platformUserId}/profile/versions/${version}`,
+      ),
+    enabled: !!platformUserId && version !== null && (options.enabled ?? true),
   });
 }
 

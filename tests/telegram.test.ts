@@ -41,6 +41,9 @@ describe("telegram service", () => {
       chatId: "6065935464",
       error: "request to https://api.telegram.org/bot[REDACTED]/sendMessage failed",
     }), "Telegram notification failed; continuing");
-    expect(result.error).not.toContain("123:abc");
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error).not.toContain("123:abc");
+    }
   });
 });

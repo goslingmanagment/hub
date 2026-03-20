@@ -2681,6 +2681,295 @@ describe("api integration", () => {
     expect(ownerFan.json().pages).toHaveLength(2);
   });
 
+  it("stores fan profile versions via chatter API key and exposes latest plus history with page scoping", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const appContext = createTestAppContext(testDb);
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "lead",
+        password: "lead-secret",
+      },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+
+    const firstWrite = await server.inject({
+      method: "PUT",
+      url: "/api/v1/pages/lana/fans/fan-001/profile",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+      payload: {
+        body: "## First profile\n\n- warm\n- engaged",
+      },
+    });
+    expect(firstWrite.statusCode).toBe(200);
+    expect(firstWrite.json()).toMatchObject({
+      version: 1,
+      source: "chatmuse",
+      createdByUserId: expect.any(Number),
+    });
+
+    const secondWrite = await server.inject({
+      method: "PUT",
+      url: "/api/v1/pages/lana/fans/fan-001/profile",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+      payload: {
+        body: "## Second profile\n\n**Closer-ready**",
+      },
+    });
+    expect(secondWrite.statusCode).toBe(200);
+    expect(secondWrite.json()).toMatchObject({
+      version: 2,
+      source: "chatmuse",
+      body: "## Second profile\n\n**Closer-ready**",
+    });
+
+    const latestByBearer = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001/profile",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(latestByBearer.statusCode).toBe(200);
+    expect(latestByBearer.json()).toMatchObject({
+      fan: {
+        platformUserId: "fan-001",
+      },
+      profile: {
+        version: 2,
+        body: "## Second profile\n\n**Closer-ready**",
+      },
+    });
+
+    const latestByLead = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001/profile",
+      headers: {
+        cookie: leadCookie,
+      },
+    });
+    expect(latestByLead.statusCode).toBe(200);
+    expect(latestByLead.json().profile?.version).toBe(2);
+
+    const versions = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001/profile/versions",
+      headers: {
+        cookie: leadCookie,
+      },
+    });
+    expect(versions.statusCode).toBe(200);
+    expect(versions.json().items).toEqual([
+      {
+        version: 2,
+        createdAt: expect.any(String),
+        isCurrent: true,
+      },
+      {
+        version: 1,
+        createdAt: expect.any(String),
+        isCurrent: false,
+      },
+    ]);
+
+    const versionOne = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001/profile/versions/1",
+      headers: {
+        cookie: leadCookie,
+      },
+    });
+    expect(versionOne.statusCode).toBe(200);
+    expect(versionOne.json()).toMatchObject({
+      version: 1,
+      body: "## First profile\n\n- warm\n- engaged",
+      source: "chatmuse",
+    });
+
+    const historyDeniedForBearer = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001/profile/versions",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(historyDeniedForBearer.statusCode).toBe(403);
+
+    const detailDeniedForBearer = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001/profile/versions/1",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(detailDeniedForBearer.statusCode).toBe(403);
+
+    const writeDeniedOnHiddenPage = await server.inject({
+      method: "PUT",
+      url: "/api/v1/pages/lily1/fans/fan-001/profile",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+      payload: {
+        body: "## Wrong page",
+      },
+    });
+    expect(writeDeniedOnHiddenPage.statusCode).toBe(403);
+
+    const readDeniedOnHiddenPage = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lily1/fans/fan-001/profile",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(readDeniedOnHiddenPage.statusCode).toBe(403);
+  });
+
+  it("returns null when no profile exists and resolves conversation-scoped profile reads", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    await seedCrmApiFixture({
+      testDb,
+      pageId: fixture.lanaPage.id,
+    });
+
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: null,
+      platformConversationId: "crm-conv-unmapped",
+      partnerPlatformUserId: "ghost-fan",
+      partnerUsername: "ghost_fan",
+      partnerDisplayName: "Ghost Fan",
+      conversationFlags: 0,
+      unreadCount: 0,
+      subscriptionTierId: null,
+      lastMessageId: "crm-msg-unmapped",
+      lastUnreadMessageId: null,
+      lastMessageAt: new Date("2026-03-18T10:00:00.000Z"),
+      lastMessageSenderId: "ghost-fan",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "still here?",
+      lastFanMessageAt: new Date("2026-03-18T10:00:00.000Z"),
+      lastModelMessageAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "lead",
+        password: "lead-secret",
+      },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+
+    const appContext = createTestAppContext(testDb);
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const latestFanProfile = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001/profile",
+      headers: {
+        cookie: leadCookie,
+      },
+    });
+    expect(latestFanProfile.statusCode).toBe(200);
+    expect(latestFanProfile.json()).toMatchObject({
+      fan: {
+        platformUserId: "fan-001",
+      },
+      profile: null,
+    });
+
+    const latestConversationProfile = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/conversations/crm-conv-001/profile",
+      headers: {
+        cookie: leadCookie,
+      },
+    });
+    expect(latestConversationProfile.statusCode).toBe(200);
+    expect(latestConversationProfile.json()).toMatchObject({
+      fan: {
+        platformUserId: "fan-001",
+      },
+      profile: null,
+    });
+
+    const missingConversation = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/conversations/missing/profile",
+      headers: {
+        cookie: leadCookie,
+      },
+    });
+    expect(missingConversation.statusCode).toBe(404);
+
+    const unmappedConversation = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/conversations/crm-conv-unmapped/profile",
+      headers: {
+        cookie: leadCookie,
+      },
+    });
+    expect(unmappedConversation.statusCode).toBe(404);
+
+    const writeProfile = await server.inject({
+      method: "PUT",
+      url: "/api/v1/pages/lana/fans/fan-001/profile",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+      payload: {
+        body: "## Conversation-aware profile\n\n---\n\nOpen loop: last asked for a bundle.",
+      },
+    });
+    expect(writeProfile.statusCode).toBe(200);
+    expect(writeProfile.json().version).toBe(1);
+
+    const conversationByBearer = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/conversations/crm-conv-001/profile",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(conversationByBearer.statusCode).toBe(200);
+    expect(conversationByBearer.json()).toMatchObject({
+      fan: {
+        platformUserId: "fan-001",
+      },
+      profile: {
+        version: 1,
+        body: "## Conversation-aware profile\n\n---\n\nOpen loop: last asked for a bundle.",
+      },
+    });
+  });
+
   it("lists v2 spenders with scoped diagnostics and no hidden-page leakage", async (context) => {
     if (!testDb || !server) {
       context.skip();

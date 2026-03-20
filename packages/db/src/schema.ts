@@ -1044,6 +1044,44 @@ export const fanSummaries = pgTable(
   }),
 );
 
+export const fanProfiles = pgTable(
+  "fan_profiles",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    version: integer("version").notNull(),
+    body: text("body").notNull(),
+    source: text("source").notNull(),
+    createdByUserId: bigint("created_by_user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    versionCheck: check("fan_profiles_version_check", sql`${table.version} > 0`),
+    versionUniq: unique("fan_profiles_fan_page_version_uniq").on(
+      table.fanId,
+      table.platformAccountId,
+      table.version,
+    ),
+    latestIdx: index("fan_profiles_latest_idx").on(
+      table.platformAccountId,
+      table.fanId,
+      table.version.desc(),
+    ),
+    historyIdx: index("fan_profiles_history_idx").on(
+      table.fanId,
+      table.platformAccountId,
+      table.createdAt.desc(),
+    ),
+  }),
+);
+
 export const fanFlags = pgTable(
   "fan_flags",
   {

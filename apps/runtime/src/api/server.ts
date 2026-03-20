@@ -119,6 +119,13 @@ import {
   getCrmRetentionReport,
   getCrmSummaryReport,
 } from "../services/crm.ts";
+import {
+  getPageConversationProfile,
+  getPageFanProfile,
+  getPageFanProfileVersion,
+  listPageFanProfileVersions,
+  upsertPageFanProfile,
+} from "../services/fan-profiles.ts";
 import { getSyncMonitorRecentRequests, getSyncMonitorSnapshot } from "../services/sync-monitor.ts";
 import {
   getSpenderBatch,
@@ -538,6 +545,68 @@ export async function buildApiServer(appContext: AppContext) {
       request.params.pageLabel,
       request.params.platformUserId,
       pageScopeFor(principal),
+    );
+  });
+
+  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile", {
+    schema: routeSchemas.pageFanProfile,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getPageFanProfile(
+      appContext,
+      principal,
+      request.params.pageLabel,
+      request.params.platformUserId,
+    );
+  });
+
+  server.put("/api/v1/pages/:pageLabel/fans/:platformUserId/profile", {
+    schema: routeSchemas.upsertFanProfile,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return upsertPageFanProfile(
+      appContext,
+      principal,
+      request.params.pageLabel,
+      request.params.platformUserId,
+      request.body.body,
+    );
+  });
+
+  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions", {
+    schema: routeSchemas.pageFanProfileVersions,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return listPageFanProfileVersions(
+      appContext,
+      principal,
+      request.params.pageLabel,
+      request.params.platformUserId,
+    );
+  });
+
+  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions/:version", {
+    schema: routeSchemas.pageFanProfileVersion,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getPageFanProfileVersion(
+      appContext,
+      principal,
+      request.params.pageLabel,
+      request.params.platformUserId,
+      request.params.version,
+    );
+  });
+
+  server.get("/api/v1/pages/:pageLabel/conversations/:conversationId/profile", {
+    schema: routeSchemas.pageConversationProfile,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getPageConversationProfile(
+      appContext,
+      principal,
+      request.params.pageLabel,
+      request.params.conversationId,
     );
   });
 

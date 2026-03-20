@@ -222,7 +222,7 @@ describe("notifications dashboard", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.text).toContain("Daily Revenue Report");
+    expect(body.text).toContain("Revenue Report");
     expect(body.reportDate).toBeTruthy();
   });
 

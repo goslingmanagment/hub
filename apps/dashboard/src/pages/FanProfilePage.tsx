@@ -1,8 +1,12 @@
 import { useParams, useNavigate } from "react-router";
 import { useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ChevronDown } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import {
   usePageFanDetail,
+  usePageFanProfile,
+  usePageFanProfileVersion,
+  usePageFanProfileVersions,
   usePageFanTransactions,
   useCreateFanNote,
   useSpenderDetail,
@@ -22,11 +26,25 @@ export function FanProfilePage() {
   const navigate = useNavigate();
   const [txOffset, setTxOffset] = useState(0);
   const [noteBody, setNoteBody] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
   const { period } = usePeriodStore();
   const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   const { data, isLoading } = usePageFanDetail(pageLabel!, platformUserId!);
+  const { data: latestProfileData, isLoading: latestProfileLoading } = usePageFanProfile(pageLabel!, platformUserId!);
+  const { data: profileVersionsData, isLoading: profileVersionsLoading } = usePageFanProfileVersions(
+    pageLabel!,
+    platformUserId!,
+    { enabled: historyOpen },
+  );
+  const { data: selectedProfileData, isLoading: selectedProfileLoading } = usePageFanProfileVersion(
+    pageLabel!,
+    platformUserId!,
+    selectedProfileVersion,
+    { enabled: selectedProfileVersion !== null },
+  );
   const { data: spenderDetail } = useSpenderDetail(platform!, platformUserId!, {
     scope: "page",
     pageLabel,
@@ -60,6 +78,17 @@ export function FanProfilePage() {
 
   const txItems = txData?.items ?? [];
   const txTotal = txData?.total ?? 0;
+  const latestProfile = latestProfileData?.profile ?? null;
+  const profileVersions = profileVersionsData?.items ?? [];
+  const viewingHistoricalVersion = selectedProfileVersion !== null;
+  const displayedProfile = viewingHistoricalVersion
+    ? selectedProfileData ?? null
+    : latestProfile;
+  const profileLoading = viewingHistoricalVersion
+    ? selectedProfileLoading
+    : latestProfileLoading;
+  const selectedVersionIsCurrent = selectedProfileVersion !== null
+    && latestProfile?.version === selectedProfileVersion;
 
   async function handleAddNote() {
     const body = noteBody.trim();
@@ -110,6 +139,10 @@ export function FanProfilePage() {
     if (type === "tip") return "bg-green";
     if (type === "chargeback" || type === "refund") return "bg-danger";
     return "bg-text-muted";
+  }
+
+  function handleSelectProfileVersion(version: number) {
+    setSelectedProfileVersion(version);
   }
 
   return (
@@ -166,6 +199,114 @@ export function FanProfilePage() {
           </div>
         ))}
       </div>
+
+      <section className="mb-6 rounded-xl border border-border bg-card p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-text-primary">Fan Intelligence</h2>
+            <p className="mt-1 text-xs text-text-muted">
+              Latest ChatMuse profile for this fan on {page.pageLabel}.
+            </p>
+          </div>
+          {viewingHistoricalVersion && (
+            <div className="flex items-center gap-2">
+              <span className="rounded-full border border-border bg-hover px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                Viewing version {selectedProfileVersion}
+              </span>
+              {selectedVersionIsCurrent && (
+                <span className="rounded-full border border-border bg-hover-alt px-2 py-1 text-[11px] text-text-muted">
+                  Current
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedProfileVersion(null)}
+                className="text-xs font-medium text-accent transition-colors hover:opacity-80"
+              >
+                Back to latest
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 rounded-xl border border-border bg-hover-alt/40 p-5">
+          {profileLoading ? (
+            <p className="text-sm text-text-muted">
+              {viewingHistoricalVersion ? "Loading selected version..." : "Loading intelligence profile..."}
+            </p>
+          ) : viewingHistoricalVersion && !displayedProfile ? (
+            <p className="text-sm text-text-muted">Unable to load the selected version.</p>
+          ) : displayedProfile ? (
+            <div>
+              <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
+                <span>Version {displayedProfile.version}</span>
+                <span>&middot;</span>
+                <span>{formatDateTime(displayedProfile.createdAt)}</span>
+              </div>
+              <ReactMarkdown className="fan-intelligence-markdown">
+                {displayedProfile.body}
+              </ReactMarkdown>
+            </div>
+          ) : (
+            <p className="text-sm text-text-muted">No intelligence profile yet</p>
+          )}
+        </div>
+
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((value) => !value)}
+            className="flex w-full items-center justify-between rounded-lg border border-border bg-hover-alt/30 px-4 py-2.5 text-left transition-colors hover:bg-hover-alt"
+            aria-expanded={historyOpen}
+          >
+            <span className="text-[13px] font-medium text-text-secondary">Version History</span>
+            <ChevronDown
+              size={16}
+              className={`text-text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+
+          {historyOpen && (
+            <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
+              {profileVersionsLoading ? (
+                <div className="px-4 py-4 text-sm text-text-muted">Loading versions...</div>
+              ) : profileVersions.length === 0 ? (
+                <div className="px-4 py-4 text-sm text-text-muted">No saved versions yet.</div>
+              ) : (
+                <div>
+                  {profileVersions.map((item) => {
+                    const selected = selectedProfileVersion === item.version;
+                    return (
+                      <button
+                        key={item.version}
+                        type="button"
+                        onClick={() => handleSelectProfileVersion(item.version)}
+                        className={`flex w-full items-center justify-between border-t border-border px-4 py-3 text-left transition-colors first:border-t-0 ${
+                          selected ? "bg-hover" : "hover:bg-hover-alt"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-text-primary">
+                            Version {item.version}
+                          </span>
+                          {item.isCurrent && (
+                            <span className="rounded-full border border-border bg-hover px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-xs text-text-muted">
+                          {formatDateTime(item.createdAt)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Two-column: Notes + Timeline */}
       <div className="mb-6 grid grid-cols-2 gap-4">

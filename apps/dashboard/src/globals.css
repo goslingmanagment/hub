@@ -33,3 +33,83 @@ body {
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+.fan-intelligence-markdown {
+  color: var(--color-text-primary);
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+
+.fan-intelligence-markdown > * + * {
+  margin-top: 0.9rem;
+}
+
+.fan-intelligence-markdown h1,
+.fan-intelligence-markdown h2,
+.fan-intelligence-markdown h3,
+.fan-intelligence-markdown h4 {
+  color: var(--color-text-primary);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.fan-intelligence-markdown h1 {
+  font-size: 1.5rem;
+}
+
+.fan-intelligence-markdown h2 {
+  font-size: 1.2rem;
+}
+
+.fan-intelligence-markdown h3 {
+  font-size: 1.05rem;
+}
+
+.fan-intelligence-markdown p,
+.fan-intelligence-markdown li {
+  color: var(--color-text-secondary);
+}
+
+.fan-intelligence-markdown strong {
+  color: var(--color-text-primary);
+  font-weight: 700;
+}
+
+.fan-intelligence-markdown ul,
+.fan-intelligence-markdown ol {
+  margin-left: 1.25rem;
+  padding-left: 0.25rem;
+}
+
+.fan-intelligence-markdown ul {
+  list-style: disc;
+}
+
+.fan-intelligence-markdown ol {
+  list-style: decimal;
+}
+
+.fan-intelligence-markdown li + li {
+  margin-top: 0.35rem;
+}
+
+.fan-intelligence-markdown hr {
+  margin: 1.25rem 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.fan-intelligence-markdown code {
+  border-radius: 6px;
+  background: var(--color-hover);
+  padding: 0.1rem 0.35rem;
+  font-size: 0.9em;
+}
+
+.fan-intelligence-markdown pre {
+  overflow-x: auto;
+  border-radius: 10px;
+  background: var(--color-hover-alt);
+  padding: 0.9rem 1rem;
+}
