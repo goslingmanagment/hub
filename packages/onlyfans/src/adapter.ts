@@ -398,10 +398,9 @@ export class OnlyFansAdapter {
     minDelayMs: number,
   ) {
     if (context.rateLimitWaiter) {
-      await context.rateLimitWaiter([
+      return context.rateLimitWaiter([
         { provider: "onlyfans", scope: "global" },
       ]);
-      return 0;
     }
 
     const rateLimitKey = `${buildProxyEgressKey(context.proxy)}:${category}`;

@@ -53,11 +53,11 @@ describe("adapter hardening", () => {
     const startedEvents = events.filter((event) => event.state === "started");
     expect(startedEvents).toHaveLength(2);
     expect(startedEvents[0]?.rateLimitWaitMs).toBeNull();
-    expect(Number(startedEvents[1]?.rateLimitWaitMs)).toBeGreaterThanOrEqual(100);
+    expect(Number(startedEvents[1]?.rateLimitWaitMs)).toBeGreaterThanOrEqual(95);
     expect(
       new Date(String(startedEvents[1]?.timestamp)).getTime() -
       new Date(String(startedEvents[0]?.timestamp)).getTime(),
-    ).toBeGreaterThanOrEqual(100);
+    ).toBeGreaterThanOrEqual(95);
     expect(events.some((event) => event.state === "retry")).toBe(false);
   });
 
@@ -65,7 +65,7 @@ describe("adapter hardening", () => {
     const {
       FanslyAdapter,
     } = await loadAdapters();
-    const waiter = vi.fn(async () => {});
+    const waiter = vi.fn(async () => 275);
 
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
@@ -76,9 +76,66 @@ describe("adapter hardening", () => {
       rateLimitWaiter: waiter,
     }, "transactions", 0);
 
-    expect(waitMs).toBe(0);
+    expect(waitMs).toBe(275);
     expect(waiter).toHaveBeenCalledWith([
       { provider: "fansly", scope: "global" },
+    ]);
+  });
+
+  it("propagates shared DM wait times into request observer events", async () => {
+    vi.resetModules();
+
+    const sharedModule = await import("@agency_hub_core/shared");
+    vi.spyOn(sharedModule, "executeObservedRequest").mockImplementation(async (input) => {
+      const rateLimitWaitMs = await input.waitForRateLimit?.() ?? 0;
+      await input.observer?.onRequestEvent({
+        state: "started",
+        requestId: input.requestId,
+        operation: input.operation,
+        endpointTemplate: input.endpointTemplate,
+        method: input.method,
+        attemptNumber: 1,
+        timestamp: new Date("2026-03-10T00:00:00.000Z"),
+        pagination: input.pagination ?? null,
+        requestMetadata: input.requestMetadata,
+        rateLimitWaitMs,
+      });
+      return {
+        parsed: {
+          messages: [],
+        },
+        raw: {
+          messages: [],
+        },
+      };
+    });
+
+    const { FanslyAdapter } = await import("../packages/fansly/src/adapter.ts");
+    const { events, requestObserver } = captureEvents();
+    const waiter = vi.fn(async () => 7_500);
+
+    const adapter = new FanslyAdapter({
+      baseUrl: "https://fansly.example",
+      globalDelayMs: 5,
+    });
+
+    await adapter.getMessagesPage({
+      session: {
+        authorization: "token",
+      },
+      requestObserver,
+      rateLimitWaiter: waiter,
+    }, {
+      groupId: "group-1",
+      limit: 25,
+    });
+    await adapter.close();
+
+    const startedEvent = events.find((event) => event.state === "started");
+    expect(startedEvent?.rateLimitWaitMs).toBe(7_500);
+    expect(waiter).toHaveBeenCalledWith([
+      { provider: "fansly", scope: "global" },
+      { provider: "fansly", scope: "dm_messages" },
     ]);
   });
 

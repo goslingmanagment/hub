@@ -90,6 +90,23 @@ interface RequestSummaryRecord {
   }>;
 }
 
+export interface DmMessagesChunkSummary {
+  conversationsProcessed: number;
+  messageFetchRequests: number;
+  rateLimit429s: number;
+  chunkDurationMs: number;
+  averageGapMs: number;
+}
+
+interface DmMessagesChunkSummaryRecord extends DmMessagesChunkSummary {
+  timestamp: string;
+  component: "sync_dm_messages_chunk";
+  provider: SyncProvider;
+  runId: number;
+  pageLabel: string;
+  stream: "dm_messages";
+}
+
 function iso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
 }
@@ -381,6 +398,23 @@ export class SyncRunTelemetry {
     await this.recordEvent("note", message, details);
   }
 
+  async recordDmMessagesChunkSummary(summary: DmMessagesChunkSummary) {
+    if (this.metadata.stream !== "dm_messages") {
+      return;
+    }
+
+    const record: DmMessagesChunkSummaryRecord = {
+      timestamp: new Date().toISOString(),
+      component: "sync_dm_messages_chunk",
+      provider: this.metadata.provider,
+      runId: this.metadata.runId,
+      pageLabel: this.metadata.pageLabel,
+      stream: "dm_messages",
+      ...summary,
+    };
+    await this.emitTraceRecord(record as unknown as Record<string, unknown>, "sync_dm_messages_chunk");
+  }
+
   async addAnomaly(input: SyncAnomalyRecord) {
     if (!this.anomalies.has(input.code)) {
       this.anomalies.set(input.code, input);
@@ -657,11 +691,15 @@ export class SyncRunTelemetry {
   }
 
   private async emitRequestSummary(summary: RequestSummaryRecord) {
+    await this.emitTraceRecord(summary as unknown as Record<string, unknown>, "sync_request_summary");
+  }
+
+  private async emitTraceRecord(record: Record<string, unknown>, name: string) {
     await Promise.all(this.requestTraceWriters.map(async (writer, index) => {
       try {
-        await writer.write(summary as unknown as Record<string, unknown>);
+        await writer.write(record);
       } catch (error) {
-        this.recordTraceWarning(index === 0 ? "sync_request_stdout_summary" : `sync_request_file_summary_${index}`, error);
+        this.recordTraceWarning(index === 0 ? `${name}_stdout` : `${name}_file_${index}`, error);
       }
     }));
   }

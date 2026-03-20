@@ -238,6 +238,43 @@ describe("sync repository timestamp normalization", () => {
     expect(execute).toHaveBeenCalledTimes(4);
   });
 
+  it("normalizes string next_available_at values before computing reservations", async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{
+          provider: "fansly",
+          scope: "global",
+          egressKey: "global",
+          minSpacingMs: 2_600,
+          nextAvailableAt: "2026-03-14T12:00:01.000Z",
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          provider: "fansly",
+          scope: "dm_messages",
+          egressKey: "global",
+          minSpacingMs: 7_500,
+          nextAvailableAt: "2026-03-14T12:00:03.000Z",
+        }],
+      })
+      .mockResolvedValue({ rows: [] });
+    const db = {
+      transaction: async (run: (tx: unknown) => Promise<Date>) => run({ execute }),
+    } as never;
+
+    const reservedAt = await reserveSyncProviderRateLimit(db, {
+      scopes: [
+        { provider: "fansly", scope: "global", egressKey: "global" },
+        { provider: "fansly", scope: "dm_messages", egressKey: "global" },
+      ],
+      now: new Date("2026-03-14T12:00:00.000Z"),
+    });
+
+    expect(reservedAt.toISOString()).toBe("2026-03-14T12:00:03.000Z");
+    expect(execute).toHaveBeenCalledTimes(4);
+  });
+
   it("upserts per-egress rate-limit profiles without resetting next_available_at", async () => {
     const execute = vi.fn().mockResolvedValue({ rows: [] });
     const db = {

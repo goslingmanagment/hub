@@ -15,7 +15,7 @@ export type SyncRateLimitScope = {
 export function createSyncRateLimitWaiter(
   app: Pick<AppContext, "config" | "db">,
   input: { egressKey: string },
-): ((scopes: SyncRateLimitScope[]) => Promise<void>) | null {
+): ((scopes: SyncRateLimitScope[]) => Promise<number>) | null {
   if (!app.config.syncSharedRateLimitEnabled) {
     return null;
   }
@@ -24,7 +24,7 @@ export function createSyncRateLimitWaiter(
 
   return async (scopes: SyncRateLimitScope[]) => {
     if (scopes.length === 0) {
-      return;
+      return 0;
     }
 
     const providers = Array.from(new Set(scopes.map((scope) => scope.provider)));
@@ -51,10 +51,12 @@ export function createSyncRateLimitWaiter(
         egressKey: input.egressKey,
       })),
     });
-    const waitMs = scheduledAt.getTime() - Date.now();
+    const waitMs = Math.max(0, scheduledAt.getTime() - Date.now());
     if (waitMs > 0) {
       await delay(waitMs);
     }
+
+    return waitMs;
   };
 }
 

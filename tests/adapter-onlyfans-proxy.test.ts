@@ -68,7 +68,7 @@ describe("adapter hardening", () => {
     const {
       OnlyFansAdapter,
     } = await loadAdapters();
-    const waiter = vi.fn(async () => {});
+    const waiter = vi.fn(async () => 125);
 
     const adapter = new OnlyFansAdapter({
       baseUrl: "https://onlyfans.example",
@@ -84,7 +84,7 @@ describe("adapter hardening", () => {
       rateLimitWaiter: waiter,
     }, "accounts", 25);
 
-    expect(waitMs).toBe(0);
+    expect(waitMs).toBe(125);
     expect(waiter).toHaveBeenCalledWith([
       { provider: "onlyfans", scope: "global" },
     ]);

@@ -7,7 +7,7 @@ export interface FanslyRequestContext {
   rateLimitWaiter?: ((scopes: Array<{
     provider: "fansly" | "onlyfans";
     scope: string;
-  }>) => Promise<void>) | null;
+  }>) => Promise<number>) | null;
 }
 
 export interface FanslyAccount {

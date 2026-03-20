@@ -1726,6 +1726,7 @@ export async function reserveSyncProviderRateLimit(
       if (!row) {
         throw new Error(`Missing sync rate-limit row for ${scope.provider}/${scope.scope}/${scope.egressKey}`);
       }
+      row.nextAvailableAt = normalizeRateLimitDate(row.nextAvailableAt);
       lockedRows.push(row);
     }
 
@@ -1749,4 +1750,17 @@ export async function reserveSyncProviderRateLimit(
   });
 
   return scheduledAt;
+}
+
+function normalizeRateLimitDate(value: Date | string) {
+  if (value instanceof Date) {
+    return value;
+  }
+
+  const normalized = new Date(value);
+  if (Number.isNaN(normalized.getTime())) {
+    throw new Error(`Invalid sync provider rate-limit timestamp: ${String(value)}`);
+  }
+
+  return normalized;
 }

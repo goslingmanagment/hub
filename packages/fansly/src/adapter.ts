@@ -641,8 +641,7 @@ export class FanslyAdapter {
     ];
 
     if (context.rateLimitWaiter) {
-      await context.rateLimitWaiter(scopes);
-      return 0;
+      return context.rateLimitWaiter(scopes);
     }
 
     const egressKey = buildProxyEgressKey(context.proxy);

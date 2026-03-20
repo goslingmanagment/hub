@@ -145,7 +145,7 @@ describe("sync observability", () => {
         platformAccountId: 9,
         pageLabel: "lora1",
         provider: "onlyfans",
-        stream: "light",
+        stream: "dm_messages",
         trigger: "worker",
       },
       {
@@ -200,11 +200,19 @@ describe("sync observability", () => {
       },
     });
 
+    await telemetry.recordDmMessagesChunkSummary({
+      conversationsProcessed: 2,
+      messageFetchRequests: 3,
+      rateLimit429s: 1,
+      chunkDurationMs: 7_500,
+      averageGapMs: 3_750,
+    });
     await telemetry.finish("success", null, {});
 
     const fileContents = await readFile(traceFile, "utf8");
     expect(fileContents).toContain("\"component\":\"sync_http\"");
     expect(fileContents).toContain("\"component\":\"sync_http_summary\"");
+    expect(fileContents).toContain("\"component\":\"sync_dm_messages_chunk\"");
     expect(fileContents).toContain("\"pageIndex\":0");
     expect(fileContents).toContain("\"cursorPresent\":false");
     expect(fileContents).not.toContain("x-om-auth-token");

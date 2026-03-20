@@ -42,6 +42,8 @@ import {
   isFanslyDmMessageSyncExcluded,
   toMills,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+  type HttpRequestEvent,
+  type HttpRequestObserver,
 } from "@agency_hub_core/shared";
 import { and, eq } from "drizzle-orm";
 
@@ -51,7 +53,11 @@ import {
   type ResolvedPageContext,
 } from "../page-context.ts";
 import { syncOnlyFansTransactions } from "./onlyfans-transactions.ts";
-import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
+import {
+  summarizeCheckpoint,
+  type DmMessagesChunkSummary,
+  type SyncRunTelemetry,
+} from "./observability.ts";
 import { composeRequestObservers, type SyncChunkYieldReason, type SyncChunkBudget } from "./chunk-budget.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
@@ -87,6 +93,54 @@ export type StreamChunkResult = {
   clearRequestPayload?: boolean;
   stats?: Record<string, unknown>;
 };
+
+class DmMessagesChunkRequestObserver implements HttpRequestObserver {
+  private readonly touchedConversationIds = new Set<number>();
+  private readonly requestGapsMs: number[] = [];
+  private requestCount = 0;
+  private rateLimit429s = 0;
+  private lastStartedAtMs: number | null = null;
+
+  recordConversationTouched(conversationId: number) {
+    this.touchedConversationIds.add(conversationId);
+  }
+
+  async onRequestEvent(event: HttpRequestEvent) {
+    if (event.operation !== "messages") {
+      return;
+    }
+
+    if (event.state === "started") {
+      this.requestCount += 1;
+
+      const startedAtMs = event.timestamp instanceof Date ? event.timestamp.getTime() : Number.NaN;
+      if (Number.isFinite(startedAtMs)) {
+        if (this.lastStartedAtMs !== null) {
+          this.requestGapsMs.push(startedAtMs - this.lastStartedAtMs);
+        }
+        this.lastStartedAtMs = startedAtMs;
+      }
+      return;
+    }
+
+    if ("httpStatus" in event && event.httpStatus === 429) {
+      this.rateLimit429s += 1;
+    }
+  }
+
+  buildSummary(chunkDurationMs: number): DmMessagesChunkSummary {
+    const totalGapMs = this.requestGapsMs.reduce((sum, value) => sum + value, 0);
+    return {
+      conversationsProcessed: this.touchedConversationIds.size,
+      messageFetchRequests: this.requestCount,
+      rateLimit429s: this.rateLimit429s,
+      chunkDurationMs,
+      averageGapMs: this.requestGapsMs.length > 0
+        ? Math.round(totalGapMs / this.requestGapsMs.length)
+        : 0,
+    };
+  }
+}
 
 type SubscribersCheckpointState = {
   revision: number;
@@ -1470,10 +1524,18 @@ export async function executeDmMessagesChunk(
   assertDmSharedRateLimitEnabled(app);
   await input.telemetry.recordPhaseStarted("dm_messages");
 
+  const chunkStartedAt = Date.now();
+  const dmMessagesRequestObserver = new DmMessagesChunkRequestObserver();
+  let emittedDmMessagesChunkSummary: DmMessagesChunkSummary | null = null;
+
   const requestContext = {
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
-    requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
+    requestObserver: composeRequestObservers(
+      input.telemetry.getRequestObserver(),
+      input.budget,
+      dmMessagesRequestObserver,
+    ),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_messages");
@@ -1499,140 +1561,23 @@ export async function executeDmMessagesChunk(
   let overlapHits = 0;
   let exhaustedEligibleConversations = false;
 
-  while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
-    let conversation = state.currentConversationId
-      ? await getPageDmConversationById(app.db, state.currentConversationId)
-      : null;
-
-    if (conversation && isFanslyDmMessageSyncExcluded(conversation.metadata)) {
-      state = emptyDmMessagesCheckpointState();
-      const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "dm_messages",
-        state,
-      });
-      await input.telemetry.recordCheckpointAdvanced(
-        "dm_messages",
-        summarizeCheckpoint(progressCheckpoint),
-      );
-      conversation = null;
+  const emitDmMessagesChunkSummary = async () => {
+    if (emittedDmMessagesChunkSummary) {
+      return emittedDmMessagesChunkSummary;
     }
 
-    if (!conversation || !conversation.isVisible || conversation.fanId === null) {
-      const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
-        platformAccountId: input.pageContext.page.id,
-      });
-      if (!candidate) {
-        exhaustedEligibleConversations = true;
-        break;
-      }
+    emittedDmMessagesChunkSummary = dmMessagesRequestObserver.buildSummary(Date.now() - chunkStartedAt);
+    await input.telemetry.recordDmMessagesChunkSummary(emittedDmMessagesChunkSummary);
+    return emittedDmMessagesChunkSummary;
+  };
 
-      conversation = await getPageDmConversationById(app.db, candidate.id);
-      if (!conversation) {
-        exhaustedEligibleConversations = true;
-        break;
-      }
-
-      const currentMode = conversation.storedMessageCount === 0
-        ? "backfill"
-        : conversation.lastMessageId !== conversation.newestStoredMessageId
-          ? "incremental"
-          : conversation.messageBackfillComplete
-            ? "incremental"
-            : "backfill";
-
-      state = {
-        ...emptyDmMessagesCheckpointState(),
-        currentConversationId: conversation.id,
-        currentPlatformConversationId: conversation.platformConversationId,
-        currentBeforeMessageId: currentMode === "backfill"
-          ? conversation.oldestStoredMessageId
-          : null,
-        currentMode,
-      };
-      const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "dm_messages",
-        state,
-      });
-      await input.telemetry.recordCheckpointAdvanced(
-        "dm_messages",
-        summarizeCheckpoint(progressCheckpoint),
-      );
-    }
-
-    if (!conversation || !state.currentMode) {
-      exhaustedEligibleConversations = true;
-      break;
-    }
-
-    let collectedThisConversation = 0;
+  try {
     while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
-      const page = await app.adapter.getMessagesPage(requestContext, {
-        groupId: conversation.platformConversationId,
-        limit: 25,
-        before: state.currentBeforeMessageId,
-      });
-      const existingIds = await getExistingPageDmMessageIds(app.db, {
-        conversationId: conversation.id,
-        platformMessageIds: page.items.map((message) => message.id),
-      });
-      const overlapFound = page.items.some((message) => existingIds.has(message.id));
+      let conversation = state.currentConversationId
+        ? await getPageDmConversationById(app.db, state.currentConversationId)
+        : null;
 
-      const normalizedMessages = [];
-      for (const message of page.items) {
-        const createdAt = await normalizeDmTimestampWithAnomaly(input.telemetry, {
-          context: "dm_messages:message",
-          value: message.createdAt,
-        });
-        if (!createdAt) {
-          continue;
-        }
-
-        normalizedMessages.push({
-          conversationId: conversation.id,
-          platformAccountId: input.pageContext.page.id,
-          platformMessageId: message.id,
-          senderPlatformUserId: message.senderId ?? null,
-          senderRole: resolveDmSenderRole(
-            message.senderId ?? null,
-            pageAccountId,
-            conversation.partnerPlatformUserId,
-          ),
-          createdAt,
-          content: message.content ?? "",
-          totalTipAmountCents: message.totalTipAmount ?? 0,
-          inReplyToMessageId: message.inReplyTo ?? null,
-          inReplyToRootMessageId: message.inReplyToRoot ?? null,
-        });
-      }
-      await upsertPageDmMessages(app.db, normalizedMessages);
-      collectedThisConversation += normalizedMessages
-        .filter((message) => !existingIds.has(message.platformMessageId))
-        .length;
-      processedMessages += normalizedMessages.length;
-
-      const oldestMessageId = page.items.at(-1)?.id ?? null;
-      const providerHistoryExhausted = page.done || !oldestMessageId;
-      const hitWindowCap =
-        state.currentMode === "backfill" &&
-        (conversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_MESSAGE_HISTORY_LIMIT;
-      const shouldComplete = state.currentMode === "incremental"
-        ? overlapFound || providerHistoryExhausted
-        : overlapFound || providerHistoryExhausted || hitWindowCap;
-
-      if (shouldComplete) {
-        if (overlapFound) {
-          overlapHits += 1;
-        }
-        const finalized = await finalizePageDmConversationMessageSync(app.db, {
-          conversationId: conversation.id,
-          messageBackfillComplete: state.currentMode === "backfill"
-            ? providerHistoryExhausted || hitWindowCap
-            : conversation.messageBackfillComplete,
-        });
-        conversation = finalized.conversation;
-        completedConversations += 1;
+      if (conversation && isFanslyDmMessageSyncExcluded(conversation.metadata)) {
         state = emptyDmMessagesCheckpointState();
         const progressCheckpoint = await upsertCheckpointProgress(app.db, {
           platformAccountId: input.pageContext.page.id,
@@ -1643,33 +1588,191 @@ export async function executeDmMessagesChunk(
           "dm_messages",
           summarizeCheckpoint(progressCheckpoint),
         );
+        conversation = null;
+      }
+
+      if (!conversation || !conversation.isVisible || conversation.fanId === null) {
+        const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
+          platformAccountId: input.pageContext.page.id,
+        });
+        if (!candidate) {
+          exhaustedEligibleConversations = true;
+          break;
+        }
+
+        conversation = await getPageDmConversationById(app.db, candidate.id);
+        if (!conversation) {
+          exhaustedEligibleConversations = true;
+          break;
+        }
+
+        const currentMode = conversation.storedMessageCount === 0
+          ? "backfill"
+          : conversation.lastMessageId !== conversation.newestStoredMessageId
+            ? "incremental"
+            : conversation.messageBackfillComplete
+              ? "incremental"
+              : "backfill";
+
+        state = {
+          ...emptyDmMessagesCheckpointState(),
+          currentConversationId: conversation.id,
+          currentPlatformConversationId: conversation.platformConversationId,
+          currentBeforeMessageId: currentMode === "backfill"
+            ? conversation.oldestStoredMessageId
+            : null,
+          currentMode,
+        };
+        const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "dm_messages",
+          state,
+        });
+        await input.telemetry.recordCheckpointAdvanced(
+          "dm_messages",
+          summarizeCheckpoint(progressCheckpoint),
+        );
+      }
+
+      if (!conversation || !state.currentMode) {
+        exhaustedEligibleConversations = true;
         break;
       }
 
-      state = {
-        ...state,
-        currentBeforeMessageId: oldestMessageId,
-      };
-      const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "dm_messages",
-        state,
-      });
-      await input.telemetry.recordCheckpointAdvanced(
-        "dm_messages",
-        summarizeCheckpoint(progressCheckpoint),
-      );
+      let collectedThisConversation = 0;
+      while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+        dmMessagesRequestObserver.recordConversationTouched(conversation.id);
 
-      if (input.budget.shouldYield()) {
-        break;
+        const page = await app.adapter.getMessagesPage(requestContext, {
+          groupId: conversation.platformConversationId,
+          limit: 25,
+          before: state.currentBeforeMessageId,
+        });
+        const existingIds = await getExistingPageDmMessageIds(app.db, {
+          conversationId: conversation.id,
+          platformMessageIds: page.items.map((message) => message.id),
+        });
+        const overlapFound = page.items.some((message) => existingIds.has(message.id));
+
+        const normalizedMessages = [];
+        for (const message of page.items) {
+          const createdAt = await normalizeDmTimestampWithAnomaly(input.telemetry, {
+            context: "dm_messages:message",
+            value: message.createdAt,
+          });
+          if (!createdAt) {
+            continue;
+          }
+
+          normalizedMessages.push({
+            conversationId: conversation.id,
+            platformAccountId: input.pageContext.page.id,
+            platformMessageId: message.id,
+            senderPlatformUserId: message.senderId ?? null,
+            senderRole: resolveDmSenderRole(
+              message.senderId ?? null,
+              pageAccountId,
+              conversation.partnerPlatformUserId,
+            ),
+            createdAt,
+            content: message.content ?? "",
+            totalTipAmountCents: message.totalTipAmount ?? 0,
+            inReplyToMessageId: message.inReplyTo ?? null,
+            inReplyToRootMessageId: message.inReplyToRoot ?? null,
+          });
+        }
+        await upsertPageDmMessages(app.db, normalizedMessages);
+        collectedThisConversation += normalizedMessages
+          .filter((message) => !existingIds.has(message.platformMessageId))
+          .length;
+        processedMessages += normalizedMessages.length;
+
+        const oldestMessageId = page.items.at(-1)?.id ?? null;
+        const providerHistoryExhausted = page.done || !oldestMessageId;
+        const hitWindowCap =
+          state.currentMode === "backfill" &&
+          (conversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_MESSAGE_HISTORY_LIMIT;
+        const shouldComplete = state.currentMode === "incremental"
+          ? overlapFound || providerHistoryExhausted
+          : overlapFound || providerHistoryExhausted || hitWindowCap;
+
+        if (shouldComplete) {
+          if (overlapFound) {
+            overlapHits += 1;
+          }
+          const finalized = await finalizePageDmConversationMessageSync(app.db, {
+            conversationId: conversation.id,
+            messageBackfillComplete: state.currentMode === "backfill"
+              ? providerHistoryExhausted || hitWindowCap
+              : conversation.messageBackfillComplete,
+          });
+          conversation = finalized.conversation;
+          completedConversations += 1;
+          state = emptyDmMessagesCheckpointState();
+          const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "dm_messages",
+            state,
+          });
+          await input.telemetry.recordCheckpointAdvanced(
+            "dm_messages",
+            summarizeCheckpoint(progressCheckpoint),
+          );
+          break;
+        }
+
+        state = {
+          ...state,
+          currentBeforeMessageId: oldestMessageId,
+        };
+        const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "dm_messages",
+          state,
+        });
+        await input.telemetry.recordCheckpointAdvanced(
+          "dm_messages",
+          summarizeCheckpoint(progressCheckpoint),
+        );
+
+        if (input.budget.shouldYield()) {
+          break;
+        }
       }
     }
-  }
 
-  if (!exhaustedEligibleConversations) {
+    const dmMessagesChunk = await emitDmMessagesChunkSummary();
+
+    if (!exhaustedEligibleConversations) {
+      return {
+        satisfied: false,
+        yieldReason: input.budget.resolveYieldReason(),
+        stats: {
+          currentConversationId: state.currentConversationId,
+          currentBeforeMessageId: state.currentBeforeMessageId,
+          currentMode: state.currentMode,
+          processedMessages,
+          completedConversations,
+          overlapHits,
+          dmMessagesChunk,
+        },
+      } satisfies StreamChunkResult;
+    }
+
+    const completedCheckpoint = await upsertCheckpoint(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "dm_messages",
+      state,
+      lastSuccessfulRunId: input.syncRunId,
+    });
+    await input.telemetry.recordCheckpointAdvanced(
+      "dm_messages",
+      summarizeCheckpoint(completedCheckpoint),
+    );
+
     return {
-      satisfied: false,
-      yieldReason: input.budget.resolveYieldReason(),
+      satisfied: true,
+      yieldReason: null,
       stats: {
         currentConversationId: state.currentConversationId,
         currentBeforeMessageId: state.currentBeforeMessageId,
@@ -1677,33 +1780,13 @@ export async function executeDmMessagesChunk(
         processedMessages,
         completedConversations,
         overlapHits,
+        dmMessagesChunk,
       },
     } satisfies StreamChunkResult;
+  } catch (error) {
+    await emitDmMessagesChunkSummary().catch(() => undefined);
+    throw error;
   }
-
-  const completedCheckpoint = await upsertCheckpoint(app.db, {
-    platformAccountId: input.pageContext.page.id,
-    stream: "dm_messages",
-    state,
-    lastSuccessfulRunId: input.syncRunId,
-  });
-  await input.telemetry.recordCheckpointAdvanced(
-    "dm_messages",
-    summarizeCheckpoint(completedCheckpoint),
-  );
-
-  return {
-    satisfied: true,
-    yieldReason: null,
-    stats: {
-      currentConversationId: state.currentConversationId,
-      currentBeforeMessageId: state.currentBeforeMessageId,
-      currentMode: state.currentMode,
-      processedMessages,
-      completedConversations,
-      overlapHits,
-    },
-  } satisfies StreamChunkResult;
 }
 
 export async function resolveExecutorPageContext(
