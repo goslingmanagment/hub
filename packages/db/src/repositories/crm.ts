@@ -509,6 +509,13 @@ export async function selectNextPageDmMessageSyncCandidate(
   const now = input.now ?? new Date();
   const nowSql = sql`${now}::timestamptz`;
   const nowPlus21Days = sql`${now}::timestamptz + interval '21 days'`;
+  const staleHeadMismatchSql = sql`
+    c.last_message_id is distinct from c.newest_stored_message_id
+    and (
+      c.last_message_sync_at is null
+      or (c.last_message_at is not null and c.last_message_sync_at < c.last_message_at)
+    )
+  `;
   const result = await db.execute<{
     id: NumericValue;
     platformConversationId: string;
@@ -544,16 +551,14 @@ export async function selectNextPageDmMessageSyncCandidate(
       and c.is_visible = true
       and c.fan_id is not null
       and (
-        c.last_message_id is distinct from c.newest_stored_message_id
-        or c.stored_message_count = 0
+        ${staleHeadMismatchSql}
         or c.message_backfill_complete = false
       )
     order by
       case
-        when c.last_message_id is distinct from c.newest_stored_message_id then 0
-        when c.stored_message_count = 0 then 1
-        when c.message_backfill_complete = false then 2
-        else 3
+        when ${staleHeadMismatchSql} then 0
+        when c.message_backfill_complete = false then 1
+        else 2
       end asc,
       c.unread_count desc,
       case

@@ -9,6 +9,7 @@ import {
   listCrmReactivation,
   listCrmRetention,
   recalculateFanPageSpend,
+  selectNextPageDmMessageSyncCandidate,
   upsertFanPage,
   upsertFans,
   upsertPageDmConversation,
@@ -333,6 +334,283 @@ describe("crm repository integration", () => {
       silenceDays: 30,
     });
     expect(reactivation.items[0]?.reactivationScore).toBe(360);
+  });
+
+  it("skips stale mismatched heads and falls through to pending backfill conversations", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    const page = await createCrmPage(testDb, "crm-dm-sync-stale");
+    const [staleFan, backlogFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-stale",
+        username: "fan_stale",
+        displayName: "Fan Stale",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-backlog",
+        username: "fan_backlog",
+        displayName: "Fan Backlog",
+      },
+    ]);
+
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: staleFan.id,
+      platformConversationId: "stale-mismatch",
+      partnerPlatformUserId: "fan-stale",
+      partnerUsername: "fan_stale",
+      partnerDisplayName: "Fan Stale",
+      conversationFlags: 0,
+      unreadCount: 99,
+      subscriptionTierId: null,
+      lastMessageId: "msg-101",
+      lastUnreadMessageId: "msg-101",
+      lastMessageAt: new Date("2026-03-19T12:00:00.000Z"),
+      lastMessageSenderId: "fan-stale",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "stale mismatch",
+      lastFanMessageAt: new Date("2026-03-19T12:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: 25,
+      newestStoredMessageId: "msg-100",
+      oldestStoredMessageId: "msg-076",
+      messageBackfillComplete: true,
+      lastMessageSyncAt: new Date("2026-03-19T12:05:00.000Z"),
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: backlogFan.id,
+      platformConversationId: "pending-backfill",
+      partnerPlatformUserId: "fan-backlog",
+      partnerUsername: "fan_backlog",
+      partnerDisplayName: "Fan Backlog",
+      conversationFlags: 0,
+      unreadCount: 1,
+      subscriptionTierId: null,
+      lastMessageId: null,
+      lastUnreadMessageId: null,
+      lastMessageAt: null,
+      lastMessageSenderId: null,
+      lastMessageSenderRole: "unknown",
+      lastMessagePreview: null,
+      lastFanMessageAt: null,
+      lastModelMessageAt: null,
+      storedMessageCount: 0,
+      newestStoredMessageId: null,
+      oldestStoredMessageId: null,
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
+      platformAccountId: page.id,
+      now,
+    });
+
+    expect(candidate).not.toBeNull();
+    expect(candidate?.platformConversationId).toBe("pending-backfill");
+  });
+
+  it("prioritizes fresh mismatched heads ahead of first-time backfills", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    const page = await createCrmPage(testDb, "crm-dm-sync-fresh");
+    const [freshFan, backlogFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-fresh",
+        username: "fan_fresh",
+        displayName: "Fan Fresh",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-backlog-priority",
+        username: "fan_backlog_priority",
+        displayName: "Fan Backlog Priority",
+      },
+    ]);
+
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: freshFan.id,
+      platformConversationId: "fresh-mismatch",
+      partnerPlatformUserId: "fan-fresh",
+      partnerUsername: "fan_fresh",
+      partnerDisplayName: "Fan Fresh",
+      conversationFlags: 0,
+      unreadCount: 0,
+      subscriptionTierId: null,
+      lastMessageId: "msg-201",
+      lastUnreadMessageId: "msg-201",
+      lastMessageAt: new Date("2026-03-19T12:00:00.000Z"),
+      lastMessageSenderId: "fan-fresh",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "fresh mismatch",
+      lastFanMessageAt: new Date("2026-03-19T12:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: 25,
+      newestStoredMessageId: "msg-200",
+      oldestStoredMessageId: "msg-176",
+      messageBackfillComplete: true,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: backlogFan.id,
+      platformConversationId: "backfill-secondary",
+      partnerPlatformUserId: "fan-backlog-priority",
+      partnerUsername: "fan_backlog_priority",
+      partnerDisplayName: "Fan Backlog Priority",
+      conversationFlags: 0,
+      unreadCount: 999,
+      subscriptionTierId: null,
+      lastMessageId: null,
+      lastUnreadMessageId: null,
+      lastMessageAt: null,
+      lastMessageSenderId: null,
+      lastMessageSenderRole: "unknown",
+      lastMessagePreview: null,
+      lastFanMessageAt: null,
+      lastModelMessageAt: null,
+      storedMessageCount: 0,
+      newestStoredMessageId: null,
+      oldestStoredMessageId: null,
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
+      platformAccountId: page.id,
+      now,
+    });
+
+    expect(candidate).not.toBeNull();
+    expect(candidate?.platformConversationId).toBe("fresh-mismatch");
+  });
+
+  it("does not reselect empty conversations once backfill is complete", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    const page = await createCrmPage(testDb, "crm-dm-sync-empty-complete");
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-empty-complete",
+      username: "fan_empty_complete",
+      displayName: "Fan Empty Complete",
+    }]);
+
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformConversationId: "empty-complete",
+      partnerPlatformUserId: "fan-empty-complete",
+      partnerUsername: "fan_empty_complete",
+      partnerDisplayName: "Fan Empty Complete",
+      conversationFlags: 0,
+      unreadCount: 5,
+      subscriptionTierId: null,
+      lastMessageId: null,
+      lastUnreadMessageId: null,
+      lastMessageAt: null,
+      lastMessageSenderId: null,
+      lastMessageSenderRole: "unknown",
+      lastMessagePreview: null,
+      lastFanMessageAt: null,
+      lastModelMessageAt: null,
+      storedMessageCount: 0,
+      newestStoredMessageId: null,
+      oldestStoredMessageId: null,
+      messageBackfillComplete: true,
+      lastMessageSyncAt: new Date("2026-03-19T12:05:00.000Z"),
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
+      platformAccountId: page.id,
+      now,
+    });
+
+    expect(candidate).toBeNull();
+  });
+
+  it("keeps null-last-message-at mismatches eligible before the first message sync", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    const page = await createCrmPage(testDb, "crm-dm-sync-null-last-message-at");
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-null-last-message-at",
+      username: "fan_null_last_message_at",
+      displayName: "Fan Null Last Message At",
+    }]);
+
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformConversationId: "null-last-message-at",
+      partnerPlatformUserId: "fan-null-last-message-at",
+      partnerUsername: "fan_null_last_message_at",
+      partnerDisplayName: "Fan Null Last Message At",
+      conversationFlags: 0,
+      unreadCount: 1,
+      subscriptionTierId: null,
+      lastMessageId: "msg-301",
+      lastUnreadMessageId: "msg-301",
+      lastMessageAt: null,
+      lastMessageSenderId: null,
+      lastMessageSenderRole: "unknown",
+      lastMessagePreview: null,
+      lastFanMessageAt: null,
+      lastModelMessageAt: null,
+      storedMessageCount: 0,
+      newestStoredMessageId: null,
+      oldestStoredMessageId: null,
+      messageBackfillComplete: true,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
+      platformAccountId: page.id,
+      now,
+    });
+
+    expect(candidate).not.toBeNull();
+    expect(candidate?.platformConversationId).toBe("null-last-message-at");
   });
 
   it(`prunes message history to ${PAGE_DM_MESSAGE_HISTORY_LIMIT} and returns preview rows oldest-to-newest`, async (context) => {
