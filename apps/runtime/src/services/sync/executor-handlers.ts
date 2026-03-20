@@ -35,9 +35,13 @@ import {
   mapFanslySubscriptionStatus,
 } from "@agency_hub_core/fansly";
 import {
+  buildFanslyDmConversationMetadata,
   buildProxyEgressKey,
   fanslyFollowIdToDate,
+  getFanslyDmMessageSyncExcludedReason,
+  isFanslyDmMessageSyncExcluded,
   toMills,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
 } from "@agency_hub_core/shared";
 import { and, eq } from "drizzle-orm";
 
@@ -145,6 +149,10 @@ function asNullableNumber(value: unknown) {
 
 function asNullableString(value: unknown) {
   return value === null || typeof value === "string" ? value : null;
+}
+
+function hasUnresolvedIdentityMetadata(metadata: Record<string, unknown> | null | undefined) {
+  return metadata?.unresolvedIdentity === true;
 }
 
 function parseSubscribersCheckpointState(
@@ -313,6 +321,16 @@ function parseDmMessagesCheckpointState(value: unknown) {
     currentBeforeMessageId,
     currentMode,
   } satisfies DmMessagesCheckpointState;
+}
+
+function emptyDmMessagesCheckpointState(): DmMessagesCheckpointState {
+  return {
+    version: 1,
+    currentConversationId: null,
+    currentPlatformConversationId: null,
+    currentBeforeMessageId: null,
+    currentMode: null,
+  };
 }
 
 function buildOnlyFansRequestContext(app: AppContext, input: ExecutorRequestContext) {
@@ -1210,8 +1228,15 @@ export async function executeDmConversationsChunk(
         partnerPlatformUserId = aggregatedPartnerIds[0]!;
       }
 
+      const partnerMissingFromAggregationAccounts = Boolean(
+        partnerPlatformUserId &&
+        page.accounts.length > 0 &&
+        !accountsById.has(partnerPlatformUserId),
+      );
+
       let detail: Awaited<ReturnType<AppContext["adapter"]["getGroupDetail"]>> | null = null;
       if ((!partnerPlatformUserId || contradictoryPartner) &&
+        !partnerMissingFromAggregationAccounts &&
         input.budget.hasRequestCapacity() &&
         input.budget.hasWallClockCapacity()) {
         detail = await app.adapter.getGroupDetail(requestContext, conversation.groupId);
@@ -1228,11 +1253,18 @@ export async function executeDmConversationsChunk(
       const partnerSnapshot = partnerPlatformUserId
         ? accountsById.get(partnerPlatformUserId) ?? null
         : null;
-      const partnerUsername = partnerSnapshot?.username ?? conversation.partnerUsername ?? null;
-      const partnerDisplayName = partnerSnapshot?.displayName ?? null;
+      const partnerUsername = partnerSnapshot?.username ??
+        conversation.partnerUsername ??
+        existing?.partnerUsername ??
+        null;
+      const partnerDisplayName = partnerSnapshot?.displayName ??
+        existing?.partnerDisplayName ??
+        null;
 
-      let fanId: number | null = null;
-      if (partnerPlatformUserId) {
+      let fanId: number | null = partnerMissingFromAggregationAccounts
+        ? existing?.fanId ?? null
+        : null;
+      if (partnerPlatformUserId && !partnerMissingFromAggregationAccounts) {
         const [fan] = await upsertFans(app.db, [{
           platform: "fansly",
           platformUserId: partnerPlatformUserId,
@@ -1267,7 +1299,8 @@ export async function executeDmConversationsChunk(
       );
       let lastMessagePreview = truncateDmPreview(headMessage?.content);
 
-      const needsHeadRepair = (!lastMessageAt || !lastMessageSenderId) &&
+      const needsHeadRepair = !partnerMissingFromAggregationAccounts &&
+        (!lastMessageAt || !lastMessageSenderId) &&
         (!existing || existing.lastMessageId !== (conversation.lastMessageId ?? null)) &&
         input.budget.hasRequestCapacity() &&
         input.budget.hasWallClockCapacity();
@@ -1301,13 +1334,22 @@ export async function executeDmConversationsChunk(
       const preservedLastModelMessageAt = lastMessageAt && lastMessageSenderRole === "model"
         ? lastMessageAt
         : existing?.lastModelMessageAt ?? null;
+      const metadata = buildFanslyDmConversationMetadata({
+        unresolvedIdentity: !partnerPlatformUserId,
+        messageSyncExcludedReason: partnerMissingFromAggregationAccounts
+          ? FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
+          : null,
+      });
 
       if (
         !existing ||
         existing.lastMessageId !== (conversation.lastMessageId ?? null) ||
         existing.unreadCount !== conversation.unreadCount ||
         existing.fanId !== fanId ||
-        !existing.isVisible
+        !existing.isVisible ||
+        hasUnresolvedIdentityMetadata(existing?.metadata) !== hasUnresolvedIdentityMetadata(metadata) ||
+        getFanslyDmMessageSyncExcludedReason(existing?.metadata) !==
+          getFanslyDmMessageSyncExcludedReason(metadata)
       ) {
         unchangedPage = false;
       }
@@ -1339,9 +1381,7 @@ export async function executeDmConversationsChunk(
         lastMessageSyncAt: existing?.lastMessageSyncAt ?? null,
         isVisible: true,
         lastSeenGeneration: state.generation,
-        metadata: partnerPlatformUserId
-          ? {}
-          : { unresolvedIdentity: true },
+        metadata,
       });
       processedConversations += 1;
     }
@@ -1439,13 +1479,7 @@ export async function executeDmMessagesChunk(
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_messages");
   await input.telemetry.recordCheckpointLoaded("dm_messages", summarizeCheckpoint(checkpoint));
 
-  let state = parseDmMessagesCheckpointState(checkpoint?.state) ?? {
-    version: 1 as const,
-    currentConversationId: null,
-    currentPlatformConversationId: null,
-    currentBeforeMessageId: null,
-    currentMode: null,
-  };
+  let state = parseDmMessagesCheckpointState(checkpoint?.state) ?? emptyDmMessagesCheckpointState();
 
   if (!parseDmMessagesCheckpointState(checkpoint?.state)) {
     const progressCheckpoint = await upsertCheckpointProgress(app.db, {
@@ -1469,6 +1503,20 @@ export async function executeDmMessagesChunk(
     let conversation = state.currentConversationId
       ? await getPageDmConversationById(app.db, state.currentConversationId)
       : null;
+
+    if (conversation && isFanslyDmMessageSyncExcluded(conversation.metadata)) {
+      state = emptyDmMessagesCheckpointState();
+      const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        stream: "dm_messages",
+        state,
+      });
+      await input.telemetry.recordCheckpointAdvanced(
+        "dm_messages",
+        summarizeCheckpoint(progressCheckpoint),
+      );
+      conversation = null;
+    }
 
     if (!conversation || !conversation.isVisible || conversation.fanId === null) {
       const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
@@ -1494,7 +1542,7 @@ export async function executeDmMessagesChunk(
             : "backfill";
 
       state = {
-        version: 1,
+        ...emptyDmMessagesCheckpointState(),
         currentConversationId: conversation.id,
         currentPlatformConversationId: conversation.platformConversationId,
         currentBeforeMessageId: currentMode === "backfill"
@@ -1585,13 +1633,7 @@ export async function executeDmMessagesChunk(
         });
         conversation = finalized.conversation;
         completedConversations += 1;
-        state = {
-          version: 1,
-          currentConversationId: null,
-          currentPlatformConversationId: null,
-          currentBeforeMessageId: null,
-          currentMode: null,
-        };
+        state = emptyDmMessagesCheckpointState();
         const progressCheckpoint = await upsertCheckpointProgress(app.db, {
           platformAccountId: input.pageContext.page.id,
           stream: "dm_messages",

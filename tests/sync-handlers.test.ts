@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PAGE_DM_MESSAGE_HISTORY_LIMIT } from "@agency_hub_core/db";
+import {
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+} from "@agency_hub_core/shared";
 
 const dbMocks = vi.hoisted(() => ({
   countActivePageFollows: vi.fn(),
@@ -755,6 +759,294 @@ describe("sync executor handlers", () => {
     }));
   });
 
+  it("marks conversations excluded from message sync when the partner is missing from aggregation accounts", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async () => ({
+      total: 1,
+      items: [{
+        groupId: "group-missing",
+        partnerAccountId: "fan-missing",
+        partnerUsername: "fan_missing",
+        flags: 0,
+        unreadCount: 2,
+        subscriptionTierId: null,
+        lastMessageId: "msg-80",
+        lastUnreadMessageId: "msg-80",
+      }],
+      accounts: [{
+        id: "fan-other",
+        username: "fan_other",
+        displayName: "Fan Other",
+        createdAt: 1_770_000_000_000,
+      }],
+      groups: [{
+        id: "group-missing",
+        users: [
+          { groupId: "group-missing", userId: "acct-dm", type: 1, permissionFlags: 0 },
+          { groupId: "group-missing", userId: "fan-missing", type: 1, permissionFlags: 0 },
+        ],
+        lastMessage: {
+          id: "msg-80",
+          type: 1,
+          dataVersion: 1,
+          content: "hello there",
+          groupId: "group-missing",
+          senderId: "fan-missing",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_770_000_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 0,
+        },
+      }],
+      offset: 0,
+      done: true,
+      raw: {
+        data: [],
+        aggregationData: {
+          total: 1,
+          accounts: [],
+          groups: [],
+        },
+      },
+    }));
+    const db = {
+      query: {
+        pageDmConversations: {
+          findFirst: vi.fn(async () => ({
+            id: 777,
+            platformAccountId: 55,
+            fanId: 101,
+            platformConversationId: "group-missing",
+            partnerPlatformUserId: "fan-missing",
+            partnerUsername: "fan_missing",
+            partnerDisplayName: "Fan Missing",
+            conversationFlags: 0,
+            unreadCount: 1,
+            subscriptionTierId: null,
+            lastMessageId: "msg-79",
+            lastUnreadMessageId: "msg-79",
+            lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+            lastMessageSenderId: "fan-missing",
+            lastMessageSenderRole: "fan",
+            lastMessagePreview: "previous",
+            lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+            lastModelMessageAt: null,
+            storedMessageCount: 7,
+            newestStoredMessageId: "msg-79",
+            oldestStoredMessageId: "msg-73",
+            messageBackfillComplete: false,
+            lastMessageSyncAt: new Date("2026-03-10T00:05:00.000Z"),
+            isVisible: true,
+            lastSeenGeneration: 1,
+            firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
+            lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+            metadata: {},
+            createdAt: new Date("2026-03-01T00:00:00.000Z"),
+            updatedAt: new Date("2026-03-10T00:00:00.000Z"),
+          })),
+        },
+      },
+    };
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+
+    const result = await executeDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 1,
+      },
+      syncRunId: 904,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(1),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(dbMocks.upsertFans).not.toHaveBeenCalled();
+    expect(dbMocks.upsertFanPages).not.toHaveBeenCalled();
+    expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith(db, expect.objectContaining({
+      platformAccountId: 55,
+      fanId: 101,
+      platformConversationId: "group-missing",
+      partnerPlatformUserId: "fan-missing",
+      partnerUsername: "fan_missing",
+      partnerDisplayName: "Fan Missing",
+      storedMessageCount: 7,
+      newestStoredMessageId: "msg-79",
+      oldestStoredMessageId: "msg-73",
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+      },
+    }));
+  });
+
+  it("clears the message sync exclusion marker when the partner reappears in aggregation accounts", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async () => ({
+      total: 1,
+      items: [{
+        groupId: "group-recovered",
+        partnerAccountId: "fan-live",
+        partnerUsername: "fan_live",
+        flags: 0,
+        unreadCount: 2,
+        subscriptionTierId: null,
+        lastMessageId: "msg-80",
+        lastUnreadMessageId: "msg-80",
+      }],
+      accounts: [{
+        id: "fan-live",
+        username: "fan_live",
+        displayName: "Fan Live",
+        createdAt: 1_770_000_000_000,
+      }],
+      groups: [{
+        id: "group-recovered",
+        users: [
+          { groupId: "group-recovered", userId: "acct-dm", type: 1, permissionFlags: 0 },
+          { groupId: "group-recovered", userId: "fan-live", type: 1, permissionFlags: 0 },
+        ],
+        lastMessage: {
+          id: "msg-80",
+          type: 1,
+          dataVersion: 1,
+          content: "hello there",
+          groupId: "group-recovered",
+          senderId: "fan-live",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_770_000_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 0,
+        },
+      }],
+      offset: 0,
+      done: true,
+      raw: {
+        data: [],
+        aggregationData: {
+          total: 1,
+          accounts: [],
+          groups: [],
+        },
+      },
+    }));
+    const db = {
+      query: {
+        pageDmConversations: {
+          findFirst: vi.fn(async () => ({
+            id: 778,
+            platformAccountId: 55,
+            fanId: 101,
+            platformConversationId: "group-recovered",
+            partnerPlatformUserId: "fan-live",
+            partnerUsername: "fan_live",
+            partnerDisplayName: "Fan Live",
+            conversationFlags: 0,
+            unreadCount: 1,
+            subscriptionTierId: null,
+            lastMessageId: "msg-79",
+            lastUnreadMessageId: "msg-79",
+            lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+            lastMessageSenderId: "fan-live",
+            lastMessageSenderRole: "fan",
+            lastMessagePreview: "previous",
+            lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+            lastModelMessageAt: null,
+            storedMessageCount: 7,
+            newestStoredMessageId: "msg-79",
+            oldestStoredMessageId: "msg-73",
+            messageBackfillComplete: false,
+            lastMessageSyncAt: new Date("2026-03-10T00:05:00.000Z"),
+            isVisible: true,
+            lastSeenGeneration: 1,
+            firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
+            lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+            metadata: {
+              [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+                FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+            },
+            createdAt: new Date("2026-03-01T00:00:00.000Z"),
+            updatedAt: new Date("2026-03-10T00:00:00.000Z"),
+          })),
+        },
+      },
+    };
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-live" }]);
+
+    const result = await executeDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 1,
+      },
+      syncRunId: 905,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(1),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(dbMocks.upsertFans).toHaveBeenCalledWith(db, [expect.objectContaining({
+      platformUserId: "fan-live",
+    })]);
+    expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(db, [expect.objectContaining({
+      fanId: 101,
+      platformAccountId: 55,
+    })]);
+    expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith(db, expect.objectContaining({
+      platformConversationId: "group-recovered",
+      metadata: {},
+    }));
+  });
+
   it("yields dm_messages when the chunk budget is exhausted mid-conversation", async () => {
     const telemetry = createTelemetry();
     const getMessagesPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {
@@ -873,5 +1165,110 @@ describe("sync executor handlers", () => {
     });
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
     expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+  });
+
+  it("drops checkpointed conversations that are marked excluded before fetching messages", async () => {
+    const telemetry = createTelemetry();
+    const getMessagesPage = vi.fn();
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagesPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        currentConversationId: 777,
+        currentPlatformConversationId: "group-excluded",
+        currentBeforeMessageId: null,
+        currentMode: "incremental",
+      },
+    });
+    dbMocks.getPageDmConversationById.mockResolvedValue({
+      id: 777,
+      platformAccountId: 55,
+      fanId: 101,
+      platformConversationId: "group-excluded",
+      partnerPlatformUserId: "fan-1",
+      partnerUsername: "fan_1",
+      partnerDisplayName: "Fan 1",
+      conversationFlags: 0,
+      unreadCount: 2,
+      subscriptionTierId: null,
+      lastMessageId: "msg-80",
+      lastUnreadMessageId: "msg-80",
+      lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastMessageSenderId: "fan-1",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "previous",
+      lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: PAGE_DM_MESSAGE_HISTORY_LIMIT,
+      newestStoredMessageId: "msg-80",
+      oldestStoredMessageId: "msg-56",
+      messageBackfillComplete: true,
+      lastMessageSyncAt: new Date("2026-03-10T00:05:00.000Z"),
+      isVisible: true,
+      lastSeenGeneration: 1,
+      firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
+      lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+      },
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-03-10T00:00:00.000Z"),
+    });
+    dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValue(null);
+
+    const result = await executeDmMessagesChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 1,
+      },
+      syncRunId: 906,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(2),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(getMessagesPage).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith({}, expect.objectContaining({
+      platformAccountId: 55,
+      stream: "dm_messages",
+      state: {
+        version: 1,
+        currentConversationId: null,
+        currentPlatformConversationId: null,
+        currentBeforeMessageId: null,
+        currentMode: null,
+      },
+    }));
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith({}, expect.objectContaining({
+      platformAccountId: 55,
+      stream: "dm_messages",
+      state: {
+        version: 1,
+        currentConversationId: null,
+        currentPlatformConversationId: null,
+        currentBeforeMessageId: null,
+        currentMode: null,
+      },
+    }));
   });
 });

@@ -11,6 +11,13 @@ export interface ResolvedFanLabel {
   isDeletedFallback: boolean;
 }
 
+export const FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY = "messageSyncExcludedReason";
+export const FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS =
+  "partner_missing_from_aggregation_accounts" as const;
+
+export type FanslyDmMessageSyncExcludedReason =
+  typeof FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS;
+
 function normalizeFanNamePart(value: string | null | undefined) {
   if (typeof value !== "string") {
     return null;
@@ -55,4 +62,40 @@ export function resolveFanLabel(input: FanLabelInput): ResolvedFanLabel {
     displayName,
     isDeletedFallback: true,
   };
+}
+
+export function getFanslyDmMessageSyncExcludedReason(
+  metadata: Record<string, unknown> | null | undefined,
+): FanslyDmMessageSyncExcludedReason | null {
+  if (!metadata) {
+    return null;
+  }
+
+  const reason = metadata[FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY];
+  return reason === FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
+    ? reason
+    : null;
+}
+
+export function isFanslyDmMessageSyncExcluded(
+  metadata: Record<string, unknown> | null | undefined,
+) {
+  return getFanslyDmMessageSyncExcludedReason(metadata) !== null;
+}
+
+export function buildFanslyDmConversationMetadata(input: {
+  unresolvedIdentity?: boolean;
+  messageSyncExcludedReason?: FanslyDmMessageSyncExcludedReason | null;
+}) {
+  const metadata: Record<string, unknown> = {};
+
+  if (input.unresolvedIdentity) {
+    metadata.unresolvedIdentity = true;
+  }
+
+  if (input.messageSyncExcludedReason) {
+    metadata[FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY] = input.messageSyncExcludedReason;
+  }
+
+  return metadata;
 }

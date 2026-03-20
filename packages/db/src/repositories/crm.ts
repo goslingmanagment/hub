@@ -1,4 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import {
@@ -88,6 +89,10 @@ function searchPattern(query?: string | null) {
 
 function normalizeCheckpointTimestamp(value: unknown) {
   return typeof value === "string" ? parseTimestamp(value) : null;
+}
+
+function dmMessageSyncEligibleSql(alias: string) {
+  return sql`coalesce(${sql.raw(alias)}.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') = ''`;
 }
 
 export type DmSenderRole = "fan" | "model" | "system" | "unknown";
@@ -550,6 +555,7 @@ export async function selectNextPageDmMessageSyncCandidate(
     where c.platform_account_id = ${input.platformAccountId}
       and c.is_visible = true
       and c.fan_id is not null
+      and ${dmMessageSyncEligibleSql("c")}
       and (
         ${staleHeadMismatchSql}
         or c.message_backfill_complete = false
@@ -632,6 +638,7 @@ export async function getCrmFreshnessCoverage(
       select count(*) filter (
                where is_visible = true
                  and fan_id is not null
+                 and ${dmMessageSyncEligibleSql("page_dm_conversations")}
                  and message_backfill_complete = false
              )::int as "pendingMessageBackfillCount",
              count(*) filter (

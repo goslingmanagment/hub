@@ -5,6 +5,7 @@ import {
   createFanslyPage,
   createModel,
   finalizePageDmConversationMessageSync,
+  getCrmFreshnessCoverage,
   getCrmConversationPreview,
   listCrmReactivation,
   listCrmRetention,
@@ -17,6 +18,10 @@ import {
   upsertPageSubscription,
   upsertTransaction,
 } from "@agency_hub_core/db";
+import {
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+} from "@agency_hub_core/shared";
 
 import {
   resetIntegrationDatabase,
@@ -510,6 +515,60 @@ describe("crm repository integration", () => {
     expect(candidate?.platformConversationId).toBe("fresh-mismatch");
   });
 
+  it("excludes conversations marked out of message sync from candidate selection", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    const page = await createCrmPage(testDb, "crm-dm-sync-excluded");
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-excluded",
+      username: "fan_excluded",
+      displayName: "Fan Excluded",
+    }]);
+
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformConversationId: "excluded-conversation",
+      partnerPlatformUserId: "fan-excluded",
+      partnerUsername: "fan_excluded",
+      partnerDisplayName: "Fan Excluded",
+      conversationFlags: 0,
+      unreadCount: 3,
+      subscriptionTierId: null,
+      lastMessageId: "msg-401",
+      lastUnreadMessageId: "msg-401",
+      lastMessageAt: new Date("2026-03-19T12:00:00.000Z"),
+      lastMessageSenderId: "fan-excluded",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "excluded conversation",
+      lastFanMessageAt: new Date("2026-03-19T12:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: 0,
+      newestStoredMessageId: null,
+      oldestStoredMessageId: null,
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+      },
+    });
+
+    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
+      platformAccountId: page.id,
+      now,
+    });
+
+    expect(candidate).toBeNull();
+  });
+
   it("does not reselect empty conversations once backfill is complete", async (context) => {
     if (!testDb) {
       context.skip();
@@ -611,6 +670,91 @@ describe("crm repository integration", () => {
 
     expect(candidate).not.toBeNull();
     expect(candidate?.platformConversationId).toBe("null-last-message-at");
+  });
+
+  it("does not count message-sync-excluded conversations in pending CRM backfill coverage", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createCrmPage(testDb, "crm-freshness-excluded");
+    const [includedFan, excludedFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-included",
+        username: "fan_included",
+        displayName: "Fan Included",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-excluded-freshness",
+        username: "fan_excluded_freshness",
+        displayName: "Fan Excluded Freshness",
+      },
+    ]);
+
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: includedFan.id,
+      platformConversationId: "freshness-included",
+      partnerPlatformUserId: "fan-included",
+      partnerUsername: "fan_included",
+      partnerDisplayName: "Fan Included",
+      conversationFlags: 0,
+      unreadCount: 1,
+      subscriptionTierId: null,
+      lastMessageId: "msg-501",
+      lastUnreadMessageId: "msg-501",
+      lastMessageAt: new Date("2026-03-20T10:00:00.000Z"),
+      lastMessageSenderId: "fan-included",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "included",
+      lastFanMessageAt: new Date("2026-03-20T10:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: 0,
+      newestStoredMessageId: null,
+      oldestStoredMessageId: null,
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: excludedFan.id,
+      platformConversationId: "freshness-excluded",
+      partnerPlatformUserId: "fan-excluded-freshness",
+      partnerUsername: "fan_excluded_freshness",
+      partnerDisplayName: "Fan Excluded Freshness",
+      conversationFlags: 0,
+      unreadCount: 1,
+      subscriptionTierId: null,
+      lastMessageId: "msg-601",
+      lastUnreadMessageId: "msg-601",
+      lastMessageAt: new Date("2026-03-20T11:00:00.000Z"),
+      lastMessageSenderId: "fan-excluded-freshness",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "excluded",
+      lastFanMessageAt: new Date("2026-03-20T11:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: 0,
+      newestStoredMessageId: null,
+      oldestStoredMessageId: null,
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+      },
+    });
+
+    const freshness = await getCrmFreshnessCoverage(testDb.db, page.id);
+
+    expect(freshness.pendingMessageBackfillCount).toBe(1);
   });
 
   it(`prunes message history to ${PAGE_DM_MESSAGE_HISTORY_LIMIT} and returns preview rows oldest-to-newest`, async (context) => {

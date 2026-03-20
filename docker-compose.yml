@@ -23,6 +23,9 @@ services:
     ports:
       - "3000:3000"
     env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agency_hub_core
+      SYNC_SHARED_RATE_LIMIT_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -30,6 +33,9 @@ services:
   worker:
     image: agency_hub_core/runtime:local
     env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agency_hub_core
+      SYNC_SHARED_RATE_LIMIT_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy
