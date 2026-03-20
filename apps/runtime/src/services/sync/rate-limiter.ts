@@ -74,8 +74,8 @@ async function ensureProviderRateLimitProfile(
       scopes: [
         { scope: "global", minSpacingMs: app.config.fanslyDefaultDelayMs + 100 },
         { scope: "followers_page", minSpacingMs: app.config.followerPageDelayMs },
-        { scope: "dm_conversations", minSpacingMs: 5000 },
-        { scope: "dm_messages", minSpacingMs: 7500 },
+        { scope: "dm_conversations", minSpacingMs: app.config.fanslyDmConversationsDelayMs },
+        { scope: "dm_messages", minSpacingMs: app.config.fanslyDmMessagesDelayMs },
       ],
     });
     return;

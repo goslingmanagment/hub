@@ -26,8 +26,21 @@ describe("config", () => {
     const config = loadConfig(baseEnv);
 
     expect(config.fanslyDefaultDelayMs).toBe(2500);
+    expect(config.fanslyDmConversationsDelayMs).toBe(5000);
+    expect(config.fanslyDmMessagesDelayMs).toBe(7500);
     expect(config.onlyFansDefaultDelayMs).toBe(1000);
     expect(config.syncPageExecutorConcurrency).toBe(4);
+  });
+
+  it("accepts explicit Fansly DM delay overrides", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      FANSLY_DM_CONVERSATIONS_DELAY_MS: "6200",
+      FANSLY_DM_MESSAGES_DELAY_MS: "8300",
+    });
+
+    expect(config.fanslyDmConversationsDelayMs).toBe(6200);
+    expect(config.fanslyDmMessagesDelayMs).toBe(8300);
   });
 
   it("accepts an explicit Fansly default delay override", () => {

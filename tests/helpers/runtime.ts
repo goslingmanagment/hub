@@ -7,6 +7,8 @@ export function createTestAppContext(
     adapter?: AppContext["adapter"];
     databaseUrl?: string;
     fanslyDefaultDelayMs?: number;
+    fanslyDmConversationsDelayMs?: number;
+    fanslyDmMessagesDelayMs?: number;
     followerPageDelayMs?: number;
     logger?: StartedTestDatabase["logger"];
     onlyFansDefaultDelayMs?: number;
@@ -32,6 +34,8 @@ export function createTestAppContext(
       onlyMonsterBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: overrides?.fanslyDefaultDelayMs ?? 2500,
+      fanslyDmConversationsDelayMs: overrides?.fanslyDmConversationsDelayMs ?? 5000,
+      fanslyDmMessagesDelayMs: overrides?.fanslyDmMessagesDelayMs ?? 7500,
       followerPageDelayMs: overrides?.followerPageDelayMs ?? 0,
       onlyFansDefaultDelayMs: overrides?.onlyFansDefaultDelayMs ?? 1000,
       transactionLookbackDays: 7,

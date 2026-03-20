@@ -47,6 +47,8 @@ describe("sync rate limiter", () => {
       config: {
         syncSharedRateLimitEnabled: true,
         fanslyDefaultDelayMs: 2_500,
+        fanslyDmConversationsDelayMs: 5_000,
+        fanslyDmMessagesDelayMs: 7_500,
         followerPageDelayMs: 5_000,
         onlyFansDefaultDelayMs: 1_000,
       } as never,
@@ -72,6 +74,16 @@ describe("sync rate limiter", () => {
     expect(timerMocks.delay).toHaveBeenCalledTimes(1);
     expect(timerMocks.delay).toHaveBeenCalledWith(7_500);
     expect(dbMocks.ensureSyncProviderRateLimitProfile).toHaveBeenCalledTimes(1);
+    expect(dbMocks.ensureSyncProviderRateLimitProfile).toHaveBeenCalledWith(db, {
+      provider: "fansly",
+      egressKey: "socks5://proxy.example:1080",
+      scopes: [
+        { scope: "global", minSpacingMs: 2_600 },
+        { scope: "followers_page", minSpacingMs: 5_000 },
+        { scope: "dm_conversations", minSpacingMs: 5_000 },
+        { scope: "dm_messages", minSpacingMs: 7_500 },
+      ],
+    });
     expect(dbMocks.reserveSyncProviderRateLimit).toHaveBeenNthCalledWith(1, db, {
       scopes: [
         { provider: "fansly", scope: "global", egressKey: "socks5://proxy.example:1080" },

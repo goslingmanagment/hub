@@ -40,6 +40,8 @@ const bootstrapMocks = vi.hoisted(() => {
       onlyMonsterBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: 2500,
+      fanslyDmConversationsDelayMs: 5000,
+      fanslyDmMessagesDelayMs: 7500,
       followerPageDelayMs: 0,
       onlyFansDefaultDelayMs: 1000,
       transactionLookbackDays: 7,

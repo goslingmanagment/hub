@@ -16,6 +16,8 @@ const envSchema = z.object({
   FANSLY_GLOBAL_DELAY_MS: z.coerce.number().int().positive().optional(),
   FANSLY_ACCOUNT_LOOKUP_DELAY_MS: z.coerce.number().int().positive().optional(),
   FOLLOWER_PAGE_DELAY_MS: z.coerce.number().int().positive().default(5000),
+  FANSLY_DM_CONVERSATIONS_DELAY_MS: z.coerce.number().int().positive().default(5000),
+  FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(7500),
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
   SYNC_SHARED_RATE_LIMIT_ENABLED: z.preprocess((value) => {
     if (typeof value === "string") {
@@ -87,6 +89,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
     fanslyDefaultDelayMs,
     followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,
+    fanslyDmConversationsDelayMs: parsed.FANSLY_DM_CONVERSATIONS_DELAY_MS,
+    fanslyDmMessagesDelayMs: parsed.FANSLY_DM_MESSAGES_DELAY_MS,
     onlyFansDefaultDelayMs: parsed.ONLYFANS_DEFAULT_DELAY_MS,
     syncSharedRateLimitEnabled: parsed.SYNC_SHARED_RATE_LIMIT_ENABLED,
     syncPageExecutorConcurrency: parsed.SYNC_PAGE_EXECUTOR_CONCURRENCY,

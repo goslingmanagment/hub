@@ -4981,8 +4981,8 @@ describe("api integration", () => {
       return;
     }
 
-    const currentTestDb = testDb;
-    const currentFixture = fixture;
+    const currentTestDb = testDb!;
+    const currentFixture = fixture!;
     const now = new Date();
     const seeded = await seedSyncRequestsScenario(currentTestDb, {
       lanaPageId: currentFixture.lanaPage.id,
@@ -5129,8 +5129,8 @@ describe("api integration", () => {
       return;
     }
 
-    const currentTestDb = testDb;
-    const currentFixture = fixture;
+    const currentTestDb = testDb!;
+    const currentFixture = fixture!;
     const now = new Date();
     const bulkRun = await seedMonitorRunningRun(currentTestDb, {
       pageId: currentFixture.lanaPage.id,

@@ -169,6 +169,8 @@ Configuration is loaded from environment variables and validated at startup.
 | `FANSLY_GLOBAL_DELAY_MS` | No | Minimum delay between any two Fansly API requests to the configured host. Defaults to `2500`. |
 | `FANSLY_ACCOUNT_LOOKUP_DELAY_MS` | No | Deprecated fallback alias for `FANSLY_GLOBAL_DELAY_MS` when the new variable is unset. |
 | `FOLLOWER_PAGE_DELAY_MS` | No | Delay between follower pages. Defaults to `5000`. |
+| `FANSLY_DM_CONVERSATIONS_DELAY_MS` | No | Minimum spacing for Fansly shared rate-limit `dm_conversations` reservations. Defaults to `5000`. |
+| `FANSLY_DM_MESSAGES_DELAY_MS` | No | Minimum spacing for Fansly shared rate-limit `dm_messages` reservations. Defaults to `7500`. |
 | `TRANSACTION_LOOKBACK_DAYS` | No | Backfill window applied to transaction checkpoint resyncs. Defaults to `7`. |
 | `TRANSACTION_RESCAN_CAP_DAYS` | No | Maximum age of pending-aware transaction rescans before the start cursor is clamped. Defaults to `30`. |
 
