@@ -4,6 +4,7 @@ import type { ProxyConfig } from "./types.ts";
 
 const SUPPORTED_PROXY_PROTOCOLS = new Set(["http:", "https:", "socks5:"]);
 const URL_CANDIDATE_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
+const TELEGRAM_BOT_TOKEN_PATH_PATTERN = /^\/(?:file\/)?bot[^/]+(?=\/|$)/i;
 
 type SupportedProxyProtocol = "http:" | "https:" | "socks5:";
 
@@ -157,12 +158,32 @@ function splitTrailingPunctuation(candidate: string) {
   };
 }
 
+function redactTelegramBotTokenUrl(url: URL) {
+  if (url.hostname !== "api.telegram.org") {
+    return null;
+  }
+
+  const redactedPath = url.pathname.replace(TELEGRAM_BOT_TOKEN_PATH_PATTERN, (match) =>
+    match.replace(/bot[^/]+/i, "bot[REDACTED]"));
+
+  if (redactedPath === url.pathname) {
+    return null;
+  }
+
+  return `${url.origin}${redactedPath}${url.search}${url.hash}`;
+}
+
 export function redactSensitiveText(value: string) {
   return value.replace(URL_CANDIDATE_PATTERN, (candidate) => {
     const { core, suffix } = splitTrailingPunctuation(candidate);
 
     try {
       const parsed = new URL(core);
+      const redactedTelegramUrl = redactTelegramBotTokenUrl(parsed);
+      if (redactedTelegramUrl) {
+        return `${redactedTelegramUrl}${suffix}`;
+      }
+
       if (!SUPPORTED_PROXY_PROTOCOLS.has(parsed.protocol)) {
         return candidate;
       }

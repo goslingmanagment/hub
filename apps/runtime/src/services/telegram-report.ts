@@ -292,16 +292,6 @@ export async function sendDailyRevenueTelegramReport(
   delivery: TelegramSendResult;
   report: DailyRevenueTelegramReport | null;
 }> {
-  if (!app.config.telegramEnabled) {
-    return {
-      delivery: {
-        status: "skipped",
-        reason: "unconfigured",
-      },
-      report: null,
-    };
-  }
-
   const settings = await getTelegramSettings(app.db, {
     defaultReportHourUtc: app.config.telegramReportHourUtc,
   });
@@ -343,16 +333,6 @@ export async function sendManualDailyRevenueTelegramReport(
   delivery: TelegramSendResult;
   report: DailyRevenueTelegramReport | null;
 }> {
-  if (!app.config.telegramEnabled) {
-    return {
-      delivery: {
-        status: "skipped",
-        reason: "unconfigured",
-      },
-      report: null,
-    };
-  }
-
   const report = await buildDailyRevenueTelegramReport(app, now);
   const delivery = await sendTelegramMessage(app, {
     text: report.text,

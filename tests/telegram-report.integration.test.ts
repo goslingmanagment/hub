@@ -1,15 +1,24 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
   dailyRevenue,
+  getTelegramSettings,
   hasScheduledReportForDate,
   insertDeliveryAttempt,
+  listDeliveryAttempts,
+  updateTelegramSettings,
 } from "@agency_hub_core/db";
+import { encryptJson } from "@agency_hub_core/shared";
 
-import { buildDailyRevenueTelegramReport, TOP_PAGE_LIMIT } from "../apps/runtime/src/services/telegram-report.ts";
+import {
+  buildDailyRevenueTelegramReport,
+  sendDailyRevenueTelegramReport,
+  sendManualDailyRevenueTelegramReport,
+  TOP_PAGE_LIMIT,
+} from "../apps/runtime/src/services/telegram-report.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -36,6 +45,34 @@ async function insertRevenue(
   });
 }
 
+async function seedTelegramDbCredentials(
+  testDb: StartedTestDatabase,
+  input?: {
+    enabled?: boolean;
+    dailyReportEnabled?: boolean;
+    chatId?: string;
+    botToken?: string;
+  },
+) {
+  const app = createTestAppContext(testDb);
+  await getTelegramSettings(testDb.db, {
+    defaultReportHourUtc: app.config.telegramReportHourUtc,
+  });
+
+  await updateTelegramSettings(testDb.db, {
+    enabled: input?.enabled,
+    dailyReportEnabled: input?.dailyReportEnabled,
+    encryptedBotToken: JSON.stringify(
+      encryptJson(
+        input?.botToken ?? "123:abc",
+        app.config.encryptionKey,
+        app.config.encryptionKeyVersion,
+      ),
+    ),
+    chatId: input?.chatId ?? "6065935464",
+  });
+}
+
 describe("telegram revenue report integration", () => {
   let testDb: StartedTestDatabase | null = null;
 
@@ -47,6 +84,10 @@ describe("telegram revenue report integration", () => {
     if (testDb) {
       await testDb.stop();
     }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   beforeEach(async () => {
@@ -242,5 +283,102 @@ describe("telegram revenue report integration", () => {
       messageId: 2,
     });
     expect(await hasScheduledReportForDate(testDb.db, "2026-03-19")).toBe(true);
+  });
+
+  it("sends the scheduled report with DB-only credentials and records the delivery attempt", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          message_id: 77,
+        },
+      }),
+    } as never);
+
+    await seedTelegramDbCredentials(testDb);
+
+    const app = createTestAppContext(testDb);
+    const result = await sendDailyRevenueTelegramReport(app, new Date("2026-03-20T15:00:00.000Z"));
+
+    expect(result.delivery).toEqual({
+      status: "sent",
+      chatId: "6065935464",
+      messageId: 77,
+    });
+    expect(result.report?.reportDate).toBe("2026-03-19");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const attempts = await listDeliveryAttempts(testDb.db, {
+      kind: ["daily_report_scheduled"],
+    });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toEqual(expect.objectContaining({
+      kind: "daily_report_scheduled",
+      status: "sent",
+      reportDate: "2026-03-19",
+      messageId: 77,
+      error: null,
+    }));
+  });
+
+  it("skips scheduled reports when disabled but still allows manual sends with DB-only credentials", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          message_id: 88,
+        },
+      }),
+    } as never);
+
+    await seedTelegramDbCredentials(testDb, {
+      enabled: false,
+      dailyReportEnabled: false,
+    });
+
+    const app = createTestAppContext(testDb);
+    const scheduled = await sendDailyRevenueTelegramReport(app, new Date("2026-03-20T15:00:00.000Z"));
+
+    expect(scheduled).toEqual({
+      delivery: {
+        status: "skipped",
+        reason: "disabled",
+      },
+      report: null,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const manual = await sendManualDailyRevenueTelegramReport(app, new Date("2026-03-20T15:00:00.000Z"));
+    expect(manual.delivery).toEqual({
+      status: "sent",
+      chatId: "6065935464",
+      messageId: 88,
+    });
+    expect(manual.report?.reportDate).toBe("2026-03-19");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const attempts = await listDeliveryAttempts(testDb.db, {
+      kind: ["daily_report_scheduled", "daily_report_manual"],
+    });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toEqual(expect.objectContaining({
+      kind: "daily_report_manual",
+      status: "sent",
+      reportDate: "2026-03-19",
+      messageId: 88,
+      error: null,
+    }));
   });
 });
