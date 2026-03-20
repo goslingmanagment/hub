@@ -1,5 +1,7 @@
 import {
   clearSyncPageAuthFailed,
+  getTelegramSettings,
+  insertDeliveryAttempt,
   listSyncRequestAttempts,
   openNotificationIncident,
   resolveNotificationIncident,
@@ -108,12 +110,29 @@ async function openIncidentAndNotify(
       return;
     }
 
-    await sendTelegramMessage(app, {
+    const settings = await getTelegramSettings(app.db, {
+      defaultReportHourUtc: app.config.telegramReportHourUtc,
+    });
+    if (!settings.enabled || !settings.syncFailureAlertsEnabled) {
+      return;
+    }
+
+    const delivery = await sendTelegramMessage(app, {
       text: openMessageForIncident({
         ...input,
         errorSummary: input.errorSummary ?? null,
       }),
     });
+
+    if (delivery.status === "sent" || delivery.status === "failed") {
+      await insertDeliveryAttempt(app.db, {
+        kind: "incident_opened",
+        status: delivery.status,
+        notificationIncidentId: result.incident.id,
+        messageId: delivery.status === "sent" ? delivery.messageId : null,
+        error: delivery.status === "failed" ? delivery.error : null,
+      });
+    }
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,
@@ -147,9 +166,26 @@ async function resolveIncidentAndNotify(
       return;
     }
 
-    await sendTelegramMessage(app, {
+    const settings = await getTelegramSettings(app.db, {
+      defaultReportHourUtc: app.config.telegramReportHourUtc,
+    });
+    if (!settings.enabled || !settings.syncFailureAlertsEnabled) {
+      return;
+    }
+
+    const delivery = await sendTelegramMessage(app, {
       text: resolveMessageForIncident(input),
     });
+
+    if (delivery.status === "sent" || delivery.status === "failed") {
+      await insertDeliveryAttempt(app.db, {
+        kind: "incident_resolved",
+        status: delivery.status,
+        notificationIncidentId: resolved.id,
+        messageId: delivery.status === "sent" ? delivery.messageId : null,
+        error: delivery.status === "failed" ? delivery.error : null,
+      });
+    }
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,

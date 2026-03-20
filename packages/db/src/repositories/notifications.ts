@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, count, desc, eq, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { notificationIncidents } from "../schema.ts";
+import { notificationIncidents, platformAccounts, telegramDeliveryAttempts } from "../schema.ts";
 
 export type NotificationIncidentKind = "auth_failed" | "proxy_failed" | "stream_failed_threshold";
 export type NotificationIncidentStatus = "open" | "resolved";
@@ -34,6 +34,83 @@ export async function listNotificationIncidents(
   return db.query.notificationIncidents.findMany({
     where: clauses.length > 0 ? and(...clauses) : undefined,
   });
+}
+
+export interface NotificationIncidentWithPage {
+  id: number;
+  incidentKey: string;
+  kind: NotificationIncidentKind;
+  pageLabel: string;
+  platform: "fansly" | "onlyfans";
+  stream: string | null;
+  status: NotificationIncidentStatus;
+  openedAt: Date;
+  lastSeenAt: Date;
+  resolvedAt: Date | null;
+  errorCode: string | null;
+  errorSummary: string | null;
+  notificationCount: number;
+}
+
+export async function listNotificationIncidentsWithPages(
+  db: Database,
+  input?: {
+    status?: NotificationIncidentStatus;
+    kind?: NotificationIncidentKind;
+    pageLabel?: string;
+    limit?: number;
+    offset?: number;
+  },
+): Promise<{ items: NotificationIncidentWithPage[]; total: number }> {
+  const clauses = [];
+
+  if (input?.status) {
+    clauses.push(eq(notificationIncidents.status, input.status));
+  }
+  if (input?.kind) {
+    clauses.push(eq(notificationIncidents.kind, input.kind));
+  }
+  if (input?.pageLabel) {
+    clauses.push(eq(platformAccounts.label, input.pageLabel));
+  }
+
+  const whereClause = clauses.length > 0 ? and(...clauses) : undefined;
+  const limit = input?.limit ?? 50;
+  const offset = input?.offset ?? 0;
+
+  const countResult = await db
+    .select({ total: count() })
+    .from(notificationIncidents)
+    .innerJoin(platformAccounts, eq(notificationIncidents.platformAccountId, platformAccounts.id))
+    .where(whereClause);
+
+  const rows = await db
+    .select({
+      id: notificationIncidents.id,
+      incidentKey: notificationIncidents.incidentKey,
+      kind: notificationIncidents.kind,
+      pageLabel: platformAccounts.label,
+      platform: platformAccounts.platform,
+      stream: notificationIncidents.stream,
+      status: notificationIncidents.status,
+      openedAt: notificationIncidents.openedAt,
+      lastSeenAt: notificationIncidents.lastSeenAt,
+      resolvedAt: notificationIncidents.resolvedAt,
+      errorCode: notificationIncidents.errorCode,
+      errorSummary: notificationIncidents.errorSummary,
+      notificationCount: sql<number>`(select count(*)::int from ${telegramDeliveryAttempts} where ${telegramDeliveryAttempts.notificationIncidentId} = ${notificationIncidents.id})`,
+    })
+    .from(notificationIncidents)
+    .innerJoin(platformAccounts, eq(notificationIncidents.platformAccountId, platformAccounts.id))
+    .where(whereClause)
+    .orderBy(desc(notificationIncidents.openedAt))
+    .limit(limit)
+    .offset(offset);
+
+  return {
+    items: rows as NotificationIncidentWithPage[],
+    total: countResult[0]?.total ?? 0,
+  };
 }
 
 export async function openNotificationIncident(

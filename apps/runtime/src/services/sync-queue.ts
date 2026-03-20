@@ -110,13 +110,12 @@ export async function ensurePlannerSchedule(
 
 export async function ensureTelegramDailyReportSchedule(
   boss: QueueCreationClient,
-  hourUtc: number,
 ) {
   if (!boss.schedule) {
     return;
   }
 
-  await boss.schedule(TELEGRAM_DAILY_REPORT_QUEUE, `0 ${hourUtc} * * *`, null, {
+  await boss.schedule(TELEGRAM_DAILY_REPORT_QUEUE, "0 * * * *", null, {
     tz: "UTC",
   });
 }

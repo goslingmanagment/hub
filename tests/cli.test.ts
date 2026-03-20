@@ -47,6 +47,7 @@ const cliMocks = vi.hoisted(() => {
     waitForRequestedSyncRevisions: vi.fn(),
     removePageProxy: vi.fn(),
     sendDailyRevenueTelegramReport: vi.fn(),
+    sendManualDailyRevenueTelegramReport: vi.fn(),
     sendTelegramTestMessage: vi.fn(),
     setPageProxy: vi.fn(),
   };
@@ -85,6 +86,7 @@ vi.mock("../apps/runtime/src/services/telegram.ts", () => ({
 
 vi.mock("../apps/runtime/src/services/telegram-report.ts", () => ({
   sendDailyRevenueTelegramReport: cliMocks.sendDailyRevenueTelegramReport,
+  sendManualDailyRevenueTelegramReport: cliMocks.sendManualDailyRevenueTelegramReport,
 }));
 
 vi.mock("../apps/runtime/src/services/sync.ts", async () => {
@@ -148,6 +150,7 @@ describe("CLI parsing", () => {
     cliMocks.waitForRequestedSyncRevisions.mockReset();
     cliMocks.removePageProxy.mockReset();
     cliMocks.sendDailyRevenueTelegramReport.mockReset();
+    cliMocks.sendManualDailyRevenueTelegramReport.mockReset();
     cliMocks.sendTelegramTestMessage.mockReset();
     cliMocks.setPageProxy.mockReset();
     cliMocks.handleSuccessfulPageVerificationRecovery.mockReset();
@@ -178,6 +181,13 @@ describe("CLI parsing", () => {
       reason: "unconfigured",
     });
     cliMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
+      delivery: {
+        status: "skipped",
+        reason: "unconfigured",
+      },
+      report: null,
+    });
+    cliMocks.sendManualDailyRevenueTelegramReport.mockResolvedValue({
       delivery: {
         status: "skipped",
         reason: "unconfigured",
@@ -538,7 +548,7 @@ describe("CLI parsing", () => {
   });
 
   it("sends the Telegram daily report when configured", async () => {
-    cliMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
+    cliMocks.sendManualDailyRevenueTelegramReport.mockResolvedValue({
       delivery: {
         status: "sent",
         chatId: "6065935464",
@@ -556,12 +566,12 @@ describe("CLI parsing", () => {
       "report",
     ], { from: "user" });
 
-    expect(cliMocks.sendDailyRevenueTelegramReport).toHaveBeenCalledWith(expect.anything());
+    expect(cliMocks.sendManualDailyRevenueTelegramReport).toHaveBeenCalledWith(expect.anything());
     expect(logSpy).toHaveBeenCalledWith("Sent Telegram daily report for 2026-03-19");
   });
 
   it("reports skipped Telegram daily reports when unconfigured", async () => {
-    cliMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
+    cliMocks.sendManualDailyRevenueTelegramReport.mockResolvedValue({
       delivery: {
         status: "skipped",
         reason: "unconfigured",

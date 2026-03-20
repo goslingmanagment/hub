@@ -4,10 +4,16 @@ const dbMocks = vi.hoisted(() => ({
   closeOrphanedSyncRuns: vi.fn(),
   deleteExpiredRawPayloads: vi.fn(),
   deleteExpiredSyncObservability: vi.fn(),
+  getTelegramSettings: vi.fn(),
+  hasScheduledReportForDate: vi.fn(),
 }));
 
 const executorMocks = vi.hoisted(() => ({
   startSyncPageExecutor: vi.fn(),
+}));
+
+const telegramReportMocks = vi.hoisted(() => ({
+  sendDailyRevenueTelegramReport: vi.fn(),
 }));
 
 const queueMocks = vi.hoisted(() => ({
@@ -21,6 +27,7 @@ vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
 }));
 vi.mock("../apps/runtime/src/services/sync/executor.ts", () => executorMocks);
+vi.mock("../apps/runtime/src/services/telegram-report.ts", () => telegramReportMocks);
 vi.mock("../apps/runtime/src/services/sync/planner.ts", () => ({
   runSyncPlannerCycle: vi.fn(),
 }));
@@ -43,6 +50,9 @@ describe("worker startup", () => {
     for (const mock of Object.values(executorMocks)) {
       mock.mockReset();
     }
+    for (const mock of Object.values(telegramReportMocks)) {
+      mock.mockReset();
+    }
     for (const mock of Object.values(queueMocks)) {
       mock.mockReset();
     }
@@ -55,6 +65,16 @@ describe("worker startup", () => {
     queueMocks.ensurePlannerSchedule.mockResolvedValue(undefined);
     queueMocks.ensureSyncQueues.mockResolvedValue(undefined);
     executorMocks.startSyncPageExecutor.mockResolvedValue(undefined);
+    telegramReportMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
+      delivery: {
+        status: "sent",
+        chatId: "6065935464",
+        messageId: 1,
+      },
+      report: {
+        reportDate: "2026-03-20",
+      },
+    });
   });
 
   it("runs orphan cleanup once before queues and executor startup", async () => {
@@ -130,7 +150,8 @@ describe("worker startup", () => {
       orphanedRunFailed: 1,
       orphanedRunPartial: 1,
     }), "Orphaned sync run startup cleanup complete");
-    expect(queueMocks.ensureTelegramDailyReportSchedule).not.toHaveBeenCalled();
+    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledTimes(1);
+    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledWith(boss);
     expect(app.logger.info).toHaveBeenCalledWith("Worker started");
 
     await runtime.shutdown();
@@ -170,12 +191,74 @@ describe("worker startup", () => {
     expect(queueMocks.ensureSyncQueues).toHaveBeenCalledWith(boss, expect.any(Set));
     expect(queueMocks.ensurePlannerSchedule).toHaveBeenCalledWith(boss);
     expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledTimes(1);
-    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledWith(boss, 7);
+    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledWith(boss);
     expect(boss.work).toHaveBeenCalledWith(
       "telegram.daily-report",
       { batchSize: 1 },
       expect.any(Function),
     );
+
+    await runtime.shutdown();
+  });
+
+  it("throws when a scheduled Telegram report delivery fails so the job can retry", async () => {
+    const reportHourUtc = new Date().getUTCHours();
+    const app = {
+      db: {},
+      logger: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+      config: {
+        syncObservabilityRetentionDays: 30,
+        telegramEnabled: true,
+        telegramReportHourUtc: reportHourUtc,
+      },
+      close: vi.fn(async () => {}),
+    };
+    const boss = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      schedule: vi.fn(async () => {}),
+      work: vi.fn(async () => {}),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      fetch: vi.fn(),
+      send: vi.fn(),
+      touch: vi.fn(),
+    };
+
+    dbMocks.getTelegramSettings.mockResolvedValue({
+      enabled: true,
+      dailyReportEnabled: true,
+      reportHourUtc,
+    });
+    dbMocks.hasScheduledReportForDate.mockResolvedValue(false);
+    telegramReportMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
+      delivery: {
+        status: "failed",
+        error: "connection refused",
+      },
+      report: {
+        reportDate: "2026-03-20",
+      },
+    });
+
+    const runtime = await startWorkerServices(app as never, boss as never);
+    const workCalls = boss.work.mock.calls as unknown as Array<[string, unknown, () => Promise<unknown>]>;
+    const telegramWorkCall = workCalls.find(([queueName]) => queueName === "telegram.daily-report");
+    const handler = telegramWorkCall?.[2];
+
+    expect(handler).toBeTypeOf("function");
+    if (!handler) {
+      throw new Error("Expected telegram.daily-report handler to be registered");
+    }
+    await expect(handler()).rejects.toThrow("Telegram daily report delivery failed: connection refused");
+    expect(dbMocks.getTelegramSettings).toHaveBeenCalledWith({}, {
+      defaultReportHourUtc: reportHourUtc,
+    });
+    expect(dbMocks.hasScheduledReportForDate).toHaveBeenCalledTimes(1);
+    expect(telegramReportMocks.sendDailyRevenueTelegramReport).toHaveBeenCalledWith(app, expect.any(Date));
 
     await runtime.shutdown();
   });

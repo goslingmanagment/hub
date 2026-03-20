@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Settings, Users, Heart, Trophy, MessageSquare, Terminal, RefreshCw, ListTodo, Database, AlertTriangle, Code2, ChevronDown } from "lucide-react";
+import { BarChart3, Bell, Settings, Users, Heart, Trophy, MessageSquare, Terminal, RefreshCw, ListTodo, Database, AlertTriangle, Code2, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { useOverview } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -186,6 +186,17 @@ export function Sidebar({ user }: SidebarProps) {
               ))}
             </div>
           )}
+          <NavLink
+            to="/notifications"
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
+              }`
+            }
+          >
+            <Bell size={16} />
+            Notifications
+          </NavLink>
           <NavLink
             to="/settings"
             className={({ isActive }) =>

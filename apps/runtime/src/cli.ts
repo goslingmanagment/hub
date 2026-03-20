@@ -32,7 +32,7 @@ import {
   unassignPageFromUser,
 } from "./services/auth.ts";
 import { getModelRevenueReport, getPageRevenueReport } from "./services/reporting.ts";
-import { sendDailyRevenueTelegramReport } from "./services/telegram-report.ts";
+import { sendManualDailyRevenueTelegramReport } from "./services/telegram-report.ts";
 import { sendTelegramTestMessage } from "./services/telegram.ts";
 import { loadFanslySessionBundleFromFile, loadOnlyMonsterTokenBundleFromFile } from "./services/page-context.ts";
 import { requestPageSync, waitForRequestedSyncRevisions } from "./services/sync-control.ts";
@@ -703,7 +703,7 @@ export function buildProgram() {
     .action(async () => {
       const app = await createAppContext();
       try {
-        const result = await sendDailyRevenueTelegramReport(app);
+        const result = await sendManualDailyRevenueTelegramReport(app);
         if (result.delivery.status === "skipped") {
           console.log("Telegram is not configured; skipping");
           return;

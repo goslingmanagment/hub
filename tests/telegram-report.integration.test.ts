@@ -5,6 +5,8 @@ import {
   createModel,
   createOnlyFansPage,
   dailyRevenue,
+  hasScheduledReportForDate,
+  insertDeliveryAttempt,
 } from "@agency_hub_core/db";
 
 import { buildDailyRevenueTelegramReport, TOP_PAGE_LIMIT } from "../apps/runtime/src/services/telegram-report.ts";
@@ -209,5 +211,36 @@ describe("telegram revenue report integration", () => {
     expect(report.text).toContain(`+${report.overflow?.pageCount} more pages`);
     expect(report.text).toContain("n/a");
     expect(report.text).not.toContain("$999.00");
+  });
+
+  it("treats only sent scheduled deliveries as completed for a report date", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await insertDeliveryAttempt(testDb.db, {
+      kind: "daily_report_scheduled",
+      status: "failed",
+      reportDate: "2026-03-19",
+      error: "timeout",
+    });
+    expect(await hasScheduledReportForDate(testDb.db, "2026-03-19")).toBe(false);
+
+    await insertDeliveryAttempt(testDb.db, {
+      kind: "daily_report_manual",
+      status: "sent",
+      reportDate: "2026-03-19",
+      messageId: 1,
+    });
+    expect(await hasScheduledReportForDate(testDb.db, "2026-03-19")).toBe(false);
+
+    await insertDeliveryAttempt(testDb.db, {
+      kind: "daily_report_scheduled",
+      status: "sent",
+      reportDate: "2026-03-19",
+      messageId: 2,
+    });
+    expect(await hasScheduledReportForDate(testDb.db, "2026-03-19")).toBe(true);
   });
 });

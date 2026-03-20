@@ -203,6 +203,38 @@ export const notificationIncidents = pgTable(
   }),
 );
 
+export const telegramSettings = pgTable("telegram_settings", {
+  id: integer("id").primaryKey().default(1),
+  enabled: boolean("enabled").default(true).notNull(),
+  dailyReportEnabled: boolean("daily_report_enabled").default(true).notNull(),
+  syncFailureAlertsEnabled: boolean("sync_failure_alerts_enabled").default(true).notNull(),
+  reportHourUtc: integer("report_hour_utc").default(9).notNull(),
+  encryptedBotToken: text("encrypted_bot_token"),
+  chatId: text("chat_id"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const telegramDeliveryAttempts = pgTable(
+  "telegram_delivery_attempts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    kind: text("kind").notNull(),
+    status: text("status").notNull(),
+    notificationIncidentId: bigint("notification_incident_id", { mode: "number" })
+      .references(() => notificationIncidents.id, { onDelete: "set null" }),
+    reportDate: text("report_date"),
+    messageId: integer("message_id"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    kindCreatedIdx: index("telegram_delivery_attempts_kind_created_idx").on(
+      table.kind,
+      table.createdAt,
+    ),
+  }),
+);
+
 export const syncRuns = pgTable(
   "sync_runs",
   {

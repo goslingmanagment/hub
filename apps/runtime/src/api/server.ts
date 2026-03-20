@@ -28,6 +28,7 @@ import {
 } from "@agency_hub_core/db";
 import {
   createLogger,
+  encryptJson,
   millsToNumber,
   redactSensitiveText,
   resolveBusinessDateRangeForPlatform,
@@ -81,6 +82,18 @@ import {
   UnauthorizedError,
 } from "../services/errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "../services/notification-incidents.ts";
+import {
+  getLatestDeliveryAttempt,
+  getNotificationIncidentByKey,
+  getTelegramSettings,
+  insertDeliveryAttempt,
+  listDeliveryAttempts,
+  listNotificationIncidentsWithPages,
+  resolveNotificationIncident,
+  updateTelegramSettings,
+} from "@agency_hub_core/db";
+import { resolveTelegramCredentials, sendTelegramMessage, sendTelegramTestMessage } from "../services/telegram.ts";
+import { buildDailyRevenueTelegramReport, sendManualDailyRevenueTelegramReport } from "../services/telegram-report.ts";
 import { resolvePageContext } from "../services/page-context.ts";
 import {
   getCrossPageFanDetailReport,
@@ -1725,6 +1738,213 @@ export async function buildApiServer(appContext: AppContext) {
     }));
 
     return { summary, items };
+  });
+
+  // ---------------------------------------------------------------------------
+  // Notifications dashboard
+  // ---------------------------------------------------------------------------
+
+  function buildNotificationsSettingsResponse(
+    settings: Awaited<ReturnType<typeof getTelegramSettings>>,
+    latest: Awaited<ReturnType<typeof getLatestDeliveryAttempt>>,
+  ) {
+    const creds = resolveTelegramCredentials(appContext, settings);
+    const configured = creds !== null;
+
+    let connectionStatus: "not_configured" | "connected" | "last_message_failed" = "connected";
+    if (!configured) {
+      connectionStatus = "not_configured";
+    } else if (latest?.status === "failed") {
+      connectionStatus = "last_message_failed";
+    }
+
+    return {
+      configured,
+      botTokenSet: !!settings.encryptedBotToken || !!appContext.config.telegramBotToken,
+      chatId: settings.chatId ?? appContext.config.telegramChatId ?? null,
+      enabled: settings.enabled,
+      dailyReportEnabled: settings.dailyReportEnabled,
+      syncFailureAlertsEnabled: settings.syncFailureAlertsEnabled,
+      reportHourUtc: settings.reportHourUtc,
+      connectionStatus,
+      lastMessageAt: latest?.createdAt?.toISOString() ?? null,
+      lastMessageError: latest?.status === "failed" ? (latest.error ?? null) : null,
+    };
+  }
+
+  server.get("/api/v1/admin/notifications/settings", {
+    schema: routeSchemas.notificationsSettings,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const settings = await getTelegramSettings(appContext.db, {
+      defaultReportHourUtc: appContext.config.telegramReportHourUtc,
+    });
+    const latest = await getLatestDeliveryAttempt(appContext.db);
+    return buildNotificationsSettingsResponse(settings, latest);
+  });
+
+  server.patch("/api/v1/admin/notifications/settings", {
+    schema: routeSchemas.notificationsSettingsUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    await getTelegramSettings(appContext.db, {
+      defaultReportHourUtc: appContext.config.telegramReportHourUtc,
+    }); // ensure singleton row exists
+
+    const { botToken, chatId, ...rest } = request.body;
+    const patch: Parameters<typeof updateTelegramSettings>[1] = { ...rest };
+
+    if (botToken !== undefined) {
+      patch.encryptedBotToken = JSON.stringify(
+        encryptJson(botToken, appContext.config.encryptionKey, appContext.config.encryptionKeyVersion),
+      );
+    }
+    if (chatId !== undefined) {
+      patch.chatId = chatId;
+    }
+
+    const updated = await updateTelegramSettings(appContext.db, patch);
+    const latest = await getLatestDeliveryAttempt(appContext.db);
+    return buildNotificationsSettingsResponse(updated, latest);
+  });
+
+  server.post("/api/v1/admin/notifications/test", {
+    schema: routeSchemas.notificationsTestMessage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const result = await sendTelegramTestMessage(appContext);
+
+    if (result.status === "sent" || result.status === "failed") {
+      await insertDeliveryAttempt(appContext.db, {
+        kind: "test",
+        status: result.status,
+        messageId: result.status === "sent" ? result.messageId : null,
+        error: result.status === "failed" ? result.error : null,
+      });
+    }
+
+    return {
+      status: result.status,
+      error: result.status === "failed" ? result.error : null,
+    };
+  });
+
+  server.get("/api/v1/admin/notifications/incidents", {
+    schema: routeSchemas.notificationsIncidents,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const query = request.query;
+    const result = await listNotificationIncidentsWithPages(appContext.db, {
+      status: query.status,
+      kind: query.kind,
+      pageLabel: query.pageLabel,
+      limit: query.limit,
+      offset: query.offset,
+    });
+
+    return {
+      items: result.items.map((item) => ({
+        ...item,
+        openedAt: item.openedAt.toISOString(),
+        lastSeenAt: item.lastSeenAt.toISOString(),
+        resolvedAt: item.resolvedAt?.toISOString() ?? null,
+      })),
+      total: result.total,
+    };
+  });
+
+  server.post("/api/v1/admin/notifications/incidents/:incidentId/resolve", {
+    schema: routeSchemas.notificationsResolveIncident,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { incidentId } = request.params;
+    const rows = (await appContext.db.execute(
+      sql`SELECT incident_key FROM notification_incidents WHERE id = ${incidentId}`,
+    )).rows;
+
+    if (!rows[0]) {
+      throw new NotFoundError(`Incident ${incidentId} not found`);
+    }
+
+    const incidentKey = (rows[0] as any).incident_key as string;
+    await resolveNotificationIncident(appContext.db, { incidentKey });
+
+    // Best-effort send "Manually resolved" to Telegram
+    const delivery = await sendTelegramMessage(appContext, {
+      text: `✅ Manually resolved\nIncident: ${incidentKey}`,
+    });
+
+    if (delivery.status === "sent" || delivery.status === "failed") {
+      await insertDeliveryAttempt(appContext.db, {
+        kind: "incident_manually_resolved",
+        status: delivery.status,
+        notificationIncidentId: incidentId,
+        messageId: delivery.status === "sent" ? delivery.messageId : null,
+        error: delivery.status === "failed" ? delivery.error : null,
+      });
+    }
+
+    return { ok: true as const };
+  });
+
+  server.get("/api/v1/admin/notifications/reports/preview", {
+    schema: routeSchemas.notificationsReportPreview,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const report = await buildDailyRevenueTelegramReport(appContext);
+    return {
+      text: report.text,
+      reportDate: report.reportDate,
+    };
+  });
+
+  server.post("/api/v1/admin/notifications/reports/send", {
+    schema: routeSchemas.notificationsReportSend,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const result = await sendManualDailyRevenueTelegramReport(appContext);
+    return {
+      status: result.delivery.status,
+      error: result.delivery.status === "failed" ? result.delivery.error : null,
+      reportDate: result.report?.reportDate ?? null,
+    };
+  });
+
+  server.get("/api/v1/admin/notifications/reports/history", {
+    schema: routeSchemas.notificationsReportHistory,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const attempts = await listDeliveryAttempts(appContext.db, {
+      kind: ["daily_report_scheduled", "daily_report_manual"],
+      limit: 50,
+    });
+
+    return {
+      items: attempts.map((a) => ({
+        id: a.id,
+        kind: a.kind as "daily_report_scheduled" | "daily_report_manual",
+        status: a.status,
+        reportDate: a.reportDate,
+        error: a.error,
+        createdAt: a.createdAt.toISOString(),
+      })),
+    };
   });
 
   // SPA static file serving (production only)

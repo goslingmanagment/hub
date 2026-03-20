@@ -1530,6 +1530,103 @@ export const adminIncidentsResponseSchema = z.object({
   items: z.array(adminIncidentItemSchema),
 });
 
+// --- Notifications dashboard schemas ---
+const notificationConnectionStatusEnum = z.enum(["not_configured", "connected", "last_message_failed"]);
+const notificationIncidentKindEnum = z.enum(["auth_failed", "proxy_failed", "stream_failed_threshold"]);
+const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
+const deliveryKindEnum = z.enum([
+  "test",
+  "daily_report_scheduled",
+  "daily_report_manual",
+  "incident_opened",
+  "incident_resolved",
+  "incident_manually_resolved",
+]);
+
+export const notificationsSettingsResponseSchema = z.object({
+  configured: z.boolean(),
+  botTokenSet: z.boolean(),
+  chatId: z.string().nullable(),
+  enabled: z.boolean(),
+  dailyReportEnabled: z.boolean(),
+  syncFailureAlertsEnabled: z.boolean(),
+  reportHourUtc: z.number().int().min(0).max(23),
+  connectionStatus: notificationConnectionStatusEnum,
+  lastMessageAt: isoTimestamp.nullable(),
+  lastMessageError: z.string().nullable(),
+});
+
+export const notificationsSettingsUpdateBodySchema = z.object({
+  enabled: z.boolean().optional(),
+  dailyReportEnabled: z.boolean().optional(),
+  syncFailureAlertsEnabled: z.boolean().optional(),
+  reportHourUtc: z.number().int().min(0).max(23).optional(),
+  botToken: z.string().min(1).optional(),
+  chatId: z.string().min(1).optional(),
+});
+
+export const notificationsTestMessageResponseSchema = z.object({
+  status: z.string(),
+  error: z.string().nullable(),
+});
+
+export const notificationsIncidentItemSchema = z.object({
+  id: intId,
+  incidentKey: z.string(),
+  kind: notificationIncidentKindEnum,
+  pageLabel: z.string(),
+  platform: platformEnum,
+  stream: z.string().nullable(),
+  status: notificationIncidentStatusEnum,
+  openedAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
+  resolvedAt: isoTimestamp.nullable(),
+  errorCode: z.string().nullable(),
+  errorSummary: z.string().nullable(),
+  notificationCount: z.number().int(),
+});
+
+export const notificationsIncidentsQuerySchema = z.object({
+  status: notificationIncidentStatusEnum.optional(),
+  kind: notificationIncidentKindEnum.optional(),
+  pageLabel: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export const notificationsIncidentsResponseSchema = z.object({
+  items: z.array(notificationsIncidentItemSchema),
+  total: z.number().int(),
+});
+
+export const notificationsResolveIncidentResponseSchema = z.object({
+  ok: z.literal(true),
+});
+
+export const notificationsReportPreviewResponseSchema = z.object({
+  text: z.string(),
+  reportDate: z.string(),
+});
+
+export const notificationsReportSendResponseSchema = z.object({
+  status: z.string(),
+  error: z.string().nullable(),
+  reportDate: z.string().nullable(),
+});
+
+export const notificationsDeliveryAttemptItemSchema = z.object({
+  id: intId,
+  kind: deliveryKindEnum,
+  status: z.string(),
+  reportDate: z.string().nullable(),
+  error: z.string().nullable(),
+  createdAt: isoTimestamp,
+});
+
+export const notificationsReportHistoryResponseSchema = z.object({
+  items: z.array(notificationsDeliveryAttemptItemSchema),
+});
+
 const fanslyCredentialsSchema = z.object({
   platform: z.literal("fansly"),
   session: z.object({
@@ -2356,6 +2453,91 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  // --- Notifications dashboard ---
+  notificationsSettings: {
+    tags: ["notifications"],
+    summary: "Get notification settings and connection status",
+    security: cookieOnlySecurity,
+    response: {
+      200: notificationsSettingsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  notificationsSettingsUpdate: {
+    tags: ["notifications"],
+    summary: "Update notification settings",
+    security: cookieOnlySecurity,
+    body: notificationsSettingsUpdateBodySchema,
+    response: {
+      200: notificationsSettingsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  notificationsTestMessage: {
+    tags: ["notifications"],
+    summary: "Send a test Telegram message",
+    security: cookieOnlySecurity,
+    response: {
+      200: notificationsTestMessageResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  notificationsIncidents: {
+    tags: ["notifications"],
+    summary: "List notification incidents with page context",
+    security: cookieOnlySecurity,
+    querystring: notificationsIncidentsQuerySchema,
+    response: {
+      200: notificationsIncidentsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  notificationsResolveIncident: {
+    tags: ["notifications"],
+    summary: "Manually resolve an incident",
+    security: cookieOnlySecurity,
+    params: z.object({ incidentId: z.coerce.number().int().positive() }),
+    response: {
+      200: notificationsResolveIncidentResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  notificationsReportPreview: {
+    tags: ["notifications"],
+    summary: "Preview the next daily report without sending",
+    security: cookieOnlySecurity,
+    response: {
+      200: notificationsReportPreviewResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  notificationsReportSend: {
+    tags: ["notifications"],
+    summary: "Manually send a daily report",
+    security: cookieOnlySecurity,
+    response: {
+      200: notificationsReportSendResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  notificationsReportHistory: {
+    tags: ["notifications"],
+    summary: "List daily report delivery history",
+    security: cookieOnlySecurity,
+    response: {
+      200: notificationsReportHistoryResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type RouteSchemas = typeof routeSchemas;
@@ -2451,3 +2633,13 @@ export type AdminCreatePageResponse = z.infer<typeof adminCreatePageResponseSche
 export type UpdateCredentialsBody = z.infer<typeof updateCredentialsBodySchema>;
 export type UpdateCredentialsResponse = z.infer<typeof updateCredentialsResponseSchema>;
 export type VerifyPageResponse = z.infer<typeof verifyPageResponseSchema>;
+export type NotificationsSettingsResponse = z.infer<typeof notificationsSettingsResponseSchema>;
+export type NotificationsSettingsUpdateBody = z.infer<typeof notificationsSettingsUpdateBodySchema>;
+export type NotificationsTestMessageResponse = z.infer<typeof notificationsTestMessageResponseSchema>;
+export type NotificationsIncidentsQuery = z.infer<typeof notificationsIncidentsQuerySchema>;
+export type NotificationsIncidentsResponse = z.infer<typeof notificationsIncidentsResponseSchema>;
+export type NotificationsIncidentItem = z.infer<typeof notificationsIncidentItemSchema>;
+export type NotificationsReportPreviewResponse = z.infer<typeof notificationsReportPreviewResponseSchema>;
+export type NotificationsReportSendResponse = z.infer<typeof notificationsReportSendResponseSchema>;
+export type NotificationsDeliveryAttemptItem = z.infer<typeof notificationsDeliveryAttemptItemSchema>;
+export type NotificationsReportHistoryResponse = z.infer<typeof notificationsReportHistoryResponseSchema>;

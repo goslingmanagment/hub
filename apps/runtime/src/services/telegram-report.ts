@@ -1,5 +1,7 @@
 import {
   getRevenuePageTotals,
+  getTelegramSettings,
+  insertDeliveryAttempt,
   listVisiblePages,
 } from "@agency_hub_core/db";
 import {
@@ -300,10 +302,71 @@ export async function sendDailyRevenueTelegramReport(
     };
   }
 
+  const settings = await getTelegramSettings(app.db, {
+    defaultReportHourUtc: app.config.telegramReportHourUtc,
+  });
+  if (!settings.enabled || !settings.dailyReportEnabled) {
+    return {
+      delivery: {
+        status: "skipped",
+        reason: "disabled",
+      },
+      report: null,
+    };
+  }
+
   const report = await buildDailyRevenueTelegramReport(app, now);
   const delivery = await sendTelegramMessage(app, {
     text: report.text,
   });
+
+  if (delivery.status === "sent" || delivery.status === "failed") {
+    await insertDeliveryAttempt(app.db, {
+      kind: "daily_report_scheduled",
+      status: delivery.status,
+      reportDate: report.reportDate,
+      messageId: delivery.status === "sent" ? delivery.messageId : null,
+      error: delivery.status === "failed" ? delivery.error : null,
+    });
+  }
+
+  return {
+    delivery,
+    report,
+  };
+}
+
+export async function sendManualDailyRevenueTelegramReport(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  now = new Date(),
+): Promise<{
+  delivery: TelegramSendResult;
+  report: DailyRevenueTelegramReport | null;
+}> {
+  if (!app.config.telegramEnabled) {
+    return {
+      delivery: {
+        status: "skipped",
+        reason: "unconfigured",
+      },
+      report: null,
+    };
+  }
+
+  const report = await buildDailyRevenueTelegramReport(app, now);
+  const delivery = await sendTelegramMessage(app, {
+    text: report.text,
+  });
+
+  if (delivery.status === "sent" || delivery.status === "failed") {
+    await insertDeliveryAttempt(app.db, {
+      kind: "daily_report_manual",
+      status: delivery.status,
+      reportDate: report.reportDate,
+      messageId: delivery.status === "sent" ? delivery.messageId : null,
+      error: delivery.status === "failed" ? delivery.error : null,
+    });
+  }
 
   return {
     delivery,

@@ -4,7 +4,10 @@ import {
   closeOrphanedSyncRuns,
   deleteExpiredRawPayloads,
   deleteExpiredSyncObservability,
+  getTelegramSettings,
+  hasScheduledReportForDate,
 } from "@agency_hub_core/db";
+import { toBusinessDate, UTC_TIME_ZONE, addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 import { PgBoss } from "pg-boss";
 
 import { createAppContext, type AppContext } from "./bootstrap.ts";
@@ -55,14 +58,11 @@ export async function startWorkerServices(
 
   await boss.start();
   await ensureSyncQueues(boss, createdQueues);
-  const schedules = [
+  await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
-  ];
-  if (app.config.telegramEnabled) {
-    schedules.push(ensureTelegramDailyReportSchedule(boss, app.config.telegramReportHourUtc));
-  }
-  await Promise.all(schedules);
+    ensureTelegramDailyReportSchedule(boss),
+  ]);
 
   await boss.work(SYNC_PLANNER_QUEUE, {
     batchSize: 1,
@@ -80,7 +80,30 @@ export async function startWorkerServices(
   });
 
   await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, { batchSize: 1 }, async () => {
-    await sendDailyRevenueTelegramReport(app);
+    const now = new Date();
+    const currentHourUtc = now.getUTCHours();
+
+    const settings = await getTelegramSettings(app.db, {
+      defaultReportHourUtc: app.config.telegramReportHourUtc,
+    });
+    if (!settings.enabled || !settings.dailyReportEnabled) {
+      return;
+    }
+    if (currentHourUtc !== settings.reportHourUtc) {
+      return;
+    }
+
+    const todayStart = startOfBusinessDay(now, UTC_TIME_ZONE);
+    const yesterdayStart = addUtcDays(todayStart, -1);
+    const reportDate = toBusinessDate(yesterdayStart, UTC_TIME_ZONE);
+    if (await hasScheduledReportForDate(app.db, reportDate)) {
+      return;
+    }
+
+    const result = await sendDailyRevenueTelegramReport(app, now);
+    if (result.delivery.status === "failed") {
+      throw new Error(`Telegram daily report delivery failed: ${result.delivery.error}`);
+    }
   });
 
   const executorPromise = startSyncPageExecutor(app, boss, {

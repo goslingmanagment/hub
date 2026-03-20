@@ -45,7 +45,7 @@ describe("runtime schema guard", () => {
 
     try {
       await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
-        "missing latest migration 0020_telegram_notifications.sql",
+        "missing latest migration 0022_telegram_credentials_in_db.sql",
       );
     } finally {
       await testDb.stop();
