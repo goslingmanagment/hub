@@ -1,7 +1,6 @@
 import { useParams, useNavigate } from "react-router";
 import { useState } from "react";
 import { ArrowLeft, ChevronDown } from "lucide-react";
-import ReactMarkdown from "react-markdown";
 import {
   usePageFanDetail,
   usePageFanProfile,
@@ -13,6 +12,7 @@ import {
 } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
 import { Pagination } from "@/components/shared/Pagination";
+import { FanIntelligenceMarkdown } from "@/components/page/FanIntelligenceMarkdown";
 import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, transactionTypeLabel } from "@/lib/format";
 import { usePeriodStore } from "@/stores/periodStore";
@@ -243,9 +243,7 @@ export function FanProfilePage() {
                 <span>&middot;</span>
                 <span>{formatDateTime(displayedProfile.createdAt)}</span>
               </div>
-              <ReactMarkdown className="fan-intelligence-markdown">
-                {displayedProfile.body}
-              </ReactMarkdown>
+              <FanIntelligenceMarkdown body={displayedProfile.body} />
             </div>
           ) : (
             <p className="text-sm text-text-muted">No intelligence profile yet</p>
