@@ -195,8 +195,12 @@ describe("sync executor handlers", () => {
 
   it("promotes followers_reconcile when follower drift is detected", async () => {
     const telemetry = createTelemetry();
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
     const app = {
-      db: {},
+      db,
       config: {
         followerPageDelayMs: 0,
         syncSharedRateLimitEnabled: false,
@@ -251,7 +255,20 @@ describe("sync executor handlers", () => {
     } as never);
 
     expect(result.satisfied).toBe(true);
-    expect(dbMocks.requestSyncStreamRevisions).toHaveBeenCalledWith({}, {
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, expect.any(Array));
+    expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, expect.any(Array));
+    expect(dbMocks.rebuildFollowerRollups).toHaveBeenCalledWith(tx, 12, 1);
+    expect(dbMocks.updateLegacySyncTimestamp).toHaveBeenCalledWith(tx, {
+      platformAccountId: 12,
+      syncType: "followers",
+    });
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+      platformAccountId: 12,
+      stream: "followers",
+    }));
+    expect(dbMocks.countActivePageFollows).toHaveBeenCalledWith(db, 12);
+    expect(dbMocks.requestSyncStreamRevisions).toHaveBeenCalledWith(db, {
       platformAccountId: 12,
       streams: ["followers_reconcile"],
       reason: "anomaly",
@@ -260,8 +277,12 @@ describe("sync executor handlers", () => {
 
   it("runs follower reconcile finalization against generation-based state", async () => {
     const telemetry = createTelemetry();
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
     const app = {
-      db: {},
+      db,
       config: {
         followerPageDelayMs: 0,
         syncSharedRateLimitEnabled: false,
@@ -307,8 +328,23 @@ describe("sync executor handlers", () => {
     } as never);
 
     expect(result.satisfied).toBe(true);
-    expect(dbMocks.deactivatePageFollowsByGeneration).toHaveBeenCalledTimes(1);
-    expect(dbMocks.refreshFanPageFollowerState).toHaveBeenCalledWith({}, 13);
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, []);
+    expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, []);
+    expect(dbMocks.deactivatePageFollowsByGeneration).toHaveBeenCalledWith(tx, {
+      platformAccountId: 13,
+      generation: 1,
+    });
+    expect(dbMocks.refreshFanPageFollowerState).toHaveBeenCalledWith(tx, 13);
+    expect(dbMocks.rebuildFollowerRollups).toHaveBeenCalledWith(tx, 13, 0);
+    expect(dbMocks.updateLegacySyncTimestamp).toHaveBeenCalledWith(tx, {
+      platformAccountId: 13,
+      syncType: "followers",
+    });
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+      platformAccountId: 13,
+      stream: "followers_reconcile",
+    }));
   });
 
   it("finalizes subscribers inside one transaction on completed pages", async () => {

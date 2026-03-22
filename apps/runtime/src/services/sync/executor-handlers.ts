@@ -917,18 +917,26 @@ export async function executeFollowersChunk(
         followerSince: followedAt,
       });
     }
-    await upsertPageFollows(app.db, followInputs);
-    await upsertFanPages(app.db, fanPageInputs);
     processedThisChunk += followInputs.length;
 
     if (reachedBoundary || page.done) {
       const newestFollowId = state.newestFollowId ?? state.knownFollowId;
-      const completedCheckpoint = await upsertCheckpoint(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "followers",
-        cursorText: newestFollowId,
-        state,
-        lastSuccessfulRunId: input.syncRunId,
+      const completedCheckpoint = await app.db.transaction(async (tx) => {
+        const dbTx = tx as typeof app.db;
+        await upsertPageFollows(dbTx, followInputs);
+        await upsertFanPages(dbTx, fanPageInputs);
+        await rebuildFollowerRollups(dbTx, input.pageContext.page.id, state.sourceFollowerCount);
+        await updateLegacySyncTimestamp(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          syncType: "followers",
+        });
+        return upsertCheckpoint(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "followers",
+          cursorText: newestFollowId,
+          state,
+          lastSuccessfulRunId: input.syncRunId,
+        });
       });
       await input.telemetry.recordCheckpointAdvanced("followers", summarizeCheckpoint(completedCheckpoint));
 
@@ -940,12 +948,6 @@ export async function executeFollowersChunk(
       ) {
         await triggerFollowersReconcileAnomaly(app, input.pageContext.page.id);
       }
-
-      await rebuildFollowerRollups(app.db, input.pageContext.page.id, state.sourceFollowerCount);
-      await updateLegacySyncTimestamp(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        syncType: "followers",
-      });
 
       return {
         satisfied: true,
@@ -959,6 +961,8 @@ export async function executeFollowersChunk(
       } satisfies StreamChunkResult;
     }
 
+    await upsertPageFollows(app.db, followInputs);
+    await upsertFanPages(app.db, fanPageInputs);
     state = {
       ...state,
       offset: state.offset + 100,
@@ -1102,26 +1106,29 @@ export async function executeFollowersReconcileChunk(
         followerSince: followedAt,
       });
     }
-    await upsertPageFollows(app.db, followInputs);
-    await upsertFanPages(app.db, fanPageInputs);
     processedThisChunk += followInputs.length;
 
     if (page.done) {
-      await deactivatePageFollowsByGeneration(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        generation: state.generation,
-      });
-      await refreshFanPageFollowerState(app.db, input.pageContext.page.id);
-      await rebuildFollowerRollups(app.db, input.pageContext.page.id, state.sourceFollowerCount);
-      await updateLegacySyncTimestamp(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        syncType: "followers",
-      });
-      const completedCheckpoint = await upsertCheckpoint(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "followers_reconcile",
-        state,
-        lastSuccessfulRunId: input.syncRunId,
+      const completedCheckpoint = await app.db.transaction(async (tx) => {
+        const dbTx = tx as typeof app.db;
+        await upsertPageFollows(dbTx, followInputs);
+        await upsertFanPages(dbTx, fanPageInputs);
+        await deactivatePageFollowsByGeneration(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          generation: state.generation,
+        });
+        await refreshFanPageFollowerState(dbTx, input.pageContext.page.id);
+        await rebuildFollowerRollups(dbTx, input.pageContext.page.id, state.sourceFollowerCount);
+        await updateLegacySyncTimestamp(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          syncType: "followers",
+        });
+        return upsertCheckpoint(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "followers_reconcile",
+          state,
+          lastSuccessfulRunId: input.syncRunId,
+        });
       });
       await input.telemetry.recordCheckpointAdvanced(
         "followers_reconcile",
@@ -1139,6 +1146,8 @@ export async function executeFollowersReconcileChunk(
       } satisfies StreamChunkResult;
     }
 
+    await upsertPageFollows(app.db, followInputs);
+    await upsertFanPages(app.db, fanPageInputs);
     state = {
       ...state,
       offset: state.offset + 100,
