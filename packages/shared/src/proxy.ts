@@ -173,6 +173,23 @@ function redactTelegramBotTokenUrl(url: URL) {
   return `${url.origin}${redactedPath}${url.search}${url.hash}`;
 }
 
+function formatMaskedCredentialUrl(url: URL) {
+  if (!url.username && !url.password) {
+    return null;
+  }
+
+  const masked = new URL(url.toString());
+  masked.username = "";
+  masked.password = "";
+  const origin = masked.host.length > 0
+    ? `${masked.protocol}//${masked.host}`
+    : `${masked.protocol}//`;
+  const suffix = masked.pathname === "/" && masked.search.length === 0 && masked.hash.length === 0
+    ? ""
+    : `${masked.pathname}${masked.search}${masked.hash}`;
+  return `${origin}${suffix} (auth)`;
+}
+
 export function redactSensitiveText(value: string) {
   return value.replace(URL_CANDIDATE_PATTERN, (candidate) => {
     const { core, suffix } = splitTrailingPunctuation(candidate);
@@ -184,15 +201,20 @@ export function redactSensitiveText(value: string) {
         return `${redactedTelegramUrl}${suffix}`;
       }
 
-      if (!SUPPORTED_PROXY_PROTOCOLS.has(parsed.protocol)) {
-        return candidate;
+      if (SUPPORTED_PROXY_PROTOCOLS.has(parsed.protocol)) {
+        if (!parsed.username && !parsed.password) {
+          return candidate;
+        }
+
+        return `${formatMaskedProxyUrl({ url: core })}${suffix}`;
       }
 
-      if (!parsed.username && !parsed.password) {
-        return candidate;
+      const redactedCredentialUrl = formatMaskedCredentialUrl(parsed);
+      if (redactedCredentialUrl) {
+        return `${redactedCredentialUrl}${suffix}`;
       }
 
-      return `${formatMaskedProxyUrl({ url: core })}${suffix}`;
+      return candidate;
     } catch {
       return candidate;
     }
