@@ -80,27 +80,31 @@ async function createChunkTelemetry(
   app: AppContext,
   streamState: SyncStreamStateRow,
 ) {
-  const pageContext = await resolveExecutorPageContext(app, streamState.platformAccountId);
+  const storedPage = await findPageById(app.db, streamState.platformAccountId);
+  if (!storedPage) {
+    throw new Error(`Page ${streamState.platformAccountId} not found`);
+  }
+
   const run = await startSyncRun(app.db, {
-    platformAccountId: pageContext.page.id,
+    platformAccountId: storedPage.page.id,
     stream: streamState.stream,
     trigger: streamState.pendingReason,
   });
   const telemetry = new SyncRunTelemetry(app, {
     runId: run.id,
-    platformAccountId: pageContext.page.id,
-    pageLabel: pageContext.page.label,
-    provider: pageContext.platform,
+    platformAccountId: storedPage.page.id,
+    pageLabel: storedPage.page.label,
+    provider: storedPage.page.platform,
     stream: streamState.stream,
     trigger: streamState.pendingReason,
-    egressKey: buildProxyEgressKey(pageContext.proxy),
+    egressKey: buildProxyEgressKey(storedPage.proxy ? { url: storedPage.proxy.url } : null),
   }, {
     runStartedAt: run.startedAt,
   });
   await telemetry.recordRunStarted();
 
   return {
-    pageContext,
+    storedPage,
     run,
     telemetry,
   };
@@ -140,11 +144,13 @@ export async function executeNextSyncPageChunk(
     };
   }
 
-  const { pageContext, run, telemetry } = await createChunkTelemetry(app, streamState);
+  const { storedPage, run, telemetry } = await createChunkTelemetry(app, streamState);
   const budget = new SyncChunkBudget();
   await recordSyncStreamChunkStarted(app.db, platformAccountId, streamState.stream);
+  let pageContext: Awaited<ReturnType<typeof resolveExecutorPageContext>> | null = null;
 
   try {
+    pageContext = await resolveExecutorPageContext(app, streamState.platformAccountId);
     const result = await executeStreamChunk(app, {
       pageContext,
       streamState,
@@ -200,12 +206,15 @@ export async function executeNextSyncPageChunk(
       endpoint: streamState.stream,
       action: `executing ${streamState.stream} sync chunk`,
     });
+    const provider = pageContext?.platform ?? telemetry.metadata.provider;
+    const pageLabel = pageContext?.page.label ?? telemetry.metadata.pageLabel;
+    const hasProxy = pageContext ? pageContext.proxy !== null : storedPage.proxy !== null;
 
     await persistFailedSyncPayload(app, {
       platformAccountId,
       syncRunId: run.id,
       endpoint: streamState.stream,
-      platform: pageContext.platform,
+      platform: provider,
       failure,
     });
 
@@ -220,8 +229,8 @@ export async function executeNextSyncPageChunk(
       });
       await notifyAuthFailedIncident(app, {
         platformAccountId,
-        pageLabel: pageContext.page.label,
-        platform: pageContext.platform,
+        pageLabel,
+        platform: provider,
         errorCode: failure.error.code,
         errorSummary: failure.summary,
       });
@@ -246,11 +255,11 @@ export async function executeNextSyncPageChunk(
     });
     await notifySyncChunkFailureIncident(app, {
       platformAccountId,
-      pageLabel: pageContext.page.label,
-      platform: pageContext.platform,
+      pageLabel,
+      platform: provider,
       stream: streamState.stream,
       runId: run.id,
-      hasProxy: pageContext.proxy !== null,
+      hasProxy,
       previousConsecutiveFailures: streamState.consecutiveFailures,
       errorCode: failure.error.code,
       errorSummary: failure.summary,

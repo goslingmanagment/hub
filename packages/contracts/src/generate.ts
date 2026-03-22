@@ -8,11 +8,13 @@ import { createLogger } from "@agency_hub_core/shared";
 import { buildApiServer } from "../../../apps/runtime/src/api/server.ts";
 
 async function main() {
+  const encryptionKey = Buffer.alloc(32, 0);
   const server = await buildApiServer({
     config: {
       databaseUrl: "",
-      encryptionKey: Buffer.alloc(32, 0),
+      encryptionKey,
       encryptionKeyVersion: 1,
+      encryptionKeysByVersion: new Map([[1, encryptionKey]]),
       logLevel: "silent",
       apiHost: "0.0.0.0",
       apiPort: 3000,

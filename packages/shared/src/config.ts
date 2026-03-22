@@ -22,6 +22,7 @@ const optionalTelegramHourSchema = z.preprocess((value) => {
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   APP_ENCRYPTION_KEY: z.string().min(1),
+  APP_ENCRYPTION_KEY_RING: optionalTrimmedStringSchema,
   APP_ENCRYPTION_KEY_VERSION: z.coerce.number().int().positive().default(1),
   LOG_LEVEL: z.string().default("info"),
   API_HOST: z.string().default("0.0.0.0"),
@@ -85,11 +86,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   loadDotEnv();
 
   const parsed = envSchema.parse(env);
-  const encryptionKey = Buffer.from(parsed.APP_ENCRYPTION_KEY, "base64");
-
-  if (encryptionKey.length !== 32) {
-    throw new Error("APP_ENCRYPTION_KEY must decode to exactly 32 bytes");
-  }
+  const encryptionKey = parseEncryptionKey(parsed.APP_ENCRYPTION_KEY, "APP_ENCRYPTION_KEY");
+  const encryptionKeysByVersion = parseEncryptionKeyRing(
+    parsed.APP_ENCRYPTION_KEY_RING,
+    parsed.APP_ENCRYPTION_KEY_VERSION,
+    encryptionKey,
+  );
 
   const fanslyDefaultDelayMs =
     parsed.FANSLY_DEFAULT_DELAY_MS ??
@@ -104,6 +106,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     databaseUrl: parsed.DATABASE_URL,
     encryptionKey,
     encryptionKeyVersion: parsed.APP_ENCRYPTION_KEY_VERSION,
+    encryptionKeysByVersion,
     logLevel: parsed.LOG_LEVEL,
     apiHost: parsed.API_HOST,
     apiPort: parsed.API_PORT,
@@ -126,4 +129,60 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
   };
+}
+
+function parseEncryptionKey(value: string, envVar: string) {
+  const encryptionKey = Buffer.from(value, "base64");
+  if (encryptionKey.length !== 32) {
+    throw new Error(`${envVar} must decode to exactly 32 bytes`);
+  }
+
+  return encryptionKey;
+}
+
+function parseEncryptionKeyRing(
+  rawValue: string | undefined,
+  writeKeyVersion: number,
+  writeKey: Buffer,
+) {
+  const keysByVersion = new Map<number, Buffer>();
+
+  if (rawValue) {
+    for (const entry of rawValue.split(",")) {
+      const trimmedEntry = entry.trim();
+      if (trimmedEntry.length === 0) {
+        continue;
+      }
+
+      const separatorIndex = trimmedEntry.indexOf(":");
+      if (separatorIndex <= 0 || separatorIndex === trimmedEntry.length - 1) {
+        throw new Error(
+          "APP_ENCRYPTION_KEY_RING entries must use the format version:base64",
+        );
+      }
+
+      const versionText = trimmedEntry.slice(0, separatorIndex).trim();
+      const keyText = trimmedEntry.slice(separatorIndex + 1).trim();
+      const keyVersion = z.coerce.number().int().positive().parse(versionText);
+
+      if (keysByVersion.has(keyVersion)) {
+        throw new Error(`APP_ENCRYPTION_KEY_RING repeats key version ${keyVersion}`);
+      }
+
+      keysByVersion.set(
+        keyVersion,
+        parseEncryptionKey(keyText, `APP_ENCRYPTION_KEY_RING version ${keyVersion}`),
+      );
+    }
+  }
+
+  const existingWriteKey = keysByVersion.get(writeKeyVersion);
+  if (existingWriteKey && !existingWriteKey.equals(writeKey)) {
+    throw new Error(
+      `APP_ENCRYPTION_KEY_RING version ${writeKeyVersion} conflicts with APP_ENCRYPTION_KEY_VERSION`,
+    );
+  }
+
+  keysByVersion.set(writeKeyVersion, writeKey);
+  return keysByVersion as ReadonlyMap<number, Buffer>;
 }

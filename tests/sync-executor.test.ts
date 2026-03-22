@@ -23,6 +23,14 @@ const sharedMocks = vi.hoisted(() => ({
   persistFailedSyncPayload: vi.fn(),
 }));
 
+const telemetryMocks = vi.hoisted(() => ({
+  instances: [] as Array<{
+    metadata: Record<string, unknown>;
+    recordRunStarted: ReturnType<typeof vi.fn>;
+    finish: ReturnType<typeof vi.fn>;
+  }>,
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/services/sync/executor-handlers.ts", () => handlerMocks);
 vi.mock("../apps/runtime/src/services/sync/shared.ts", async () => {
@@ -37,13 +45,18 @@ vi.mock("../apps/runtime/src/services/sync/shared.ts", async () => {
 });
 vi.mock("../apps/runtime/src/services/sync/observability.ts", () => ({
   SyncRunTelemetry: class {
+    readonly metadata: Record<string, unknown>;
+    readonly recordRunStarted = vi.fn(async () => undefined);
+    readonly finish = vi.fn(async () => undefined);
+
+    constructor(_app: unknown, metadata: Record<string, unknown>) {
+      this.metadata = metadata;
+      telemetryMocks.instances.push(this);
+    }
+
     getRequestObserver() {
       return null;
     }
-
-    async recordRunStarted() {}
-
-    async finish() {}
   },
 }));
 
@@ -93,6 +106,7 @@ describe("sync executor", () => {
       mock.mockReset();
     }
     sharedMocks.persistFailedSyncPayload.mockReset();
+    telemetryMocks.instances.length = 0;
 
     dbMocks.startSyncRun.mockResolvedValue({
       id: 777,
@@ -101,6 +115,7 @@ describe("sync executor", () => {
     dbMocks.findPageById.mockResolvedValue({
       page: {
         id: 55,
+        label: "page-55",
         platform: "fansly",
       },
       proxy: {
@@ -223,6 +238,51 @@ describe("sync executor", () => {
     expect(result).toMatchObject({
       kind: "auth_failed",
       platformAccountId: 55,
+      needsContinuation: false,
+    });
+  });
+
+  it("records a failed run when page-context decryption fails before chunk execution", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.listRunnableSyncStreamStatesForPage
+      .mockResolvedValueOnce([streamState])
+      .mockResolvedValueOnce([]);
+    handlerMocks.resolveExecutorPageContext.mockRejectedValue(
+      new Error("No encryption key configured for version 1"),
+    );
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.startSyncRun).toHaveBeenCalledWith({}, {
+      platformAccountId: 55,
+      stream: "followers",
+      trigger: "manual",
+    });
+    expect(dbMocks.recordSyncStreamChunkStarted).toHaveBeenCalledWith({}, 55, "followers");
+    expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledWith(app, expect.objectContaining({
+      platformAccountId: 55,
+      syncRunId: 777,
+      platform: "fansly",
+      endpoint: "followers",
+    }));
+    expect(telemetryMocks.instances[0]?.recordRunStarted).toHaveBeenCalledTimes(1);
+    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
+      "failed",
+      expect.objectContaining({
+        summary: expect.stringContaining("No encryption key configured for version 1"),
+      }),
+      {
+        chunkStatus: "failed",
+      },
+    );
+    expect(result).toMatchObject({
+      kind: "failed",
+      platformAccountId: 55,
+      runId: 777,
       needsContinuation: false,
     });
   });

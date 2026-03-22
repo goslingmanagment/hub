@@ -6,6 +6,9 @@ export function createTestAppContext(
   overrides?: {
     adapter?: AppContext["adapter"];
     databaseUrl?: string;
+    encryptionKey?: Buffer;
+    encryptionKeyVersion?: number;
+    encryptionKeysByVersion?: ReadonlyMap<number, Buffer>;
     fanslyDefaultDelayMs?: number;
     fanslyDmConversationsDelayMs?: number;
     fanslyDmMessagesDelayMs?: number;
@@ -18,14 +21,22 @@ export function createTestAppContext(
     syncSharedRateLimitEnabled?: boolean;
   },
 ) {
+  const encryptionKey = overrides?.encryptionKey ?? Buffer.alloc(32, 7);
+  const encryptionKeyVersion = overrides?.encryptionKeyVersion ?? 1;
+  const encryptionKeysByVersion = new Map(overrides?.encryptionKeysByVersion ?? []);
+  if (!encryptionKeysByVersion.has(encryptionKeyVersion)) {
+    encryptionKeysByVersion.set(encryptionKeyVersion, encryptionKey);
+  }
+
   return {
     db: testDb.db,
     pool: testDb.pool,
     logger: overrides?.logger ?? testDb.logger,
     config: {
       databaseUrl: overrides?.databaseUrl ?? "",
-      encryptionKey: Buffer.alloc(32, 7),
-      encryptionKeyVersion: 1,
+      encryptionKey,
+      encryptionKeyVersion,
+      encryptionKeysByVersion,
       logLevel: "silent",
       apiHost: "0.0.0.0",
       apiPort: 3000,

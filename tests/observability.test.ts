@@ -30,12 +30,14 @@ describe("sync observability", () => {
     const logger = {
       warn: vi.fn(),
     };
+    const encryptionKey = Buffer.alloc(32, 7);
     const telemetry = new SyncRunTelemetry(
       {
         config: {
           databaseUrl: "",
-          encryptionKey: Buffer.alloc(32, 7),
+          encryptionKey,
           encryptionKeyVersion: 1,
+          encryptionKeysByVersion: new Map([[1, encryptionKey]]),
           logLevel: "silent",
           apiHost: "0.0.0.0",
           apiPort: 3000,
@@ -127,12 +129,14 @@ describe("sync observability", () => {
 
     const traceDir = await mkdtemp(path.join(tmpdir(), "sync-http-trace-"));
     const traceFile = path.join(traceDir, "requests.ndjson");
+    const encryptionKey = Buffer.alloc(32, 7);
     const telemetry = new SyncRunTelemetry(
       {
         config: {
           databaseUrl: "",
-          encryptionKey: Buffer.alloc(32, 7),
+          encryptionKey,
           encryptionKeyVersion: 1,
+          encryptionKeysByVersion: new Map([[1, encryptionKey]]),
           logLevel: "silent",
           apiHost: "0.0.0.0",
           apiPort: 3000,

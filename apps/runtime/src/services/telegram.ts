@@ -1,5 +1,5 @@
 import { getTelegramSettings, type TelegramSettingsRow } from "@agency_hub_core/db";
-import { decryptJson, redactSensitiveText } from "@agency_hub_core/shared";
+import { decryptJsonWithKeyVersion, redactSensitiveText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 
@@ -38,7 +38,10 @@ export function resolveTelegramCredentials(
   // DB credentials take priority over env vars
   if (settings.encryptedBotToken && settings.chatId) {
     try {
-      const botToken = decryptJson<string>(settings.encryptedBotToken, app.config.encryptionKey);
+      const botToken = decryptJsonWithKeyVersion<string>(
+        settings.encryptedBotToken,
+        app.config.encryptionKeysByVersion,
+      );
       return { botToken, chatId: settings.chatId };
     } catch {
       // decryption failed — fall through to env vars

@@ -57,6 +57,7 @@ describe("db write safety", () => {
         databaseUrl: "",
         encryptionKey,
         encryptionKeyVersion: 1,
+        encryptionKeysByVersion: new Map([[1, encryptionKey]]),
         logLevel: "silent",
         apiHost: "0.0.0.0",
         apiPort: 3000,
@@ -106,6 +107,7 @@ describe("db write safety", () => {
         databaseUrl: "",
         encryptionKey,
         encryptionKeyVersion: 1,
+        encryptionKeysByVersion: new Map([[1, encryptionKey]]),
         logLevel: "silent",
         apiHost: "0.0.0.0",
         apiPort: 3000,
@@ -617,6 +619,68 @@ describe("db write safety", () => {
 
     const contextResult = await resolvePageContext(createTestAppContext(testDb), page.label);
 
+    expect(contextResult.proxy).toEqual({
+      url: "socks5://127.0.0.1:1080",
+      username: "legacy-user",
+      password: "legacy-pass",
+    });
+  });
+
+  it("reads stored credentials and proxy auth using historical encryption keys", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const historicalKey = Buffer.alloc(32, 3);
+    const currentKey = Buffer.alloc(32, 8);
+    const model = await createModel(testDb.db, {
+      slug: "rotated-key-model",
+      name: "Rotated Key Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "rotated-key-page",
+    });
+
+    await storeFanslySession(
+      testDb.db,
+      page.id,
+      JSON.stringify(encryptJson<StoredPlatformCredentialBundle>(
+        {
+          platform: "fansly",
+          session: {
+            authorization: "legacy-token",
+          },
+        },
+        historicalKey,
+        1,
+      )),
+      1,
+    );
+    await storeProxyConfig(testDb.db, page.id, {
+      url: "socks5://127.0.0.1:1080",
+      encryptedAuth: JSON.stringify(encryptJson(
+        {
+          username: "legacy-user",
+          password: "legacy-pass",
+        },
+        historicalKey,
+        1,
+      )),
+      keyVersion: 1,
+    });
+
+    const contextResult = await resolvePageContext(createTestAppContext(testDb, {
+      encryptionKey: currentKey,
+      encryptionKeyVersion: 2,
+      encryptionKeysByVersion: new Map([
+        [1, historicalKey],
+        [2, currentKey],
+      ]),
+    }), page.label);
+
+    expect(contextResult.session.authorization).toBe("legacy-token");
     expect(contextResult.proxy).toEqual({
       url: "socks5://127.0.0.1:1080",
       username: "legacy-user",

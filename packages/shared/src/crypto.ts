@@ -8,6 +8,8 @@ export interface EncryptedEnvelope {
   ciphertext: string;
 }
 
+export type EncryptionKeysByVersion = ReadonlyMap<number, Buffer>;
+
 export function encryptJson<T>(
   value: T,
   key: Buffer,
@@ -28,11 +30,13 @@ export function encryptJson<T>(
   };
 }
 
-export function decryptJson<T>(payload: EncryptedEnvelope | string, key: Buffer): T {
-  const envelope = typeof payload === "string"
+function parseEncryptedEnvelope(payload: EncryptedEnvelope | string) {
+  return typeof payload === "string"
     ? (JSON.parse(payload) as EncryptedEnvelope)
     : payload;
+}
 
+function decryptEnvelope<T>(envelope: EncryptedEnvelope, key: Buffer): T {
   const decipher = createDecipheriv(
     "aes-256-gcm",
     key,
@@ -46,6 +50,23 @@ export function decryptJson<T>(payload: EncryptedEnvelope | string, key: Buffer)
   ]);
 
   return JSON.parse(plaintext.toString("utf8")) as T;
+}
+
+export function decryptJson<T>(payload: EncryptedEnvelope | string, key: Buffer): T {
+  return decryptEnvelope(parseEncryptedEnvelope(payload), key);
+}
+
+export function decryptJsonWithKeyVersion<T>(
+  payload: EncryptedEnvelope | string,
+  encryptionKeysByVersion: EncryptionKeysByVersion,
+): T {
+  const envelope = parseEncryptedEnvelope(payload);
+  const key = encryptionKeysByVersion.get(envelope.keyVersion);
+  if (!key) {
+    throw new Error(`No encryption key configured for version ${envelope.keyVersion}`);
+  }
+
+  return decryptEnvelope<T>(envelope, key);
 }
 
 export function sha256Hex(value: string) {

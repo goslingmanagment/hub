@@ -127,4 +127,18 @@ describe("config", () => {
       TELEGRAM_REPORT_HOUR: "24",
     })).toThrow();
   });
+
+  it("parses optional historical encryption keys alongside the current write key", () => {
+    const currentKey = Buffer.alloc(32, 7);
+    const historicalKey = Buffer.alloc(32, 9);
+    const config = loadConfig({
+      ...baseEnv,
+      APP_ENCRYPTION_KEY: currentKey.toString("base64"),
+      APP_ENCRYPTION_KEY_VERSION: "2",
+      APP_ENCRYPTION_KEY_RING: `1:${historicalKey.toString("base64")}`,
+    });
+
+    expect(config.encryptionKeysByVersion.get(1)?.equals(historicalKey)).toBe(true);
+    expect(config.encryptionKeysByVersion.get(2)?.equals(currentKey)).toBe(true);
+  });
 });

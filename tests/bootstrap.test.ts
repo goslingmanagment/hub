@@ -18,6 +18,7 @@ const bootstrapMocks = vi.hoisted(() => {
   const onlyFansAdapter = {
     close: vi.fn(async () => {}),
   };
+  const encryptionKey = Buffer.alloc(32, 7);
 
   return {
     adapter,
@@ -30,8 +31,9 @@ const bootstrapMocks = vi.hoisted(() => {
     logger,
     loadConfig: vi.fn(() => ({
       databaseUrl: "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
-      encryptionKey: Buffer.alloc(32, 7),
+      encryptionKey,
       encryptionKeyVersion: 1,
+      encryptionKeysByVersion: new Map([[1, encryptionKey]]),
       logLevel: "silent",
       apiHost: "0.0.0.0",
       apiPort: 3000,

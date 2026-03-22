@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import {
   normalizeProxyConfig,
-  decryptJson,
+  decryptJsonWithKeyVersion,
   encryptJson,
   type FanslySessionBundle,
   type OnlyMonsterTokenBundle,
@@ -18,6 +18,13 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+
+function decryptStoredJson<T>(
+  app: Pick<AppContext, "config">,
+  payload: string,
+) {
+  return decryptJsonWithKeyVersion<T>(payload, app.config.encryptionKeysByVersion);
+}
 
 function normalizeOptionalSessionValue(value: unknown, key: string) {
   if (value === undefined || value === null) {
@@ -145,9 +152,9 @@ export function resolveStoredProxyConfig(
   }
 
   const auth = storedProxy.encryptedAuth
-    ? decryptJson<{ username: string | null; password: string | null }>(
+    ? decryptStoredJson<{ username: string | null; password: string | null }>(
+      app,
       storedProxy.encryptedAuth,
-      app.config.encryptionKey,
     )
     : null;
 
@@ -181,9 +188,9 @@ function resolveStoredPageContext(
     throw new Error(`Page "${label}" has no stored platform credentials`);
   }
 
-  const decrypted = decryptJson<StoredPlatformCredentialBundle | Record<string, unknown>>(
+  const decrypted = decryptStoredJson<StoredPlatformCredentialBundle | Record<string, unknown>>(
+    app,
     stored.credentials.encryptedSession,
-    app.config.encryptionKey,
   );
 
   const proxy = resolveStoredProxyConfig(app, stored.proxy);
