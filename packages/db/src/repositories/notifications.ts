@@ -7,6 +7,11 @@ export type NotificationIncidentKind = "auth_failed" | "proxy_failed" | "stream_
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";
+const MAX_OPEN_INCIDENT_ATTEMPTS = 3;
+
+function isUniqueViolation(error: unknown): error is { code: string } {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+}
 
 export async function getNotificationIncidentByKey(db: Database, incidentKey: string) {
   return (await db.query.notificationIncidents.findFirst({
@@ -144,56 +149,79 @@ export async function openNotificationIncident(
     metadata: input.metadata ?? {},
     updatedAt: now,
   };
-
-  const [inserted] = await db.insert(notificationIncidents)
-    .values(values)
-    .onConflictDoNothing()
-    .returning();
-
-  if (inserted) {
-    return {
-      incident: inserted,
-      transition: "opened",
-    };
-  }
-
-  const [reopened] = await db.update(notificationIncidents)
-    .set(values)
-    .where(and(
-      eq(notificationIncidents.incidentKey, input.incidentKey),
-      eq(notificationIncidents.status, "resolved"),
-    ))
-    .returning();
-
-  if (reopened) {
-    return {
-      incident: reopened,
-      transition: "reopened",
-    };
-  }
-
-  const [existing] = await db.update(notificationIncidents)
-    .set({
-      lastSeenAt: now,
-      errorCode: input.errorCode ?? null,
-      errorSummary: input.errorSummary ?? null,
-      metadata: input.metadata ?? {},
-      updatedAt: now,
-    })
-    .where(and(
-      eq(notificationIncidents.incidentKey, input.incidentKey),
-      eq(notificationIncidents.status, "open"),
-    ))
-    .returning();
-
-  if (!existing) {
-    throw new Error(`Notification incident "${input.incidentKey}" could not be opened`);
-  }
-
-  return {
-    incident: existing,
-    transition: "existing",
+  const existingUpdate = {
+    lastSeenAt: now,
+    errorCode: input.errorCode ?? null,
+    errorSummary: input.errorSummary ?? null,
+    metadata: input.metadata ?? {},
+    updatedAt: now,
   };
+
+  for (let attempt = 0; attempt < MAX_OPEN_INCIDENT_ATTEMPTS; attempt += 1) {
+    try {
+      return await db.transaction(async (tx) => {
+        const lockedResult = await tx.execute(sql<NotificationIncidentRow>`
+          select *
+          from ${notificationIncidents}
+          where ${notificationIncidents.incidentKey} = ${input.incidentKey}
+          for update
+        `);
+        const locked = lockedResult.rows[0] ?? null;
+
+        if (!locked) {
+          const [inserted] = await tx.insert(notificationIncidents)
+            .values(values)
+            .returning();
+
+          if (!inserted) {
+            throw new Error(`Notification incident "${input.incidentKey}" could not be inserted`);
+          }
+
+          return {
+            incident: inserted,
+            transition: "opened" as const,
+          };
+        }
+
+        if (locked.status === "resolved") {
+          const [reopened] = await tx.update(notificationIncidents)
+            .set(values)
+            .where(eq(notificationIncidents.id, locked.id))
+            .returning();
+
+          if (!reopened) {
+            throw new Error(`Notification incident "${input.incidentKey}" could not be reopened`);
+          }
+
+          return {
+            incident: reopened,
+            transition: "reopened" as const,
+          };
+        }
+
+        const [existing] = await tx.update(notificationIncidents)
+          .set(existingUpdate)
+          .where(eq(notificationIncidents.id, locked.id))
+          .returning();
+
+        if (!existing) {
+          throw new Error(`Notification incident "${input.incidentKey}" could not be refreshed`);
+        }
+
+        return {
+          incident: existing,
+          transition: "existing" as const,
+        };
+      });
+    } catch (error) {
+      if (attempt < MAX_OPEN_INCIDENT_ATTEMPTS - 1 && isUniqueViolation(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error(`Notification incident "${input.incidentKey}" could not be opened`);
 }
 
 export async function resolveNotificationIncident(

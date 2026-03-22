@@ -284,6 +284,55 @@ describe("notification incidents integration", () => {
     expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("opens one persisted incident under concurrent callers without throwing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "concurrency-model",
+      name: "Concurrency Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "concurrency-page",
+    });
+
+    const now = new Date("2026-03-15T12:00:00.000Z");
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        openNotificationIncident(testDb.db, {
+          incidentKey: `auth_failed:${page.id}`,
+          kind: "auth_failed",
+          platformAccountId: page.id,
+          errorCode: "auth_failed",
+          errorSummary: "session expired",
+          metadata: {
+            pageLabel: page.label,
+            platform: "fansly",
+          },
+          now,
+        })),
+    );
+
+    expect(results).toHaveLength(8);
+    expect(results.every((result) => result.incident.status === "open")).toBe(true);
+    expect(results.filter((result) => result.transition === "opened")).toHaveLength(1);
+    expect(results.every((result) => ["opened", "existing"].includes(result.transition))).toBe(true);
+
+    const incidents = await listNotificationIncidents(testDb.db, {
+      platformAccountId: page.id,
+    });
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toEqual(expect.objectContaining({
+      incidentKey: `auth_failed:${page.id}`,
+      status: "open",
+      errorCode: "auth_failed",
+      errorSummary: "session expired",
+    }));
+  });
+
   it("clears auth_failed state and resolves page-level incidents after successful verification recovery", async (context) => {
     if (!testDb) {
       context.skip();
