@@ -89,4 +89,31 @@ describe("adapter hardening", () => {
       { provider: "onlyfans", scope: "global" },
     ]);
   });
+
+  it("serializes cross-category OnlyFans requests on the same egress", async () => {
+    const {
+      OnlyFansAdapter,
+    } = await loadAdapters();
+
+    const adapter = new OnlyFansAdapter({
+      baseUrl: "https://onlyfans.example",
+      defaultDelayMs: 25,
+    });
+    const context = {
+      auth: {
+        token: "om-token",
+      },
+      proxy: {
+        url: "http://proxy.example:8080",
+      },
+    };
+
+    await (adapter as any).waitForRateLimit(context, "accounts", 25);
+    const startedAt = Date.now();
+    const waitMs = await (adapter as any).waitForRateLimit(context, "transactions", 25);
+    await adapter.close();
+
+    expect(waitMs).toBeGreaterThanOrEqual(15);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(15);
+  });
 });

@@ -403,36 +403,65 @@ export class OnlyFansAdapter {
       ]);
     }
 
-    const rateLimitKey = `${buildProxyEgressKey(context.proxy)}:${category}`;
+    const egressKey = buildProxyEgressKey(context.proxy);
+    const categoryKey = `${egressKey}:${category}`;
+    const globalKey = egressKey;
+    const categoryGate = this.enterRateLimitChain(this.rateLimitChains.get(categoryKey) ?? Promise.resolve());
+    this.rateLimitChains.set(categoryKey, categoryGate.chain);
 
-    const previous = this.rateLimitChains.get(rateLimitKey) ?? Promise.resolve();
+    await categoryGate.previous;
+    try {
+      const globalGate = this.enterRateLimitChain(this.rateLimitChains.get(globalKey) ?? Promise.resolve());
+      this.rateLimitChains.set(globalKey, globalGate.chain);
+
+      await globalGate.previous;
+      try {
+        const waitedMs = await this.waitForMinimumDelay(
+          this.requestTimestamps.get(globalKey),
+          minDelayMs,
+        );
+        const startedAt = Date.now();
+        this.requestTimestamps.set(globalKey, startedAt);
+        return waitedMs;
+      } finally {
+        globalGate.release();
+        if (this.rateLimitChains.get(globalKey) === globalGate.chain) {
+          this.rateLimitChains.delete(globalKey);
+        }
+      }
+    } finally {
+      categoryGate.release();
+      if (this.rateLimitChains.get(categoryKey) === categoryGate.chain) {
+        this.rateLimitChains.delete(categoryKey);
+      }
+    }
+  }
+
+  private enterRateLimitChain(previous: Promise<void>) {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const chain = previous.then(() => gate);
-    this.rateLimitChains.set(rateLimitKey, chain);
+    return {
+      previous,
+      chain: previous.then(() => gate),
+      release,
+    };
+  }
 
-    await previous;
-    try {
-      const lastStartedAt = this.requestTimestamps.get(rateLimitKey);
-      const now = Date.now();
-      let waitedMs = 0;
-      if (lastStartedAt !== undefined) {
-        const elapsed = now - lastStartedAt;
-        if (elapsed < minDelayMs) {
-          waitedMs = minDelayMs - elapsed;
-          await delay(waitedMs);
-        }
-      }
-      this.requestTimestamps.set(rateLimitKey, Date.now());
-      return waitedMs;
-    } finally {
-      release();
-      if (this.rateLimitChains.get(rateLimitKey) === chain) {
-        this.rateLimitChains.delete(rateLimitKey);
-      }
+  private async waitForMinimumDelay(lastStartedAt: number | null | undefined, minDelayMs: number) {
+    if (lastStartedAt === null || lastStartedAt === undefined || minDelayMs <= 0) {
+      return 0;
     }
+
+    const elapsed = Date.now() - lastStartedAt;
+    if (elapsed >= minDelayMs) {
+      return 0;
+    }
+
+    const waitedMs = minDelayMs - elapsed;
+    await delay(waitedMs);
+    return waitedMs;
   }
 }
 
