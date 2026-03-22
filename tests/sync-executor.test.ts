@@ -170,7 +170,6 @@ describe("sync executor", () => {
       "sync.page.execute",
       { platformAccountId: 55 },
       {
-        singletonKey: "55",
         priority: 45,
         group: {
           id: "fansly:socks5://proxy.example:1080",
@@ -214,6 +213,54 @@ describe("sync executor", () => {
 
     expect(boss.send).toHaveBeenCalledTimes(1);
     expect(boss.complete).not.toHaveBeenCalled();
+  });
+
+  it("continues draining locally when PgBoss cannot enqueue a duplicate continuation", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    const boss = {
+      complete: vi.fn(async () => {}),
+      send: vi.fn(async () => null),
+    } as unknown as {
+      complete: ReturnType<typeof vi.fn>;
+      send: ReturnType<typeof vi.fn>;
+    };
+
+    dbMocks.listRunnableSyncStreamStatesForPage
+      .mockResolvedValueOnce([streamState])
+      .mockResolvedValueOnce([streamState])
+      .mockResolvedValueOnce([streamState])
+      .mockResolvedValueOnce([]);
+    handlerMocks.executeStreamChunk
+      .mockResolvedValueOnce({
+        satisfied: false,
+        yieldReason: "request_budget",
+        stats: { processedThisChunk: 100 },
+      })
+      .mockResolvedValueOnce({
+        satisfied: true,
+        stats: { processedThisChunk: 1 },
+      });
+
+    const result = await processSyncPageExecuteJob(app, boss as never, {
+      job: {
+        id: "job-1",
+        data: { platformAccountId: 55 },
+        groupId: "fansly:direct",
+      },
+    });
+
+    expect(boss.send).toHaveBeenCalledTimes(1);
+    expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(2);
+    expect(dbMocks.recordSyncStreamChunkStarted).toHaveBeenCalledTimes(2);
+    expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
+    expect(result).toMatchObject({
+      kind: "success",
+      platformAccountId: 55,
+      needsContinuation: false,
+    });
   });
 
   it("marks auth failures durably and does not request continuation", async () => {

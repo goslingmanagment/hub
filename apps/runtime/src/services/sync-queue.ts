@@ -133,13 +133,14 @@ export async function sendSyncPageWakeup(
     priority: number;
     provider: "fansly" | "onlyfans";
     egressKey: string;
+    dedupe?: boolean;
   },
 ): Promise<string | null | unknown> {
   return boss.send(
     SYNC_PAGE_EXECUTE_QUEUE,
     { platformAccountId: input.platformAccountId } satisfies SyncPageExecutePayload,
     {
-      singletonKey: String(input.platformAccountId),
+      singletonKey: input.dedupe === false ? undefined : String(input.platformAccountId),
       priority: input.priority,
       group: {
         id: buildSyncPageExecuteGroupId(input.provider, input.egressKey),

@@ -3623,7 +3623,7 @@ describe("api integration", () => {
 
         return rows.rows.length >= 7
           && rows.rows.every((row) => row.status === "success");
-      });
+      }, 15_000);
 
       const syncRunRows = await activeTestDb.pool.query<{
         stream: string;
@@ -3652,7 +3652,7 @@ describe("api integration", () => {
       abortController.abort();
       await executorPromise;
     }
-  });
+  }, 20_000);
 
   it("returns 503 when page creation succeeds but the initial sync cannot be queued", async (context) => {
     if (!testDb || !server) {

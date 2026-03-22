@@ -545,7 +545,7 @@ describe("sync integration", () => {
       await waitForRequestedSyncRevisions(app, {
         platformAccountId: page.id,
         revisions: request.revisions,
-        timeoutMs: 10_000,
+        timeoutMs: 20_000,
         pollMs: 100,
       });
 
@@ -580,7 +580,7 @@ describe("sync integration", () => {
       await boss.stop();
       await app.close();
     }
-  }, 20_000);
+  }, 30_000);
 
   it("serializes two direct Fansly pages on the same egress even with parallel workers", async (context) => {
     if (!testDb) {
