@@ -263,6 +263,38 @@ describe("sync executor", () => {
     });
   });
 
+  it("fails instead of draining forever when continuation wakeups keep getting skipped", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    const boss = {
+      complete: vi.fn(async () => {}),
+      send: vi.fn(async () => null),
+    } as unknown as {
+      complete: ReturnType<typeof vi.fn>;
+      send: ReturnType<typeof vi.fn>;
+    };
+
+    dbMocks.listRunnableSyncStreamStatesForPage.mockImplementation(async () => [streamState]);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: { processedThisChunk: 1 },
+    });
+
+    await expect(processSyncPageExecuteJob(app, boss as never, {
+      job: {
+        id: "job-1",
+        data: { platformAccountId: 55 },
+        groupId: "fansly:direct",
+      },
+    })).rejects.toThrow("Sync page executor exceeded 500 local chunks for page 55");
+
+    expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(500);
+    expect(boss.complete).not.toHaveBeenCalled();
+  });
+
   it("marks auth failures durably and does not request continuation", async () => {
     const app = {
       db: {},

@@ -277,8 +277,15 @@ export async function processSyncPageExecuteJob(
   },
 ) {
   let result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
+  let localChunks = 1;
 
   while (result.needsContinuation && result.continuationPriority !== null) {
+    if (localChunks >= MAX_LOCAL_EXECUTOR_CHUNKS) {
+      throw new Error(
+        `Sync page executor exceeded ${MAX_LOCAL_EXECUTOR_CHUNKS} local chunks for page ${result.platformAccountId}`,
+      );
+    }
+
     const wakeupTarget = await resolveSyncPageWakeupTarget(app, result.platformAccountId);
     if (wakeupTarget) {
       const wakeupId = await sendSyncPageWakeup(boss, {
@@ -295,6 +302,7 @@ export async function processSyncPageExecuteJob(
     }
 
     result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
+    localChunks += 1;
   }
 
   await boss.complete(SYNC_PAGE_EXECUTE_QUEUE, input.job.id);
