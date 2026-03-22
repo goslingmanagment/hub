@@ -33,4 +33,39 @@ describe("withPageSyncLock", () => {
     expect(release).toHaveBeenCalledTimes(1);
     expect(release.mock.calls[0]?.[0]).toBeInstanceOf(PageSyncLockReleaseError);
   });
+
+  it("preserves the original business error when advisory unlock also fails", async () => {
+    const release = vi.fn();
+    const runError = new Error("sync chunk failed");
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ locked: true }] })
+      .mockRejectedValueOnce(new Error("unlock failed"));
+    const connect = vi.fn(async () => ({
+      query,
+      release,
+    }));
+
+    let caught: unknown;
+    try {
+      await withPageSyncLock({
+        pool: {
+          connect,
+        },
+      } as never, {
+        pageId: 42,
+        pageLabel: "lora-main",
+      }, async () => {
+        throw runError;
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(runError);
+    expect((caught as Error & { lockReleaseError?: unknown }).lockReleaseError).toBeInstanceOf(
+      PageSyncLockReleaseError,
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release.mock.calls[0]?.[0]).toBeInstanceOf(PageSyncLockReleaseError);
+  });
 });

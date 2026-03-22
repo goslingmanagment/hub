@@ -21,6 +21,20 @@ export class PageSyncLockReleaseError extends Error {
   }
 }
 
+function attachLockReleaseError(error: unknown, releaseError: PageSyncLockReleaseError) {
+  if (!(error instanceof Error)) {
+    return error;
+  }
+
+  Object.defineProperty(error, "lockReleaseError", {
+    value: releaseError,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  return error;
+}
+
 export async function withPageSyncLock<T>(
   app: Pick<AppContext, "pool">,
   input: {
@@ -31,6 +45,7 @@ export async function withPageSyncLock<T>(
 ) {
   const client = await app.pool.connect();
   let releaseError: PageSyncLockReleaseError | null = null;
+  let runError: unknown = null;
 
   try {
     const result = await client.query<{ locked: boolean }>(
@@ -44,6 +59,9 @@ export async function withPageSyncLock<T>(
 
     try {
       return await run();
+    } catch (error) {
+      runError = error;
+      throw error;
     } finally {
       try {
         const unlockResult = await client.query<{ unlocked: boolean }>(
@@ -55,6 +73,9 @@ export async function withPageSyncLock<T>(
         }
       } catch (error) {
         releaseError = new PageSyncLockReleaseError(input.pageLabel, error);
+        if (runError !== null) {
+          throw attachLockReleaseError(runError, releaseError);
+        }
         throw releaseError;
       }
     }
