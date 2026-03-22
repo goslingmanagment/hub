@@ -15,6 +15,7 @@ import {
   listApiKeys,
   listUserPageAssignments,
   listUsers,
+  revokeApiKeysByIds,
   revokeApiKeysForUser,
   revokeAuthSessionsForUser,
   revokeAuthSession,
@@ -104,7 +105,7 @@ async function getAuthenticatedUserByUsername(app: AppContext, username: string)
   return getAuthenticatedUserById(app, user.id);
 }
 
-async function recordAudit(app: AppContext, input: AuditContext & {
+async function recordAudit(app: Pick<AppContext, "db">, input: AuditContext & {
   eventType: string;
   targetUserId?: number | null;
   platformAccountId?: number | null;
@@ -307,35 +308,42 @@ export async function issueChatterApiKey(
   if (input.pageLabel && !page) {
     throw new NotFoundError(`Page "${input.pageLabel}" not found`);
   }
-  if (page) {
-    await assignUserToPage(app.db, user.id, page.id);
-  }
-
-  const activeKeys = await findActiveApiKeysForUser(app.db, user.id);
-  if (activeKeys.length > 0) {
-    await revokeApiKeysForUser(app.db, user.id, "rotated");
-  }
 
   const tokenBody = randomToken(24);
   const rawKey = `${API_KEY_PREFIX}${tokenBody}`;
   const keyPrefix = `${API_KEY_PREFIX}${tokenBody.slice(0, API_KEY_DISPLAY_LENGTH)}`;
-  await createApiKey(app.db, {
-    userId: user.id,
-    keyPrefix,
-    tokenDigest: sha256Hex(rawKey),
-  });
+  const tokenDigest = sha256Hex(rawKey);
+  await app.db.transaction(async (tx) => {
+    const dbTx = tx as unknown as typeof app.db;
+    if (page) {
+      await assignUserToPage(dbTx, user.id, page.id);
+    }
 
-  await recordAudit(app, {
-    ...audit,
-    eventType: "api_key.issued",
-    targetUserId: user.id,
-    platformAccountId: page?.id ?? null,
-    metadata: {
-      username: user.username,
+    const activeKeys = await findActiveApiKeysForUser(dbTx, user.id);
+    await createApiKey(dbTx, {
+      userId: user.id,
       keyPrefix,
-      rotatedKeys: activeKeys.length,
-      pageLabel: page?.label ?? null,
-    },
+      tokenDigest,
+    });
+
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "api_key.issued",
+      targetUserId: user.id,
+      platformAccountId: page?.id ?? null,
+      metadata: {
+        username: user.username,
+        keyPrefix,
+        rotatedKeys: activeKeys.length,
+        pageLabel: page?.label ?? null,
+      },
+    });
+
+    await revokeApiKeysByIds(
+      dbTx,
+      activeKeys.map((activeKey) => activeKey.id),
+      "rotated",
+    );
   });
 
   return {

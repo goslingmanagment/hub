@@ -192,6 +192,24 @@ export async function revokeApiKeysForUser(
   )).returning();
 }
 
+export async function revokeApiKeysByIds(
+  db: Database,
+  apiKeyIds: number[],
+  revokedReason: string | null,
+) {
+  if (apiKeyIds.length === 0) {
+    return [];
+  }
+
+  return db.update(apiKeys).set({
+    revokedAt: new Date(),
+    revokedReason,
+  }).where(and(
+    inArray(apiKeys.id, apiKeyIds),
+    isNull(apiKeys.revokedAt),
+  )).returning();
+}
+
 export async function findApiKeyByDigest(db: Database, tokenDigest: string) {
   return db.query.apiKeys.findFirst({
     where: eq(apiKeys.tokenDigest, tokenDigest),
