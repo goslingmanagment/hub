@@ -1010,6 +1010,7 @@ export const connectionItemSchema = z.object({
   lastSyncError: z.string().nullable(),
   subscriberCount: z.number().int(),
   followerCount: z.number().int(),
+  proxyConfigured: z.boolean(),
 });
 
 export const overviewResponseSchema = z.object({
@@ -1676,7 +1677,7 @@ const fanslyCredentialsSchema = z.object({
     url: z.string().min(1),
     username: z.string().nullable().optional(),
     password: z.string().nullable().optional(),
-  }).optional(),
+  }).nullable().optional(),
 });
 
 const onlyfansCredentialsSchema = z.object({
@@ -1689,7 +1690,7 @@ const onlyfansCredentialsSchema = z.object({
     url: z.string().min(1),
     username: z.string().nullable().optional(),
     password: z.string().nullable().optional(),
-  }).optional(),
+  }).nullable().optional(),
 });
 
 export const verifyCredentialsBodySchema = z.discriminatedUnion("platform", [

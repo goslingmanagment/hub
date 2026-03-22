@@ -136,7 +136,7 @@ export async function removeProxy(
   await deleteProxyConfig(app.db, platformAccountId);
 }
 
-function resolveStoredProxy(
+export function resolveStoredProxyConfig(
   app: AppContext,
   storedProxy: NonNullable<Awaited<ReturnType<typeof findPageByLabel>>>["proxy"],
 ) {
@@ -186,7 +186,7 @@ function resolveStoredPageContext(
     app.config.encryptionKey,
   );
 
-  const proxy = resolveStoredProxy(app, stored.proxy);
+  const proxy = resolveStoredProxyConfig(app, stored.proxy);
 
   if (stored.page.platform === "fansly") {
     const session = isStoredPlatformCredentialBundle(decrypted)

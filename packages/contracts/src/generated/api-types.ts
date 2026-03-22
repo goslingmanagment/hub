@@ -5921,6 +5921,7 @@ export interface paths {
                             lastSyncError: string | null;
                             subscriberCount: number;
                             followerCount: number;
+                            proxyConfigured: boolean;
                         }[];
                     };
                 };
@@ -6065,7 +6066,7 @@ export interface paths {
                             url: string;
                             username?: string | null;
                             password?: string | null;
-                        };
+                        } | null;
                         modelSlug: string;
                         label: string;
                     } | {
@@ -6079,7 +6080,7 @@ export interface paths {
                             url: string;
                             username?: string | null;
                             password?: string | null;
-                        };
+                        } | null;
                         modelSlug: string;
                         label: string;
                     };
@@ -6177,7 +6178,7 @@ export interface paths {
                             url: string;
                             username?: string | null;
                             password?: string | null;
-                        };
+                        } | null;
                     } | {
                         /** @enum {string} */
                         platform: "onlyfans";
@@ -6189,7 +6190,7 @@ export interface paths {
                             url: string;
                             username?: string | null;
                             password?: string | null;
-                        };
+                        } | null;
                     };
                 };
             };
@@ -6377,7 +6378,7 @@ export interface paths {
                             url: string;
                             username?: string | null;
                             password?: string | null;
-                        };
+                        } | null;
                     } | {
                         /** @enum {string} */
                         platform: "onlyfans";
@@ -6389,7 +6390,7 @@ export interface paths {
                             url: string;
                             username?: string | null;
                             password?: string | null;
-                        };
+                        } | null;
                     };
                 };
             };

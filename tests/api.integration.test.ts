@@ -38,6 +38,7 @@ import { encryptJson, FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
 import {
   SESSION_COOKIE_NAME,
@@ -3762,8 +3763,46 @@ describe("api integration", () => {
         label: "lana",
         connectionStatus: "active",
         lastSyncError: null,
+        proxyConfigured: false,
       }),
     ]));
+  });
+
+  it("reports whether a stored proxy is configured without exposing proxy secrets", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    await saveProxy(createTestAppContext(testDb), fixture.lanaPage.id, {
+      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/connections",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const lanaConnection = response.json().find((connection: { label: string }) => connection.label === "lana");
+    expect(lanaConnection).toEqual(expect.objectContaining({
+      label: "lana",
+      proxyConfigured: true,
+    }));
+    expect(lanaConnection).not.toHaveProperty("proxy");
+    expect(JSON.stringify(lanaConnection)).not.toContain("proxy-user");
+    expect(JSON.stringify(lanaConnection)).not.toContain("proxy-pass");
   });
 
   it("returns subscriber spend and last transaction metadata", async (context) => {
@@ -4585,6 +4624,76 @@ describe("api integration", () => {
       url: "socks5://127.0.0.1:1080",
       has_encrypted_auth: true,
     });
+  });
+
+  it("removes a stored proxy when owners explicitly clear it via PATCH", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const activeTestDb = testDb;
+    await saveProxy(createTestAppContext(activeTestDb), fixture.lanaPage.id, {
+      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    });
+
+    await server.close();
+    let verifiedProxy: Record<string, unknown> | null | undefined;
+    const appContext = createTestAppContext(activeTestDb, {
+      adapter: {
+        async verifySession(contextInput: { proxy?: Record<string, unknown> | null }) {
+          verifiedProxy = contextInput.proxy;
+          return {
+            parsed: {
+              account: {
+                id: "acct-lana",
+                username: "lana_page",
+                displayName: "Lana",
+                followCount: 0,
+                subscriberCount: 0,
+              },
+            },
+            raw: null,
+          };
+        },
+      } as never,
+    });
+    server = await buildApiServer(appContext);
+    await server.ready();
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/pages/lana/credentials",
+      headers: { cookie },
+      payload: {
+        platform: "fansly",
+        session: {
+          authorization: "updated-token",
+        },
+        proxy: null,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(verifiedProxy).toBeNull();
+
+    const proxyRows = await activeTestDb.pool.query<{ count: number }>(`
+      select count(*)::int as count
+      from platform_account_proxies
+      where platform_account_id = $1
+    `, [fixture.lanaPage.id]);
+
+    expect(proxyRows.rows[0]?.count).toBe(0);
   });
 
   it("serves follower and subscriber daily series plus swagger security schemes", async (context) => {

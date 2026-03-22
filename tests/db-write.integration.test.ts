@@ -651,6 +651,75 @@ describe("db write safety", () => {
     expect(proxyRows.rows[0]?.count).toBe(0);
   });
 
+  it("reuses the stored proxy when credential updates omit proxy fields", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "stored-proxy-update-model",
+      name: "Stored Proxy Update Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "stored-proxy-update-page",
+    });
+
+    await saveProxy(createTestAppContext(testDb), page.id, {
+      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    });
+
+    let verifyCallCount = 0;
+    let verifiedProxy: Record<string, unknown> | null = null;
+    const app = createTestAppContext(testDb, {
+      adapter: {
+        async verifySession(contextInput: { proxy?: Record<string, unknown> | null }) {
+          verifyCallCount += 1;
+          verifiedProxy = contextInput.proxy ?? null;
+          return {
+            parsed: {
+              account: {
+                id: "acct-1",
+                username: "lana",
+                displayName: "Lana",
+                followCount: 0,
+                subscriberCount: 0,
+              },
+            },
+            raw: null,
+          };
+        },
+      } as never,
+    });
+
+    await updatePageCredentials(app, page.label, {
+      platform: "fansly",
+      session: {
+        authorization: "replacement-token",
+      },
+    });
+
+    const proxyRows = await testDb.pool.query(`
+      select url, encrypted_auth is not null as has_encrypted_auth
+      from platform_account_proxies
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(verifyCallCount).toBe(1);
+    expect(verifiedProxy).toEqual({
+      url: "socks5://127.0.0.1:1080",
+      username: "proxy-user",
+      password: "proxy-pass",
+    });
+    expect(proxyRows.rows).toEqual([
+      {
+        url: "socks5://127.0.0.1:1080",
+        has_encrypted_auth: true,
+      },
+    ]);
+  });
+
   it("verifies OnlyMonster account access before persisting an OnlyFans page", async (context) => {
     if (!testDb) {
       context.skip();

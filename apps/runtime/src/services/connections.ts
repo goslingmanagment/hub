@@ -17,7 +17,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
-import { saveProxy } from "./page-context.ts";
+import { removeProxy, resolveStoredProxyConfig, saveProxy } from "./page-context.ts";
 
 export type ConnectionStatus =
   | "active"
@@ -137,6 +137,7 @@ export async function listConnectionStatuses(
       lastSyncError: latestRun?.errorSummary ?? null,
       subscriberCount: page.subscriberCount,
       followerCount: page.followerCount,
+      proxyConfigured: page.proxyConfigured,
     };
   });
 }
@@ -160,7 +161,11 @@ export async function updatePageCredentials(
     throw new NotFoundError(`Page "${pageLabel}" not found`);
   }
 
-  const proxy = body.proxy ? normalizeProxyConfig(body.proxy) : null;
+  const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
+  const hasExplicitProxyInput = body.proxy !== undefined;
+  const proxy = body.proxy === undefined
+    ? storedProxy
+    : (body.proxy ? normalizeProxyConfig(body.proxy) : null);
 
   if (stored.page.platform !== body.platform) {
     throw new BadRequestError(
@@ -209,9 +214,12 @@ export async function updatePageCredentials(
     keyVersion: app.config.encryptionKeyVersion,
   });
 
-  // Save proxy if provided
-  if (proxy) {
-    await saveProxy(app, stored.page.id, proxy);
+  if (hasExplicitProxyInput) {
+    if (proxy) {
+      await saveProxy(app, stored.page.id, proxy);
+    } else {
+      await removeProxy(app, stored.page.id);
+    }
   }
 
   await handleSuccessfulPageVerificationRecovery(app, {

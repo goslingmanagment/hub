@@ -17790,6 +17790,9 @@
                         "type": "integer",
                         "minimum": -9007199254740991,
                         "maximum": 9007199254740991
+                      },
+                      "proxyConfigured": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -17805,7 +17808,8 @@
                       "lastFollowerSyncAt",
                       "lastSyncError",
                       "subscriberCount",
-                      "followerCount"
+                      "followerCount",
+                      "proxyConfigured"
                     ],
                     "additionalProperties": false
                   }
@@ -18045,35 +18049,42 @@
                         ]
                       },
                       "proxy": {
-                        "type": "object",
-                        "properties": {
-                          "url": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "username": {
-                            "anyOf": [
-                              {
-                                "type": "string"
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "minLength": 1
                               },
-                              {
-                                "type": "null"
+                              "username": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "password": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
+                            },
+                            "required": [
+                              "url"
                             ]
                           },
-                          "password": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                          {
+                            "type": "null"
                           }
-                        },
-                        "required": [
-                          "url"
                         ]
                       },
                       "modelSlug": {
@@ -18118,35 +18129,42 @@
                         "minLength": 1
                       },
                       "proxy": {
-                        "type": "object",
-                        "properties": {
-                          "url": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "username": {
-                            "anyOf": [
-                              {
-                                "type": "string"
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "minLength": 1
                               },
-                              {
-                                "type": "null"
+                              "username": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "password": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
+                            },
+                            "required": [
+                              "url"
                             ]
                           },
-                          "password": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                          {
+                            "type": "null"
                           }
-                        },
-                        "required": [
-                          "url"
                         ]
                       },
                       "modelSlug": {
@@ -18391,35 +18409,42 @@
                         ]
                       },
                       "proxy": {
-                        "type": "object",
-                        "properties": {
-                          "url": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "username": {
-                            "anyOf": [
-                              {
-                                "type": "string"
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "minLength": 1
                               },
-                              {
-                                "type": "null"
+                              "username": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "password": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
+                            },
+                            "required": [
+                              "url"
                             ]
                           },
-                          "password": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                          {
+                            "type": "null"
                           }
-                        },
-                        "required": [
-                          "url"
                         ]
                       }
                     },
@@ -18454,35 +18479,42 @@
                         "minLength": 1
                       },
                       "proxy": {
-                        "type": "object",
-                        "properties": {
-                          "url": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "username": {
-                            "anyOf": [
-                              {
-                                "type": "string"
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "minLength": 1
                               },
-                              {
-                                "type": "null"
+                              "username": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "password": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
+                            },
+                            "required": [
+                              "url"
                             ]
                           },
-                          "password": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                          {
+                            "type": "null"
                           }
-                        },
-                        "required": [
-                          "url"
                         ]
                       }
                     },
@@ -18839,35 +18871,42 @@
                         ]
                       },
                       "proxy": {
-                        "type": "object",
-                        "properties": {
-                          "url": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "username": {
-                            "anyOf": [
-                              {
-                                "type": "string"
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "minLength": 1
                               },
-                              {
-                                "type": "null"
+                              "username": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "password": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
+                            },
+                            "required": [
+                              "url"
                             ]
                           },
-                          "password": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                          {
+                            "type": "null"
                           }
-                        },
-                        "required": [
-                          "url"
                         ]
                       }
                     },
@@ -18902,35 +18941,42 @@
                         "minLength": 1
                       },
                       "proxy": {
-                        "type": "object",
-                        "properties": {
-                          "url": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "username": {
-                            "anyOf": [
-                              {
-                                "type": "string"
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "minLength": 1
                               },
-                              {
-                                "type": "null"
+                              "username": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "password": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
+                            },
+                            "required": [
+                              "url"
                             ]
                           },
-                          "password": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
+                          {
+                            "type": "null"
                           }
-                        },
-                        "required": [
-                          "url"
                         ]
                       }
                     },

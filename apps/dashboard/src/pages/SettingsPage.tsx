@@ -15,7 +15,7 @@ import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import { toast } from "sonner";
 
 type Tab = "credentials" | "sync" | "users";
-type CredentialsModalConnection = Pick<ConnectionItem, "label" | "platform">;
+type CredentialsModalConnection = Pick<ConnectionItem, "label" | "platform" | "proxyConfigured">;
 
 const tabs: { key: Tab; label: string }[] = [
   { key: "credentials", label: "Credentials" },
@@ -100,7 +100,12 @@ function CredentialsTab() {
             </div>
             <button
               type="button"
-              onClick={() => setSelectedConnection({ label: conn.label, platform: conn.platform })}
+              onClick={() =>
+                setSelectedConnection({
+                  label: conn.label,
+                  platform: conn.platform,
+                  proxyConfigured: conn.proxyConfigured,
+                })}
               className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
             >
               Update Credentials
@@ -320,6 +325,7 @@ function CredentialsModal({
   const [proxyUrl, setProxyUrl] = useState("");
   const [proxyUsername, setProxyUsername] = useState("");
   const [proxyPassword, setProxyPassword] = useState("");
+  const [clearStoredProxy, setClearStoredProxy] = useState(false);
 
   const title = `Update ${connection.label} credentials`;
   const hasProxy = proxyUrl.trim().length > 0;
@@ -334,13 +340,15 @@ function CredentialsModal({
           fanslyClientCheck: fanslyClientCheck.trim() || undefined,
           fanslySessionId: fanslySessionId.trim() || undefined,
         },
-        proxy: hasProxy
-          ? {
-            url: proxyUrl.trim(),
-            username: proxyUsername.trim() || null,
-            password: proxyPassword.trim() || null,
-          }
-          : undefined,
+        proxy: clearStoredProxy
+          ? null
+          : hasProxy
+            ? {
+              url: proxyUrl.trim(),
+              username: proxyUsername.trim() || null,
+              password: proxyPassword.trim() || null,
+            }
+            : undefined,
       }
       : {
         platform: "onlyfans",
@@ -348,13 +356,15 @@ function CredentialsModal({
           token: onlyFansToken.trim(),
         },
         username: onlyFansUsername.trim(),
-        proxy: hasProxy
-          ? {
-            url: proxyUrl.trim(),
-            username: proxyUsername.trim() || null,
-            password: proxyPassword.trim() || null,
-          }
-          : undefined,
+        proxy: clearStoredProxy
+          ? null
+          : hasProxy
+            ? {
+              url: proxyUrl.trim(),
+              username: proxyUsername.trim() || null,
+              password: proxyPassword.trim() || null,
+            }
+            : undefined,
       };
 
     try {
@@ -421,11 +431,27 @@ function CredentialsModal({
           </>
         )}
 
+        {connection.proxyConfigured && (
+          <label className="flex items-center gap-2 rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={clearStoredProxy}
+              onChange={(event) => setClearStoredProxy(event.target.checked)}
+            />
+            Remove the currently stored proxy on save
+          </label>
+        )}
+
         <div className="grid grid-cols-3 gap-3">
           <Field label="Proxy URL (optional)">
             <input
               value={proxyUrl}
-              onChange={(event) => setProxyUrl(event.target.value)}
+              onChange={(event) => {
+                setProxyUrl(event.target.value);
+                if (event.target.value.trim().length > 0) {
+                  setClearStoredProxy(false);
+                }
+              }}
               className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
             />
           </Field>
