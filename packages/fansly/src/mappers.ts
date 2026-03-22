@@ -1,13 +1,13 @@
 import type { TransactionState, TransactionType } from "@agency_hub_core/shared";
 
-export const FANSLY_MAPPER_VERSION = "fansly-phase1-v4";
+export const FANSLY_MAPPER_VERSION = "fansly-phase1-v5";
 
 export function mapFanslyTransactionType(rawType: number): TransactionType {
   if ([15000, 15001, 6515].includes(rawType)) {
     return "subscription";
   }
 
-  if ([7001, 7101].includes(rawType)) {
+  if ([7001, 7101, 20001].includes(rawType)) {
     return "tip";
   }
 

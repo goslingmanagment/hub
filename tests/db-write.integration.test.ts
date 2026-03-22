@@ -12,6 +12,7 @@ import {
   getFollowersForPage,
   recalculateFanPageSpend,
   rebuildRevenueRollups,
+  startSyncRun,
   storeFanslySession,
   storeProxyConfig,
   updatePageMetadata,
@@ -28,6 +29,8 @@ import type { OnlyMonsterAccount } from "@agency_hub_core/onlyfans";
 import { onboardFanslyPage, onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboarding.ts";
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
 import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
+import { getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
+import { syncTransactions } from "../apps/runtime/src/services/sync/transactions.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import {
@@ -1776,6 +1779,114 @@ describe("db write safety", () => {
         creator_net_amount_mills: 5000n,
       },
     ]);
+  });
+
+  it("maps Fansly raw type 20001 into the tip revenue bucket end to end", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "fansly-tip-sync-model",
+      name: "Fansly Tip Sync Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "fansly-tip-sync",
+    });
+    const run = await startSyncRun(testDb.db, {
+      platformAccountId: page.id,
+      stream: "transactions",
+      trigger: "worker",
+    });
+    const app = createTestAppContext(testDb, {
+      adapter: {
+        async getTransactionsPage() {
+          return {
+            items: [{
+              transactionId: "mapped-tip-20001",
+              walletId: null,
+              accountId: null,
+              correlationId: null,
+              correlationAccountId: null,
+              type: 20001,
+              status: 2,
+              destination: null,
+              amount: 12000,
+              destinationAmount: 12000,
+              destinationTax: null,
+              newBalance64: null,
+              senderId: null,
+              receiverId: null,
+              createdAt: new Date("2026-03-10T12:00:00.000Z").getTime(),
+              updatedAt: null,
+            }],
+            total: 1,
+            done: true,
+            raw: {
+              items: [{
+                transactionId: "mapped-tip-20001",
+                type: 20001,
+              }],
+            },
+          };
+        },
+        async getAccountsByIdsPage() {
+          return {
+            parsed: [],
+            raw: [],
+          };
+        },
+      } as never,
+    });
+    const telemetry = {
+      recordCheckpointLoaded: vi.fn(async () => {}),
+      recordCheckpointAdvanced: vi.fn(async () => {}),
+      addAnomaly: vi.fn(async () => {}),
+      addNote: vi.fn(async () => {}),
+      mergeHydrationSummary: vi.fn(),
+      setBoundarySummary: vi.fn(),
+      setScanSummary: vi.fn(),
+    };
+
+    await syncTransactions(app, {
+      pageLabel: page.label,
+      platformAccountId: page.id,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: run.id,
+      telemetry: telemetry as never,
+    });
+
+    const transactionRows = await testDb.pool.query(`
+      select raw_type, canonical_type
+      from transactions
+      where platform_account_id = ${page.id}
+        and transaction_id = 'mapped-tip-20001'
+    `);
+    expect(transactionRows.rows[0]).toEqual({
+      raw_type: "20001",
+      canonical_type: "tip",
+    });
+
+    const report = await getPageRevenueReport(app, page.label, {
+      period: "30d",
+      now: new Date("2026-03-15T00:00:00.000Z"),
+    });
+    expect(report.revenueMills).toBe(12000);
+    expect(report.breakdown).toEqual(expect.arrayContaining([
+      {
+        canonicalType: "tip",
+        bucket: "revenue",
+        netAmountMills: 12000,
+      },
+    ]));
+    expect(report.breakdown.some((row) => row.canonicalType === "other")).toBe(false);
   });
 
   it("fully clears stale spender projections when qualifying ledger rows disappear", async (context) => {

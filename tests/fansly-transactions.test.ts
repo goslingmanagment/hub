@@ -148,6 +148,13 @@ describe("syncTransactions", () => {
       telemetry: createTelemetry() as never,
     });
 
+    expect(dbMocks.upsertTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        rawType: 20001,
+        canonicalType: "tip",
+      }),
+    );
     expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
       expect.anything(),
       1,

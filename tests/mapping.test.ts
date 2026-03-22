@@ -17,6 +17,7 @@ describe("Fansly transaction mapping", () => {
   it("maps known types into the Phase 1 taxonomy", () => {
     expect(mapFanslyTransactionType(15001)).toBe("subscription");
     expect(mapFanslyTransactionType(7101)).toBe("tip");
+    expect(mapFanslyTransactionType(20001)).toBe("tip");
     expect(mapFanslyTransactionType(2110)).toBe("message_purchase");
     expect(mapFanslyTransactionType(2016)).toBe("message_purchase");
     expect(mapFanslyTransactionType(2116)).toBe("message_purchase");
