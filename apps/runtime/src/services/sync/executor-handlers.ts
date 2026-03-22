@@ -734,22 +734,25 @@ export async function executeSubscribersChunk(
         autoRenew,
       });
     }
-    await upsertPageSubscriptions(app.db, subscriptionInputs);
-    await upsertFanPages(app.db, fanPageInputs);
     processedThisChunk += subscriptionInputs.length;
 
     if (page.done) {
-      await deactivatePageSubscriptionsByGeneration(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        generation: state.generation,
-      });
-      await refreshFanPageSubscriberState(app.db, input.pageContext.page.id);
-      await rebuildSubscriberRollups(app.db, input.pageContext.page.id);
-      const completedCheckpoint = await upsertCheckpoint(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "subscribers",
-        state,
-        lastSuccessfulRunId: input.syncRunId,
+      const completedCheckpoint = await app.db.transaction(async (tx) => {
+        const dbTx = tx as typeof app.db;
+        await upsertPageSubscriptions(dbTx, subscriptionInputs);
+        await upsertFanPages(dbTx, fanPageInputs);
+        await deactivatePageSubscriptionsByGeneration(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          generation: state.generation,
+        });
+        await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
+        await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
+        return upsertCheckpoint(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "subscribers",
+          state,
+          lastSuccessfulRunId: input.syncRunId,
+        });
       });
       await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(completedCheckpoint));
       return {
@@ -764,6 +767,8 @@ export async function executeSubscribersChunk(
       } satisfies StreamChunkResult;
     }
 
+    await upsertPageSubscriptions(app.db, subscriptionInputs);
+    await upsertFanPages(app.db, fanPageInputs);
     state = {
       ...state,
       offset: state.offset + 100,

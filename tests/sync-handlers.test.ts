@@ -311,6 +311,82 @@ describe("sync executor handlers", () => {
     expect(dbMocks.refreshFanPageFollowerState).toHaveBeenCalledWith({}, 13);
   });
 
+  it("finalizes subscribers inside one transaction on completed pages", async () => {
+    const telemetry = createTelemetry();
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getSubscribersPage: vi.fn(async () => ({
+          total: 1,
+          items: [{
+            id: "sub-1",
+            subscriberId: "fan-1",
+            historyId: null,
+            subscriptionTierId: null,
+            subscriptionTierName: null,
+            subscriptionTierColor: null,
+            planId: null,
+            status: 3,
+            price: 5000,
+            renewPrice: 5000,
+            autoRenew: 1,
+            billingCycle: 30,
+            duration: 30,
+            renewDate: null,
+            createdAt: new Date("2026-03-10T00:00:00.000Z").toISOString(),
+            updatedAt: null,
+            endsAt: new Date("2026-04-09T00:00:00.000Z").toISOString(),
+          }],
+          done: true,
+          raw: {},
+        })),
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    fanHydrationMocks.hydrateFans.mockResolvedValue(new Map([["fan-1", 91]]));
+
+    const result = await executeSubscribersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 14,
+          label: "fansly-page",
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 6,
+      },
+      syncRunId: 103,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(dbMocks.upsertPageSubscriptions).toHaveBeenCalledWith(tx, expect.any(Array));
+    expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, expect.any(Array));
+    expect(dbMocks.deactivatePageSubscriptionsByGeneration).toHaveBeenCalledWith(tx, {
+      platformAccountId: 14,
+      generation: 1,
+    });
+    expect(dbMocks.refreshFanPageSubscriberState).toHaveBeenCalledWith(tx, 14);
+    expect(dbMocks.rebuildSubscriberRollups).toHaveBeenCalledWith(tx, 14);
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+      platformAccountId: 14,
+      stream: "subscribers",
+    }));
+  });
+
   it("consumes OnlyFans manual transaction override payloads revision-safely", async () => {
     const telemetry = createTelemetry();
     const app = {
