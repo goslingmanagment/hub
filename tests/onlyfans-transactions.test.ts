@@ -666,7 +666,7 @@ describe("syncOnlyFansTransactions", () => {
     expect(firstRequest.start!.toISOString()).toBe("2026-03-01T00:00:00.000Z");
   });
 
-  it("skips incremental OnlyFans rollup rebuilds when no ledger rows changed", async () => {
+  it("applies authoritative empty-window cleanup when the upstream window is empty", async () => {
     const adapter = createAdapter({
       transactionPages: [makeCursorPage([])],
       chargebackPages: [makeCursorPage([])],
@@ -681,8 +681,26 @@ describe("syncOnlyFansTransactions", () => {
       budget: new SyncChunkBudget(10, 60_000),
     });
 
-    expect(dbMocks.rebuildSpenderProjections).not.toHaveBeenCalled();
-    expect(dbMocks.rebuildRevenueRollups).not.toHaveBeenCalled();
+    expect(dbMocks.deleteTransactionsMissingFromWindow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        platformAccountId: 1,
+        from: new Date("2026-03-07T00:00:00.000Z"),
+        to: new Date("2026-03-15T00:00:00.000Z"),
+        cleanupMode: "authoritative_empty",
+        keepTransactionIds: [],
+      }),
+    );
+    expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      new Date("2026-03-07T00:00:00.000Z"),
+    );
+    expect(dbMocks.rebuildRevenueRollups).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      new Date("2026-03-07T00:00:00.000Z"),
+    );
   });
 
   it("rebuilds incremental OnlyFans rollups from the cleanup window start", async () => {
@@ -707,6 +725,8 @@ describe("syncOnlyFansTransactions", () => {
       expect.objectContaining({
         platformAccountId: 1,
         from: new Date("2026-03-07T00:00:00.000Z"),
+        cleanupMode: "keep_set",
+        keepTransactionIds: ["tx-1"],
       }),
     );
     expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
@@ -721,7 +741,7 @@ describe("syncOnlyFansTransactions", () => {
     );
   });
 
-  it("applies cleanup to chargeback-only incremental windows", async () => {
+  it("applies keep-set cleanup to chargeback-only incremental windows", async () => {
     const adapter = createAdapter({
       transactionPages: [makeCursorPage([])],
       chargebackPages: [
@@ -743,6 +763,7 @@ describe("syncOnlyFansTransactions", () => {
       expect.objectContaining({
         platformAccountId: 1,
         from: new Date("2026-03-07T00:00:00.000Z"),
+        cleanupMode: "keep_set",
         keepTransactionIds: ["cb-1"],
       }),
     );

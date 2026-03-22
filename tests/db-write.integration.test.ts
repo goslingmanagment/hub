@@ -9,6 +9,7 @@ import {
   createFanslyPage,
   createModel,
   deleteProxyConfig,
+  deleteTransactionsMissingFromWindow,
   getFollowersForPage,
   recalculateFanPageSpend,
   rebuildRevenueRollups,
@@ -1544,6 +1545,151 @@ describe("db write safety", () => {
       creator_net_amount_mills: 1200n,
     });
     expect(rows.rows[0]?.source_updated_at).toBeInstanceOf(Date);
+  });
+
+  it("deletes only missing transactions in a keep-set cleanup window", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "keep-set-cleanup-model",
+      name: "Keep Set Cleanup Model",
+    });
+    const page = await createOnlyFansPage(testDb.db, {
+      modelId: model.id,
+      label: "keep-set-cleanup-page",
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "keep-me",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-06T00:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "drop-me",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-06T01:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "outside-window",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-08T00:00:00.000Z"),
+    });
+
+    await deleteTransactionsMissingFromWindow(testDb.db, {
+      platformAccountId: page.id,
+      from: new Date("2026-03-05T00:00:00.000Z"),
+      to: new Date("2026-03-07T00:00:00.000Z"),
+      cleanupMode: "keep_set",
+      keepTransactionIds: ["keep-me"],
+    });
+
+    const rows = await testDb.pool.query(`
+      select transaction_id
+      from transactions
+      where platform_account_id = ${page.id}
+      order by transaction_id asc
+    `);
+
+    expect(rows.rows.map((row) => row.transaction_id)).toEqual([
+      "keep-me",
+      "outside-window",
+    ]);
+  });
+
+  it("deletes the full cleanup window for authoritative empty scans", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "authoritative-empty-cleanup-model",
+      name: "Authoritative Empty Cleanup Model",
+    });
+    const page = await createOnlyFansPage(testDb.db, {
+      modelId: model.id,
+      label: "authoritative-empty-cleanup-page",
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "drop-1",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-06T00:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "drop-2",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-06T01:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      transactionId: "outside-window",
+      rawType: "Tip from",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-08T00:00:00.000Z"),
+    });
+
+    await deleteTransactionsMissingFromWindow(testDb.db, {
+      platformAccountId: page.id,
+      from: new Date("2026-03-05T00:00:00.000Z"),
+      to: new Date("2026-03-07T00:00:00.000Z"),
+      cleanupMode: "authoritative_empty",
+      keepTransactionIds: [],
+    });
+
+    const rows = await testDb.pool.query(`
+      select transaction_id
+      from transactions
+      where platform_account_id = ${page.id}
+      order by transaction_id asc
+    `);
+
+    expect(rows.rows.map((row) => row.transaction_id)).toEqual([
+      "outside-window",
+    ]);
   });
 
   it("batches fan upserts and username alias writes into set-based statements", async (context) => {

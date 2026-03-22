@@ -564,15 +564,14 @@ async function syncOnlyFansTransactionsIncremental(
       });
     }
 
-    cleanupApplied = sourceTransactionIds.size > 0;
-    if (cleanupApplied) {
-      await deleteTransactionsMissingFromWindow(tx as typeof app.db, {
-        platformAccountId: input.platformAccountId,
-        from: start,
-        to: end,
-        keepTransactionIds: Array.from(sourceTransactionIds),
-      });
-    }
+    cleanupApplied = true;
+    await deleteTransactionsMissingFromWindow(tx as typeof app.db, {
+      platformAccountId: input.platformAccountId,
+      from: start,
+      to: end,
+      cleanupMode: sourceTransactionIds.size > 0 ? "keep_set" : "authoritative_empty",
+      keepTransactionIds: Array.from(sourceTransactionIds),
+    });
     const dirtyFrom = cleanupApplied ? start : oldestSeenAt;
     if (dirtyFrom) {
       await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId, dirtyFrom);

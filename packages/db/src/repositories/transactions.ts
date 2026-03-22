@@ -305,7 +305,8 @@ export async function deleteTransactionsMissingFromWindow(
     platformAccountId: number;
     from: Date;
     to: Date;
-    keepTransactionIds: string[];
+    cleanupMode: "keep_set" | "authoritative_empty";
+    keepTransactionIds?: string[];
   },
 ) {
   const clauses = [
@@ -314,8 +315,12 @@ export async function deleteTransactionsMissingFromWindow(
     lt(transactions.occurredAt, input.to),
   ];
 
-  if (input.keepTransactionIds.length > 0) {
-    clauses.push(notInArray(transactions.transactionId, input.keepTransactionIds));
+  if (input.cleanupMode === "keep_set") {
+    const keepTransactionIds = input.keepTransactionIds ?? [];
+    if (keepTransactionIds.length === 0) {
+      return;
+    }
+    clauses.push(notInArray(transactions.transactionId, keepTransactionIds));
   }
 
   await db.delete(transactions).where(and(...clauses));
