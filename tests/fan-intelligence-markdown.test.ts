@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   FanIntelligenceMarkdown,
   FanIntelligenceMarkdownRenderer,
-} from "../apps/dashboard/src/components/page/FanIntelligenceMarkdown";
+} from "../apps/dashboard/src/components/page/FanIntelligenceMarkdown.tsx";
 
 function render(body: string): string {
   return renderToStaticMarkup(createElement(FanIntelligenceMarkdown, { body }));

@@ -9,6 +9,10 @@ export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";
 const MAX_OPEN_INCIDENT_ATTEMPTS = 3;
 
+type LockedNotificationIncidentRow = NotificationIncidentRow & {
+  status: NotificationIncidentStatus;
+};
+
 function isUniqueViolation(error: unknown): error is { code: string } {
   return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
 }
@@ -160,7 +164,7 @@ export async function openNotificationIncident(
   for (let attempt = 0; attempt < MAX_OPEN_INCIDENT_ATTEMPTS; attempt += 1) {
     try {
       return await db.transaction(async (tx) => {
-        const lockedResult = await tx.execute(sql<NotificationIncidentRow>`
+        const lockedResult = await tx.execute(sql<LockedNotificationIncidentRow>`
           select *
           from ${notificationIncidents}
           where ${notificationIncidents.incidentKey} = ${input.incidentKey}
@@ -184,9 +188,10 @@ export async function openNotificationIncident(
         }
 
         if (locked.status === "resolved") {
+          const lockedId = Number(locked.id);
           const [reopened] = await tx.update(notificationIncidents)
             .set(values)
-            .where(eq(notificationIncidents.id, locked.id))
+            .where(eq(notificationIncidents.id, lockedId))
             .returning();
 
           if (!reopened) {
@@ -199,9 +204,10 @@ export async function openNotificationIncident(
           };
         }
 
+        const lockedId = Number(locked.id);
         const [existing] = await tx.update(notificationIncidents)
           .set(existingUpdate)
-          .where(eq(notificationIncidents.id, locked.id))
+          .where(eq(notificationIncidents.id, lockedId))
           .returning();
 
         if (!existing) {

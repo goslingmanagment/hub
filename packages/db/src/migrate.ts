@@ -5,6 +5,26 @@ import { loadConfig } from "@agency_hub_core/shared";
 
 import { createPool } from "./client.ts";
 
+function assertUniqueMigrationPrefixes(files: string[]) {
+  const seenPrefixes = new Map<string, string>();
+
+  for (const file of files) {
+    const prefix = file.split("_", 1)[0] ?? "";
+    if (!prefix) {
+      continue;
+    }
+
+    const existing = seenPrefixes.get(prefix);
+    if (existing) {
+      throw new Error(
+        `Duplicate migration prefix "${prefix}" found in "${existing}" and "${file}"`,
+      );
+    }
+
+    seenPrefixes.set(prefix, file);
+  }
+}
+
 async function main() {
   const config = loadConfig();
   const pool = createPool(config.databaseUrl);
@@ -21,6 +41,7 @@ async function main() {
     const files = (await readdir(migrationsDir))
       .filter((file) => file.endsWith(".sql"))
       .sort();
+    assertUniqueMigrationPrefixes(files);
 
     for (const file of files) {
       const alreadyApplied = await pool.query(

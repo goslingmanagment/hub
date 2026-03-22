@@ -299,10 +299,11 @@ describe("notification incidents integration", () => {
       label: "concurrency-page",
     });
 
+    const currentTestDb = testDb;
     const now = new Date("2026-03-15T12:00:00.000Z");
     const results = await Promise.all(
       Array.from({ length: 8 }, () =>
-        openNotificationIncident(testDb.db, {
+        openNotificationIncident(currentTestDb.db, {
           incidentKey: `auth_failed:${page.id}`,
           kind: "auth_failed",
           platformAccountId: page.id,

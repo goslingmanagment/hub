@@ -828,8 +828,10 @@ export async function executeFollowersChunk(
   await input.telemetry.recordCheckpointLoaded("followers", summarizeCheckpoint(checkpoint));
   const existingState = parseFollowersCheckpointState(checkpoint?.state, input.streamState.desiredRevision);
 
-  let state = existingState;
-  if (!state) {
+  let state: FollowersCheckpointState;
+  if (existingState) {
+    state = existingState;
+  } else {
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
     state = {
       revision: input.streamState.desiredRevision,
@@ -1026,8 +1028,10 @@ export async function executeFollowersReconcileChunk(
     input.streamState.desiredRevision,
   );
   const previousGeneration = asNumber(asRecord(checkpoint?.state)?.generation) ?? 0;
-  let state = existingState;
-  if (!state) {
+  let state: FollowersReconcileCheckpointState;
+  if (existingState) {
+    state = existingState;
+  } else {
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
     state = {
       revision: input.streamState.desiredRevision,

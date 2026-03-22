@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseProfileSections,
   isStrategySection,
-} from "../apps/dashboard/src/lib/parseFanProfile";
+} from "../apps/dashboard/src/lib/parseFanProfile.ts";
 
 describe("parseProfileSections", () => {
   it("returns full body as preamble when no H2 headings", () => {

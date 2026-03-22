@@ -60,7 +60,33 @@ const envSchema = z.object({
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
 });
 
-export type AppConfig = ReturnType<typeof loadConfig>;
+export interface AppConfig {
+  databaseUrl: string;
+  encryptionKey: Buffer;
+  encryptionKeyVersion: number;
+  encryptionKeysByVersion: ReadonlyMap<number, Buffer>;
+  logLevel: string;
+  apiHost: string;
+  apiPort: number;
+  sessionTtlDays: number;
+  fanslyBaseUrl: string;
+  onlyMonsterBaseUrl: string;
+  syncHttpTraceFile: string | null;
+  fanslyDefaultDelayMs: number;
+  followerPageDelayMs: number;
+  fanslyDmConversationsDelayMs: number;
+  fanslyDmMessagesDelayMs: number;
+  onlyFansDefaultDelayMs: number;
+  syncSharedRateLimitEnabled: boolean;
+  syncPageExecutorConcurrency: number;
+  transactionLookbackDays: number;
+  transactionRescanCapDays: number;
+  syncObservabilityRetentionDays: number;
+  telegramBotToken: string | null;
+  telegramChatId: string | null;
+  telegramEnabled: boolean;
+  telegramReportHourUtc: number;
+}
 
 function hasConfiguredValue(value: string | undefined) {
   return typeof value === "string" && value.trim().length > 0;
@@ -82,7 +108,7 @@ export function resolveFanslyDefaultDelayEnvSource(env: NodeJS.ProcessEnv = proc
   return null;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   loadDotEnv();
 
   const parsed = envSchema.parse(env);
@@ -131,7 +157,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   };
 }
 
-function parseEncryptionKey(value: string, envVar: string) {
+function parseEncryptionKey(value: string, envVar: string): Buffer {
   const encryptionKey = Buffer.from(value, "base64");
   if (encryptionKey.length !== 32) {
     throw new Error(`${envVar} must decode to exactly 32 bytes`);
@@ -144,7 +170,7 @@ function parseEncryptionKeyRing(
   rawValue: string | undefined,
   writeKeyVersion: number,
   writeKey: Buffer,
-) {
+): ReadonlyMap<number, Buffer> {
   const keysByVersion = new Map<number, Buffer>();
 
   if (rawValue) {
@@ -184,5 +210,5 @@ function parseEncryptionKeyRing(
   }
 
   keysByVersion.set(writeKeyVersion, writeKey);
-  return keysByVersion as ReadonlyMap<number, Buffer>;
+  return keysByVersion;
 }

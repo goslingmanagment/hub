@@ -27,6 +27,26 @@ function isEmptyJsonbDefault(value: string | null) {
   return normalizeDefaultExpression(value) === "'{}'::jsonb";
 }
 
+function assertUniqueMigrationPrefixes(files: string[]) {
+  const seenPrefixes = new Map<string, string>();
+
+  for (const file of files) {
+    const prefix = file.split("_", 1)[0] ?? "";
+    if (!prefix) {
+      continue;
+    }
+
+    const existing = seenPrefixes.get(prefix);
+    if (existing) {
+      throw new Error(
+        `Duplicate migration prefix "${prefix}" found in "${existing}" and "${file}"`,
+      );
+    }
+
+    seenPrefixes.set(prefix, file);
+  }
+}
+
 function driftError(detail: string) {
   return new Error(
     "Database schema for this runtime is behind or inconsistent. " +
@@ -36,9 +56,11 @@ function driftError(detail: string) {
 }
 
 async function listMigrationFiles(migrationsDir: string) {
-  return (await readdir(migrationsDir))
+  const files = (await readdir(migrationsDir))
     .filter((file) => file.endsWith(".sql"))
     .sort();
+  assertUniqueMigrationPrefixes(files);
+  return files;
 }
 
 export async function assertRuntimeSchemaReady(

@@ -680,6 +680,11 @@ describe("db write safety", () => {
       ]),
     }), page.label);
 
+    expect(contextResult.session).toBeDefined();
+    if (!contextResult.session) {
+      throw new Error("Expected page context session to be present");
+    }
+
     expect(contextResult.session.authorization).toBe("legacy-token");
     expect(contextResult.proxy).toEqual({
       url: "socks5://127.0.0.1:1080",
