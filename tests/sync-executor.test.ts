@@ -118,7 +118,7 @@ describe("sync executor", () => {
     });
   });
 
-  it("completes the current job before sending a continuation wakeup", async () => {
+  it("queues the continuation wakeup before completing the current job", async () => {
     const app = {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
@@ -162,7 +162,43 @@ describe("sync executor", () => {
         },
       },
     );
-    expect(boss.complete.mock.invocationCallOrder[0]).toBeLessThan(boss.send.mock.invocationCallOrder[0]);
+    expect(boss.send.mock.invocationCallOrder[0]).toBeLessThan(boss.complete.mock.invocationCallOrder[0]);
+  });
+
+  it("does not complete the current job when the continuation wakeup fails", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    const boss = {
+      complete: vi.fn(async () => {}),
+      send: vi.fn(async () => {
+        throw new Error("queue unavailable");
+      }),
+    } as unknown as {
+      complete: ReturnType<typeof vi.fn>;
+      send: ReturnType<typeof vi.fn>;
+    };
+
+    dbMocks.listRunnableSyncStreamStatesForPage
+      .mockResolvedValueOnce([streamState])
+      .mockResolvedValueOnce([streamState]);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: { processedThisChunk: 100 },
+    });
+
+    await expect(processSyncPageExecuteJob(app, boss as never, {
+      job: {
+        id: "job-1",
+        data: { platformAccountId: 55 },
+        groupId: "fansly:direct",
+      },
+    })).rejects.toThrow("queue unavailable");
+
+    expect(boss.send).toHaveBeenCalledTimes(1);
+    expect(boss.complete).not.toHaveBeenCalled();
   });
 
   it("marks auth failures durably and does not request continuation", async () => {

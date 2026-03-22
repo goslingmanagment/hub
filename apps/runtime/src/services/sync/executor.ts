@@ -268,19 +268,20 @@ export async function processSyncPageExecuteJob(
   },
 ) {
   const result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
-  await boss.complete(SYNC_PAGE_EXECUTE_QUEUE, input.job.id);
 
   if (result.needsContinuation && result.continuationPriority !== null) {
     const wakeupTarget = await resolveSyncPageWakeupTarget(app, result.platformAccountId);
     if (wakeupTarget) {
       await sendSyncPageWakeup(boss, {
-      platformAccountId: result.platformAccountId,
-      priority: result.continuationPriority,
+        platformAccountId: result.platformAccountId,
+        priority: result.continuationPriority,
         provider: wakeupTarget.provider,
         egressKey: wakeupTarget.egressKey,
       });
     }
   }
+
+  await boss.complete(SYNC_PAGE_EXECUTE_QUEUE, input.job.id);
 
   return result;
 }
