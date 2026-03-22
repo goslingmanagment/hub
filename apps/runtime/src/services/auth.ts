@@ -200,25 +200,29 @@ export async function setUserPassword(
     throw new BadRequestError(`Role "${user.role}" cannot use password login`);
   }
 
-  await updateUserPasswordHash(
-    app.db,
-    user.id,
-    await argon2.hash(input.password, { type: argon2.argon2id }),
-  );
-  const revokedSessions = await revokeAuthSessionsForUser(
-    app.db,
-    user.id,
-    "password_reset",
-  );
+  const passwordHash = await argon2.hash(input.password, { type: argon2.argon2id });
+  await app.db.transaction(async (tx) => {
+    const dbTx = tx as unknown as typeof app.db;
+    await updateUserPasswordHash(
+      dbTx,
+      user.id,
+      passwordHash,
+    );
+    const revokedSessions = await revokeAuthSessionsForUser(
+      dbTx,
+      user.id,
+      "password_reset",
+    );
 
-  await recordAudit(app, {
-    ...audit,
-    eventType: "user.password_updated",
-    targetUserId: user.id,
-    metadata: {
-      username: user.username,
-      revokedSessions: revokedSessions.length,
-    },
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.password_updated",
+      targetUserId: user.id,
+      metadata: {
+        username: user.username,
+        revokedSessions: revokedSessions.length,
+      },
+    });
   });
 }
 
