@@ -127,8 +127,8 @@ export class FanslyAdapter {
         query: {
           after: params.after ? String(params.after.getTime()) : undefined,
           before: params.before ? String(params.before.getTime()) : undefined,
-          limit: params.limit ? String(params.limit) : undefined,
-          offset: params.offset ? String(params.offset) : undefined,
+          limit: params.limit != null ? String(params.limit) : undefined,
+          offset: params.offset != null ? String(params.offset) : undefined,
         },
         category: "transactions",
         requestShape: {
@@ -173,8 +173,8 @@ export class FanslyAdapter {
       operation: "subscribers",
       endpointTemplate: "/subscribers",
       query: {
-        offset: params.offset ? String(params.offset) : undefined,
-        limit: params.limit ? String(params.limit) : undefined,
+        offset: params.offset != null ? String(params.offset) : undefined,
+        limit: params.limit != null ? String(params.limit) : undefined,
         after: params.after ? String(params.after.getTime()) : undefined,
         before: params.before ? String(params.before.getTime()) : undefined,
         status: params.status ?? "3,4",
@@ -227,8 +227,8 @@ export class FanslyAdapter {
         operation: "followers",
         endpointTemplate: "/account/:accountId/followersnew",
         query: {
-          offset: params.offset ? String(params.offset) : undefined,
-          limit: params.limit ? String(params.limit) : undefined,
+          offset: params.offset != null ? String(params.offset) : undefined,
+          limit: params.limit != null ? String(params.limit) : undefined,
           after: params.after ?? undefined,
           before: params.before ?? undefined,
         },
@@ -279,8 +279,8 @@ export class FanslyAdapter {
       operation: "messaging_groups",
       endpointTemplate: "/messaging/groups",
       query: {
-        offset: params.offset ? String(params.offset) : undefined,
-        limit: params.limit ? String(params.limit) : undefined,
+        offset: params.offset != null ? String(params.offset) : undefined,
+        limit: params.limit != null ? String(params.limit) : undefined,
         sortOrder: params.sortOrder !== undefined ? String(params.sortOrder) : undefined,
         flags: params.flags !== undefined ? String(params.flags) : undefined,
         search: params.search ?? undefined,
@@ -355,7 +355,7 @@ export class FanslyAdapter {
       endpointTemplate: "/message",
       query: {
         groupId: params.groupId,
-        limit: params.limit ? String(params.limit) : undefined,
+        limit: params.limit != null ? String(params.limit) : undefined,
         before: params.before ?? undefined,
       },
       category: "dm_messages",
