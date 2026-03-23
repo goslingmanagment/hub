@@ -5,6 +5,7 @@ import {
   createModel,
   createOnlyFansPage,
   dailyRevenue,
+  getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
   hasScheduledReportForDate,
   insertDeliveryAttempt,
@@ -288,6 +289,42 @@ describe("telegram revenue report integration", () => {
       messageId: 2,
     });
     expect(await hasScheduledReportForDate(testDb.db, "2026-03-19")).toBe(true);
+  });
+
+  it("returns the latest successful scheduled report date on or before a bound", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await insertDeliveryAttempt(testDb.db, {
+      kind: "daily_report_scheduled",
+      status: "sent",
+      reportDate: "2026-03-18",
+      messageId: 1,
+    });
+    await insertDeliveryAttempt(testDb.db, {
+      kind: "daily_report_scheduled",
+      status: "failed",
+      reportDate: "2026-03-19",
+      error: "timeout",
+    });
+    await insertDeliveryAttempt(testDb.db, {
+      kind: "daily_report_manual",
+      status: "sent",
+      reportDate: "2026-03-20",
+      messageId: 2,
+    });
+    await insertDeliveryAttempt(testDb.db, {
+      kind: "daily_report_scheduled",
+      status: "sent",
+      reportDate: "2026-03-21",
+      messageId: 3,
+    });
+
+    expect(await getLatestScheduledReportDateOnOrBefore(testDb.db, "2026-03-17")).toBe(null);
+    expect(await getLatestScheduledReportDateOnOrBefore(testDb.db, "2026-03-20")).toBe("2026-03-18");
+    expect(await getLatestScheduledReportDateOnOrBefore(testDb.db, "2026-03-21")).toBe("2026-03-21");
   });
 
   it("sends the scheduled report with DB-only credentials and records the delivery attempt", async (context) => {

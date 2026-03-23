@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { telegramSettings, telegramDeliveryAttempts } from "../schema.ts";
@@ -126,4 +126,26 @@ export async function hasScheduledReportForDate(
   });
 
   return !!row;
+}
+
+export async function getLatestScheduledReportDateOnOrBefore(
+  db: Database,
+  reportDate: string,
+): Promise<string | null> {
+  const row = await db.query.telegramDeliveryAttempts.findFirst({
+    columns: {
+      reportDate: true,
+    },
+    where: and(
+      eq(telegramDeliveryAttempts.kind, "daily_report_scheduled"),
+      eq(telegramDeliveryAttempts.status, "sent"),
+      lte(telegramDeliveryAttempts.reportDate, reportDate),
+    ),
+    orderBy: [
+      desc(telegramDeliveryAttempts.reportDate),
+      desc(telegramDeliveryAttempts.createdAt),
+    ],
+  });
+
+  return row?.reportDate ?? null;
 }

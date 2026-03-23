@@ -2,8 +2,8 @@ import {
   closeOrphanedSyncRuns,
   deleteExpiredRawPayloads,
   deleteExpiredSyncObservability,
+  getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
-  hasScheduledReportForDate,
 } from "@agency_hub_core/db";
 import { toBusinessDate, UTC_TIME_ZONE, addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 import { PgBoss } from "pg-boss";
@@ -27,6 +27,41 @@ type WorkerBoss = Pick<
   PgBoss,
   "complete" | "createQueue" | "fail" | "fetch" | "schedule" | "send" | "start" | "stop" | "touch" | "work"
 >;
+
+function resolveDueTelegramReportDate(
+  now: Date,
+  reportHourUtc: number,
+) {
+  const todayStart = startOfBusinessDay(now, UTC_TIME_ZONE);
+  const dueStart = addUtcDays(
+    todayStart,
+    now.getUTCHours() >= reportHourUtc ? -1 : -2,
+  );
+
+  return toBusinessDate(dueStart, UTC_TIME_ZONE);
+}
+
+function buildTelegramReportRunTime(reportDate: string) {
+  return addUtcDays(new Date(`${reportDate}T00:00:00.000Z`), 1);
+}
+
+function listPendingTelegramReportDates(
+  latestSentReportDate: string | null,
+  dueReportDate: string,
+) {
+  if (!latestSentReportDate) {
+    return [dueReportDate];
+  }
+
+  const dates: string[] = [];
+  let cursor = addUtcDays(new Date(`${latestSentReportDate}T00:00:00.000Z`), 1);
+  while (toBusinessDate(cursor, UTC_TIME_ZONE) <= dueReportDate) {
+    dates.push(toBusinessDate(cursor, UTC_TIME_ZONE));
+    cursor = addUtcDays(cursor, 1);
+  }
+
+  return dates;
+}
 
 export async function startWorkerServices(
   app: AppContext,
@@ -79,7 +114,6 @@ export async function startWorkerServices(
 
   await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, { batchSize: 1 }, async () => {
     const now = new Date();
-    const currentHourUtc = now.getUTCHours();
 
     const settings = await getTelegramSettings(app.db, {
       defaultReportHourUtc: app.config.telegramReportHourUtc,
@@ -87,20 +121,21 @@ export async function startWorkerServices(
     if (!settings.enabled || !settings.dailyReportEnabled) {
       return;
     }
-    if (currentHourUtc !== settings.reportHourUtc) {
-      return;
-    }
 
-    const todayStart = startOfBusinessDay(now, UTC_TIME_ZONE);
-    const yesterdayStart = addUtcDays(todayStart, -1);
-    const reportDate = toBusinessDate(yesterdayStart, UTC_TIME_ZONE);
-    if (await hasScheduledReportForDate(app.db, reportDate)) {
-      return;
-    }
+    const dueReportDate = resolveDueTelegramReportDate(now, settings.reportHourUtc);
+    const latestSentReportDate = await getLatestScheduledReportDateOnOrBefore(
+      app.db,
+      dueReportDate,
+    );
 
-    const result = await sendDailyRevenueTelegramReport(app, now);
-    if (result.delivery.status === "failed") {
-      throw new Error(`Telegram daily report delivery failed: ${result.delivery.error}`);
+    for (const reportDate of listPendingTelegramReportDates(latestSentReportDate, dueReportDate)) {
+      const result = await sendDailyRevenueTelegramReport(
+        app,
+        buildTelegramReportRunTime(reportDate),
+      );
+      if (result.delivery.status === "failed") {
+        throw new Error(`Telegram daily report delivery failed: ${result.delivery.error}`);
+      }
     }
   });
 
