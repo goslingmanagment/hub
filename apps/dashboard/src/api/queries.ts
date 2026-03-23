@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
   AdminCreateUserBody,
@@ -371,11 +372,35 @@ export function useSpenderDetail(
 }
 
 export function useSpenderBatch(body: SpenderBatchBody | null) {
-  return useQuery({
-    queryKey: ["spenderBatch", body],
+  const qc = useQueryClient();
+  const requestFingerprint = body !== null && body.fans.length > 0
+    ? JSON.stringify(body)
+    : null;
+  const queryKey = ["spenderBatch", requestFingerprint] as const;
+  const query = useQuery({
+    queryKey,
     queryFn: () => api.post<SpenderBatchResponse>("/api/v2/spenders:batch", body!),
-    enabled: body !== null && body.fans.length > 0,
+    enabled: false,
+    retry: false,
   });
+
+  useEffect(() => {
+    if (requestFingerprint === null) {
+      return;
+    }
+
+    if (qc.getQueryState<SpenderBatchResponse>(queryKey)?.fetchStatus === "fetching") {
+      return;
+    }
+
+    if (qc.getQueryData<SpenderBatchResponse>(queryKey) !== undefined) {
+      return;
+    }
+
+    void query.refetch();
+  }, [qc, query.refetch, requestFingerprint]);
+
+  return query;
 }
 
 // Admin
