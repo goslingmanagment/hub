@@ -1,8 +1,8 @@
 import {
   clearSyncPageAuthFailed,
   getTelegramSettings,
+  hasRecentTerminalProxyFailure,
   insertDeliveryAttempt,
-  listSyncRequestAttempts,
   openNotificationIncident,
   resolveNotificationIncident,
   type NotificationIncidentKind,
@@ -199,14 +199,10 @@ async function hasTerminalProxyFailure(
   app: Pick<AppContext, "db">,
   runId: number,
 ) {
-  const attempts = await listSyncRequestAttempts(app.db, {
+  return hasRecentTerminalProxyFailure(app.db, {
     runId,
     limit: 2_000,
   });
-
-  return attempts.some((attempt) =>
-    attempt.state === "failed" &&
-    (attempt.failureKind === "timeout" || attempt.failureKind === "transport"));
 }
 
 export async function notifyAuthFailedIncident(

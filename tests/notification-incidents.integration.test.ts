@@ -284,6 +284,104 @@ describe("notification incidents integration", () => {
     expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("detects terminal proxy failures from the newest attempt window instead of the oldest rows", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "latest-failure-model",
+      name: "Latest Failure Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "latest-proxy-page",
+    });
+    await ensureSyncStreamStateRows(testDb.db, {
+      platformAccountId: page.id,
+    });
+
+    const app = createTestAppContext(testDb);
+    const run = await startSyncRun(testDb.db, {
+      platformAccountId: page.id,
+      stream: "followers",
+      trigger: "worker",
+    });
+
+    await testDb.pool.query(`
+      insert into sync_request_attempts (
+        sync_run_id,
+        platform_account_id,
+        provider,
+        stream,
+        operation,
+        logical_request_id,
+        attempt_number,
+        state,
+        started_at,
+        finished_at
+      )
+      select $1,
+             $2,
+             'fansly',
+             'followers',
+             'followers_page',
+             'followers_page:' || gs::text,
+             1,
+             'success',
+             timestamptz '2026-03-22T00:00:00.000Z' + make_interval(secs => gs),
+             timestamptz '2026-03-22T00:00:00.000Z' + make_interval(secs => gs + 1)
+      from generate_series(1, 2001) gs
+    `, [run.id, page.id]);
+
+    await testDb.pool.query(`
+      insert into sync_request_attempts (
+        sync_run_id,
+        platform_account_id,
+        provider,
+        stream,
+        operation,
+        logical_request_id,
+        attempt_number,
+        state,
+        failure_kind,
+        error_message,
+        started_at,
+        finished_at
+      )
+      values (
+        $1,
+        $2,
+        'fansly',
+        'followers',
+        'followers_page',
+        'followers_page:2002',
+        1,
+        'failed',
+        'transport',
+        'proxy connect failed',
+        timestamptz '2026-03-23T00:00:00.000Z',
+        timestamptz '2026-03-23T00:00:01.000Z'
+      )
+    `, [run.id, page.id]);
+
+    await notifySyncChunkFailureIncident(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      stream: "followers",
+      runId: run.id,
+      hasProxy: true,
+      previousConsecutiveFailures: 0,
+      errorSummary: "proxy connect failed",
+    });
+
+    const incident = await getNotificationIncidentByKey(testDb.db, `proxy_failed:${page.id}`);
+    expect(incident?.status).toBe("open");
+    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("opens one persisted incident under concurrent callers without throwing", async (context) => {
     if (!testDb) {
       context.skip();

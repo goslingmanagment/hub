@@ -926,6 +926,33 @@ export async function listSyncRequestAttempts(
   return result.rows.map((row) => normalizeSyncRequestAttemptRow(row));
 }
 
+export async function hasRecentTerminalProxyFailure(
+  db: Database,
+  input: {
+    runId: number;
+    limit?: number;
+  },
+) {
+  const result = await db.execute<{ hasFailure: boolean }>(sql`
+    with recent_attempts as (
+      select a.state,
+             a.failure_kind as "failureKind"
+      from sync_request_attempts a
+      where a.sync_run_id = ${input.runId}
+      order by a.started_at desc, a.id desc
+      limit ${input.limit ?? 2000}
+    )
+    select exists(
+      select 1
+      from recent_attempts
+      where state = 'failed'
+        and "failureKind" in ('timeout', 'transport')
+    ) as "hasFailure"
+  `);
+
+  return Boolean(result.rows[0]?.hasFailure);
+}
+
 export async function listSyncMonitorRecentRequests(
   db: Database,
   input?: {

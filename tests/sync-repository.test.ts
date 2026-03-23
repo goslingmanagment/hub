@@ -4,6 +4,7 @@ import {
   computeSyncStreamSlotOffsetSeconds,
   ensureSyncProviderRateLimitProfile,
   getSyncRun,
+  hasRecentTerminalProxyFailure,
   listRecentSyncRuns,
   listRunningSyncRuns,
   listSyncRequestAttempts,
@@ -157,6 +158,29 @@ describe("sync repository timestamp normalization", () => {
     expect(events[0]?.emittedAt).toBeInstanceOf(Date);
     expect(attempts[0]?.startedAt).toBeInstanceOf(Date);
     expect(attempts[0]?.finishedAt).toBeInstanceOf(Date);
+  });
+
+  it("checks only the latest request attempts when detecting terminal proxy failures", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      rows: [{
+        hasFailure: true,
+      }],
+    });
+    const db = {
+      execute,
+    } as never;
+
+    const hasFailure = await hasRecentTerminalProxyFailure(db, {
+      runId: 8,
+      limit: 2_000,
+    });
+
+    expect(hasFailure).toBe(true);
+
+    const query = execute.mock.calls[0]?.[0];
+    expect(extractSqlText(query)).toContain("order by a.started_at desc, a.id desc");
+    expect(extractQueryParams(query)).toContain(8);
+    expect(extractQueryParams(query)).toContain(2_000);
   });
 
   it("normalizes last activity timestamps for running run snapshots", async () => {
