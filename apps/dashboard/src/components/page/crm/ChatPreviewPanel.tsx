@@ -10,12 +10,24 @@ interface ChatPreviewPanelProps {
 }
 
 export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHref }: ChatPreviewPanelProps) {
-  const { data, isLoading } = useCrmConversationPreview(pageLabel, platformConversationId, { limit: 10 });
+  const {
+    data,
+    isError,
+    isLoading,
+  } = useCrmConversationPreview(pageLabel, platformConversationId, { limit: 10 });
 
   if (isLoading) {
     return (
       <div className="bg-hover/50 px-6 py-4">
         <span className="text-sm text-text-muted">Loading preview...</span>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="bg-hover/50 px-6 py-4">
+        <span className="text-sm text-text-muted">Preview failed to load.</span>
       </div>
     );
   }
