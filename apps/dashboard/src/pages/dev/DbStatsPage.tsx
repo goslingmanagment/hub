@@ -87,7 +87,7 @@ export function DbStatsPage() {
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
-              {["Name", "Hash", "Applied"].map((col) => (
+              {["Hash Prefix", "Hash", "Applied"].map((col) => (
                 <th
                   key={col}
                   className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
