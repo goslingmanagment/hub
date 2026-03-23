@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { loadConfig } from "@agency_hub_core/shared";
@@ -7,18 +11,25 @@ const baseEnv = {
   APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
 } satisfies NodeJS.ProcessEnv;
 const originalDotenvQuiet = process.env.DOTENV_CONFIG_QUIET;
+const originalCwd = process.cwd();
+let testCwd: string;
 
-beforeAll(() => {
+beforeAll(async () => {
   process.env.DOTENV_CONFIG_QUIET = "true";
+  testCwd = await mkdtemp(path.join(tmpdir(), "agency-hub-config-tests-"));
+  process.chdir(testCwd);
 });
 
-afterAll(() => {
+afterAll(async () => {
+  process.chdir(originalCwd);
+
   if (originalDotenvQuiet === undefined) {
     delete process.env.DOTENV_CONFIG_QUIET;
-    return;
+  } else {
+    process.env.DOTENV_CONFIG_QUIET = originalDotenvQuiet;
   }
 
-  process.env.DOTENV_CONFIG_QUIET = originalDotenvQuiet;
+  await rm(testCwd, { recursive: true, force: true });
 });
 
 describe("config", () => {
@@ -163,5 +174,36 @@ describe("config", () => {
 
     expect(config.encryptionKeysByVersion.get(1)?.equals(historicalKey)).toBe(true);
     expect(config.encryptionKeysByVersion.get(2)?.equals(currentKey)).toBe(true);
+  });
+
+  it("loads dotenv values into the supplied env object without mutating process.env", async () => {
+    const originalOnlyMonsterBaseUrl = process.env.ONLYMONSTER_BASE_URL;
+    const dotenvPath = path.join(testCwd, ".env");
+
+    await writeFile(
+      dotenvPath,
+      "ONLYMONSTER_BASE_URL=https://example.invalid/from-dotenv\n",
+      "utf8",
+    );
+
+    delete process.env.ONLYMONSTER_BASE_URL;
+
+    try {
+      const env = {
+        ...baseEnv,
+      };
+      const config = loadConfig(env);
+
+      expect(env.ONLYMONSTER_BASE_URL).toBe("https://example.invalid/from-dotenv");
+      expect(config.onlyMonsterBaseUrl).toBe("https://example.invalid/from-dotenv");
+      expect(process.env.ONLYMONSTER_BASE_URL).toBeUndefined();
+    } finally {
+      if (originalOnlyMonsterBaseUrl === undefined) {
+        delete process.env.ONLYMONSTER_BASE_URL;
+      } else {
+        process.env.ONLYMONSTER_BASE_URL = originalOnlyMonsterBaseUrl;
+      }
+      await rm(dotenvPath, { force: true });
+    }
   });
 });

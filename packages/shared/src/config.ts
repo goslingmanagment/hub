@@ -126,7 +126,10 @@ export function resolveFanslyDefaultDelayEnvSource(env: NodeJS.ProcessEnv = proc
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  loadDotEnv();
+  loadDotEnv({
+    processEnv: env,
+    quiet: process.env.DOTENV_CONFIG_QUIET === "true",
+  });
 
   const parsed = envSchema.parse(env);
   const encryptionKey = parseEncryptionKey(parsed.APP_ENCRYPTION_KEY, "APP_ENCRYPTION_KEY");
