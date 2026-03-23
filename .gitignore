@@ -1,6 +1,8 @@
 node_modules
 .pnpm-store
 .env
+.env.production
+.env.production.local
 .env.local
 .env.docker
 coverage

@@ -1,442 +1,260 @@
-# Agency Hub Core
+# Agency Hub
 
-CLI-first page-to-PostgreSQL sync pipeline for the current Fansly + OnlyFans milestone.
+Agency Hub is a single-origin dashboard + API for syncing Fansly and OnlyFans page data into PostgreSQL, running background sync workers, and operating the system from one Docker Compose stack.
 
-This repo syncs Fansly page metadata, transactions, subscribers, and followers, plus OnlyFans revenue data via OnlyMonster, into PostgreSQL, then rebuilds daily rollups for reporting. It does not include a dashboard UI.
+For v1.0 production:
+- the dashboard and API are served from the same plain-HTTP origin
+- the production container runs compiled Node.js output, not `tsx`
+- migrations run automatically on API and worker startup under a Postgres advisory lock
+- crashed services restart automatically through Docker restart policies
+- public monitoring endpoints are available at `/api/v1/health` and `/api/v1/health/sync`
 
-## What's Included
+Backups are intentionally deferred in this release hardening pass. Do not assume built-in backup or restore scripts exist yet.
 
-- Drizzle ORM schema and SQL migrations for the current storage model
-- Fansly adapter with auth headers, pagination, retries, proxy support, and request pacing
-- OnlyFans adapter backed by OnlyMonster for page lookup, transactions, and chargebacks
-- `pg-boss` worker for scheduled sync jobs
-- CLI for setup, sync, and verification workflows
-- Docker Compose for local PostgreSQL 16
+## Production Prerequisites
 
-## Workspace Layout
+- Linux server with Docker Engine and Docker Compose plugin
+- Git
+- A reachable public IP or hostname
+- One 32-byte base64 encryption key for stored credentials
+- Valid Fansly sessions and/or OnlyMonster tokens for the pages you will onboard
 
-```text
-apps/runtime     CLI and worker entrypoints
-packages/db      Drizzle schema, migrations, repositories
-packages/fansly  Fansly adapter and response mapping
-packages/onlyfans OnlyMonster-backed OnlyFans adapter and response mapping
-packages/shared  config, logging, money, crypto, time helpers
-docs/            PRD, decisions, roadmap
-reference/       Fansly OpenAPI spec and real response fixtures
-```
+## Production Files
 
-## Root Scripts
+- `.env.production.example`: canonical production environment template
+- `docker-compose.production.yml`: production stack with `postgres`, `api`, and `worker`
+- `scripts/deploy-production.sh`: local build + remote ship + remote verify helper
 
-| Script | Purpose |
-| --- | --- |
-| `pnpm cli` | Run manual setup, verification, and reporting commands. |
-| `pnpm worker` | Start the `pg-boss` scheduler and background sync jobs. |
-| `pnpm db:generate` | Generate Drizzle migration files from the schema. |
-| `pnpm db:migrate` | Apply migrations to the configured database. |
-| `pnpm test` | Run the Vitest suite. |
-| `pnpm dev:db` | Start the local PostgreSQL container from `docker-compose.yml`. |
+## First Production Deploy
 
-## Prerequisites
-
-- Node.js
-- `pnpm`
-- Docker for the bundled local PostgreSQL setup, or an existing PostgreSQL instance
-- A valid Fansly session bundle for each Fansly page you want to sync
-- A valid OnlyMonster token for each OnlyFans page you want to sync
-- A 32-byte base64 encryption key for credentials stored at rest
-
-## Quickstart
-
-1. Install dependencies:
+1. Clone the repo on the server:
 
 ```bash
-pnpm install
+git clone <YOUR_GITHUB_REPO_URL> agency-hub
+cd agency-hub
 ```
 
-2. Create a local env file:
+2. Create the production env file:
 
 ```bash
-cp .env.example .env
+cp .env.production.example .env.production
 ```
 
-3. Generate an encryption key and set `APP_ENCRYPTION_KEY`:
+3. Generate an encryption key and put it into `APP_ENCRYPTION_KEY` in `.env.production`:
 
 ```bash
 openssl rand -base64 32
 ```
 
-4. Start PostgreSQL:
+4. Edit `.env.production` and set at least:
+
+- `POSTGRES_PASSWORD`
+- `DATABASE_URL`
+- `APP_ENCRYPTION_KEY`
+- any optional Telegram values you want enabled
+
+The default production compose file expects the bundled Postgres container and the app to use port `3000`.
+
+5. Build and start the stack:
 
 ```bash
-pnpm dev:db
+docker compose -f docker-compose.production.yml up -d --build
 ```
 
-5. Apply migrations:
+6. Wait for the API to come up and confirm health:
 
 ```bash
-pnpm db:migrate
+curl http://127.0.0.1:3000/api/v1/health
+curl http://127.0.0.1:3000/api/v1/health/sync
 ```
 
-Migrations are not applied automatically on startup. If you point the API or worker at a new or reused local Postgres volume, run `pnpm db:migrate` against that exact `DATABASE_URL` before starting runtime processes.
+`/api/v1/health` should return HTTP `200`. `/api/v1/health/sync` is public and may return HTTP `200` or `503`, because it reports real per-page sync state rather than simple process liveness.
 
-6. Add a model:
+7. Create the first owner account:
 
 ```bash
-pnpm cli model add --slug lora --name "Lora"
+docker compose -f docker-compose.production.yml exec api \
+  node apps/runtime/dist/cli.js user add \
+  --username owner \
+  --role owner \
+  --password 'change-me-now'
 ```
 
-7. Create a Fansly session file. The loader accepts either camelCase or header-style keys. Only `authorization` is required; the other Fansly headers are optional when available:
+8. Open the dashboard from the same origin as the API:
 
-```json
-{
-  "authorization": "YOUR_AUTH_TOKEN"
-}
+```text
+http://YOUR_SERVER_IP:3000/login
 ```
 
-8. Add a page:
+Sign in with the owner account you just created. The dashboard onboarding flow can add models and pages from the browser.
+
+## First Run Notes
+
+- The API and worker both start through `apps/runtime/dist/startup.js`, which runs migrations before handing off to the role-specific process.
+- Restarting the stack or re-running `docker compose ... up -d --build` is safe. Applied migrations are skipped automatically.
+- The worker is a separate service using the same image, so background sync work does not share the API process.
+
+## Operating The System
+
+### Add the first model from the CLI
 
 ```bash
-pnpm cli page add fansly \
+docker compose -f docker-compose.production.yml exec api \
+  node apps/runtime/dist/cli.js model add \
+  --slug lora \
+  --name "Lora"
+```
+
+### Add pages from the CLI
+
+Fansly:
+
+```bash
+docker compose -f docker-compose.production.yml exec api \
+  node apps/runtime/dist/cli.js page add fansly \
   --model lora \
   --label lora-main \
-  --session-file ./secrets/lora-main.session.json
+  --session-file /run/secrets/lora-main.session.json
 ```
 
-For OnlyFans via OnlyMonster, use a token file:
+The session file must already exist inside the container if you use the CLI this way. For most first-time production setups, the dashboard onboarding flow is simpler.
 
-```json
-{
-  "token": "YOUR_ONLYMONSTER_TOKEN"
-}
-```
+OnlyFans via OnlyMonster:
 
 ```bash
-pnpm cli page add onlyfans \
+docker compose -f docker-compose.production.yml exec api \
+  node apps/runtime/dist/cli.js page add onlyfans \
   --model lora \
   --label lora-of \
   --username lora_onlyfans \
-  --token-file ./secrets/lora-of.token.json
+  --token-file /run/secrets/lora-of.token.json
 ```
 
-9. Verify the stored session:
+The token file must already exist inside the container if you use the CLI this way.
+
+### Trigger a manual sync
 
 ```bash
-pnpm cli page verify --page lora-main
+docker compose -f docker-compose.production.yml exec api \
+  node apps/runtime/dist/cli.js sync \
+  --page lora-main \
+  --scope all
 ```
 
-10. Run a full sync:
+### Inspect sync state from the CLI
 
 ```bash
-pnpm cli sync --page lora-main
+docker compose -f docker-compose.production.yml exec api \
+  node apps/runtime/dist/cli.js sync status
 ```
 
-Example output:
+## Updating An Existing Deployment
 
-```text
-✓ Synced 142 transactions
-✓ Synced 3,241 followers (delta: +12)
-✓ Built daily rollups
-```
-
-11. Inspect 7-day revenue:
+When the server already has the repo checked out:
 
 ```bash
-pnpm cli revenue --page lora-main --period 7d
+git pull
+docker compose -f docker-compose.production.yml up -d --build
 ```
 
-Example output:
+This is the intended update path. It rebuilds the production image, recreates the containers, and lets startup handle migrations automatically. No separate migration command is required.
 
-```text
-Page: lora-main
-7d net revenue: $1,234.50
-  Subscriptions: $890.00
-  Tips: $234.50
-  Messages: $110.00
+## Remote Deployment From Your Workstation
+
+If you want to build locally and push the image to a remote host over SSH:
+
+```bash
+scripts/deploy-production.sh user@server --verify-url http://SERVER_IP:3000
 ```
+
+What the script does:
+
+- builds `agency_hub_core/runtime:production` locally
+- streams that image to the remote host with `docker load`
+- syncs release files into `/opt/agency-hub` by default
+- runs `docker compose -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build`
+- verifies `/api/v1/health`, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
+
+The script assumes the remote server already has `/opt/agency-hub/.env.production` populated.
+
+## Backups
+
+Built-in backup automation is not shipped in this release hardening pass. Use your existing VPS or Postgres backup tooling until Agency Hub backup/restore scripts are implemented.
+
+## Monitoring
+
+- API/process health: `GET /api/v1/health`
+- Public sync health: `GET /api/v1/health/sync`
+- Dashboard login: `GET /login`
+
+Examples:
+
+```bash
+curl http://127.0.0.1:3000/api/v1/health
+curl -i http://127.0.0.1:3000/api/v1/health/sync
+```
+
+`/api/v1/health/sync` includes per-page state, failed/stalled stream counts, sync freshness ages, and issue codes that are suitable for external uptime or alerting systems.
+
+## Troubleshooting
+
+### API or worker keeps restarting
+
+Check container logs:
+
+```bash
+docker compose -f docker-compose.production.yml logs --tail=200 api
+docker compose -f docker-compose.production.yml logs --tail=200 worker
+```
+
+Common causes are an invalid `DATABASE_URL`, a bad `APP_ENCRYPTION_KEY`, or missing page credentials.
+
+### `/api/v1/health` is not healthy
+
+- Confirm Postgres is up:
+
+```bash
+docker compose -f docker-compose.production.yml ps
+```
+
+- Confirm the app can connect to the DSN in `.env.production`.
+- Confirm the `postgres` service credentials match the `DATABASE_URL`.
+
+### `/api/v1/health/sync` returns `503`
+
+That means the app is running but one or more pages are stale or have failed/stalled streams. Inspect:
+
+```bash
+curl -s http://127.0.0.1:3000/api/v1/health/sync
+docker compose -f docker-compose.production.yml exec api node apps/runtime/dist/cli.js sync status
+```
+
+### Dashboard route shows a 404 or blank page
+
+- Confirm `apps/dashboard/dist` exists in the image by rebuilding the stack with `--build`.
+- Confirm you are opening the API origin itself, for example `http://SERVER_IP:3000/login`.
+- Do not put the dashboard behind a separate origin for this release.
 
 ## Configuration
 
-Configuration is loaded from environment variables and validated at startup.
+Use `.env.production.example` for production. It documents every supported runtime variable, the expected format, and the default behavior.
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `DATABASE_URL` | Yes | PostgreSQL connection string used by the CLI and worker. |
-| `APP_ENCRYPTION_KEY` | Yes | Base64-encoded key that must decode to exactly 32 bytes. Used for Fansly sessions and proxy credentials. |
-| `APP_ENCRYPTION_KEY_VERSION` | No | Integer version stored with encrypted records. Defaults to `1`. |
-| `LOG_LEVEL` | No | Logger level. Defaults to `info`. |
-| `FANSLY_BASE_URL` | No | Fansly API base URL. Defaults to `https://apiv3.fansly.com/api/v1`. |
-| `ONLYMONSTER_BASE_URL` | No | OnlyMonster API base URL. Defaults to `https://omapi.onlymonster.ai`. |
-| `FANSLY_GLOBAL_DELAY_MS` | No | Minimum delay between any two Fansly API requests to the configured host. Defaults to `2500`. |
-| `FANSLY_ACCOUNT_LOOKUP_DELAY_MS` | No | Deprecated fallback alias for `FANSLY_GLOBAL_DELAY_MS` when the new variable is unset. |
-| `FOLLOWER_PAGE_DELAY_MS` | No | Delay between follower pages. Defaults to `5000`. |
-| `FANSLY_DM_CONVERSATIONS_DELAY_MS` | No | Minimum spacing for Fansly shared rate-limit `dm_conversations` reservations. Defaults to `5000`. |
-| `FANSLY_DM_MESSAGES_DELAY_MS` | No | Minimum spacing for Fansly shared rate-limit `dm_messages` reservations. Defaults to `7500`. |
-| `TRANSACTION_LOOKBACK_DAYS` | No | Backfill window applied to transaction checkpoint resyncs. Defaults to `7`. |
-| `TRANSACTION_RESCAN_CAP_DAYS` | No | Maximum age of pending-aware transaction rescans before the start cursor is clamped. Defaults to `30`. |
-| `TELEGRAM_BOT_TOKEN` | No | Telegram bot token for owner notifications. When unset, Telegram delivery is disabled. |
-| `TELEGRAM_CHAT_ID` | No | Telegram chat ID that receives owner notifications. Stored as a string so group IDs also work. |
-| `TELEGRAM_REPORT_HOUR` | No | UTC hour `0-23` for the daily revenue report. Defaults to `9`. |
+For local development:
 
-## CLI Reference
+- `.env.example` is for running services directly on the host
+- `.env.docker.example` is for local Docker-based development
+- `docker-compose.yml` remains the dev-only compose stack and is unchanged by the production release path
 
-### `model add`
+## Local Development
 
-Create a local model record that pages attach to.
+The production work did not replace the existing dev flow.
 
 ```bash
-pnpm cli model add --slug lora --name "Lora"
-```
-
-### `model list`
-
-List configured models with their page counts.
-
-```bash
-pnpm cli model list
-```
-
-### `model revenue`
-
-Show combined net revenue for all pages attached to one model.
-
-```bash
-pnpm cli model revenue --slug lora --period 7d
-```
-
-### `page add fansly`
-
-Register a Fansly page only after a live Fansly auth check succeeds, then encrypt its session bundle and optionally store proxy settings.
-
-```bash
-pnpm cli page add fansly \
-  --model lora \
-  --label lora-main \
-  --session-file ./secrets/lora-main.session.json \
-  --proxy-url http://proxy.example:8080 \
-  --proxy-username proxy-user \
-  --proxy-password proxy-pass
-```
-
-Supported flags:
-
-- `--model <slug>`
-- `--label <label>`
-- `--session-file <file>`
-- `--proxy-url <url>` (`http://`, `https://`, and `socks5://` supported)
-- `--proxy-username <username>`
-- `--proxy-password <password>`
-
-### `page add onlyfans`
-
-Register an OnlyFans page by resolving the page username through OnlyMonster, then encrypt the token and store the matched account metadata.
-
-```bash
-pnpm cli page add onlyfans \
-  --model lora \
-  --label lora-of \
-  --username lora_onlyfans \
-  --token-file ./secrets/lora-of.token.json
-```
-
-Supported flags:
-
-- `--model <slug>`
-- `--label <label>`
-- `--username <username>`
-- `--token-file <file>`
-- `--proxy-url <url>` (`http://`, `https://`, and `socks5://` supported)
-- `--proxy-username <username>`
-- `--proxy-password <password>`
-
-### `page verify`
-
-Validate the stored Fansly session or OnlyMonster account access and refresh the page metadata snapshot.
-
-```bash
-pnpm cli page verify --page lora-main
-```
-
-### `telegram test`
-
-Send a verification message to the configured Telegram chat. If Telegram is not configured, the command exits successfully and prints a skip message.
-
-```bash
-pnpm cli telegram test
-```
-
-### `telegram report`
-
-Build and send the same compact daily revenue report that the worker sends on schedule.
-
-```bash
-pnpm cli telegram report
-```
-
-### `page list`
-
-List tracked pages with current snapshot counts, last sync timestamps, and masked proxy state.
-
-```bash
-pnpm cli page list
-```
-
-### `page set-proxy`
-
-Verify the stored page credentials through a new proxy and persist the proxy only if verification succeeds.
-
-```bash
-pnpm cli page set-proxy \
-  --page lora-main \
-  --proxy-url socks5://proxy-user:proxy-pass@127.0.0.1:1080
-```
-
-### `page remove-proxy`
-
-Remove the stored proxy assignment for an existing page.
-
-```bash
-pnpm cli page remove-proxy --page lora-main
-```
-
-### `sync`
-
-Run sync jobs manually. For Fansly, `light` includes DM conversation metadata sync and `all` runs the same light, transactions, subscribers, DM, and follower services used by the worker. Fansly DM sync requires `SYNC_SHARED_RATE_LIMIT_ENABLED=true`. For OnlyFans, `all` runs revenue sync only and skips followers.
-
-```bash
-pnpm cli sync --page lora-main --scope all
-```
-
-Other useful scopes:
-
-```bash
-pnpm cli sync --page lora-main --scope light
-pnpm cli sync --page lora-main --scope followers
-```
-
-OnlyFans limitations:
-
-- `--scope followers` is unsupported and returns an error
-- `--scope all` runs the light revenue sync and prints a follower-sync skip message
-
-### `status`
-
-List recent sync runs across pages, optionally filtered to a single page.
-
-```bash
-pnpm cli status --limit 20
-pnpm cli status --page lora-main --limit 10
-```
-
-### `revenue`
-
-Show page-scoped net revenue by canonical transaction bucket for a reporting period.
-
-```bash
-pnpm cli revenue --page lora-main --period 7d
-```
-
-Supported periods:
-
-- `today`
-- `7d`
-- `30d`
-- `all`
-- `custom` with `--from YYYY-MM-DD --to YYYY-MM-DD`
-
-Revenue periods are resolved on UTC business dates.
-
-### `followers`
-
-List currently tracked active followers for a page, newest first.
-
-```bash
-pnpm cli followers --page lora-main
-```
-
-### `subscribers`
-
-List currently tracked subscribers for a page.
-
-```bash
-pnpm cli subscribers --page lora-main
-```
-
-### `fan-spend`
-
-Show total creator net from a fan on a page using a platform user id or username.
-
-```bash
-pnpm cli fan-spend --page lora-main --fan somefan123
-```
-
-### `fans`
-
-Rank fans on a page by creator net.
-
-```bash
-pnpm cli fans --page lora-main --limit 20
-```
-
-## Worker Behavior
-
-Start the background scheduler with:
-
-```bash
+pnpm install
+cp .env.example .env
+pnpm dev:db
+pnpm db:migrate
+pnpm api
 pnpm worker
+pnpm dev:dashboard
 ```
-
-The worker schedules jobs for Fansly pages that already exist in the database when the worker starts:
-
-- hourly light syncs for page metadata, transactions, subscribers, and rollup rebuilds
-- follower syncs every 12 hours with the configured inter-page delay
-- daily raw payload cleanup
-
-If you add a new page while the worker is already running, restart the worker so that page gets scheduled.
-
-The API, worker, and CLI now fail fast when the runtime database is missing the latest migration or when `sync_runs.stats` does not match the expected `jsonb NOT NULL DEFAULT '{}'` shape. Fix the drift with `pnpm db:migrate` against the same `DATABASE_URL` the process uses.
-
-OnlyFans scheduling is intentionally deferred in this milestone. Use `pnpm cli sync --page <label>` manually for OF pages.
-
-## Data Notes
-
-- Money is stored as `BIGINT` mills. Conversion to formatted USD happens at the CLI edge.
-- OnlyMonster amounts are treated as dollars and converted to mills at ingest.
-- Fan identity is canonicalized as `(platform, platform_user_id)` to support future multi-platform ingestion.
-- Sync jobs are idempotent and safe to re-run.
-- Fansly session bundles, OnlyMonster tokens, and proxy credentials are encrypted at rest with application-layer AES-256-GCM.
-- Raw debugging payloads are stored in JSONB and cleaned up after their 180-day retention window.
-- Fansly story and bundle sale types (`32001`, `32101`) map to `post_purchase`; the bundle-oriented `2016` and `2116` types remain on `message_purchase` until they are reclassified with raw payload evidence.
-- OnlyFans pages do not have subscriber/follower list sync in this milestone because OnlyMonster does not expose those endpoints.
-
-## Testing And Verification
-
-Typecheck:
-
-```bash
-pnpm exec tsc --noEmit
-```
-
-Run tests:
-
-```bash
-pnpm test
-```
-
-Integration coverage uses Testcontainers. If no working container runtime is available, those tests will be skipped instead of failing the whole suite.
-
-## Current Scope
-
-- Fansly sync plus the OnlyFans revenue milestone via OnlyMonster
-- OnlyFans onboarding, manual sync, and model/page revenue reporting
-- Fansly-only worker scheduling, follower sync, and subscriber sync
-- Revenue rollups are derived from canonical transactions stored in PostgreSQL, not from direct platform exports
-- Dashboard UI still out of scope
-
-## Additional Docs
-
-- [Product requirements](docs/prd.md)
-- [Technical decisions](docs/decisions.md)
-- [Roadmap](docs/roadmap.md)
-- [Fansly API spec](reference/fansly_api_spec.md)
-- [OnlyMonster notes](reference/onlymonster_api_spec.md)
-- [OpenAPI reference](reference/openapi.yaml)
