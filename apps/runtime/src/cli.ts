@@ -6,14 +6,19 @@ import { PgBoss } from "pg-boss";
 
 import {
   createModel,
+  findPageByLabel,
 } from "@agency_hub_core/db";
 import {
+  buildProxyEgressKey,
+  createProxyRequestDispatcher,
+  createRequestDispatcher,
   creatableUserRoles,
   formatMaskedProxyUrl,
   formatUsdFromMills,
   parsePeriod,
   redactSensitiveText,
   toMills,
+  type ProxyConfig,
   type TransactionType,
 } from "@agency_hub_core/shared";
 
@@ -34,7 +39,12 @@ import {
 import { getModelRevenueReport, getPageRevenueReport } from "./services/reporting.ts";
 import { sendManualDailyRevenueTelegramReport } from "./services/telegram-report.ts";
 import { sendTelegramTestMessage } from "./services/telegram.ts";
-import { loadFanslySessionBundleFromFile, loadOnlyMonsterTokenBundleFromFile } from "./services/page-context.ts";
+import {
+  loadFanslySessionBundleFromFile,
+  loadOnlyMonsterTokenBundleFromFile,
+  resolveStoredProxyConfig,
+  type ResolvedPageContext,
+} from "./services/page-context.ts";
 import { requestPageSync, waitForRequestedSyncRevisions } from "./services/sync-control.ts";
 import { refreshPageMetadata } from "./services/sync/shared.ts";
 import { getSyncMonitorSnapshot } from "./services/sync-monitor.ts";
@@ -136,6 +146,85 @@ function buildProxyInput(options: {
       password: options.proxyPassword ?? null,
     }
     : null;
+}
+
+async function lookupExitIpViaDispatcher(input: { url: string } | null) {
+  const { request } = await import("undici");
+  const dispatcher = input
+    ? createProxyRequestDispatcher(input)
+    : createRequestDispatcher();
+
+  try {
+    const { statusCode, body } = await request("https://api.ipify.org?format=json", {
+      method: "GET",
+      signal: AbortSignal.timeout(30_000),
+      dispatcher,
+    });
+    const text = await body.text();
+    if (statusCode < 200 || statusCode >= 300) {
+      throw new Error(`IP check returned HTTP ${statusCode}`);
+    }
+
+    const payload = JSON.parse(text) as { ip?: unknown };
+    if (typeof payload.ip !== "string" || payload.ip.length === 0) {
+      throw new Error("IP check returned an invalid payload");
+    }
+
+    return payload.ip;
+  } finally {
+    await dispatcher.close().catch(() => undefined);
+  }
+}
+
+function describeExitIpLookupError(error: unknown) {
+  return redactSensitiveText(error instanceof Error ? error.message : String(error));
+}
+
+async function resolvePageRoute(app: Awaited<ReturnType<typeof createAppContext>>, pageLabel: string) {
+  const stored = await findPageByLabel(app.db, pageLabel);
+  if (!stored) {
+    throw new Error(`Page not found for label "${pageLabel}"`);
+  }
+
+  return {
+    pageLabel: stored.page.label,
+    platform: stored.page.platform,
+    proxy: resolveStoredProxyConfig(app, stored.proxy),
+  };
+}
+
+async function resolvePageEgressSummary(input: {
+  pageLabel: string;
+  platform: "fansly" | "onlyfans";
+  proxy: ProxyConfig | null;
+}) {
+  try {
+    return {
+      ...input,
+      route: input.proxy ? formatMaskedProxyUrl(input.proxy) : "direct",
+      egressKey: buildProxyEgressKey(input.proxy),
+      exitIp: await lookupExitIpViaDispatcher(input.proxy),
+      exitIpError: null,
+    };
+  } catch (error) {
+    return {
+      ...input,
+      route: input.proxy ? formatMaskedProxyUrl(input.proxy) : "direct",
+      egressKey: buildProxyEgressKey(input.proxy),
+      exitIp: null,
+      exitIpError: describeExitIpLookupError(error),
+    };
+  }
+}
+
+function printPageEgressSummary(summary: Awaited<ReturnType<typeof resolvePageEgressSummary>>) {
+  console.log(`Page: ${summary.pageLabel}`);
+  console.log(`Platform: ${summary.platform}`);
+  console.log(`Egress key: ${summary.egressKey}`);
+  console.log(`Route: ${summary.route}`);
+  console.log(
+    `Exit IP: ${summary.exitIp ?? `unavailable (${summary.exitIpError ?? "unknown error"})`}`,
+  );
 }
 
 async function watchStatus(
@@ -556,8 +645,14 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         const context = await resolvePageContext(app, options.page);
+        const egressSummaryPromise = resolvePageEgressSummary({
+          pageLabel: context.page.label,
+          platform: context.platform,
+          proxy: context.proxy,
+        });
         if (context.platform === "fansly") {
           const verified = await refreshPageMetadata(app, context, "light");
+          printPageEgressSummary(await egressSummaryPromise);
           await handleSuccessfulPageVerificationRecovery(app, {
             platformAccountId: context.page.id,
             pageLabel: context.page.label,
@@ -568,6 +663,7 @@ export function buildProgram() {
           );
         } else {
           const verified = await refreshPageMetadata(app, context, "light");
+          printPageEgressSummary(await egressSummaryPromise);
           await handleSuccessfulPageVerificationRecovery(app, {
             platformAccountId: context.page.id,
             pageLabel: context.page.label,
@@ -577,6 +673,33 @@ export function buildProgram() {
             `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.platform_account_id})`,
           );
         }
+      } finally {
+        await app.close();
+      }
+    });
+
+  page
+    .command("proxy-ip")
+    .requiredOption("--page <label>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const route = await resolvePageRoute(app, options.page);
+        if (!route.proxy) {
+          throw new Error(`Page ${options.page} has no proxy configured`);
+        }
+
+        const [proxyIp, directIp] = await Promise.all([
+          lookupExitIpViaDispatcher(route.proxy),
+          lookupExitIpViaDispatcher(null),
+        ]);
+
+        console.log(`Page: ${route.pageLabel}`);
+        console.log(`Platform: ${route.platform}`);
+        console.log(`Proxy: ${formatMaskedProxyUrl(route.proxy)}`);
+        console.log(`Proxy exit IP: ${proxyIp}`);
+        console.log(`Direct exit IP: ${directIp}`);
+        console.log(`Differs from direct: ${proxyIp !== directIp ? "yes" : "no"}`);
       } finally {
         await app.close();
       }
@@ -598,6 +721,9 @@ export function buildProgram() {
           throw new Error("--transactions-start is only supported with light or all sync scopes");
         }
 
+        const route = await resolvePageRoute(app, options.page);
+        const egressSummaryPromise = resolvePageEgressSummary(route);
+
         const boss = new PgBoss({ connectionString: app.config.databaseUrl });
         try {
           await boss.start();
@@ -609,6 +735,7 @@ export function buildProgram() {
             reason: "manual",
             onlyFansTransactionsStart: options.transactionsStart ?? null,
           });
+          printPageEgressSummary(await egressSummaryPromise);
 
           if (noWait) {
             console.log(`Queued ${options.scope} sync for ${options.page}`);
