@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AdminCreateUserBody,
   AuthState,
@@ -46,6 +46,19 @@ import type {
   NotificationsReportPreviewResponse,
   NotificationsReportSendResponse,
   NotificationsReportHistoryResponse,
+  ModelListItem,
+  CreateModelBody,
+  CreateModelResponse,
+  UpdateModelBody,
+  AssignedPage,
+  CreatePageBody,
+  AdminCreatePageResponse,
+  UpdatePageBody,
+  AdminUpdatePageResponse,
+  VerifyCredentialsResponse,
+  VerifyPageResponse,
+  DeletedResponse,
+  AdminAssignPageBody,
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
 
@@ -702,5 +715,130 @@ export function useReportHistory() {
   return useQuery({
     queryKey: ["notifications", "reportHistory"],
     queryFn: () => api.get<NotificationsReportHistoryResponse>("/api/v1/admin/notifications/reports/history"),
+  });
+}
+
+// Admin — Catalog invalidation helper
+function invalidateAdminCatalog(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ["admin", "models"] });
+  qc.invalidateQueries({ queryKey: ["admin", "pages"] });
+  qc.invalidateQueries({ queryKey: ["admin", "connections"] });
+  qc.invalidateQueries({ queryKey: ["admin", "users"] });
+  qc.invalidateQueries({ queryKey: ["overview"] });
+}
+
+// Admin — Models
+export function useAdminModels() {
+  return useQuery({
+    queryKey: ["admin", "models"],
+    queryFn: () => api.get<ModelListItem[]>("/api/v1/admin/models"),
+  });
+}
+
+export function useAdminCreateModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: CreateModelBody) =>
+      api.post<CreateModelResponse>("/api/v1/admin/models", body),
+    onSuccess: () => invalidateAdminCatalog(qc),
+  });
+}
+
+export function useAdminUpdateModel(modelSlug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: UpdateModelBody) =>
+      api.patch<CreateModelResponse>(`/api/v1/admin/models/${modelSlug}`, body),
+    onSuccess: () => invalidateAdminCatalog(qc),
+  });
+}
+
+export function useAdminDeleteModel(modelSlug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () =>
+      api.del<DeletedResponse>(`/api/v1/admin/models/${modelSlug}`),
+    onSuccess: () => invalidateAdminCatalog(qc),
+  });
+}
+
+// Admin — Pages
+export function useAdminPages() {
+  return useQuery({
+    queryKey: ["admin", "pages"],
+    queryFn: () => api.get<AssignedPage[]>("/api/v1/admin/pages"),
+  });
+}
+
+export function useAdminCreatePage() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: CreatePageBody) =>
+      api.post<AdminCreatePageResponse>("/api/v1/admin/pages", body),
+    onSuccess: () => invalidateAdminCatalog(qc),
+  });
+}
+
+export function useAdminUpdatePage(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: UpdatePageBody) =>
+      api.patch<AdminUpdatePageResponse>(`/api/v1/admin/pages/${pageLabel}`, body),
+    onSuccess: () => invalidateAdminCatalog(qc),
+  });
+}
+
+export function useAdminDeletePage(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () =>
+      api.del<DeletedResponse>(`/api/v1/admin/pages/${pageLabel}`),
+    onSuccess: () => invalidateAdminCatalog(qc),
+  });
+}
+
+// Admin — Credential verification
+export function useAdminVerifyCredentials() {
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: VerifyCredentialsBody) =>
+      api.post<VerifyCredentialsResponse>("/api/v1/admin/credentials/verify", body),
+  });
+}
+
+export function useAdminVerifyPage(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () =>
+      api.post<VerifyPageResponse>(`/api/v1/admin/pages/${pageLabel}/verify`),
+    onSuccess: () => invalidateAdminCatalog(qc),
+  });
+}
+
+// Admin — User page assignment
+export function useAdminAssignPage(username: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: AdminAssignPageBody) =>
+      api.post<AuthUser>(`/api/v1/admin/users/${username}/pages`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
+  });
+}
+
+export function useAdminUnassignPage(username: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (pageLabel: string) =>
+      api.del<{ ok: true }>(`/api/v1/admin/users/${username}/pages/${pageLabel}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 }
