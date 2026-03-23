@@ -8,9 +8,13 @@ export async function listenOnLoopback(
 ): Promise<{ host: string; port: number } | null> {
   return acquireTestPrerequisite(async () => {
     await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
+      const onError = (error: Error) => {
+        reject(error);
+      };
+
+      server.once("error", onError);
       server.listen(0, "127.0.0.1", () => {
-        server.removeAllListeners("error");
+        server.removeListener("error", onError);
         resolve();
       });
     });
