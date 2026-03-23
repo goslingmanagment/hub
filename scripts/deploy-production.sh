@@ -109,6 +109,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BUILD_PLATFORM="linux/amd64"
 
 if [[ -z "$VERIFY_URL" ]]; then
   REMOTE_HOST="${REMOTE##*@}"
@@ -185,8 +186,8 @@ HEALTH_FILE="${TEMP_DIR}/health.json"
 SYNC_FILE="${TEMP_DIR}/sync.json"
 DASHBOARD_FILE="${TEMP_DIR}/dashboard.html"
 
-log "Building ${IMAGE_TAG} locally from ${ROOT_DIR}"
-docker build -t "$IMAGE_TAG" "$ROOT_DIR"
+log "Building ${IMAGE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
+docker build --platform="${BUILD_PLATFORM}" -t "$IMAGE_TAG" "$ROOT_DIR"
 
 log "Loading ${IMAGE_TAG} on ${REMOTE}"
 docker save "$IMAGE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
