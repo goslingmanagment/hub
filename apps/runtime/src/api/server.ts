@@ -2019,7 +2019,7 @@ export async function buildApiServer(appContext: AppContext) {
   // SPA static file serving (production only)
   const { existsSync } = await import("node:fs");
   const { resolve } = await import("node:path");
-  const dashboardDist = resolve(import.meta.dirname, "../../dashboard/dist");
+  const dashboardDist = resolve(process.cwd(), "apps/dashboard/dist");
   if (existsSync(dashboardDist)) {
     const fastifyStatic = (await import("@fastify/static")).default;
     await server.register(fastifyStatic, { root: dashboardDist, prefix: "/", wildcard: false });

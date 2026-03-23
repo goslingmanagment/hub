@@ -6,6 +6,7 @@
   "scripts": {
     "api": "node --import tsx/esm apps/runtime/src/api.ts",
     "build": "pnpm typecheck && pnpm --dir apps/dashboard build",
+    "build:production": "pnpm typecheck && node scripts/build-production.mjs && pnpm --dir apps/dashboard build",
     "cli": "node --import tsx/esm apps/runtime/src/cli.ts",
     "contracts:generate": "node --import tsx/esm packages/contracts/src/generate.ts",
     "worker": "node --import tsx/esm apps/runtime/src/worker.ts",

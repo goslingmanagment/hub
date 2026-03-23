@@ -60,6 +60,7 @@ function SettingsTab() {
   if (isLoading || !data) {
     return <div className="py-12 text-center text-sm text-text-muted">Loading...</div>;
   }
+  const settings = data;
 
   function handleToggle(field: "enabled" | "dailyReportEnabled" | "syncFailureAlertsEnabled", value: boolean) {
     updateSettings.mutate({ [field]: value });
@@ -74,7 +75,7 @@ function SettingsTab() {
     const chatId = chatIdRef.current?.value?.trim() || undefined;
 
     // First-time setup: both required
-    if (!data.configured && (!botToken || !chatId)) {
+    if (!settings.configured && (!botToken || !chatId)) {
       toast.error("Both fields are required");
       return;
     }

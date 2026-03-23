@@ -101,10 +101,15 @@ export function PageDetailPage() {
     );
   }
 
-  const activityPoints = (isFansly ? dailyData?.items : subsDailyData?.items)?.map((item) => ({
-    businessDate: item.businessDate,
-    value: (isFansly ? item.newFollowers : item.newSubscribers) ?? 0,
-  })) ?? [];
+  const activityPoints = isFansly
+    ? (dailyData?.items ?? []).map((item) => ({
+      businessDate: item.businessDate,
+      value: item.newFollowers ?? 0,
+    }))
+    : (subsDailyData?.items ?? []).map((item) => ({
+      businessDate: item.businessDate,
+      value: item.newSubscribers ?? 0,
+    }));
   const chartTitle = isFansly ? "New Followers" : "New Subscribers";
   const revenuePoints = (revenueDailyData?.series ?? []).map((item) => ({
     businessDate: item.businessDate,
