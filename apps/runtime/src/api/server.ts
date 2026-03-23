@@ -38,6 +38,8 @@ import {
   type Period,
   type Platform,
 } from "@agency_hub_core/shared";
+import { FanslyApiError } from "@agency_hub_core/fansly";
+import { OnlyMonsterApiError } from "@agency_hub_core/onlyfans";
 import type { FastifyReply } from "fastify";
 import Fastify from "fastify";
 import { PgBoss } from "pg-boss";
@@ -278,6 +280,19 @@ export async function buildApiServer(appContext: AppContext) {
       throw new UnauthorizedError();
     }
     return principal;
+  }
+
+  function isAdminPageVerifyBadRequest(error: unknown) {
+    if (error instanceof BadRequestError) {
+      return true;
+    }
+
+    if (error instanceof FanslyApiError || error instanceof OnlyMonsterApiError) {
+      return error.status === 401 || error.status === 403;
+    }
+
+    return error instanceof Error
+      && error.message === "OnlyFans page metadata is missing onlyMonsterAccountId";
   }
 
   server.setErrorHandler((error, request, reply) => {
@@ -1620,9 +1635,19 @@ export async function buildApiServer(appContext: AppContext) {
         platform: pageContext.platform,
       };
     } catch (error) {
-      throw new BadRequestError(
-        `Page verification failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`,
-      );
+      if (error instanceof NotFoundError) {
+        throw error;
+      }
+
+      if (isAdminPageVerifyBadRequest(error)) {
+        throw new BadRequestError(
+          `Page verification failed: ${
+            redactSensitiveText(error instanceof Error ? error.message : "Unknown error")
+          }`,
+        );
+      }
+
+      throw error;
     }
   });
 

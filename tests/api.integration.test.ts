@@ -4672,7 +4672,7 @@ describe("api integration", () => {
     }));
   });
 
-  it("clears auth_failed state and resolves incidents when owners verify a page", async (context) => {
+  it("clears auth_failed state and resolves incidents when owners admin verify a page", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -4775,6 +4775,95 @@ describe("api integration", () => {
     )).toEqual(expect.objectContaining({
       status: "resolved",
     }));
+  });
+
+  it("returns 404 when owners admin verify a missing page", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/pages/missing/verify",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({
+      error: "not_found",
+      message: 'Page "missing" not found',
+      statusCode: 404,
+    });
+  });
+
+  it("returns 500 when owners admin verify hits an unexpected runtime failure", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const activeTestDb = testDb;
+    await server.close();
+    const appContext = createTestAppContext(activeTestDb, {
+      adapter: {
+        ...createAutoSyncFanslyAdapter({
+          accountId: "acct-lana",
+          username: "lana_page",
+          displayName: "Lana",
+        }),
+        async getAccountMe() {
+          throw new Error("metadata refresh exploded");
+        },
+      } as AppContext["adapter"],
+    });
+    server = await buildApiServer(appContext);
+    await server.ready();
+
+    await storeFanslySession(
+      activeTestDb.db,
+      fixture.lanaPage.id,
+      JSON.stringify(encryptJson({
+        platform: "fansly",
+        session: {
+          authorization: "verify-token",
+        },
+      }, Buffer.alloc(32, 7), 1)),
+      1,
+    );
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/pages/lana/verify",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      error: "internal_error",
+      message: "Internal Server Error",
+      statusCode: 500,
+    });
   });
 
   it("normalizes inline proxy credentials when updating page credentials via PATCH", async (context) => {

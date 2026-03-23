@@ -18,6 +18,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { BadRequestError, NotFoundError } from "./errors.ts";
 
 function decryptStoredJson<T>(
   app: Pick<AppContext, "config">,
@@ -181,28 +182,51 @@ function resolveStoredPageContext(
   label: string,
 ) {
   if (!stored) {
-    throw new Error(`Page not found for label "${label}"`);
+    throw new NotFoundError(`Page "${label}" not found`);
   }
 
   if (!stored.credentials) {
-    throw new Error(`Page "${label}" has no stored platform credentials`);
+    throw new BadRequestError(`Page "${label}" has no stored platform credentials`);
   }
 
-  const decrypted = decryptStoredJson<StoredPlatformCredentialBundle | Record<string, unknown>>(
-    app,
-    stored.credentials.encryptedSession,
-  );
+  let decrypted: StoredPlatformCredentialBundle | Record<string, unknown>;
+  try {
+    decrypted = decryptStoredJson<StoredPlatformCredentialBundle | Record<string, unknown>>(
+      app,
+      stored.credentials.encryptedSession,
+    );
+  } catch (error) {
+    throw new BadRequestError(
+      `Page "${label}" has invalid stored platform credentials: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+    );
+  }
 
   const proxy = resolveStoredProxyConfig(app, stored.proxy);
 
   if (stored.page.platform === "fansly") {
-    const session = isStoredPlatformCredentialBundle(decrypted)
-      ? decrypted.platform === "fansly"
-        ? decrypted.session
-        : (() => {
-          throw new Error(`Page "${label}" has OnlyFans credentials stored for a Fansly page`);
-        })()
-      : normalizeSessionBundle(asRecord(decrypted));
+    let session: FanslySessionBundle;
+    try {
+      session = isStoredPlatformCredentialBundle(decrypted)
+        ? decrypted.platform === "fansly"
+          ? decrypted.session
+          : (() => {
+            throw new BadRequestError(
+              `Page "${label}" has OnlyFans credentials stored for a Fansly page`,
+            );
+          })()
+        : normalizeSessionBundle(asRecord(decrypted));
+    } catch (error) {
+      if (error instanceof BadRequestError) {
+        throw error;
+      }
+      throw new BadRequestError(
+        `Page "${label}" has invalid stored platform credentials: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
+    }
 
     return {
       page: stored.page,
@@ -212,13 +236,27 @@ function resolveStoredPageContext(
     };
   }
 
-  const auth = isStoredPlatformCredentialBundle(decrypted)
-    ? decrypted.platform === "onlyfans"
-      ? decrypted.auth
-      : (() => {
-        throw new Error(`Page "${label}" has Fansly credentials stored for an OnlyFans page`);
-      })()
-    : normalizeOnlyMonsterTokenBundle(asRecord(decrypted));
+  let auth: OnlyMonsterTokenBundle;
+  try {
+    auth = isStoredPlatformCredentialBundle(decrypted)
+      ? decrypted.platform === "onlyfans"
+        ? decrypted.auth
+        : (() => {
+          throw new BadRequestError(
+            `Page "${label}" has Fansly credentials stored for an OnlyFans page`,
+          );
+        })()
+      : normalizeOnlyMonsterTokenBundle(asRecord(decrypted));
+  } catch (error) {
+    if (error instanceof BadRequestError) {
+      throw error;
+    }
+    throw new BadRequestError(
+      `Page "${label}" has invalid stored platform credentials: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+    );
+  }
 
   return {
     page: stored.page,
