@@ -1,99 +1,96 @@
 # Action Plan — 2026-03-22
 
-Merged from `docs/verified-audit-2026-03-22.md` and `docs/verified-audit-opus-2026-03-22.md`.
-Rules were applied exactly as requested; every disagreement and every Codex-only finding was reviewed directly in code before classification.
+Re-audited against current `main` on 2026-03-23. Every previously open item was checked against the cited code paths before being kept, re-prioritized, or dropped. The remaining work is ranked by actual production impact; stale, theoretical, duplicate, or already-mitigated findings are in Dropped.
 
-## Section 1: Fix now (P0/P1)
-Confirmed production-impact issues affecting data integrity, security, or reliability.
-Status: Closed on 2026-03-23. All Section 1 items are complete on current `main`; `pnpm typecheck` and `pnpm test` are green.
+## P0 — Fix now
+None.
 
-- [x] [P0] CONCURRENCY-002: Race condition in openNotificationIncident — concurrent callers can all fail. File: packages/db/src/repositories/notifications.ts:148-196. Fix: Replace the three-step open flow with one atomic upsert or update path, or lock the row before the status transition. Commit: `77b48c38593b`.
-- [x] [P0] RELIABILITY-001: Sync job marked complete before continuation wakeup — failure silently stalls sync. File: apps/runtime/src/services/sync/executor.ts:263-286. Fix: Complete the current job only after the continuation wakeup is queued, or catch wakeup failures so they do not strand execution. Commit: `1e4caf5d3622`.
-- [x] [P1] API-CORRECTNESS-002: Stored proxies cannot be cleared through the credentials update flow. File: apps/runtime/src/services/connections.ts:163; packages/contracts/src/routes.ts:1675; apps/dashboard/src/pages/SettingsPage.tsx:325; apps/dashboard/src/pages/SettingsPage.tsx:337; apps/runtime/src/services/connections.ts:212; apps/runtime/src/services/connections.ts:213-215. Fix: Allow explicit proxy clearing in the API contract, have the dashboard send `proxy: null` when fields are cleared, and call `removeProxy()` when that happens. Commit: `4e778a2d42e4`.
-- [x] [P1] DATA-INTEGRITY-002: Fansly tip transactions with raw type 20001 are misclassified as other. File: packages/fansly/src/mappers.ts:5; packages/fansly/src/mappers.ts:10; apps/runtime/src/services/sync/transactions.ts:259; apps/runtime/src/services/sync/transactions.ts:567; tests/fansly-transactions.test.ts:48. Fix: add `20001` to the Fansly tip mapping, backfill affected historical rows, and add an integration assertion that raw type `20001` lands in the `tip` bucket end to end. Commit: `3537148440af`.
-- [x] [P1] DATA-INTEGRITY-004: Follower upserts outside transaction — partial deactivation on crash. File: apps/runtime/src/services/sync/executor-handlers.ts:876-916, 1067-1101. Fix: Wrap the final follower write, deactivation, rollup rebuild, and checkpoint update in one transaction per completed page. Commit: `5d9a496762bc`.
-- [x] [P1] DATA-INTEGRITY-005: OnlyFans empty-window transaction cleanup has inconsistent semantics and can either retain stale rows or delete an entire window. File: apps/runtime/src/services/sync/onlyfans-transactions.ts:567; packages/db/src/repositories/transactions.ts:302; packages/db/src/repositories/transactions.ts:302-322. Fix: Make empty-window cleanup explicit: support authoritative empty windows without overloading an empty keep-set to mean both delete-none and delete-all. Commit: `541b83f7929a`.
-- [x] [P1] DATA-INTEGRITY-007: Subscriber deactivation runs outside transaction — crash leaves partial state. File: apps/runtime/src/services/sync/executor-handlers.ts:737-753. Fix: Wrap subscriber upsert, generation deactivation, rollup rebuild, and checkpoint advancement in a single transaction. Commit: `8b9e051f3f8c`.
-- [x] [P1] ERROR-HANDLING-001: Advisory lock release failure suppresses original business error. File: apps/runtime/src/services/sync/locking.ts:45-63. Fix: Preserve the original business error when advisory unlock fails, for example by attaching the release failure as secondary context. Commit: `380b944244ce`.
-- [x] [P1] ERROR-HANDLING-002: redactSensitiveText only redacts proxy URLs, not database URLs. File: packages/shared/src/proxy.ts:186-192. Fix: Extend text redaction to database URLs and other credential-bearing connection strings before they reach logs or error messages. Commit: `05ce6b68f824`.
-- [x] [P1] RELIABILITY-003: Fansly adapter — falsy check drops offset=0 and limit=0 from query params. File: packages/fansly/src/adapter.ts:176-177, 230-231, 282-283. Fix: Use `params.offset != null ? String(params.offset) : undefined`. Commit: `c92baafdd0f4`.
-- [x] [P1] RELIABILITY-005: OnlyFans requests are not globally serialized per egress. File: packages/onlyfans/src/adapter.ts:406; packages/fansly/src/adapter.ts:647; packages/onlyfans/src/adapter.ts:395-436. Fix: add a per-egress global chain/timestamp alongside the per-category limiter, mirroring the Fansly implementation so categories on the same egress serialize correctly. Apply the same two-level gating pattern from the Fansly adapter. Commit: `b28489256438`.
-- [x] [P1] SECURITY-001: API key rotation can revoke the old key before the replacement is safe. File: apps/runtime/src/services/auth.ts:314; apps/runtime/src/services/auth.ts:316; apps/runtime/src/services/auth.ts:328. Fix: Create and audit the replacement API key transactionally before revoking the old key, so failures cannot leave the user keyless. Commit: `360d5e6ccf23`.
-- [x] [P1] SECURITY-005: Password resets are non-atomic. File: apps/runtime/src/services/auth.ts:202. Fix: Wrap password-hash update, session revocation, and audit logging in one transaction or move the audit write off the critical path. Commit: `211c2a662320`.
-- [x] [P1] SECURITY-007: Stored-secret key rotation is unsupported, and decrypt failures can abort before sync telemetry exists. File: packages/shared/src/crypto.ts:31; packages/shared/src/crypto.ts:5; apps/runtime/src/services/page-context.ts:94; apps/runtime/src/services/page-context.ts:125; apps/runtime/src/services/page-context.ts:147; apps/runtime/src/services/page-context.ts:184; apps/runtime/src/services/sync/executor.ts:83. Fix: Add key-ring reads by `keyVersion`, keep old keys readable during rotation, and ensure decrypt failures still create clear sync-run telemetry. Commit: `d0b5c36ceaad`.
+## P1 — Fix soon
 
-## Section 2: Fix soon (P2)
-Confirmed but lower-urgency fixes, mostly UX, performance, configuration, and developer-experience work.
+None.
 
-- [P0] TYPE-SAFETY-001: loadDotEnv() always mutates process.env, ignoring the passed env parameter. File: packages/shared/src/config.ts:84-86. Fix: Pass the target env object through dotenv loading or keep dotenv side effects out of `loadConfig(customEnv)` entirely.
-- [P1] CONFIGURATION-001: migrate.ts — hardcoded relative path breaks outside repo root; empty dir silently succeeds. File: packages/db/src/migrate.ts:20-23. Fix: Resolve migrations relative to the module file, and fail loudly when the resolved migrations directory is empty or missing.
-- [P1] FRONTEND-002: SubscribersPage re-sorts server response client-side, breaking pagination order. File: apps/dashboard/src/pages/SubscribersPage.tsx:50-54. Fix: Stop re-sorting an already paginated server slice on the client, or move the sort into the backend query so paging stays globally ordered.
-- [P1] FRONTEND-003: useSpenderBatch — POST inside useQuery causes spurious re-posts. File: apps/dashboard/src/api/queries.ts:373-379. Fix: Move the batch POST behind an explicit mutation or a stable query key so re-renders do not re-issue side-effecting POSTs.
-- [P1] PERFORMANCE-001: findOnlyFansAccountByUsername — unbounded full pagination of all accounts. File: apps/runtime/src/services/onlyfans.ts:91-121. Fix: Stop paginating once a unique username match is found, or push the username filter down to the upstream query if the API supports it.
-- [P1] PERFORMANCE-002: hasTerminalProxyFailure loads up to 2,000 request attempts in memory. File: apps/runtime/src/services/notification-incidents.ts:202-209. Fix: Move terminal proxy-failure detection into SQL or fetch only the newest attempts needed for the decision.
-- [P1] PERFORMANCE-003: N+1 DB query per DM conversation inside page loop. File: apps/runtime/src/services/sync/executor-handlers.ts:1261-1266. Fix: Batch-load existing DM conversations instead of doing one point query per conversation inside the page loop.
-- [P2] API-CORRECTNESS-003: `content_manager` is exposed as a role but has no supported authentication path. File: apps/runtime/src/services/auth.ts:65; packages/shared/src/types.ts:104; apps/dashboard/src/pages/SettingsPage.tsx:516; apps/runtime/src/services/auth.ts:69. Fix: Either remove `content_manager` from the exposed role set until permissions exist, or implement an actual auth and capability model for it.
-- [P2] CONFIGURATION-002: .env.example and .env.docker.example are out of sync with config schema. File: .env.example; .env.docker.example. Fix: Sync both files to cover every env var in `envSchema`.
-- [P2] CONFIGURATION-003: Docker compose — no migration service; app crashes against empty database. File: docker-compose.yml; docker-compose.test.yml. Fix: Add a migration step or dedicated migrator service before API and worker startup so empty databases boot cleanly.
-- [P2] CONFIGURATION-004: Docker compose — worker service has no build directive. File: docker-compose.yml:33-41. Fix: Give the worker service its own `build:` stanza or otherwise guarantee the runtime image exists before `docker compose up worker`.
-- [P2] CONFIGURATION-005: generate.ts and migrate.ts resolve paths relative to process.cwd(). File: packages/contracts/src/generate.ts:49-50; packages/db/src/migrate.ts:20. Fix: Resolve output and migration paths from the module location instead of `process.cwd()`.
-- [P2] CONFIGURATION-007: Schema readiness checks rely on the lexicographically last migration, and duplicate `0022_*` names make that drift easier to miss. File: packages/db/src/schema-guard.ts:52; packages/db/migrations/0022_fan_profiles.sql; packages/db/migrations/0022_telegram_credentials_in_db.sql; packages/db/src/migrate.ts:21; tests/helpers/db.ts:125. Fix: Stop using the lexicographically last migration as the readiness check; verify the full applied set or an explicit schema version.
-- [P2] CONFIGURATION-008: The advertised root build pipeline is broken. File: package.json:8; tsconfig.json; tests/fan-intelligence-markdown.test.ts; tests/parseFanProfile.test.ts; tsconfig.json:6; tsconfig.json:11; tests/fan-intelligence-markdown.test.ts:8; tests/parseFanProfile.test.ts:6. Fix: Split root server and dashboard test typechecking, and fix the NodeNext-compatible test imports so `pnpm typecheck` matches the advertised build path.
-- [P2] DATA-INTEGRITY-008: isLegacyOnlyFansTransactionBackfillState cursor check causes false-positive upgrades. File: apps/runtime/src/services/sync/onlyfans-transactions.ts:192-204. Fix: Remove `typeof value.cursor === "string"` from legacy detection and only upgrade truly legacy checkpoints.
-- [P2] DATA-INTEGRITY-010: windowEnd null silently falls back to snapshotEnd in transaction backfill. File: apps/runtime/src/services/sync/transaction-backfill.ts:127-155. Fix: Treat `windowEnd: null` as invalid checkpoint state and fail for repair instead of silently falling back to `snapshotEnd`.
-- [P2] ERROR-HANDLING-003: adminVerifyPage wraps all errors as 400 Bad Request. File: apps/runtime/src/api/server.ts:1614-1618. Fix: Only catch domain-specific validation errors as 400; let 500s propagate.
-- [P2] ERROR-HANDLING-004: Audit DB error on failed login path propagates as 500 instead of 401. File: apps/runtime/src/services/auth.ts:412-417. Fix: Make failed-login auditing best-effort, or defer it so an audit insert failure cannot replace the intended 401 response.
-- [P2] FRONTEND-004: "custom" period option is unreachable — no UI to set custom date range. File: apps/dashboard/src/stores/periodStore.ts:3; apps/dashboard/src/components/shared/PeriodSelector.tsx. Fix: Either expose controls for `customFrom` and `customTo`, or remove the unreachable `custom` state until the UI exists.
-- [P2] FRONTEND-005: ChatPreviewPanel does not handle the isError state. File: apps/dashboard/src/components/page/crm/ChatPreviewPanel.tsx:15-29. Fix: Render an explicit error state for failed preview loads instead of showing the same empty-state copy as a real empty conversation.
-- [P2] FRONTEND-006: DbStatsPage "Name" column renders hash, not name. File: apps/dashboard/src/pages/dev/DbStatsPage.tsx:113-117. Fix: Render the migration name in the Name column instead of duplicating the hash in both columns.
-- [P2] FRONTEND-007: FanProfilePage uses navigate(-1) for back navigation. File: apps/dashboard/src/pages/FanProfilePage.tsx:153. Fix: Replace `navigate(-1)` with a route-aware fallback so direct-entry pages stay inside the app when users click Back.
-- [P2] FRONTEND-008: RetentionTable activeTouchpointKey falls back to "all" for multi-touchpoint selections. File: apps/dashboard/src/components/page/crm/RetentionTable.tsx:100. Fix: Show the real active touchpoint selection instead of collapsing any multi-select state to `all` in the filter pill.
-- [P2] PERFORMANCE-006: OnlyFans incremental sync has no budget yield — can run far past wall-clock limit. File: apps/runtime/src/services/sync/onlyfans-transactions.ts:391-503. Fix: Add budget checks inside the OnlyFans incremental loops so large windows yield cooperatively instead of overrunning chunk budgets.
-- [P2] PERFORMANCE-007: pageConversationMessagesQuerySchema — limit has no upper bound. File: packages/contracts/src/routes.ts:368-370. Fix: Add a reasonable upper bound to `pageConversationMessagesQuerySchema.limit`.
-- [P2] PERFORMANCE-009: syncRequestsQuerySchema — limit has no upper bound. File: packages/contracts/src/routes.ts:1437-1440. Fix: Add a reasonable upper bound to `syncRequestsQuerySchema.limit`.
-- [P2] PERFORMANCE-010: Triple CTE execution in listCrmRetention. File: packages/db/src/repositories/crm.ts:897-991. Fix: Reuse the retention base CTE work for counts and rows instead of executing the same heavy CTE three separate times.
-- [P2] RELIABILITY-010: Daily Telegram reports do not catch up after a missed scheduled hour. File: apps/runtime/src/worker.ts:82; apps/runtime/src/worker.ts:92. Fix: Schedule daily reports by pending report date rather than exact current hour, so missed or retried reports still catch up.
-- [P2] RELIABILITY-012: dollarsToMills silently truncates >3 decimal places. File: packages/shared/src/money.ts:50-65. Fix: Reject or explicitly round input values with more than three decimal places instead of silently truncating them.
-- [P2] RELIABILITY-015: Proxy-failure incident detection samples the oldest attempts instead of the latest ones. File: apps/runtime/src/services/notification-incidents.ts:202; packages/db/src/repositories/sync.ts:922. Fix: Inspect the newest request attempts when checking for terminal proxy failures, not the oldest 2,000 rows first.
-- [P2] RELIABILITY-018: Telegram sends have no timeout. File: apps/runtime/src/services/telegram.ts:78; apps/runtime/src/services/telegram.ts:79. Fix: Add an explicit timeout and bounded retry policy to Telegram sends, ideally via the shared HTTP helper.
-- [P2] TEST-GAPS-001: adapter-harness.ts mock doesn't actually short-circuit delays. File: tests/helpers/adapter-harness.ts:82-86. Fix: Mock timer delays with an immediate or virtual-clock implementation so adapter tests stop waiting real time.
-- [P2] TEST-GAPS-002: Integration tests allow 30s container startup but still inherit Vitest's 10s hook timeout. File: tests/helpers/db.ts:13; tests/api.integration.test.ts; vitest.config.ts:18. Fix: Raise Vitest hook timeouts to match the database startup budget used by the integration helper.
-- [P2] TEST-GAPS-003: network.ts — removeAllListeners("error") removes all error handlers, not just the one added. File: tests/helpers/network.ts:10-15. Fix: Remove only the helper's own `error` listener instead of calling `removeAllListeners("error")` on the shared server.
-- [P2] TEST-GAPS-005: vitest.config.ts React aliases point into apps/dashboard/node_modules. File: vitest.config.ts:14-15. Fix: Point the Vitest React aliases at workspace-resolved packages instead of `apps/dashboard/node_modules`.
+## P2 — Backlog
 
-## Section 3: Backlog
-Risks worth tracking and low-priority confirmed items that are not urgent.
+- [ ] ERROR-HANDLING-003: `adminVerifyPage` wraps all failures as `400 Bad Request`, including unexpected server-side errors. File: `apps/runtime/src/api/server.ts:1600-1626`. Fix: only convert domain validation and credential errors into 400s; let unexpected failures propagate as 500s.
+- [ ] ERROR-HANDLING-004: Failed-login audit writes can still turn a normal bad-password path into a `500` instead of a `401`. File: `apps/runtime/src/services/auth.ts:423-440`. Fix: make failed-login auditing best-effort, or defer it so an audit insert failure cannot replace the intended auth response.
+- [ ] FRONTEND-005: `ChatPreviewPanel` still renders the generic empty state when the preview request fails. File: `apps/dashboard/src/components/page/crm/ChatPreviewPanel.tsx:12-29`. Fix: handle `isError` explicitly so a failed preview load is distinguishable from a genuinely empty conversation.
+- [ ] FRONTEND-006: `DbStatsPage` labels its first migration column "Name", but renders a hash prefix instead. File: `apps/dashboard/src/pages/dev/DbStatsPage.tsx:90-120`, `packages/contracts/src/routes.ts:1605-1613`, `apps/runtime/src/api/server.ts:1748-1759`. Fix: either rename the column to match the actual data, or extend the API to return a real migration name instead of duplicating hash-like identifiers.
+- [ ] FRONTEND-007: `FanProfilePage` still uses `navigate(-1)` for Back navigation. File: `apps/dashboard/src/pages/FanProfilePage.tsx:151-154`. Fix: use a route-aware fallback so direct-entry pages stay inside the app instead of depending on browser history state.
+- [ ] PERFORMANCE-010: `listCrmRetention` still executes the same heavy retention CTE three times for total, counts, and rows. File: `packages/db/src/repositories/crm.ts:912-983`. Fix: materialize `filtered` once or return counts and rows from a single query path instead of recomputing the full CTE for each result shape.
+- [ ] RELIABILITY-016: Same-day custom ranges still silently become a zero-width `[from, from)` window. File: `packages/shared/src/time.ts:231-251`. Fix: treat same-day custom ranges as an inclusive single day, or reject them explicitly instead of returning an empty window silently.
+- [ ] RELIABILITY-018: Telegram sends still have no explicit timeout or bounded retry policy. File: `apps/runtime/src/services/telegram.ts:81-125`. Fix: wrap `fetch` with an `AbortSignal` timeout and a small retry policy so hung Telegram calls cannot block requests or worker jobs indefinitely.
+- [ ] RELIABILITY-020: Unknown transaction types still fall through to `other` without any warning or telemetry. File: `packages/fansly/src/mappers.ts:30-34`, `packages/onlyfans/src/mappers.ts:5-20`. Fix: emit a warning log or sync telemetry event whenever an unmapped raw transaction type falls through.
+- [ ] API-CORRECTNESS-008: Search endpoints still treat `%` and `_` inside user queries as SQL wildcards. File: `packages/db/src/repositories/crm.ts:85-88`, `packages/db/src/repositories/reporting.ts:351-363`, `packages/db/src/repositories/spenders.ts:1017-1032`. Fix: escape `%` and `_` before building `ILIKE` patterns and use consistent `ESCAPE '\\'` semantics across the affected queries.
+- [ ] CONFIGURATION-009: `drizzle.config.ts` still passes an empty string when `DATABASE_URL` is missing, which fails late and unclearly. File: `packages/db/drizzle.config.ts:3-9`. Fix: throw a clear configuration error before invoking drizzle-kit when `DATABASE_URL` is unset.
+- [ ] TEST-GAPS-002: Integration suites allow 30s container startup in the helper, but still rely on Vitest's shorter default hook budget. File: `tests/helpers/db.ts:11-13`, `vitest.config.ts:18-24`, `tests/api.integration.test.ts:3-58`. Fix: raise hook and test timeouts to match the Testcontainers startup budget used by the integration harness.
+- [ ] TEST-GAPS-003: `listenOnLoopback()` still calls `removeAllListeners("error")` on the shared server. File: `tests/helpers/network.ts:10-15`. Fix: remove only the helper's own one-shot error listener instead of clearing unrelated listeners from the server instance.
 
-- [P0] CONCURRENCY-003: TOCTOU race in updatePageMetadata — concurrent identity conflict check is unreliable. File: packages/db/src/repositories/catalog.ts:319-407. Track: Use `SELECT ... FOR UPDATE` or a single CTE `UPDATE ... WHERE platformAccountId IS NULL OR platformAccountId = $value`.
-- [P1] API-CORRECTNESS-001: getFollowersPage returns page length as total, not real total count. File: packages/fansly/src/adapter.ts:257-259. Track: Return the provider's real total count for followers, or rename the field to a page-local count and update downstream consumers.
-- [P1] DATA-INTEGRITY-003: fanUpsertPresenceKey — fragile; adding a new optional field without updating this function silently drops the column from conflict updates. File: packages/db/src/repositories/fans.ts:61-68. Track: Add a comprehensive comment or use a type-level check that all optional fields of the input type are covered.
-- [P1] DATA-INTEGRITY-006: Overview subscriber/follower totals use hardcoded "fansly" business-date for all platforms. File: apps/runtime/src/api/server.ts:812-832. Track: Resolve business-date range per-platform, not with a hardcoded `"fansly"`.
-- [P1] SECURITY-004: No .dockerignore — local secrets could be included in Docker build context. File: Dockerfile (no .dockerignore exists); .lilly2-session.json; *.json. Track: Add `.dockerignore` excluding `.env*`, `.sessions/`, `*.json` session files, `node_modules`, etc.
-- [P1] TYPE-SAFETY-003: as any cast on updatePageCredentials body bypasses type safety. File: apps/runtime/src/api/server.ts:1626. Track: Replace the route-level `as any` with a typed parsed body that matches the credentials update schema.
-- [P1] TYPE-SAFETY-004: decryptJson does not validate the alg field before decryption. File: packages/shared/src/crypto.ts:31-48. Track: Validate `envelope.alg` before decryption so the runtime contract matches the encrypted envelope type.
-- [P2] API-CORRECTNESS-004: DST ambiguity in getTimeZoneOffsetMs for generic time zones. File: packages/shared/src/time.ts:118-130. Track: Avoid generic timezone-offset lookups at ambiguous DST boundaries, or require an instant-aware API that resolves the ambiguity explicitly.
-- [P2] API-CORRECTNESS-005: referrer header key is wrong in Fansly adapter. File: packages/fansly/src/adapter.ts:558. Track: Change to `"referer": "https://fansly.com/"`.
-- [P2] FRONTEND-009: Topbar breadcrumbs use index as React list key. File: apps/dashboard/src/components/layout/Topbar.tsx:64. Track: Use a stable key derived from the breadcrumb identity instead of the array index.
-- [P2] RELIABILITY-016: Same-day custom range produces zero-width window silently. File: packages/shared/src/time.ts:237, 247-251. Track: Either treat same-day custom ranges as a single inclusive day, or reject them explicitly instead of silently building a zero-width window.
-- [P2] RELIABILITY-019: toPeriodMetadata uses its own new Date(), not the caller's now. File: apps/runtime/src/services/spenders.ts:225-238. Track: Thread the caller-provided `now` through `toPeriodMetadata()` instead of recomputing with a fresh `new Date()`.
-- [P2] RELIABILITY-020: Unknown transaction types silently fall to "other" — no warning logged. File: packages/fansly/src/mappers.ts:30-34; packages/onlyfans/src/mappers.ts. Track: Emit a warning log when the fallthrough is hit for codes not in the explicit list.
-- [P2] SECURITY-008: redactLogValue treats Buffer/Date as plain objects. File: packages/shared/src/logger.ts:10. Track: Add early returns for `Buffer.isBuffer(value)` and `value instanceof Date`.
-- [P2] TEST-GAPS-004: resetIntegrationDatabase — TRUNCATE CASCADE runs without a transaction. File: tests/helpers/db.ts:88-108. Track: Wrap in `BEGIN`/`COMMIT`.
-- [P2] TYPE-SAFETY-006: revenueDailyResponseSchema mixes two item shapes without union discrimination. File: packages/contracts/src/routes.ts:1085-1089. Track: Model the grouped and ungrouped revenue response items as an explicit union, or split them into separate schemas.
-- [P2] TYPE-SAFETY-008: updateTelegramSettings return type lies — can return undefined. File: packages/db/src/repositories/telegram-settings.ts:47-58. Track: Return `TelegramSettingsRow | undefined` honestly or guarantee row seeding before this update path runs.
-- [P3] API-CORRECTNESS-008: Search endpoints treat % and _ inside user queries as SQL wildcards. File: packages/db/src/repositories/crm.ts:85; packages/db/src/repositories/reporting.ts:349; packages/db/src/repositories/spenders.ts:1028. Track: escape `%` and `_` before building `ILIKE` patterns and add `escape '\\'` semantics consistently across the affected queries.
-- [P3] API-CORRECTNESS-009: Telegram credentials cannot be cleared from the product. File: packages/contracts/src/routes.ts:1596; apps/runtime/src/api/server.ts:1867; apps/dashboard/src/pages/NotificationsPage.tsx:72; apps/dashboard/src/pages/NotificationsPage.tsx:84. Track: Allow explicit Telegram credential clearing in the schema and API, and add a clear or remove action in the dashboard.
-- [P3] CONFIGURATION-009: drizzle.config.ts — DATABASE_URL silently defaults to empty string. File: packages/db/drizzle.config.ts:8. Track: Fail fast in `drizzle.config.ts` when `DATABASE_URL` is missing instead of defaulting to an empty string.
-- [P3] DOCUMENTATION-001: Repository documentation and test compose configuration are materially stale. File: README.md:5; docker-compose.test.yml; docker-compose.test.yml:25; docker-compose.test.yml:35; .env.docker.example. Track: Update the README to describe the dashboard and current workflows accurately, and align test compose instructions with the tracked env template.
-- [P3] TEST-GAPS-006: The follower pacing test is too timing-sensitive and currently fails spuriously. File: tests/adapter-fansly-followers-delay.test.ts:49. Track: Assert on the actual timestamp gap, or switch to fake timers and deterministic clock control. Avoid tight millisecond thresholds on live timers.
+## Done
 
-## Section 4: Dropped
-False positives or accepted non-issues so they do not get re-audited.
+- [x] CONCURRENCY-002: Fixed the `openNotificationIncident` race so concurrent callers no longer fail each other. Commit: `77b48c38593b`.
+- [x] RELIABILITY-001: Fixed sync job completion ordering so continuation wakeup failures no longer strand execution. Commit: `1e4caf5d3622`.
+- [x] API-CORRECTNESS-002: Fixed credentials updates so stored proxies can be cleared. Commit: `4e778a2d42e4`.
+- [x] DATA-INTEGRITY-002: Fixed Fansly raw type `20001` so it maps to `tip`. Commit: `3537148440af`.
+- [x] DATA-INTEGRITY-004: Fixed follower finalization so writes, deactivation, rollups, and checkpointing stay transactional. Commit: `5d9a496762bc`.
+- [x] DATA-INTEGRITY-005: Fixed OnlyFans empty-window cleanup semantics. Commit: `541b83f7929a`.
+- [x] DATA-INTEGRITY-007: Fixed subscriber finalization so deactivation and checkpoint advancement stay transactional. Commit: `8b9e051f3f8c`.
+- [x] ERROR-HANDLING-001: Fixed advisory lock release handling so unlock failures no longer replace the original business error. Commit: `380b944244ce`.
+- [x] ERROR-HANDLING-002: Extended sensitive text redaction to database URLs and similar credential-bearing strings. Commit: `05ce6b68f824`.
+- [x] RELIABILITY-003: Fixed Fansly query param serialization so `offset=0` and `limit=0` are preserved. Commit: `c92baafdd0f4`.
+- [x] RELIABILITY-005: Fixed OnlyFans per-egress serialization so categories on the same egress no longer overlap. Commit: `b28489256438`.
+- [x] SECURITY-001: Fixed API key rotation so the replacement key is created safely before old keys are revoked. Commit: `360d5e6ccf23`.
+- [x] SECURITY-005: Fixed password reset flow so hash update, session revocation, and audit logging are atomic. Commit: `211c2a662320`.
+- [x] SECURITY-007: Added stored-secret key-ring support and clearer decrypt-failure telemetry. Commit: `d0b5c36ceaad`.
+- [x] TYPE-SAFETY-001: Fixed `loadConfig(customEnv)` so dotenv respects the passed env object. Commit: `36d1ef8`.
+- [x] CONFIGURATION-001: Fixed migration path resolution and missing-directory handling. Commit: `454a24b`.
+- [x] FRONTEND-002: Fixed `SubscribersPage` so client-side re-sorting no longer breaks pagination order. Commit: `308ae47`.
+- [x] FRONTEND-003: Fixed `useSpenderBatch` so it no longer issues side-effecting POSTs from `useQuery`. Commit: `38530d3`.
+- [x] PERFORMANCE-001: Fixed OnlyFans account lookup so it stops paginating once a unique username match is found. Commit: `2af97e0`.
+- [x] PERFORMANCE-002: Moved terminal proxy-failure detection into SQL and out of the in-memory 2,000-row scan. Commit: `ae516f8`.
+- [x] PERFORMANCE-003: Fixed the DM conversation N+1 query inside the sync page loop. Commit: `58dfa08`.
+- [x] API-CORRECTNESS-003: Stopped exposing unsupported `content_manager` creation from product flows. Commit: `72206cde7716`.
+- [x] CONFIGURATION-003: Added a compose migrator gate so schema bootstraps before runtime services start. Commit: `69ac525dd4fd`.
+- [x] DATA-INTEGRITY-008: Fixed OnlyFans backfill resume parsing so current cursor/window state survives restarts. Commit: `9e91fb6b504f`.
+- [x] PERFORMANCE-006: Added resumable in-loop budget yielding for incremental OnlyFans rescans. Commit: `efafe0bc95df`.
+- [x] RELIABILITY-010: Changed Telegram daily reports to catch up by missing due dates instead of exact current hour. Commit: `926a1a8b606b`.
+- [x] API-CORRECTNESS-009: Added explicit Telegram credential clearing across the contract, API, and dashboard. Commit: `306bf8faf46b`.
 
+## Dropped
+
+- CONFIGURATION-002: `.env.example` and `.env.docker.example` intentionally omit vars that already have safe runtime defaults; the current templates still boot cleanly.
+- CONFIGURATION-004: The shared runtime image is already built on the normal full-stack compose path; the worker-only `docker compose up worker` case is edge developer ergonomics, not a meaningful defect.
+- CONFIGURATION-005: `runMigrations()` is already module-relative; the remaining `contracts:generate` cwd sensitivity only affects ad hoc invocation outside the scripted repo-root path.
+- CONFIGURATION-007: Duplicate-prefix migration drift is already blocked by `assertUniqueMigrationPrefixes()`, and the remaining "latest migration only" guard would need manual schema tampering to misfire.
+- CONFIGURATION-008: No longer reproducible on 2026-03-23; `pnpm typecheck` and `pnpm test` both pass on current `main`.
+- CONCURRENCY-003: The unique constraint already prevents cross-row identity collisions, and the remaining same-row race needs contradictory concurrent identity writes for one page, which current call paths do not realistically produce.
+- API-CORRECTNESS-001: The follower adapter's `total` value is not used for dashboard pagination or destructive sync logic anywhere in the current code.
+- API-CORRECTNESS-004: The DST ambiguity is real in the abstract, but current business-date call paths use UTC, so the problematic generic-timezone case is not exercised.
+- API-CORRECTNESS-005: I found no current breakage tied to the `referrer` header spelling in the live adapter behavior; this is speculative without a failing path.
+- DATA-INTEGRITY-003: `fanUpsertPresenceKey()` is a future-maintainer footgun, not a current data-integrity bug in shipping behavior.
+- DATA-INTEGRITY-006: The overview path hardcodes `"fansly"` for subscriber and follower business dates, but both current platforms resolve to UTC, so behavior is unchanged today.
+- DATA-INTEGRITY-010: Current checkpoint writers always persist a real `windowEnd`; the null fallback only matters for corrupted checkpoint state.
+- FRONTEND-004: No current UI exposes the `custom` period state, so this is dormant product surface rather than a live regression.
+- FRONTEND-008: The multi-touchpoint state is unreachable in the current single-select CRM filter UI.
+- PERFORMANCE-007: The contract layer is sloppy, but the repository path already clamps conversation-message fetches to 100 rows.
+- PERFORMANCE-009: The route schema is unbounded, but the sync-monitor service already clamps this path to `MAX_REQUEST_LIMIT = 500`.
+- RELIABILITY-012: The cited call sites only consume provider amounts and prices that are already mill-precision or less in current flows; I found no failing path from extra decimals.
+- RELIABILITY-015: This is already covered by the SQL newest-attempt fix from PERFORMANCE-002; the current code orders proxy-failure checks from newest to oldest and has regression coverage.
+- RELIABILITY-019: The mismatch only matters if a request crosses a business-day boundary between adjacent `new Date()` calls inside one handler, which is too theoretical to prioritize.
+- SECURITY-004: Stale audit item; `.dockerignore` already excludes `.env*`, session files, and other local secrets from Docker build context.
+- SECURITY-008: `Buffer`/`Date` handling in `redactLogValue()` is inelegant, but I found no current call path that logs secret-bearing buffers or dates in a way that changes real exposure.
+- TEST-GAPS-001: The current adapter test suite is not paying meaningful real-time waits here; this is no longer an active bottleneck.
+- TEST-GAPS-004: The helper is test-only, and the single `TRUNCATE ... CASCADE` statement is already atomic; wrapping it in an extra transaction is low-value cleanup.
+- TEST-GAPS-005: The current workspace install resolves these React aliases successfully, and the full suite is green.
+- TEST-GAPS-006: No longer reproducible on 2026-03-23; the follower pacing test passes in the full suite.
+- TYPE-SAFETY-003: Fastify and Zod already validate this route body at runtime; the remaining `as any` is compile-time hygiene only.
+- TYPE-SAFETY-004: The envelope `alg` field is not a security boundary in this code path; decryption already uses a fixed algorithm and malformed payloads fail authentication.
+- TYPE-SAFETY-006: The current optional `canonicalType` schema matches the live grouped and ungrouped revenue responses, and coverage exists in `tests/api.integration.test.ts`.
+- TYPE-SAFETY-008: Every current caller seeds the singleton row before `updateTelegramSettings()`, so the undefined return path is theoretical in the shipping product.
+- DOCUMENTATION-001: The README and compose references now match the current production deployment flow closely enough that this is no longer a meaningful action item.
 - CONCURRENCY-001: The read and replacement of `fetchLock` happen synchronously with no `await`, so two workers cannot observe the same promise chain.
 - DATA-INTEGRITY-001: The math claim is wrong. For integer half-up division, adding floor(divisor / 2) before dividing is the standard rule, including odd divisors, so there is no rounding bug to reproduce here.
-- TYPE-SAFETY-002: The onboarding helper’s catch path always rethrows, and the transaction callback always returns the created page. There is no real runtime path where `page` reaches the caller as `undefined`.
-- CONCURRENCY-004: The `!` is a type escape, but not a concurrency bug. In the actual insert race, one caller inserts and the other caller’s second `findFirst()` reads that row; the concurrent insert case does not make this path return `undefined`.
+- TYPE-SAFETY-002: The onboarding helper's catch path always rethrows, and the transaction callback always returns the created page. There is no real runtime path where `page` reaches the caller as `undefined`.
+- CONCURRENCY-004: The `!` is a type escape, but not a concurrency bug. In the actual insert race, one caller inserts and the other caller's second `findFirst()` reads that row; the concurrent insert case does not make this path return `undefined`.
 - FRONTEND-001: The CRM retention query already guarantees `subscriptionExpiresAt` for these rows, so the non-null assertion is safe under the current contract.
 - RELIABILITY-002: `hasScheduledReportForDate()` only suppresses retries for rows with `status = sent`, so failed deliveries do not block retries.
 - RELIABILITY-004: The shared OnlyFans limiter only defines a global scope today, so omitting a category scope there is consistent with the current model.
@@ -104,13 +101,13 @@ False positives or accepted non-issues so they do not get re-audited.
 - CONFIGURATION-006: `resolveFanslyDefaultDelayEnvSource()` and `loadConfig()` are fed from the same env object in real call sites; the claimed mismatch is theoretical.
 - DATA-INTEGRITY-009: The current state model has no dedicated reversal state, and transaction typing already carries the stronger semantic signal.
 - DEAD-CODE-001: `severity` is an unused prop, but the cost is trivial and there is no behavior attached to it. This is cleanup only.
-- ERROR-HANDLING-005: The exhausted-retries message can become generic when retry metadata does not carry a final error object, but the detailed failures are still logged/request-observed elsewhere. This is a diagnostics polish issue, not a high-value fix.
+- ERROR-HANDLING-005: The exhausted-retries message can become generic when retry metadata does not carry a final error object, but the detailed failures are still logged and request-observed elsewhere. This is diagnostics polish, not a high-value fix.
 - PERFORMANCE-004: Chunk request budgets should count real HTTP attempts, including retries; otherwise retries still consume outbound capacity without yielding.
 - PERFORMANCE-005: Linear backoff is a tuning choice here, not a proven production defect.
 - PERFORMANCE-008: The extra PgBoss client is an intentional design tradeoff that lets the API enqueue work directly; there is no evidence it is harmful today.
 - RELIABILITY-007: Skipped runs still surface in `recentRuns`; the top-level status intentionally stays coarse instead of exposing `skipped` as a primary state.
 - RELIABILITY-008: The UI explicitly labels the filter as `Auto-renew Off`, not `Off or Unknown`, so excluding `NULL` rows matches product semantics.
-- RELIABILITY-009: On the cited `insert(...).returning()` paths, PostgreSQL either returns the inserted row or throws. The destructuring pattern is a typing annoyance, but not a runtime reliability bug in the code that was cited.
+- RELIABILITY-009: On the cited `insert(...).returning()` paths, PostgreSQL either returns the inserted row or throws. The destructuring pattern is a typing annoyance, but not a runtime reliability bug in the cited code.
 - RELIABILITY-011: The stale `existing` read does not cause false change detection in the cited path. Head repair only runs when the row is missing or `lastMessageId` already changed, and those conditions already make the page count as changed.
 - RELIABILITY-013: The process-wide int8 parser mutation is a known tradeoff in an app-owned `pg` process and is not causing a present failure.
 - RELIABILITY-014: The `NOT IN` null trap does not apply here because the subquery key is a non-nullable foreign key. This is a stylistic SQL preference, not an actual correctness issue in the current schema.
@@ -128,25 +125,25 @@ False positives or accepted non-issues so they do not get re-audited.
 - DEAD-CODE-006: The duplicate imports in `ChatPreviewPanel.tsx` are real, but this is trivial cleanup with no product impact.
 - DEAD-CODE-007: The duplicated `SortHeader` component exists in two tables, but the code is small and currently easy to reason about. There is no meaningful risk from leaving it duplicated.
 - DEAD-CODE-008: The singular and batch fan upsert paths do repeat `updateSet` construction, but the duplication is straightforward and not causing behavior drift today.
-- DEAD-CODE-009: `fan_pages.lastTransactionAt` is not dead. It is still read by reporting/spender paths in the current codebase.
+- DEAD-CODE-009: `fan_pages.lastTransactionAt` is not dead. It is still read by reporting and spender paths in the current codebase.
 - DEAD-CODE-010: `FanIntelligenceMarkdownRenderer` is exercised by the test suite, so the export is not dead.
 - DEAD-CODE-011: `GLOBAL_DELAY_SAFETY_MARGIN_MS` is a magic constant with no doc, but it is an intentional tuning knob rather than dead code or a behavior bug.
 - DEAD-CODE-012: `handleSelectProfileVersion` is still wired into the component tree, so it is not dead even if it is a thin wrapper.
 - DEAD-CODE-013: The IIFE-to-throw pattern is harder to read than a direct branch, but it is stylistic only.
-- DEAD-CODE-014: This is indentation/style, not dead code or a runtime problem.
+- DEAD-CODE-014: This is indentation and style, not dead code or a runtime problem.
 - DEAD-CODE-015: The cited send-wakeup indentation issue is formatting only.
 - DEAD-CODE-016: The default Telegram report hour literal is real, but extracting `9` into a named constant would be cosmetic at current scale.
-- DEAD-CODE-017: `minDate`/`maxDate` are duplicated in a few modules, but the helpers are tiny and context-local. There is no meaningful maintenance pain to justify a shared abstraction right now.
-- DEAD-CODE-018: The `parsed`/`raw` duality is an intentional adapter contract surface. They currently happen to be equal objects, but keeping both names avoids churn if parsing and raw payload capture diverge later.
+- DEAD-CODE-017: `minDate` and `maxDate` are duplicated in a few modules, but the helpers are tiny and context-local. There is no meaningful maintenance pain to justify a shared abstraction right now.
+- DEAD-CODE-018: The `parsed` and `raw` duality is an intentional adapter contract surface. They currently happen to be equal objects, but keeping both names avoids churn if parsing and raw payload capture diverge later.
 - DEAD-CODE-019: The empty-`pageIds` checks are not simply redundant. `applyPageScope()` reports scope state, and individual callers still decide whether to short-circuit based on their own query shape.
 - DEAD-CODE-020: The Commander negated option already drives `options.wait`, so checking `options.noWait` too is redundant. It is harmless and not worth special cleanup.
 - PERFORMANCE-011: Parsing the same date three times is trivial overhead and not worth separate cleanup.
 - RELIABILITY-021: The complaint is about a missing comment, not a reliability defect. `browser.ts` is a straightforward browser-safe export surface as written.
 - RELIABILITY-022: The mixed field naming mirrors upstream payloads and is not a runtime reliability defect.
-- RELIABILITY-023: `buildFanslyDmConversationMetadata()` omits `messageSyncExcludedReason` when the value is null on purpose. Downstream logic treats absence as “no exclusion reason,” so nothing is lost.
+- RELIABILITY-023: `buildFanslyDmConversationMetadata()` omits `messageSyncExcludedReason` when the value is null on purpose. Downstream logic treats absence as "no exclusion reason," so nothing is lost.
 - RELIABILITY-024: The duplicate checkpoint parse is harmless duplicate work with no behavioral consequence.
 - RELIABILITY-025: Waiting before the final failed retry is a small failure-path latency cost, not a correctness problem.
-- RELIABILITY-026: `sql.join` vs `inArray` is a consistency/style concern only. There is no demonstrated reliability problem from the current implementation.
+- RELIABILITY-026: `sql.join` vs `inArray` is a consistency and style concern only. There is no demonstrated reliability problem from the current implementation.
 - TYPE-SAFETY-009: Excluding `auto` from the response schema is deliberate. Requests may ask for `auto`, but resolved response granularity is always one of `day`, `week`, or `month`.
 - TYPE-SAFETY-010: The `Array<any>` clause arrays are an imprecise typing choice, but there is no demonstrated runtime bug behind them. This is cleanup only.
 - TYPE-SAFETY-011: The cast is ugly, but the normalizer immediately validates shape and throws on bad data; this is cleanup, not a demonstrated bug.
