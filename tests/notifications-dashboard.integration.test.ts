@@ -6,7 +6,6 @@ import {
   getTelegramSettings,
   insertDeliveryAttempt,
   openNotificationIncident,
-  updateTelegramSettings,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -140,6 +139,48 @@ describe("notifications dashboard", () => {
     const getBody = getRes.json();
     expect(getBody.enabled).toBe(false);
     expect(getBody.reportHourUtc).toBe(14);
+  });
+
+  it("PATCH settings clears stored credentials when null is provided", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const { server, cookie, appContext } = await buildServer();
+
+    const setRes = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/notifications/settings",
+      headers: { cookie },
+      payload: {
+        botToken: "7123456789:AAH-test-token",
+        chatId: "-1001234567890",
+      },
+    });
+
+    expect(setRes.statusCode).toBe(200);
+    expect(setRes.json().configured).toBe(true);
+    expect(setRes.json().botTokenSet).toBe(true);
+    expect(setRes.json().chatId).toBe("-1001234567890");
+
+    const clearRes = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/notifications/settings",
+      headers: { cookie },
+      payload: {
+        botToken: null,
+        chatId: null,
+      },
+    });
+
+    expect(clearRes.statusCode).toBe(200);
+    const body = clearRes.json();
+    expect(body.configured).toBe(false);
+    expect(body.botTokenSet).toBe(false);
+    expect(body.chatId).toBe(null);
+
+    const persisted = await getTelegramSettings(appContext.db, {
+      defaultReportHourUtc: appContext.config.telegramReportHourUtc,
+    });
+    expect(persisted.encryptedBotToken).toBe(null);
+    expect(persisted.chatId).toBe(null);
   });
 
   it("POST test returns delivery result and creates attempt row", async (context) => {

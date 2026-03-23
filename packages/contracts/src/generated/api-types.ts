@@ -7030,8 +7030,8 @@ export interface paths {
                         dailyReportEnabled?: boolean;
                         syncFailureAlertsEnabled?: boolean;
                         reportHourUtc?: number;
-                        botToken?: string;
-                        chatId?: string;
+                        botToken?: string | null;
+                        chatId?: string | null;
                     };
                 };
             };

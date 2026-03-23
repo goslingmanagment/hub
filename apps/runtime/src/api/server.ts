@@ -1876,9 +1876,11 @@ export async function buildApiServer(appContext: AppContext) {
     const patch: Parameters<typeof updateTelegramSettings>[1] = { ...rest };
 
     if (botToken !== undefined) {
-      patch.encryptedBotToken = JSON.stringify(
-        encryptJson(botToken, appContext.config.encryptionKey, appContext.config.encryptionKeyVersion),
-      );
+      patch.encryptedBotToken = botToken === null
+        ? null
+        : JSON.stringify(
+            encryptJson(botToken, appContext.config.encryptionKey, appContext.config.encryptionKeyVersion),
+          );
     }
     if (chatId !== undefined) {
       patch.chatId = chatId;

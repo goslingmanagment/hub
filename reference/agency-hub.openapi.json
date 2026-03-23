@@ -16379,8 +16379,7 @@
                     "enum": [
                       "owner",
                       "team_lead",
-                      "chatter",
-                      "content_manager"
+                      "chatter"
                     ]
                   },
                   "password": {
@@ -20735,12 +20734,26 @@
                     "maximum": 23
                   },
                   "botToken": {
-                    "type": "string",
-                    "minLength": 1
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "chatId": {
-                    "type": "string",
-                    "minLength": 1
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 }
               }

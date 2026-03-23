@@ -95,6 +95,17 @@ function SettingsTab() {
     });
   }
 
+  function handleClearCredentials() {
+    updateSettings.mutate({ botToken: null, chatId: null }, {
+      onSuccess: () => {
+        toast.success("Stored credentials cleared");
+        if (botTokenRef.current) botTokenRef.current.value = "";
+        if (chatIdRef.current) chatIdRef.current.value = "";
+      },
+      onError: () => toast.error("Failed to clear credentials"),
+    });
+  }
+
   function handleSendTest() {
     sendTest.mutate(undefined, {
       onSuccess: (result) => {
@@ -175,7 +186,14 @@ function SettingsTab() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <CredentialsEdit chatId={data.chatId} onSave={handleSaveCredentials} botTokenRef={botTokenRef} chatIdRef={chatIdRef} isPending={updateSettings.isPending} />
+            <CredentialsEdit
+              chatId={data.chatId}
+              onClear={handleClearCredentials}
+              onSave={handleSaveCredentials}
+              botTokenRef={botTokenRef}
+              chatIdRef={chatIdRef}
+              isPending={updateSettings.isPending}
+            />
             <button
               onClick={handleSendTest}
               disabled={sendTest.isPending}
@@ -230,8 +248,9 @@ function SettingsTab() {
   );
 }
 
-function CredentialsEdit({ chatId, onSave, botTokenRef, chatIdRef, isPending }: {
+function CredentialsEdit({ chatId, onClear, onSave, botTokenRef, chatIdRef, isPending }: {
   chatId: string | null;
+  onClear: () => void;
   onSave: () => void;
   botTokenRef: React.RefObject<HTMLInputElement | null>;
   chatIdRef: React.RefObject<HTMLInputElement | null>;
@@ -276,6 +295,13 @@ function CredentialsEdit({ chatId, onSave, botTokenRef, chatIdRef, isPending }: 
           </div>
         </div>
         <div className="flex justify-end gap-2 mt-4">
+          <button
+            onClick={() => { onClear(); setOpen(false); }}
+            disabled={isPending}
+            className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
+          >
+            Clear Stored Credentials
+          </button>
           <button
             onClick={() => setOpen(false)}
             className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary hover:bg-hover"

@@ -1665,8 +1665,8 @@ export const notificationsSettingsUpdateBodySchema = z.object({
   dailyReportEnabled: z.boolean().optional(),
   syncFailureAlertsEnabled: z.boolean().optional(),
   reportHourUtc: z.number().int().min(0).max(23).optional(),
-  botToken: z.string().min(1).optional(),
-  chatId: z.string().min(1).optional(),
+  botToken: z.string().min(1).nullable().optional(),
+  chatId: z.string().min(1).nullable().optional(),
 });
 
 export const notificationsTestMessageResponseSchema = z.object({
