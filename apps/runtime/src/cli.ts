@@ -8,13 +8,13 @@ import {
   createModel,
 } from "@agency_hub_core/db";
 import {
+  creatableUserRoles,
   formatMaskedProxyUrl,
   formatUsdFromMills,
   parsePeriod,
   redactSensitiveText,
   toMills,
   type TransactionType,
-  type UserRole,
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
@@ -906,9 +906,14 @@ export function buildProgram() {
     .action(async (options) => {
       const app = await createAppContext();
       try {
+        const role = creatableUserRoles.find((candidate) => candidate === options.role);
+        if (!role) {
+          throw new Error(`Invalid role: ${options.role}. Expected one of ${creatableUserRoles.join(", ")}`);
+        }
+
         const user = await createUserAccount(app, {
           username: options.username,
-          role: options.role as UserRole,
+          role,
           password: options.password,
         }, auditContext());
 
