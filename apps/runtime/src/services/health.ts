@@ -83,17 +83,26 @@ export async function getPublicSyncHealth(
   ]);
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
+  const snapshotPagesById = new Map(snapshot.pages.map((page) => [page.pageId, page]));
+  const allPageIds = new Set([
+    ...connectionsById.keys(),
+    ...snapshotPagesById.keys(),
+  ]);
   const thresholds = {
     lightMaxAgeMinutes: app.config.healthSyncLightMaxAgeMinutes,
     followerMaxAgeMinutes: app.config.healthSyncFollowerMaxAgeMinutes,
   };
 
-  const pages = snapshot.pages.map((page) => {
-    const connection = connectionsById.get(page.pageId);
+  const pages = Array.from(allPageIds, (pageId) => {
+    const page = snapshotPagesById.get(pageId);
+    const connection = connectionsById.get(pageId);
     const lightAge = ageMinutes(connection?.lastLightSyncAt ?? null, now);
-    const followerAge = page.platform === "fansly"
+    const followerAge = (page?.platform ?? connection?.platform) === "fansly"
       ? ageMinutes(connection?.lastFollowerSyncAt ?? null, now)
       : null;
+    const failedStreams = page?.summary.failedStreams ?? 0;
+    const stalledStreams = page?.summary.stalledStreams ?? 0;
+    const pendingStreams = page?.summary.pendingStreams ?? 0;
     const issues: string[] = [];
 
     if (!connection || connection.connectionStatus !== "active") {
@@ -106,7 +115,7 @@ export async function getPublicSyncHealth(
       issues.push("light_sync_stale");
     }
 
-    if (page.platform === "fansly") {
+    if ((page?.platform ?? connection?.platform) === "fansly") {
       if (followerAge === null) {
         issues.push("follower_sync_missing");
       } else if (followerAge > thresholds.followerMaxAgeMinutes) {
@@ -114,32 +123,32 @@ export async function getPublicSyncHealth(
       }
     }
 
-    if (page.summary.failedStreams > 0) {
+    if (failedStreams > 0) {
       issues.push("failed_streams");
     }
 
-    if (page.summary.stalledStreams > 0) {
+    if (stalledStreams > 0) {
       issues.push("stalled_streams");
     }
 
     const status: ServiceHealthStatus = issues.length > 0 ? "degraded" : "ok";
 
     return {
-      pageId: page.pageId,
-      pageLabel: page.pageLabel,
-      platform: page.platform,
-      modelSlug: page.modelSlug,
-      modelName: page.modelName,
+      pageId,
+      pageLabel: page?.pageLabel ?? connection?.label ?? "unknown",
+      platform: page?.platform ?? connection?.platform ?? "fansly",
+      modelSlug: page?.modelSlug ?? connection?.modelSlug ?? "unknown",
+      modelName: page?.modelName ?? connection?.modelName ?? "unknown",
       status,
       connectionStatus: connection?.connectionStatus ?? "unverified",
       lastLightSyncAt: connection?.lastLightSyncAt ?? null,
       lightAgeMinutes: lightAge,
       lastFollowerSyncAt: connection?.lastFollowerSyncAt ?? null,
       followerAgeMinutes: followerAge,
-      failedStreams: page.summary.failedStreams,
-      stalledStreams: page.summary.stalledStreams,
-      pendingStreams: page.summary.pendingStreams,
-      lastErrorSummary: firstErrorSummary(page.streams) ?? connection?.lastSyncError ?? null,
+      failedStreams,
+      stalledStreams,
+      pendingStreams,
+      lastErrorSummary: firstErrorSummary(page?.streams ?? []) ?? connection?.lastSyncError ?? null,
       issues,
     };
   });
@@ -160,7 +169,7 @@ export async function getPublicSyncHealth(
       timestamp: now.toISOString(),
       thresholds,
       overall: {
-        pageCount: snapshot.overall.pages,
+        pageCount: pages.length,
         unhealthyPageCount,
         runningStreams: snapshot.overall.runningStreams,
         failedStreams: snapshot.overall.failedStreams,
