@@ -16,6 +16,18 @@ services:
       timeout: 5s
       retries: 10
 
+  migrator:
+    build: .
+    image: agency_hub_core/runtime:local
+    command: ["pnpm", "db:migrate"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agency_hub_core
+      SYNC_SHARED_RATE_LIMIT_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build: .
     image: agency_hub_core/runtime:local
@@ -29,6 +41,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
 
   worker:
     image: agency_hub_core/runtime:local
@@ -39,6 +53,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
 
 volumes:
   postgres_data:
