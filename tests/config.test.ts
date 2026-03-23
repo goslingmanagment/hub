@@ -189,7 +189,7 @@ describe("config", () => {
     delete process.env.ONLYMONSTER_BASE_URL;
 
     try {
-      const env = {
+      const env: NodeJS.ProcessEnv = {
         ...baseEnv,
       };
       const config = loadConfig(env);
