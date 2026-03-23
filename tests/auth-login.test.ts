@@ -1,0 +1,120 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type MockDb = {
+  failAudit: boolean;
+};
+
+const repoMocks = vi.hoisted(() => ({
+  assignUserToPage: vi.fn(),
+  createApiKey: vi.fn(),
+  createAuthSession: vi.fn(),
+  createUser: vi.fn(),
+  deleteExpiredAuthSessions: vi.fn(),
+  findActiveApiKeysForUser: vi.fn(),
+  findApiKeyByDigest: vi.fn(),
+  findAuthSessionByDigest: vi.fn(),
+  findPageSummaryByLabel: vi.fn(),
+  findUserById: vi.fn(),
+  findUserByUsername: vi.fn(),
+  insertAuditEvent: vi.fn(),
+  listApiKeys: vi.fn(),
+  listUserPageAssignments: vi.fn(),
+  listUsers: vi.fn(),
+  revokeApiKeysByIds: vi.fn(),
+  revokeApiKeysForUser: vi.fn(),
+  revokeAuthSession: vi.fn(),
+  revokeAuthSessionsForUser: vi.fn(),
+  touchApiKey: vi.fn(),
+  touchAuthSession: vi.fn(),
+  unassignUserFromPage: vi.fn(),
+  updateUserPasswordHash: vi.fn(),
+}));
+
+const argon2Mocks = vi.hoisted(() => ({
+  hash: vi.fn(async () => "hashed-secret"),
+  verify: vi.fn(async () => false),
+}));
+
+vi.mock("@agency_hub_core/db", () => repoMocks);
+vi.mock("argon2", () => ({
+  default: {
+    argon2id: "argon2id",
+    hash: argon2Mocks.hash,
+    verify: argon2Mocks.verify,
+  },
+}));
+
+import { loginWithPassword } from "../apps/runtime/src/services/auth.ts";
+
+beforeEach(() => {
+  for (const mock of Object.values(repoMocks)) {
+    mock.mockReset();
+  }
+  argon2Mocks.hash.mockClear();
+  argon2Mocks.verify.mockClear();
+  argon2Mocks.verify.mockResolvedValue(false);
+  repoMocks.listUserPageAssignments.mockResolvedValue([]);
+  repoMocks.insertAuditEvent.mockImplementation(async (db: MockDb) => {
+    if (db.failAudit) {
+      throw new Error("audit failed");
+    }
+
+    return {
+      id: 1,
+      eventType: "auth.login_failed",
+    };
+  });
+});
+
+describe("loginWithPassword", () => {
+  it("keeps the unauthorized response when unknown-user login auditing fails", async () => {
+    repoMocks.findUserByUsername.mockResolvedValue(null);
+    const logger = { warn: vi.fn() };
+
+    await expect(loginWithPassword({
+      db: { failAudit: true },
+      logger,
+    } as never, {
+      username: "ghost",
+      password: "wrong",
+    })).rejects.toMatchObject({
+      message: "Invalid username or password",
+      statusCode: 401,
+    });
+
+    expect(repoMocks.insertAuditEvent).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({
+      username: "ghost",
+      targetUserId: null,
+    }), "Failed-login audit insert failed; continuing with unauthorized response");
+  });
+
+  it("keeps the unauthorized response when bad-password auditing fails", async () => {
+    repoMocks.findUserByUsername.mockResolvedValue({
+      id: 7,
+      username: "dima",
+      role: "owner",
+      passwordHash: "hashed-password",
+    });
+    argon2Mocks.verify.mockResolvedValue(false);
+    const logger = { warn: vi.fn() };
+
+    await expect(loginWithPassword({
+      db: { failAudit: true },
+      logger,
+    } as never, {
+      username: "dima",
+      password: "wrong",
+    })).rejects.toMatchObject({
+      message: "Invalid username or password",
+      statusCode: 401,
+    });
+
+    expect(argon2Mocks.verify).toHaveBeenCalledWith("hashed-password", "wrong");
+    expect(repoMocks.insertAuditEvent).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({
+      username: "dima",
+      targetUserId: 7,
+    }), "Failed-login audit insert failed; continuing with unauthorized response");
+  });
+});

@@ -122,6 +122,29 @@ async function recordAudit(app: Pick<AppContext, "db">, input: AuditContext & {
   });
 }
 
+async function recordFailedLoginAuditBestEffort(
+  app: Pick<AppContext, "db" | "logger">,
+  input: {
+    username: string;
+    targetUserId?: number | null;
+  },
+) {
+  try {
+    await recordAudit(app, {
+      source: "api",
+      eventType: "auth.login_failed",
+      targetUserId: input.targetUserId ?? null,
+      metadata: { username: input.username },
+    });
+  } catch (error) {
+    app.logger.warn({
+      username: input.username,
+      targetUserId: input.targetUserId ?? null,
+      err: error,
+    }, "Failed-login audit insert failed; continuing with unauthorized response");
+  }
+}
+
 export async function listUsersDetailed(app: AppContext) {
   const users = await listUsers(app.db);
   const result: AuthenticatedUser[] = [];
@@ -422,21 +445,17 @@ export async function loginWithPassword(
   const user = await findUserByUsername(app.db, input.username);
 
   if (!user || !roleCanUseSession(user.role) || !user.passwordHash) {
-    await recordAudit(app, {
-      source: "api",
-      eventType: "auth.login_failed",
-      metadata: { username: input.username },
+    await recordFailedLoginAuditBestEffort(app, {
+      username: input.username,
     });
     throw new UnauthorizedError("Invalid username or password");
   }
 
   const isValid = await argon2.verify(user.passwordHash, input.password);
   if (!isValid) {
-    await recordAudit(app, {
-      source: "api",
-      eventType: "auth.login_failed",
+    await recordFailedLoginAuditBestEffort(app, {
+      username: user.username,
       targetUserId: user.id,
-      metadata: { username: user.username },
     });
     throw new UnauthorizedError("Invalid username or password");
   }
