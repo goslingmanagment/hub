@@ -47,11 +47,7 @@ export function SubscribersPage() {
   }
 
   const platform = data.page.platform;
-  const items = [...data.items].sort((a, b) => {
-    if (!a.endsAt) return 1;
-    if (!b.endsAt) return -1;
-    return new Date(a.endsAt).getTime() - new Date(b.endsAt).getTime();
-  });
+  const items = data.items;
   const total = data.total;
   const filters = [
     { key: "all", label: "All" },
