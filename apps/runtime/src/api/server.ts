@@ -7,15 +7,23 @@ import {
   type RevenueDailyTypedItem,
 } from "@agency_hub_core/contracts";
 import {
+  CatalogModelNotFoundError,
+  CatalogPageNotFoundError,
   countDistinctFansForPages,
   createFanNote,
   createModel,
+  deleteModelBySlug,
+  deletePageByLabel,
+  DuplicateModelSlugError,
+  DuplicatePageLabelError,
   findPlatformFan,
   getLatestSyncRunPerPage,
   getRevenueBreakdownForScope,
   getRevenuePageTotals,
   listFanFlags,
   listFanPageContexts,
+  listAdminModels,
+  listAdminPages,
   listFanTransactionsCrossPage,
   listFanTransactionsOnPage,
   listRevenueDailyForPages,
@@ -24,7 +32,10 @@ import {
   listFollowerTotalsForPages,
   listSubscriberTotalsForPages,
   listVisiblePages,
+  ModelHasPagesError,
   setFanFlags,
+  updateModelBySlug,
+  updatePageByLabel,
 } from "@agency_hub_core/db";
 import {
   createLogger,
@@ -78,6 +89,7 @@ import { listConnectionStatuses, updatePageCredentials } from "../services/conne
 import {
   AppError,
   BadRequestError,
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   ServiceUnavailableError,
@@ -194,6 +206,50 @@ function serializeEpochMillisecondsTimestamp(value: Date | string | number | big
 
 function toNumber(value: number | string | bigint) {
   return typeof value === "number" ? value : Number(value);
+}
+
+function serializeAssignedPage(page: {
+  id: number;
+  label: string;
+  platform: Platform;
+  username: string | null;
+  displayName: string | null;
+  followerCount: number;
+  subscriberCount: number;
+  lastLightSyncAt: Date | string | null;
+  lastFollowerSyncAt: Date | string | null;
+  modelSlug: string;
+  modelName: string;
+}) {
+  return {
+    id: page.id,
+    label: page.label,
+    platform: page.platform,
+    username: page.username,
+    displayName: page.displayName,
+    followerCount: page.followerCount,
+    subscriberCount: page.subscriberCount,
+    lastLightSyncAt: serializeNullableTimestamp(page.lastLightSyncAt),
+    lastFollowerSyncAt: serializeNullableTimestamp(page.lastFollowerSyncAt),
+    modelSlug: page.modelSlug,
+    modelName: page.modelName,
+  };
+}
+
+function rethrowAdminCatalogError(error: unknown): never {
+  if (
+    error instanceof DuplicateModelSlugError ||
+    error instanceof DuplicatePageLabelError ||
+    error instanceof ModelHasPagesError
+  ) {
+    throw new ConflictError(error.message);
+  }
+
+  if (error instanceof CatalogModelNotFoundError || error instanceof CatalogPageNotFoundError) {
+    throw new NotFoundError(error.message);
+  }
+
+  throw error;
 }
 
 export async function buildApiServer(appContext: AppContext) {
@@ -1479,13 +1535,60 @@ export async function buildApiServer(appContext: AppContext) {
     });
   });
 
+  server.get("/api/v1/admin/models", {
+    schema: routeSchemas.adminModels,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return listAdminModels(appContext.db);
+  });
+
   server.post("/api/v1/admin/models", {
     schema: routeSchemas.adminCreateModel,
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    const model = await createModel(appContext.db, request.body);
-    return { id: model.id, slug: model.slug, name: model.name };
+    try {
+      const model = await createModel(appContext.db, request.body);
+      return { id: model.id, slug: model.slug, name: model.name };
+    } catch (error) {
+      rethrowAdminCatalogError(error);
+    }
+  });
+
+  server.patch("/api/v1/admin/models/:modelSlug", {
+    schema: routeSchemas.adminUpdateModel,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    try {
+      const model = await updateModelBySlug(appContext.db, request.params.modelSlug, request.body);
+      return { id: model.id, slug: model.slug, name: model.name };
+    } catch (error) {
+      rethrowAdminCatalogError(error);
+    }
+  });
+
+  server.delete("/api/v1/admin/models/:modelSlug", {
+    schema: routeSchemas.adminDeleteModel,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    try {
+      await deleteModelBySlug(appContext.db, request.params.modelSlug);
+      return { deleted: true as const };
+    } catch (error) {
+      rethrowAdminCatalogError(error);
+    }
+  });
+
+  server.get("/api/v1/admin/pages", {
+    schema: routeSchemas.adminPages,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const pages = await listAdminPages(appContext.db);
+    return pages.map((page) => serializeAssignedPage(page));
   });
 
   server.post("/api/v1/admin/pages", {
@@ -1516,19 +1619,7 @@ export async function buildApiServer(appContext: AppContext) {
       }
       const page = await getPageSummary(appContext, body.label);
       return {
-        page: {
-          id: page.id,
-          label: page.label,
-          platform: page.platform,
-          username: page.username,
-          displayName: page.displayName,
-          followerCount: page.followerCount,
-          subscriberCount: page.subscriberCount,
-          lastLightSyncAt: page.lastLightSyncAt?.toISOString() ?? null,
-          lastFollowerSyncAt: page.lastFollowerSyncAt?.toISOString() ?? null,
-          modelSlug: page.modelSlug,
-          modelName: page.modelName,
-        },
+        page: serializeAssignedPage(page),
         verified: true,
       };
     } else {
@@ -1554,21 +1645,39 @@ export async function buildApiServer(appContext: AppContext) {
       }
       const page = await getPageSummary(appContext, body.label);
       return {
-        page: {
-          id: page.id,
-          label: page.label,
-          platform: page.platform,
-          username: page.username,
-          displayName: page.displayName,
-          followerCount: page.followerCount,
-          subscriberCount: page.subscriberCount,
-          lastLightSyncAt: page.lastLightSyncAt?.toISOString() ?? null,
-          lastFollowerSyncAt: page.lastFollowerSyncAt?.toISOString() ?? null,
-          modelSlug: page.modelSlug,
-          modelName: page.modelName,
-        },
+        page: serializeAssignedPage(page),
         verified: true,
       };
+    }
+  });
+
+  server.patch("/api/v1/admin/pages/:pageLabel", {
+    schema: routeSchemas.adminUpdatePage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    try {
+      const updated = await updatePageByLabel(appContext.db, request.params.pageLabel, request.body);
+      const [page] = await listAdminPages(appContext.db, { pageIds: [updated.id] });
+      if (!page) {
+        throw new NotFoundError(`Page "${updated.label}" not found`);
+      }
+      return { page: serializeAssignedPage(page) };
+    } catch (error) {
+      rethrowAdminCatalogError(error);
+    }
+  });
+
+  server.delete("/api/v1/admin/pages/:pageLabel", {
+    schema: routeSchemas.adminDeletePage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    try {
+      await deletePageByLabel(appContext.db, request.params.pageLabel);
+      return { deleted: true as const };
+    } catch (error) {
+      rethrowAdminCatalogError(error);
     }
   });
 

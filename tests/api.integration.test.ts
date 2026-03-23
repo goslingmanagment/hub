@@ -3741,6 +3741,502 @@ describe("api integration", () => {
     });
   });
 
+  it("lists admin models including empty models and rejects non-owner access", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const emptyModel = await createModel(testDb.db, {
+      slug: "empty-model",
+      name: "Empty Model",
+    });
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const ownerResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/models",
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(ownerResponse.statusCode).toBe(200);
+    expect(ownerResponse.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: fixture.lanaModel.id,
+        slug: "lana-model",
+        name: "Lana Model",
+        pageCount: 1,
+      }),
+      expect.objectContaining({
+        id: emptyModel.id,
+        slug: "empty-model",
+        name: "Empty Model",
+        pageCount: 0,
+      }),
+    ]));
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "lead",
+        password: "lead-secret",
+      },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+
+    const forbidden = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/models",
+      headers: { cookie: leadCookie },
+    });
+
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.json()).toEqual({
+      error: "forbidden",
+      message: "Owner access required",
+      statusCode: 403,
+    });
+  });
+
+  it("updates and deletes models through admin CRUD", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "temp-model",
+      name: "Temp Model",
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const updateResponse = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/models/temp-model",
+      headers: { cookie },
+      payload: {
+        slug: "temp-model-renamed",
+        name: "Temp Model Renamed",
+      },
+    });
+
+    expect(updateResponse.statusCode).toBe(200);
+    expect(updateResponse.json()).toEqual({
+      id: expect.any(Number),
+      slug: "temp-model-renamed",
+      name: "Temp Model Renamed",
+    });
+
+    const deleteResponse = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/models/temp-model-renamed",
+      headers: { cookie },
+    });
+
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(deleteResponse.json()).toEqual({
+      deleted: true,
+    });
+
+    const rows = await testDb.pool.query<{ count: number }>(`
+      select count(*)::int as count
+      from models
+      where slug = 'temp-model-renamed'
+    `);
+    expect(rows.rows[0]?.count).toBe(0);
+  });
+
+  it("returns typed conflicts and not-found errors for admin model CRUD", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "spare-model",
+      name: "Spare Model",
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const duplicateCreate = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/models",
+      headers: { cookie },
+      payload: {
+        slug: "lana-model",
+        name: "Duplicate Lana",
+      },
+    });
+
+    expect(duplicateCreate.statusCode).toBe(409);
+    expect(duplicateCreate.json()).toEqual({
+      error: "conflict",
+      message: 'Model "lana-model" already exists',
+      statusCode: 409,
+    });
+
+    const missingUpdate = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/models/missing-model",
+      headers: { cookie },
+      payload: {
+        name: "Nope",
+      },
+    });
+
+    expect(missingUpdate.statusCode).toBe(404);
+    expect(missingUpdate.json()).toEqual({
+      error: "not_found",
+      message: 'Model "missing-model" not found',
+      statusCode: 404,
+    });
+
+    const duplicateUpdate = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/models/spare-model",
+      headers: { cookie },
+      payload: {
+        slug: "lana-model",
+      },
+    });
+
+    expect(duplicateUpdate.statusCode).toBe(409);
+    expect(duplicateUpdate.json()).toEqual({
+      error: "conflict",
+      message: 'Model "lana-model" already exists',
+      statusCode: 409,
+    });
+
+    const missingDelete = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/models/missing-model",
+      headers: { cookie },
+    });
+
+    expect(missingDelete.statusCode).toBe(404);
+    expect(missingDelete.json()).toEqual({
+      error: "not_found",
+      message: 'Model "missing-model" not found',
+      statusCode: 404,
+    });
+
+    const nonEmptyDelete = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/models/lana-model",
+      headers: { cookie },
+    });
+
+    expect(nonEmptyDelete.statusCode).toBe(409);
+    expect(nonEmptyDelete.json()).toEqual({
+      error: "conflict",
+      message: 'Model "lana-model" cannot be deleted while it still has 1 page',
+      statusCode: 409,
+    });
+  });
+
+  it("lists, updates, and deletes pages through admin CRUD", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const reassignedModel = await createModel(testDb.db, {
+      slug: "target-model",
+      name: "Target Model",
+    });
+    await storeFanslySession(
+      testDb.db,
+      fixture.lanaPage.id,
+      JSON.stringify(encryptJson({
+        platform: "fansly",
+        session: {
+          authorization: "seed-token",
+        },
+      }, Buffer.alloc(32, 7), 1)),
+      1,
+    );
+    await saveProxy(createTestAppContext(testDb), fixture.lanaPage.id, {
+      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    });
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const listResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/pages",
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: fixture.lanaPage.id,
+        label: "lana",
+        modelSlug: "lana-model",
+      }),
+      expect.objectContaining({
+        label: "lily1",
+        modelSlug: "lily-model",
+      }),
+    ]));
+
+    const leadLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "lead",
+        password: "lead-secret",
+      },
+    });
+    const leadCookie = sessionCookieFrom(leadLogin);
+
+    const forbidden = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/pages/lana",
+      headers: { cookie: leadCookie },
+      payload: {
+        label: "blocked",
+      },
+    });
+
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.json()).toEqual({
+      error: "forbidden",
+      message: "Owner access required",
+      statusCode: 403,
+    });
+
+    const updateResponse = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/pages/lana",
+      headers: { cookie: ownerCookie },
+      payload: {
+        label: "lana-renamed",
+        modelSlug: reassignedModel.slug,
+      },
+    });
+
+    expect(updateResponse.statusCode).toBe(200);
+    expect(updateResponse.json()).toMatchObject({
+      page: {
+        id: fixture.lanaPage.id,
+        label: "lana-renamed",
+        modelSlug: "target-model",
+        modelName: "Target Model",
+      },
+    });
+
+    const pageRows = await testDb.pool.query<{
+      label: string;
+      model_slug: string;
+    }>(`
+      select pa.label, m.slug as model_slug
+      from platform_accounts pa
+      join models m on m.id = pa.model_id
+      where pa.id = $1
+    `, [fixture.lanaPage.id]);
+
+    expect(pageRows.rows[0]).toEqual({
+      label: "lana-renamed",
+      model_slug: "target-model",
+    });
+
+    const deleteResponse = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/pages/lana-renamed",
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(deleteResponse.json()).toEqual({
+      deleted: true,
+    });
+
+    const [accountRows, credentialRows, proxyRows, assignmentRows] = await Promise.all([
+      testDb.pool.query<{ count: number }>(`
+        select count(*)::int as count
+        from platform_accounts
+        where id = $1
+      `, [fixture.lanaPage.id]),
+      testDb.pool.query<{ count: number }>(`
+        select count(*)::int as count
+        from platform_account_credentials
+        where platform_account_id = $1
+      `, [fixture.lanaPage.id]),
+      testDb.pool.query<{ count: number }>(`
+        select count(*)::int as count
+        from platform_account_proxies
+        where platform_account_id = $1
+      `, [fixture.lanaPage.id]),
+      testDb.pool.query<{ count: number }>(`
+        select count(*)::int as count
+        from user_page_assignments
+        where platform_account_id = $1
+      `, [fixture.lanaPage.id]),
+    ]);
+
+    expect(accountRows.rows[0]?.count).toBe(0);
+    expect(credentialRows.rows[0]?.count).toBe(0);
+    expect(proxyRows.rows[0]?.count).toBe(0);
+    expect(assignmentRows.rows[0]?.count).toBe(0);
+  });
+
+  it("returns typed conflicts and not-found errors for admin page CRUD", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const missingUpdate = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/pages/missing-page",
+      headers: { cookie },
+      payload: {
+        label: "still-missing",
+      },
+    });
+
+    expect(missingUpdate.statusCode).toBe(404);
+    expect(missingUpdate.json()).toEqual({
+      error: "not_found",
+      message: 'Page "missing-page" not found',
+      statusCode: 404,
+    });
+
+    const duplicateUpdate = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/pages/lana",
+      headers: { cookie },
+      payload: {
+        label: "lily1",
+      },
+    });
+
+    expect(duplicateUpdate.statusCode).toBe(409);
+    expect(duplicateUpdate.json()).toEqual({
+      error: "conflict",
+      message: 'Page "lily1" already exists',
+      statusCode: 409,
+    });
+
+    const missingModelUpdate = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/pages/lana",
+      headers: { cookie },
+      payload: {
+        modelSlug: "missing-model",
+      },
+    });
+
+    expect(missingModelUpdate.statusCode).toBe(404);
+    expect(missingModelUpdate.json()).toEqual({
+      error: "not_found",
+      message: 'Model "missing-model" not found',
+      statusCode: 404,
+    });
+
+    const missingDelete = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/pages/missing-page",
+      headers: { cookie },
+    });
+
+    expect(missingDelete.statusCode).toBe(404);
+    expect(missingDelete.json()).toEqual({
+      error: "not_found",
+      message: 'Page "missing-page" not found',
+      statusCode: 404,
+    });
+
+    await server.close();
+    const appContext = createTestAppContext(testDb, {
+      adapter: createAutoSyncFanslyAdapter({
+        accountId: "acct-duplicate-page",
+        username: "duplicate_page_user",
+        displayName: "Duplicate Page User",
+      }),
+    });
+    server = await buildApiServer(appContext);
+    await server.ready();
+
+    const refreshedLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const refreshedCookie = sessionCookieFrom(refreshedLogin);
+
+    const duplicateCreate = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/pages",
+      headers: { cookie: refreshedCookie },
+      payload: {
+        platform: "fansly",
+        modelSlug: "lana-model",
+        label: "lana",
+        session: {
+          authorization: "token",
+        },
+      },
+    });
+
+    expect(duplicateCreate.statusCode).toBe(409);
+    expect(duplicateCreate.json()).toEqual({
+      error: "conflict",
+      message: 'Page "lana" already exists',
+      statusCode: 409,
+    });
+  });
+
   it("returns a typed 404 when onboarding references a missing model slug", async (context) => {
     if (!testDb || !server) {
       context.skip();

@@ -1,6 +1,7 @@
 import {
   createOnlyFansPage,
   createFanslyPage,
+  DuplicatePageLabelError,
   findModelBySlug,
   PlatformAccountIdentityConflictError,
   PlatformAccountIdentityImmutableError,
@@ -58,6 +59,7 @@ async function storeProxyIfPresent(
 
 function rethrowPageIdentityConflict(error: unknown): never {
   if (
+    error instanceof DuplicatePageLabelError ||
     error instanceof PlatformAccountIdentityConflictError ||
     error instanceof PlatformAccountIdentityImmutableError
   ) {

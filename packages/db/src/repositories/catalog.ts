@@ -1,4 +1,4 @@
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 
 import type { Platform, ProxyConfig } from "@agency_hub_core/shared";
 
@@ -44,6 +44,47 @@ export class PlatformAccountIdentityConflictError extends Error {
   }
 }
 
+export class DuplicateModelSlugError extends Error {
+  constructor(readonly slug: string) {
+    super(`Model "${slug}" already exists`);
+    this.name = "DuplicateModelSlugError";
+  }
+}
+
+export class DuplicatePageLabelError extends Error {
+  constructor(readonly label: string) {
+    super(`Page "${label}" already exists`);
+    this.name = "DuplicatePageLabelError";
+  }
+}
+
+export class CatalogModelNotFoundError extends Error {
+  constructor(readonly slug: string) {
+    super(`Model "${slug}" not found`);
+    this.name = "CatalogModelNotFoundError";
+  }
+}
+
+export class CatalogPageNotFoundError extends Error {
+  constructor(readonly label: string) {
+    super(`Page "${label}" not found`);
+    this.name = "CatalogPageNotFoundError";
+  }
+}
+
+export class ModelHasPagesError extends Error {
+  constructor(
+    readonly slug: string,
+    readonly pageCount: number,
+  ) {
+    super(
+      `Model "${slug}" cannot be deleted while it still has ${pageCount} ` +
+        `page${pageCount === 1 ? "" : "s"}`,
+    );
+    this.name = "ModelHasPagesError";
+  }
+}
+
 function hasErrorCode(error: unknown, code: string) {
   let current: unknown = error;
 
@@ -66,9 +107,7 @@ export async function createModel(db: Database, input: { slug: string; name: str
     return created;
   } catch (error) {
     if (hasErrorCode(error, "23505")) {
-      throw new Error(`Model "${input.slug}" already exists`, {
-        cause: error instanceof Error ? error : undefined,
-      });
+      throw new DuplicateModelSlugError(input.slug);
     }
 
     throw error;
@@ -117,25 +156,34 @@ export async function createPlatformPage(
     label: string;
   },
 ) {
-  const [created] = await db.transaction(async (tx) => {
-    const [page] = await tx
-      .insert(platformAccounts)
-      .values({
-        modelId: input.modelId,
-        platform: input.platform,
-        commissionRate: defaultCommissionRateForPlatform(input.platform),
-        label: input.label,
-      })
-      .returning();
+  let created;
+  try {
+    [created] = await db.transaction(async (tx) => {
+      const [page] = await tx
+        .insert(platformAccounts)
+        .values({
+          modelId: input.modelId,
+          platform: input.platform,
+          commissionRate: defaultCommissionRateForPlatform(input.platform),
+          label: input.label,
+        })
+        .returning();
 
-    await tx.insert(spenderProjectionWatermarks).values({
-      platformAccountId: page.id,
-      lastRebuiltAt: new Date(0),
-      updatedAt: new Date(),
+      await tx.insert(spenderProjectionWatermarks).values({
+        platformAccountId: page.id,
+        lastRebuiltAt: new Date(0),
+        updatedAt: new Date(),
+      });
+
+      return [page];
     });
+  } catch (error) {
+    if (hasErrorCode(error, "23505")) {
+      throw new DuplicatePageLabelError(input.label);
+    }
 
-    return [page];
-  });
+    throw error;
+  }
 
   return created;
 }
@@ -281,6 +329,191 @@ export async function listModelsWithPageCounts(db: Database) {
     group by m.id, m.slug, m.name
     order by m.slug asc
   `);
+}
+
+export async function listAdminModels(db: Database) {
+  return db.select({
+    id: models.id,
+    slug: models.slug,
+    name: models.name,
+    pageCount: sql<number>`count(${platformAccounts.id})::int`,
+  }).from(models)
+    .leftJoin(platformAccounts, eq(platformAccounts.modelId, models.id))
+    .groupBy(models.id, models.slug, models.name)
+    .orderBy(models.slug);
+}
+
+export async function updateModelBySlug(
+  db: Database,
+  slug: string,
+  input: {
+    slug?: string;
+    name?: string;
+  },
+) {
+  const patch: {
+    slug?: string;
+    name?: string;
+  } = {};
+
+  if (input.slug !== undefined) {
+    patch.slug = input.slug;
+  }
+  if (input.name !== undefined) {
+    patch.name = input.name;
+  }
+
+  let updated;
+  try {
+    [updated] = await db
+      .update(models)
+      .set(patch)
+      .where(eq(models.slug, slug))
+      .returning();
+  } catch (error) {
+    if (hasErrorCode(error, "23505")) {
+      throw new DuplicateModelSlugError(input.slug ?? slug);
+    }
+
+    throw error;
+  }
+
+  if (!updated) {
+    throw new CatalogModelNotFoundError(slug);
+  }
+
+  return updated;
+}
+
+export async function deleteModelBySlug(db: Database, slug: string) {
+  const deleted = await db.execute(sql`
+    delete from models m
+    where m.slug = ${slug}
+      and not exists (
+        select 1
+        from platform_accounts pa
+        where pa.model_id = m.id
+      )
+    returning m.id
+  `);
+
+  if (deleted.rows.length > 0) {
+    return;
+  }
+
+  const model = await findModelBySlug(db, slug);
+  if (!model) {
+    throw new CatalogModelNotFoundError(slug);
+  }
+
+  const [{ pageCount }] = await db.select({
+    pageCount: sql<number>`count(${platformAccounts.id})::int`,
+  }).from(platformAccounts)
+    .where(eq(platformAccounts.modelId, model.id));
+
+  throw new ModelHasPagesError(slug, pageCount);
+}
+
+export async function listAdminPages(
+  db: Database,
+  input?: {
+    pageIds?: number[];
+  },
+) {
+  const clauses: Array<any> = [];
+
+  if (input?.pageIds !== undefined) {
+    if (input.pageIds.length === 0) {
+      return [];
+    }
+    clauses.push(inArray(platformAccounts.id, input.pageIds));
+  }
+
+  return db.select({
+    id: platformAccounts.id,
+    label: platformAccounts.label,
+    platform: platformAccounts.platform,
+    username: platformAccounts.username,
+    displayName: platformAccounts.displayName,
+    followerCount: platformAccounts.followerCount,
+    subscriberCount: platformAccounts.subscriberCount,
+    lastLightSyncAt: platformAccounts.lastLightSyncAt,
+    lastFollowerSyncAt: platformAccounts.lastFollowerSyncAt,
+    modelSlug: models.slug,
+    modelName: models.name,
+  }).from(platformAccounts)
+    .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .where(clauses.length > 0 ? and(...clauses) : undefined)
+    .orderBy(models.slug, platformAccounts.label);
+}
+
+export async function updatePageByLabel(
+  db: Database,
+  label: string,
+  input: {
+    label?: string;
+    modelSlug?: string;
+  },
+) {
+  const existing = await db.query.platformAccounts.findFirst({
+    where: eq(platformAccounts.label, label),
+  });
+  if (!existing) {
+    throw new CatalogPageNotFoundError(label);
+  }
+
+  const patch: {
+    label?: string;
+    modelId?: number;
+    updatedAt: Date;
+  } = {
+    updatedAt: new Date(),
+  };
+
+  if (input.label !== undefined) {
+    patch.label = input.label;
+  }
+
+  if (input.modelSlug !== undefined) {
+    const model = await findModelBySlug(db, input.modelSlug);
+    if (!model) {
+      throw new CatalogModelNotFoundError(input.modelSlug);
+    }
+    patch.modelId = model.id;
+  }
+
+  let updated;
+  try {
+    [updated] = await db
+      .update(platformAccounts)
+      .set(patch)
+      .where(eq(platformAccounts.id, existing.id))
+      .returning();
+  } catch (error) {
+    if (hasErrorCode(error, "23505")) {
+      throw new DuplicatePageLabelError(input.label ?? label);
+    }
+
+    throw error;
+  }
+
+  return updated;
+}
+
+export async function deletePageByLabel(db: Database, label: string) {
+  const [deleted] = await db
+    .delete(platformAccounts)
+    .where(eq(platformAccounts.label, label))
+    .returning({
+      id: platformAccounts.id,
+      label: platformAccounts.label,
+    });
+
+  if (!deleted) {
+    throw new CatalogPageNotFoundError(label);
+  }
+
+  return deleted;
 }
 
 export async function listPageSummaries(db: Database) {

@@ -1787,10 +1787,24 @@ export const createModelBodySchema = z.object({
   name: z.string().min(1).max(200),
 });
 
+export const updateModelBodySchema = z.object({
+  slug: z.string().min(1).max(100).optional(),
+  name: z.string().min(1).max(200).optional(),
+}).refine((value) => value.slug !== undefined || value.name !== undefined, {
+  message: "At least one field is required",
+});
+
 export const createModelResponseSchema = z.object({
   id: intId,
   slug: z.string(),
   name: z.string(),
+});
+
+export const updatePageBodySchema = z.object({
+  label: z.string().min(1).optional(),
+  modelSlug: z.string().min(1).optional(),
+}).refine((value) => value.label !== undefined || value.modelSlug !== undefined, {
+  message: "At least one field is required",
 });
 
 export const updateCredentialsBodySchema = z.discriminatedUnion("platform", [
@@ -1809,9 +1823,17 @@ export const adminCreatePageResponseSchema = z.object({
   verified: z.boolean(),
 });
 
+export const adminUpdatePageResponseSchema = z.object({
+  page: assignedPageSchema,
+});
+
 export const updateCredentialsResponseSchema = z.object({
   updated: z.boolean(),
   verified: z.boolean(),
+});
+
+export const deletedResponseSchema = z.object({
+  deleted: z.literal(true),
 });
 
 const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
@@ -2525,6 +2547,16 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  adminModels: {
+    tags: ["admin"],
+    summary: "List all models for admin management",
+    security: cookieOnlySecurity,
+    response: {
+      200: z.array(modelListItemSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   adminCreateModel: {
     tags: ["admin"],
     summary: "Create a model",
@@ -2532,6 +2564,44 @@ export const routeSchemas = {
     body: createModelBodySchema,
     response: {
       200: createModelResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminUpdateModel: {
+    tags: ["admin"],
+    summary: "Update a model",
+    security: cookieOnlySecurity,
+    params: modelParamsSchema,
+    body: updateModelBodySchema,
+    response: {
+      200: createModelResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminDeleteModel: {
+    tags: ["admin"],
+    summary: "Delete an empty model",
+    security: cookieOnlySecurity,
+    params: modelParamsSchema,
+    response: {
+      200: deletedResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminPages: {
+    tags: ["admin"],
+    summary: "List all pages for admin management",
+    security: cookieOnlySecurity,
+    response: {
+      200: z.array(assignedPageSchema),
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
@@ -2545,6 +2615,35 @@ export const routeSchemas = {
       200: adminCreatePageResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  adminUpdatePage: {
+    tags: ["admin"],
+    summary: "Update a page",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    body: updatePageBodySchema,
+    response: {
+      200: adminUpdatePageResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminDeletePage: {
+    tags: ["admin"],
+    summary: "Delete a page",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    response: {
+      200: deletedResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
     },
   },
   adminVerifyCredentials: {
@@ -2808,12 +2907,16 @@ export type ConnectionItem = z.infer<typeof connectionItemSchema>;
 export type VerifyCredentialsBody = z.infer<typeof verifyCredentialsBodySchema>;
 export type VerifyCredentialsResponse = z.infer<typeof verifyCredentialsResponseSchema>;
 export type CreateModelBody = z.infer<typeof createModelBodySchema>;
+export type UpdateModelBody = z.infer<typeof updateModelBodySchema>;
 export type CreateModelResponse = z.infer<typeof createModelResponseSchema>;
 export type CreatePageBody = z.infer<typeof createPageBodySchema>;
+export type UpdatePageBody = z.infer<typeof updatePageBodySchema>;
 export type AdminCreatePageResponse = z.infer<typeof adminCreatePageResponseSchema>;
+export type AdminUpdatePageResponse = z.infer<typeof adminUpdatePageResponseSchema>;
 export type UpdateCredentialsBody = z.infer<typeof updateCredentialsBodySchema>;
 export type UpdateCredentialsResponse = z.infer<typeof updateCredentialsResponseSchema>;
 export type VerifyPageResponse = z.infer<typeof verifyPageResponseSchema>;
+export type DeletedResponse = z.infer<typeof deletedResponseSchema>;
 export type NotificationsSettingsResponse = z.infer<typeof notificationsSettingsResponseSchema>;
 export type NotificationsSettingsUpdateBody = z.infer<typeof notificationsSettingsUpdateBodySchema>;
 export type NotificationsTestMessageResponse = z.infer<typeof notificationsTestMessageResponseSchema>;
