@@ -26,7 +26,170 @@ export interface paths {
                     content: {
                         "application/json": {
                             /** @enum {string} */
-                            status: "ok";
+                            status: "ok" | "degraded";
+                            timestamp: string;
+                            checks: {
+                                api: {
+                                    /** @enum {string} */
+                                    status: "ok";
+                                };
+                                database: {
+                                    /** @enum {string} */
+                                    status: "ok" | "error";
+                                    latencyMs: number | null;
+                                    error: string | null;
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "ok" | "degraded";
+                            timestamp: string;
+                            checks: {
+                                api: {
+                                    /** @enum {string} */
+                                    status: "ok";
+                                };
+                                database: {
+                                    /** @enum {string} */
+                                    status: "ok" | "error";
+                                    latencyMs: number | null;
+                                    error: string | null;
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/health/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public sync health for external monitoring */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "ok" | "degraded";
+                            timestamp: string;
+                            thresholds: {
+                                lightMaxAgeMinutes: number;
+                                followerMaxAgeMinutes: number;
+                            };
+                            overall: {
+                                pageCount: number;
+                                unhealthyPageCount: number;
+                                runningStreams: number;
+                                failedStreams: number;
+                                stalledStreams: number;
+                                pendingStreams: number;
+                                recentFailedRuns: number;
+                                recent429s: number;
+                                recent5xxs: number;
+                            };
+                            pages: {
+                                pageId: number;
+                                pageLabel: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                /** @enum {string} */
+                                status: "ok" | "degraded";
+                                /** @enum {string} */
+                                connectionStatus: "active" | "stale" | "error" | "expired" | "never_synced" | "unverified";
+                                lastLightSyncAt: string | null;
+                                lightAgeMinutes: number | null;
+                                lastFollowerSyncAt: string | null;
+                                followerAgeMinutes: number | null;
+                                failedStreams: number;
+                                stalledStreams: number;
+                                pendingStreams: number;
+                                lastErrorSummary: string | null;
+                                issues: string[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "ok" | "degraded";
+                            timestamp: string;
+                            thresholds: {
+                                lightMaxAgeMinutes: number;
+                                followerMaxAgeMinutes: number;
+                            };
+                            overall: {
+                                pageCount: number;
+                                unhealthyPageCount: number;
+                                runningStreams: number;
+                                failedStreams: number;
+                                stalledStreams: number;
+                                pendingStreams: number;
+                                recentFailedRuns: number;
+                                recent429s: number;
+                                recent5xxs: number;
+                            };
+                            pages: {
+                                pageId: number;
+                                pageLabel: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                /** @enum {string} */
+                                status: "ok" | "degraded";
+                                /** @enum {string} */
+                                connectionStatus: "active" | "stale" | "error" | "expired" | "never_synced" | "unverified";
+                                lastLightSyncAt: string | null;
+                                lightAgeMinutes: number | null;
+                                lastFollowerSyncAt: string | null;
+                                followerAgeMinutes: number | null;
+                                failedStreams: number;
+                                stalledStreams: number;
+                                pendingStreams: number;
+                                lastErrorSummary: string | null;
+                                issues: string[];
+                            }[];
                         };
                     };
                 };

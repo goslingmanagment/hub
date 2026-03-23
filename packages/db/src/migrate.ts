@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { loadConfig } from "@agency_hub_core/shared";
 
@@ -25,9 +26,11 @@ function assertUniqueMigrationPrefixes(files: string[]) {
   }
 }
 
-async function main() {
+export async function runMigrations(input?: {
+  databaseUrl?: string;
+}) {
   const config = loadConfig();
-  const pool = createPool(config.databaseUrl);
+  const pool = createPool(input?.databaseUrl ?? config.databaseUrl);
 
   try {
     await pool.query(`
@@ -69,7 +72,17 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+async function main() {
+  await runMigrations();
+}
+
+const isMainModule = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isMainModule) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

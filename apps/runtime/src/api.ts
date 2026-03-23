@@ -1,7 +1,9 @@
+import { pathToFileURL } from "node:url";
+
 import { createAppContext } from "./bootstrap.ts";
 import { buildApiServer } from "./api/server.ts";
 
-async function main() {
+export async function main() {
   const appContext = await createAppContext();
   const server = await buildApiServer(appContext);
   const keepAlive = setInterval(() => {}, 60_000);
@@ -33,7 +35,13 @@ async function main() {
   process.on("SIGTERM", shutdown);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+const isMainModule = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isMainModule) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

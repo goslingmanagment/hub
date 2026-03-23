@@ -3768,6 +3768,113 @@ describe("api integration", () => {
     ]));
   });
 
+  it("serves public system health without auth and degrades when the database probe fails", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const healthy = await server.inject({
+      method: "GET",
+      url: "/api/v1/health",
+    });
+
+    expect(healthy.statusCode).toBe(200);
+    expect(healthy.json()).toMatchObject({
+      status: "ok",
+      checks: {
+        api: {
+          status: "ok",
+        },
+        database: {
+          status: "ok",
+          error: null,
+        },
+      },
+    });
+    expect(typeof healthy.json().timestamp).toBe("string");
+    expect(typeof healthy.json().checks.database.latencyMs).toBe("number");
+
+    const querySpy = vi
+      .spyOn(testDb.pool, "query")
+      .mockRejectedValueOnce(new Error("db probe failed"));
+
+    const degraded = await server.inject({
+      method: "GET",
+      url: "/api/v1/health",
+    });
+
+    querySpy.mockRestore();
+
+    expect(degraded.statusCode).toBe(503);
+    expect(degraded.json()).toMatchObject({
+      status: "degraded",
+      checks: {
+        api: {
+          status: "ok",
+        },
+        database: {
+          status: "error",
+          error: "db probe failed",
+        },
+      },
+    });
+    expect(typeof degraded.json().checks.database.latencyMs).toBe("number");
+  });
+
+  it("serves public sync health for external monitoring without requiring auth", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, new Date());
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/health/sync",
+    });
+
+    expect(response.statusCode).toBe(503);
+    const body = response.json();
+
+    expect(body).toMatchObject({
+      status: "degraded",
+      thresholds: {
+        lightMaxAgeMinutes: 180,
+        followerMaxAgeMinutes: 1080,
+      },
+      overall: {
+        pageCount: 2,
+        unhealthyPageCount: 2,
+      },
+    });
+    expect(typeof body.timestamp).toBe("string");
+    expect(body.overall.failedStreams).toBeGreaterThan(0);
+    expect(body.overall.stalledStreams).toBeGreaterThan(0);
+
+    expect(body.pages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        pageLabel: "lana",
+        platform: "fansly",
+        status: "degraded",
+        issues: expect.arrayContaining([
+          "follower_sync_missing",
+          "failed_streams",
+          "stalled_streams",
+        ]),
+      }),
+      expect.objectContaining({
+        pageLabel: "lily1",
+        platform: "fansly",
+        status: "degraded",
+        issues: expect.arrayContaining([
+          "follower_sync_missing",
+        ]),
+      }),
+    ]));
+  });
+
   it("reports whether a stored proxy is configured without exposing proxy secrets", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

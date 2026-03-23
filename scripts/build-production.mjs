@@ -112,5 +112,6 @@ await buildPackage("packages/db/dist", {
 await buildPackage("apps/runtime/dist", {
   api: "apps/runtime/src/api.ts",
   cli: "apps/runtime/src/cli.ts",
+  startup: "apps/runtime/src/startup.ts",
   worker: "apps/runtime/src/worker.ts",
 });

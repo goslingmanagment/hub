@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  api:
+    build: .
+    image: agency_hub_core/runtime:production
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    command: ["node", "apps/runtime/dist/startup.js", "api"]
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const port = process.env.API_PORT || '3000'; fetch('http://127.0.0.1:' + port + '/api/v1/health').then((res) => { if (!res.ok) process.exit(1); }).catch(() => process.exit(1));",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    image: agency_hub_core/runtime:production
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    command: ["node", "apps/runtime/dist/startup.js", "worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "import('pg').then(async ({ Client }) => { const client = new Client({ connectionString: process.env.DATABASE_URL }); await client.connect(); await client.query('select 1'); await client.end(); }).catch(() => process.exit(1));",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+volumes:
+  postgres_data:

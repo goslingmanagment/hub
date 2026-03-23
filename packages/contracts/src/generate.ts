@@ -32,6 +32,8 @@ async function main() {
       syncSharedRateLimitEnabled: false,
       syncPageExecutorConcurrency: 1,
       syncObservabilityRetentionDays: 30,
+      healthSyncLightMaxAgeMinutes: 180,
+      healthSyncFollowerMaxAgeMinutes: 1080,
       telegramBotToken: null,
       telegramChatId: null,
       telegramEnabled: false,

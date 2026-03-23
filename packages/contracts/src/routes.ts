@@ -100,8 +100,72 @@ export const authStateSchema = z.object({
   user: authUserSchema,
 });
 
+const serviceHealthStatusEnum = z.enum(["ok", "degraded"]);
+const systemCheckStatusEnum = z.enum(["ok", "error"]);
+const healthConnectionStatusEnum = z.enum([
+  "active",
+  "stale",
+  "error",
+  "expired",
+  "never_synced",
+  "unverified",
+]);
+
+export const systemCheckSchema = z.object({
+  status: systemCheckStatusEnum,
+  latencyMs: z.number().int().nonnegative().nullable(),
+  error: z.string().nullable(),
+});
+
 export const healthResponseSchema = z.object({
-  status: z.literal("ok"),
+  status: serviceHealthStatusEnum,
+  timestamp: isoTimestamp,
+  checks: z.object({
+    api: z.object({
+      status: z.literal("ok"),
+    }),
+    database: systemCheckSchema,
+  }),
+});
+
+export const syncHealthPageSchema = z.object({
+  pageId: intId,
+  pageLabel: z.string(),
+  platform: platformEnum,
+  modelSlug: z.string(),
+  modelName: z.string(),
+  status: serviceHealthStatusEnum,
+  connectionStatus: healthConnectionStatusEnum,
+  lastLightSyncAt: isoTimestamp.nullable(),
+  lightAgeMinutes: z.number().int().nonnegative().nullable(),
+  lastFollowerSyncAt: isoTimestamp.nullable(),
+  followerAgeMinutes: z.number().int().nonnegative().nullable(),
+  failedStreams: z.number().int(),
+  stalledStreams: z.number().int(),
+  pendingStreams: z.number().int(),
+  lastErrorSummary: z.string().nullable(),
+  issues: z.array(z.string()),
+});
+
+export const syncHealthResponseSchema = z.object({
+  status: serviceHealthStatusEnum,
+  timestamp: isoTimestamp,
+  thresholds: z.object({
+    lightMaxAgeMinutes: z.number().int().positive(),
+    followerMaxAgeMinutes: z.number().int().positive(),
+  }),
+  overall: z.object({
+    pageCount: z.number().int(),
+    unhealthyPageCount: z.number().int(),
+    runningStreams: z.number().int(),
+    failedStreams: z.number().int(),
+    stalledStreams: z.number().int(),
+    pendingStreams: z.number().int(),
+    recentFailedRuns: z.number().int(),
+    recent429s: z.number().int(),
+    recent5xxs: z.number().int(),
+  }),
+  pages: z.array(syncHealthPageSchema),
 });
 
 export const loginBodySchema = z.object({
@@ -1761,6 +1825,15 @@ export const routeSchemas = {
     summary: "Health check",
     response: {
       200: healthResponseSchema,
+      503: healthResponseSchema,
+    },
+  },
+  healthSync: {
+    tags: ["system"],
+    summary: "Public sync health for external monitoring",
+    response: {
+      200: syncHealthResponseSchema,
+      503: syncHealthResponseSchema,
     },
   },
   login: {

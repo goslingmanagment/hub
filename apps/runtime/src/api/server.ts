@@ -119,6 +119,7 @@ import {
   getCrmRetentionReport,
   getCrmSummaryReport,
 } from "../services/crm.ts";
+import { getPublicSyncHealth, getSystemHealth } from "../services/health.ts";
 import {
   getPageConversationProfile,
   getPageFanProfile,
@@ -339,9 +340,19 @@ export async function buildApiServer(appContext: AppContext) {
 
   server.get("/api/v1/health", {
     schema: routeSchemas.health,
-  }, async () => ({
-    status: "ok" as const,
-  }));
+  }, async (_request, reply) => {
+    const health = await getSystemHealth(appContext);
+    reply.code(health.statusCode as 200 | 503);
+    return health.body;
+  });
+
+  server.get("/api/v1/health/sync", {
+    schema: routeSchemas.healthSync,
+  }, async (_request, reply) => {
+    const health = await getPublicSyncHealth(appContext);
+    reply.code(health.statusCode as 200 | 503);
+    return health.body;
+  });
 
   server.post("/api/v1/auth/login", {
     schema: routeSchemas.login,
