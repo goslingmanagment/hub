@@ -40,7 +40,8 @@ export function PagesTab() {
     setCredsConnection({
       label: page.label,
       platform: page.platform,
-      proxyConfigured: conn?.proxyConfigured ?? false,
+      proxyUrl: conn?.proxyUrl ?? null,
+      proxyHasAuth: conn?.proxyHasAuth ?? false,
     });
   }
 

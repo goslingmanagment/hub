@@ -1,11 +1,13 @@
 import { useState } from "react";
 import type { ConnectionItem, VerifyCredentialsBody } from "@agency_hub_core/contracts";
+import { buildProxyConfig } from "@agency_hub_core/shared";
 import { useAdminUpdateCredentials } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Field } from "@/components/shared/Field";
+import { ProxyInput } from "@/components/shared/ProxyInput";
 import { toast } from "sonner";
 
-export type CredentialsModalConnection = Pick<ConnectionItem, "label" | "platform" | "proxyConfigured">;
+export type CredentialsModalConnection = Pick<ConnectionItem, "label" | "platform" | "proxyUrl" | "proxyHasAuth">;
 
 export function CredentialsModal({
   connection,
@@ -21,15 +23,22 @@ export function CredentialsModal({
   const [fanslySessionId, setFanslySessionId] = useState("");
   const [onlyFansToken, setOnlyFansToken] = useState("");
   const [onlyFansUsername, setOnlyFansUsername] = useState("");
-  const [proxyUrl, setProxyUrl] = useState("");
-  const [proxyUsername, setProxyUsername] = useState("");
-  const [proxyPassword, setProxyPassword] = useState("");
-  const [clearStoredProxy, setClearStoredProxy] = useState(false);
+
+  const hadStoredProxy = connection.proxyUrl != null;
+  const [proxyRaw, setProxyRaw] = useState(connection.proxyUrl ?? "");
 
   const title = `Update ${connection.label} credentials`;
-  const hasProxy = proxyUrl.trim().length > 0;
 
   async function handleSubmit() {
+    const proxyConfig = buildProxyConfig(proxyRaw);
+    // If there was a stored proxy and user cleared the field, explicitly remove it.
+    // If no stored proxy and field is empty, omit proxy (no change).
+    const proxy = proxyConfig !== undefined
+      ? proxyConfig
+      : hadStoredProxy
+        ? null
+        : undefined;
+
     const body: VerifyCredentialsBody = connection.platform === "fansly"
       ? {
         platform: "fansly",
@@ -39,15 +48,7 @@ export function CredentialsModal({
           fanslyClientCheck: fanslyClientCheck.trim() || undefined,
           fanslySessionId: fanslySessionId.trim() || undefined,
         },
-        proxy: clearStoredProxy
-          ? null
-          : hasProxy
-            ? {
-              url: proxyUrl.trim(),
-              username: proxyUsername.trim() || null,
-              password: proxyPassword.trim() || null,
-            }
-            : undefined,
+        proxy,
       }
       : {
         platform: "onlyfans",
@@ -55,15 +56,7 @@ export function CredentialsModal({
           token: onlyFansToken.trim(),
         },
         username: onlyFansUsername.trim(),
-        proxy: clearStoredProxy
-          ? null
-          : hasProxy
-            ? {
-              url: proxyUrl.trim(),
-              username: proxyUsername.trim() || null,
-              password: proxyPassword.trim() || null,
-            }
-            : undefined,
+        proxy,
       };
 
     try {
@@ -130,46 +123,11 @@ export function CredentialsModal({
           </>
         )}
 
-        {connection.proxyConfigured && (
-          <label className="flex items-center gap-2 rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-secondary">
-            <input
-              type="checkbox"
-              checked={clearStoredProxy}
-              onChange={(event) => setClearStoredProxy(event.target.checked)}
-            />
-            Remove the currently stored proxy on save
-          </label>
-        )}
-
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Proxy URL (optional)">
-            <input
-              value={proxyUrl}
-              onChange={(event) => {
-                setProxyUrl(event.target.value);
-                if (event.target.value.trim().length > 0) {
-                  setClearStoredProxy(false);
-                }
-              }}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-          <Field label="Proxy username">
-            <input
-              value={proxyUsername}
-              onChange={(event) => setProxyUsername(event.target.value)}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-          <Field label="Proxy password">
-            <input
-              type="password"
-              value={proxyPassword}
-              onChange={(event) => setProxyPassword(event.target.value)}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-        </div>
+        <ProxyInput
+          value={proxyRaw}
+          onChange={setProxyRaw}
+          initialStoredProxy={hadStoredProxy ? { url: connection.proxyUrl!, hasAuth: connection.proxyHasAuth } : null}
+        />
       </div>
 
       <div className="mt-6 flex items-center justify-end gap-2">

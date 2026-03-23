@@ -76,7 +76,8 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
     lastFollowerSyncAt: platformAccounts.lastFollowerSyncAt,
     modelSlug: models.slug,
     modelName: models.name,
-    proxyConfigured: sql<boolean>`${platformAccountProxies.platformAccountId} is not null`,
+    proxyUrl: platformAccountProxies.url,
+    proxyHasAuth: sql<boolean>`${platformAccountProxies.encryptedAuth} is not null`,
   }).from(platformAccounts)
     .innerJoin(models, eq(models.id, platformAccounts.modelId))
     .leftJoin(platformAccountProxies, eq(platformAccountProxies.platformAccountId, platformAccounts.id))

@@ -4492,7 +4492,8 @@ describe("api integration", () => {
         label: "lana",
         connectionStatus: "active",
         lastSyncError: null,
-        proxyConfigured: false,
+        proxyUrl: null,
+        proxyHasAuth: false,
       }),
     ]));
   });
@@ -4634,9 +4635,9 @@ describe("api integration", () => {
     const lanaConnection = response.json().find((connection: { label: string }) => connection.label === "lana");
     expect(lanaConnection).toEqual(expect.objectContaining({
       label: "lana",
-      proxyConfigured: true,
+      proxyUrl: "socks5://127.0.0.1:1080",
+      proxyHasAuth: true,
     }));
-    expect(lanaConnection).not.toHaveProperty("proxy");
     expect(JSON.stringify(lanaConnection)).not.toContain("proxy-user");
     expect(JSON.stringify(lanaConnection)).not.toContain("proxy-pass");
   });

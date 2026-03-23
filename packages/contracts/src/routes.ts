@@ -1076,7 +1076,8 @@ export const connectionItemSchema = z.object({
   lastSyncError: z.string().nullable(),
   subscriberCount: z.number().int(),
   followerCount: z.number().int(),
-  proxyConfigured: z.boolean(),
+  proxyUrl: z.string().nullable(),
+  proxyHasAuth: z.boolean(),
 });
 
 export const overviewResponseSchema = z.object({
@@ -1781,6 +1782,18 @@ export const createPageBodySchema = z.discriminatedUnion("platform", [
     label: z.string().min(1),
   }),
 ]);
+
+export const testProxyBodySchema = z.object({
+  proxy: z.object({
+    url: z.string().min(1),
+    username: z.string().nullable().optional(),
+    password: z.string().nullable().optional(),
+  }),
+});
+
+export const testProxyResponseSchema = z.object({
+  ip: z.string(),
+});
 
 export const createModelBodySchema = z.object({
   slug: z.string().min(1).max(100),
@@ -2658,6 +2671,18 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  adminTestProxy: {
+    tags: ["admin"],
+    summary: "Test a proxy connection and return the exit IP",
+    security: cookieOnlySecurity,
+    body: testProxyBodySchema,
+    response: {
+      200: testProxyResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   adminVerifyPage: {
     tags: ["admin"],
     summary: "Verify stored credentials for a page",
@@ -2906,6 +2931,8 @@ export type SyncRunsQuery = z.infer<typeof syncRunsQuerySchema>;
 export type ConnectionItem = z.infer<typeof connectionItemSchema>;
 export type VerifyCredentialsBody = z.infer<typeof verifyCredentialsBodySchema>;
 export type VerifyCredentialsResponse = z.infer<typeof verifyCredentialsResponseSchema>;
+export type TestProxyBody = z.infer<typeof testProxyBodySchema>;
+export type TestProxyResponse = z.infer<typeof testProxyResponseSchema>;
 export type CreateModelBody = z.infer<typeof createModelBodySchema>;
 export type UpdateModelBody = z.infer<typeof updateModelBodySchema>;
 export type CreateModelResponse = z.infer<typeof createModelResponseSchema>;

@@ -33,6 +33,8 @@ import type {
   FanNoteResponse,
   FanFlagsResponse,
   FanListResponse,
+  TestProxyBody,
+  TestProxyResponse,
   VerifyCredentialsBody,
   CrmSummaryResponse,
   CrmRetentionResponse,
@@ -809,6 +811,14 @@ export function useAdminVerifyCredentials() {
     meta: { suppressGlobalError: true },
     mutationFn: (body: VerifyCredentialsBody) =>
       api.post<VerifyCredentialsResponse>("/api/v1/admin/credentials/verify", body),
+  });
+}
+
+export function useAdminTestProxy() {
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: TestProxyBody) =>
+      api.post<TestProxyResponse>("/api/v1/admin/proxy/test", body),
   });
 }
 

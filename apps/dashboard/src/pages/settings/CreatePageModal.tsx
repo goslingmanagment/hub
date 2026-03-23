@@ -5,9 +5,11 @@ import type {
   VerifyCredentialsBody,
   VerifyCredentialsResponse,
 } from "@agency_hub_core/contracts";
+import { buildProxyConfig } from "@agency_hub_core/shared";
 import { useAdminCreatePage, useAdminVerifyCredentials } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Field } from "@/components/shared/Field";
+import { ProxyInput } from "@/components/shared/ProxyInput";
 import { toast } from "sonner";
 
 type Platform = "fansly" | "onlyfans";
@@ -38,10 +40,8 @@ export function CreatePageModal({
   const [onlyFansToken, setOnlyFansToken] = useState("");
   const [onlyFansUsername, setOnlyFansUsername] = useState("");
 
-  // Proxy fields
-  const [proxyUrl, setProxyUrl] = useState("");
-  const [proxyUsername, setProxyUsername] = useState("");
-  const [proxyPassword, setProxyPassword] = useState("");
+  // Proxy
+  const [proxyRaw, setProxyRaw] = useState("");
 
   // Verify state
   const [verifyState, setVerifyState] = useState<VerifyState>("idle");
@@ -57,14 +57,7 @@ export function CreatePageModal({
   }
 
   function buildCredentialsBody(): VerifyCredentialsBody {
-    const hasProxy = proxyUrl.trim().length > 0;
-    const proxy = hasProxy
-      ? {
-        url: proxyUrl.trim(),
-        username: proxyUsername.trim() || null,
-        password: proxyPassword.trim() || null,
-      }
-      : undefined;
+    const proxy = buildProxyConfig(proxyRaw);
 
     if (platform === "fansly") {
       return {
@@ -241,39 +234,13 @@ export function CreatePageModal({
           </>
         )}
 
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Proxy URL (optional)">
-            <input
-              value={proxyUrl}
-              onChange={(event) => {
-                setProxyUrl(event.target.value);
-                resetVerify();
-              }}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-          <Field label="Proxy username">
-            <input
-              value={proxyUsername}
-              onChange={(event) => {
-                setProxyUsername(event.target.value);
-                resetVerify();
-              }}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-          <Field label="Proxy password">
-            <input
-              type="password"
-              value={proxyPassword}
-              onChange={(event) => {
-                setProxyPassword(event.target.value);
-                resetVerify();
-              }}
-              className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-          </Field>
-        </div>
+        <ProxyInput
+          value={proxyRaw}
+          onChange={(v) => {
+            setProxyRaw(v);
+            resetVerify();
+          }}
+        />
 
         {/* Verify result / error */}
         {verifyState === "verified" && verifyResult && (

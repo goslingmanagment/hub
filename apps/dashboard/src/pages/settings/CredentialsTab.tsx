@@ -57,7 +57,8 @@ export function CredentialsTab() {
                 setSelectedConnection({
                   label: conn.label,
                   platform: conn.platform,
-                  proxyConfigured: conn.proxyConfigured,
+                  proxyUrl: conn.proxyUrl,
+                  proxyHasAuth: conn.proxyHasAuth,
                 })}
               className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
             >

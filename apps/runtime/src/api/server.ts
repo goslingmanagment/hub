@@ -39,8 +39,10 @@ import {
 } from "@agency_hub_core/db";
 import {
   createLogger,
+  createProxyRequestDispatcher,
   encryptJson,
   millsToNumber,
+  normalizeProxyConfig,
   redactSensitiveText,
   resolveBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
@@ -1718,6 +1720,38 @@ export async function buildApiServer(appContext: AppContext) {
       throw new BadRequestError(
         `Credential verification failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`,
       );
+    }
+  });
+
+  server.post("/api/v1/admin/proxy/test", {
+    schema: routeSchemas.adminTestProxy,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const { request: undiciRequest } = await import("undici");
+    const proxy = normalizeProxyConfig(request.body.proxy);
+    const dispatcher = createProxyRequestDispatcher(proxy);
+    try {
+      const { statusCode, body: responseBody } = await undiciRequest(
+        "https://api.ipify.org?format=json",
+        {
+          method: "GET",
+          signal: AbortSignal.timeout(30_000),
+          dispatcher,
+        },
+      );
+      const text = await responseBody.text();
+      if (statusCode < 200 || statusCode >= 300) {
+        throw new Error(`IP check returned HTTP ${statusCode}`);
+      }
+      const data = JSON.parse(text) as { ip: string };
+      return { ip: data.ip };
+    } catch (error) {
+      throw new BadRequestError(
+        `Proxy test failed: ${redactSensitiveText(error instanceof Error ? error.message : "Unknown error")}`,
+      );
+    } finally {
+      await dispatcher.close();
     }
   });
 

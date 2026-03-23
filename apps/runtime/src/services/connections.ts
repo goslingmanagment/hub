@@ -137,7 +137,8 @@ export async function listConnectionStatuses(
       lastSyncError: latestRun?.errorSummary ?? null,
       subscriberCount: page.subscriberCount,
       followerCount: page.followerCount,
-      proxyConfigured: page.proxyConfigured,
+      proxyUrl: page.proxyUrl ?? null,
+      proxyHasAuth: page.proxyHasAuth ?? false,
     };
   });
 }
