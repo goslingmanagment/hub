@@ -90,7 +90,6 @@ export async function findOnlyFansAccountByUsername(
 ) {
   let cursor: string | null = null;
   let pageIndex = 0;
-  const matches: OnlyMonsterAccount[] = [];
 
   do {
     const response = await adapter.listAccountsPage(context, {
@@ -99,23 +98,14 @@ export async function findOnlyFansAccountByUsername(
       pageIndex,
     });
 
-    matches.push(
-      ...response.parsed.accounts.filter((account) => account.username === username),
-    );
+    const match = response.parsed.accounts.find((account) => account.username === username);
+    if (match) {
+      return match;
+    }
 
     cursor = response.parsed.nextCursor ?? null;
     pageIndex += 1;
   } while (cursor);
 
-  if (matches.length === 0) {
-    throw new Error(`OnlyMonster account "${username}" was not found for this token`);
-  }
-
-  if (matches.length > 1) {
-    throw new Error(
-      `OnlyMonster username "${username}" matched multiple accounts; use a unique username`,
-    );
-  }
-
-  return matches[0]!;
+  throw new Error(`OnlyMonster account "${username}" was not found for this token`);
 }

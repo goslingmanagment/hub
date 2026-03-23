@@ -896,7 +896,7 @@ describe("db write safety", () => {
     ).rejects.toThrow('OnlyMonster account "missing" was not found for this token');
   });
 
-  it("fails cleanly when the OnlyFans username resolves to multiple accounts", async (context) => {
+  it("uses the first OnlyFans username match when multiple accounts share the username", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -931,18 +931,30 @@ describe("db write safety", () => {
       ],
     });
 
-    await expect(
-      onboardOnlyFansPage(app, {
-        modelSlug: "lora",
-        label: "lora-of",
-        auth: {
-          token: "om-token",
-        },
-        username: "lora_of",
-      }),
-    ).rejects.toThrow(
-      'OnlyMonster username "lora_of" matched multiple accounts; use a unique username',
-    );
+    const { page } = await onboardOnlyFansPage(app, {
+      modelSlug: "lora",
+      label: "lora-of",
+      auth: {
+        token: "om-token",
+      },
+      username: "lora_of",
+    });
+
+    const pageRows = await testDb.pool.query(`
+      select platform_account_id,
+             username,
+             metadata::text as metadata
+      from platform_accounts
+      where id = ${page.id}
+    `);
+
+    expect(pageRows.rows[0]).toMatchObject({
+      platform_account_id: "of-acct-42",
+      username: "lora_of",
+    });
+    expect(JSON.parse(pageRows.rows[0]?.metadata ?? "{}")).toMatchObject({
+      onlyMonsterAccountId: 42,
+    });
   });
 
   it("rejects Fansly credential updates that point at a different upstream account", async (context) => {
