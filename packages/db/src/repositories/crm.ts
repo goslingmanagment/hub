@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
+import { buildContainsSearchPattern } from "./search.ts";
 import {
   fanPages,
   fans,
@@ -95,11 +96,6 @@ function normalizeJsonArray(value: unknown) {
   }
 
   throw new Error("Expected JSON array");
-}
-
-function searchPattern(query?: string | null) {
-  const trimmed = query?.trim();
-  return trimmed ? `%${trimmed}%` : null;
 }
 
 function normalizeCheckpointTimestamp(value: unknown) {
@@ -780,7 +776,7 @@ export interface CrmRetentionRow {
 }
 
 function retentionBaseQuery(input: CrmRetentionListInput) {
-  const query = searchPattern(input.query);
+  const query = buildContainsSearchPattern(input.query);
   const now = input.now ?? new Date();
   const nowSql = sql`${now}::timestamptz`;
   const nowPlus1Day = sql`${now}::timestamptz + interval '1 day'`;
@@ -793,14 +789,14 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
   const searchFilter = query
     ? sql`
       and (
-        f.platform_user_id ilike ${query}
-        or f.username ilike ${query}
-        or f.display_name ilike ${query}
+        f.platform_user_id ilike ${query} escape '\\'
+        or f.username ilike ${query} escape '\\'
+        or f.display_name ilike ${query} escape '\\'
         or exists (
           select 1
           from fan_username_aliases fua
           where fua.fan_id = fp.fan_id
-            and fua.username ilike ${query}
+            and fua.username ilike ${query} escape '\\'
         )
       )
     `
@@ -1151,7 +1147,7 @@ export interface CrmReactivationRow {
 }
 
 function reactivationBaseQuery(input: CrmReactivationListInput) {
-  const query = searchPattern(input.query);
+  const query = buildContainsSearchPattern(input.query);
   const now = input.now ?? new Date();
   const nowSql = sql`${now}::timestamptz`;
   const nowPlus21Days = sql`${now}::timestamptz + interval '21 days'`;
@@ -1161,14 +1157,14 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
   const searchFilter = query
     ? sql`
       and (
-        f.platform_user_id ilike ${query}
-        or f.username ilike ${query}
-        or f.display_name ilike ${query}
+        f.platform_user_id ilike ${query} escape '\\'
+        or f.username ilike ${query} escape '\\'
+        or f.display_name ilike ${query} escape '\\'
         or exists (
           select 1
           from fan_username_aliases fua
           where fua.fan_id = slp.fan_id
-            and fua.username ilike ${query}
+            and fua.username ilike ${query} escape '\\'
         )
       )
     `

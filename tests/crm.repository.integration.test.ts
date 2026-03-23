@@ -356,6 +356,76 @@ describe("crm repository integration", () => {
     }
   });
 
+  it("treats wildcard characters literally in retention search", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-17T12:00:00.000Z");
+    const page = await createCrmPage(testDb, "crm-retention-wildcard");
+    const [targetFan, distractorFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-retention-wildcard-target",
+        username: "wild_100%buyer",
+        displayName: "Wildcard Retention Target",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-retention-wildcard-distractor",
+        username: "wildX100buyer",
+        displayName: "Wildcard Retention Distractor",
+      },
+    ]);
+
+    await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: targetFan.platformUserId,
+      username: "retention-renamed",
+      displayName: "Wildcard Retention Target",
+    }]);
+
+    for (const [index, fan] of [targetFan, distractorFan].entries()) {
+      await upsertFanPage(testDb.db, {
+        fanId: fan.id,
+        platformAccountId: page.id,
+        isSubscriber: true,
+        subscriberSince: new Date("2026-02-01T00:00:00.000Z"),
+        subscriptionExpiresAt: new Date(`2026-03-2${index}T12:00:00.000Z`),
+        autoRenew: index === 0 ? false : true,
+      });
+      await upsertPageSubscription(testDb.db, {
+        platformSubscriptionId: `sub-retention-wildcard-${index}`,
+        platformAccountId: page.id,
+        fanId: fan.id,
+        rawStatus: 3,
+        canonicalStatus: "active",
+        priceMills: 5000n,
+        renewPriceMills: 5000n,
+        autoRenew: index === 0 ? false : true,
+        sourceCreatedAt: new Date("2026-02-01T00:00:00.000Z"),
+        endsAt: new Date(`2026-03-2${index}T12:00:00.000Z`),
+      });
+    }
+
+    const retention = await listCrmRetention(testDb.db, {
+      platformAccountId: page.id,
+      limit: 10,
+      offset: 0,
+      query: "wild_100%",
+      showHandled: false,
+      now,
+    });
+
+    expect(retention.total).toBe(1);
+    expect(retention.items).toHaveLength(1);
+    expect(retention.items[0]).toMatchObject({
+      platformUserId: "fan-retention-wildcard-target",
+      username: "retention-renamed",
+    });
+  });
+
   it("computes reactivation score from mills and ignores fan_pages.last_seen_at", async (context) => {
     if (!testDb) {
       context.skip();
@@ -417,6 +487,77 @@ describe("crm repository integration", () => {
       silenceDays: 30,
     });
     expect(reactivation.items[0]?.reactivationScore).toBe(360);
+  });
+
+  it("treats wildcard characters literally in reactivation search", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-17T12:00:00.000Z");
+    const page = await createCrmPage(testDb, "crm-reactivation-wildcard");
+    const [targetFan, distractorFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-reactivation-wildcard-target",
+        username: "wild_100%buyer",
+        displayName: "Wildcard Reactivation Target",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-reactivation-wildcard-distractor",
+        username: "wildX100buyer",
+        displayName: "Wildcard Reactivation Distractor",
+      },
+    ]);
+
+    await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: targetFan.platformUserId,
+      username: "reactivation-renamed",
+      displayName: "Wildcard Reactivation Target",
+    }]);
+
+    for (const fan of [targetFan, distractorFan]) {
+      await upsertFanPage(testDb.db, {
+        fanId: fan.id,
+        platformAccountId: page.id,
+        isSubscriber: false,
+        subscriberSince: new Date("2026-01-01T00:00:00.000Z"),
+        subscriptionExpiresAt: new Date("2026-02-01T00:00:00.000Z"),
+        autoRenew: false,
+      });
+      await upsertTransaction(testDb.db, {
+        platformAccountId: page.id,
+        fanId: fan.id,
+        transactionId: `tx-reactivation-wildcard-${fan.id}`,
+        rawType: 20001,
+        canonicalType: "tip",
+        transactionState: "posted",
+        rawStatus: 2,
+        grossAmountMills: 12000n,
+        sourceDestinationAmountMills: 12000n,
+        creatorNetAmountMills: 12000n,
+        occurredAt: new Date("2026-02-15T12:00:00.000Z"),
+      });
+    }
+    await recalculateFanPageSpend(testDb.db, page.id);
+
+    const reactivation = await listCrmReactivation(testDb.db, {
+      platformAccountId: page.id,
+      limit: 10,
+      offset: 0,
+      query: "wild_100%",
+      now,
+    });
+
+    expect(reactivation.total).toBe(1);
+    expect(reactivation.items).toHaveLength(1);
+    expect(reactivation.items[0]).toMatchObject({
+      platformUserId: "fan-reactivation-wildcard-target",
+      username: "reactivation-renamed",
+    });
   });
 
   it("skips stale mismatched heads and falls through to pending backfill conversations", async (context) => {

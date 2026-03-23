@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 
 import {
   getTransactionClassification,
@@ -24,6 +24,7 @@ import {
   spenderLifetimePage,
   transactions,
 } from "../schema.ts";
+import { buildContainsSearchPattern, ilikeEscaped } from "./search.ts";
 
 function applyPageScope<T>(clauses: T[], pageIds?: number[]) {
   if (pageIds !== undefined) {
@@ -349,18 +350,20 @@ export async function listSubscribersForPage(
   ];
 
   if (input.query) {
-    const pattern = `%${input.query}%`;
-    conditions.push(or(
-      ilike(fans.platformUserId, pattern),
-      ilike(sql`coalesce(${fans.username}, '')`, pattern),
-      ilike(sql`coalesce(${fans.displayName}, '')`, pattern),
-      sql`exists (
-        select 1
-        from ${fanUsernameAliases} fua
-        where fua.fan_id = ${fans.id}
-          and fua.username ilike ${pattern}
-      )`,
-    )!);
+    const pattern = buildContainsSearchPattern(input.query);
+    if (pattern) {
+      conditions.push(or(
+        ilikeEscaped(fans.platformUserId, pattern),
+        ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
+        ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
+        sql`exists (
+          select 1
+          from ${fanUsernameAliases} fua
+          where fua.fan_id = ${fans.id}
+            and fua.username ilike ${pattern} escape '\\'
+        )`,
+      )!);
+    }
   }
 
   if (input.expiringWithinDays != null) {
@@ -498,18 +501,20 @@ export async function listFollowersForPage(
   ];
 
   if (input.query) {
-    const pattern = `%${input.query}%`;
-    clauses.push(or(
-      ilike(fans.platformUserId, pattern),
-      ilike(sql`coalesce(${fans.username}, '')`, pattern),
-      ilike(sql`coalesce(${fans.displayName}, '')`, pattern),
-      sql`exists (
-        select 1
-        from ${fanUsernameAliases} fua
-        where fua.fan_id = ${fans.id}
-          and fua.username ilike ${pattern}
-      )`,
-    )!);
+    const pattern = buildContainsSearchPattern(input.query);
+    if (pattern) {
+      clauses.push(or(
+        ilikeEscaped(fans.platformUserId, pattern),
+        ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
+        ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
+        sql`exists (
+          select 1
+          from ${fanUsernameAliases} fua
+          where fua.fan_id = ${fans.id}
+            and fua.username ilike ${pattern} escape '\\'
+        )`,
+      )!);
+    }
   }
 
   if (input.followedWithinHours != null) {
@@ -573,18 +578,20 @@ export async function listFansForPage(
 ) {
   const clauses = [eq(fanPages.platformAccountId, input.pageId)];
   if (input.query) {
-    const pattern = `%${input.query}%`;
-    clauses.push(or(
-      ilike(fans.platformUserId, pattern),
-      ilike(sql`coalesce(${fans.username}, '')`, pattern),
-      ilike(sql`coalesce(${fans.displayName}, '')`, pattern),
-      sql`exists (
-        select 1
-        from ${fanUsernameAliases} fua
-        where fua.fan_id = ${fans.id}
-          and fua.username ilike ${pattern}
-      )`,
-    )!);
+    const pattern = buildContainsSearchPattern(input.query);
+    if (pattern) {
+      clauses.push(or(
+        ilikeEscaped(fans.platformUserId, pattern),
+        ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
+        ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
+        sql`exists (
+          select 1
+          from ${fanUsernameAliases} fua
+          where fua.fan_id = ${fans.id}
+            and fua.username ilike ${pattern} escape '\\'
+        )`,
+      )!);
+    }
   }
   const rows = await db.select({
     total: sql<number>`count(*) over()::int`,

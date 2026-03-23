@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 
 import {
   businessDateToUtcStart,
@@ -21,6 +21,7 @@ import {
   spenderProjectionWatermarks,
   transactions,
 } from "../schema.ts";
+import { buildContainsSearchPattern, ilikeEscaped } from "./search.ts";
 
 function transactionTypeListSql(transactionTypes: TransactionType[]) {
   return sql.join(
@@ -588,24 +589,24 @@ function buildSpenderQueryClause(
     platform: Platform;
   },
 ) {
-  if (!query) {
+  const pattern = buildContainsSearchPattern(query);
+  if (!pattern) {
     return eq(fans.platform, input.platform);
   }
 
-  const pattern = `%${query}%`;
   const aliasMatchSql = sql`exists (
     select 1
     from fan_username_aliases fua
     where fua.fan_id = ${fans.id}
-      and fua.username ilike ${pattern}
+      and fua.username ilike ${pattern} escape '\\'
   )`;
 
   return and(
     eq(fans.platform, input.platform),
     or(
-      ilike(fans.platformUserId, pattern),
-      ilike(sql`coalesce(${fans.username}, '')`, pattern),
-      ilike(sql`coalesce(${fans.displayName}, '')`, pattern),
+      ilikeEscaped(fans.platformUserId, pattern),
+      ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
+      ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
       aliasMatchSql,
     )!,
   )!;
@@ -1014,20 +1015,35 @@ export async function searchFansInScope(
     };
   }
 
-  const pattern = `%${input.query}%`;
+  const pattern = buildContainsSearchPattern(input.query);
+  if (!pattern) {
+    return {
+      total: 0,
+      items: [] as Array<{
+        fanId: number;
+        platform: Platform;
+        platformUserId: string;
+        username: string | null;
+        displayName: string | null;
+        createdAtExternal: Date | null;
+        matchKind: "platformUserId" | "username" | "alias" | "displayName";
+        matchedValue: string | null;
+      }>,
+    };
+  }
   const aliasMatchSql = sql`(
     select fua.username
     from fan_username_aliases fua
     where fua.fan_id = ${fans.id}
-      and fua.username ilike ${pattern}
+      and fua.username ilike ${pattern} escape '\\'
     order by fua.last_seen_at desc, fua.username asc
     limit 1
   )`;
 
   const matchClauses = or(
-    ilike(fans.platformUserId, pattern),
-    ilike(sql`coalesce(${fans.username}, '')`, pattern),
-    ilike(sql`coalesce(${fans.displayName}, '')`, pattern),
+    ilikeEscaped(fans.platformUserId, pattern),
+    ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
+    ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
     sql`${aliasMatchSql} is not null`,
   )!;
 
@@ -1050,16 +1066,16 @@ export async function searchFansInScope(
     createdAtExternal: fans.createdAtExternal,
     matchKind: sql<"platformUserId" | "username" | "alias" | "displayName">`
       case
-        when ${fans.platformUserId} ilike ${pattern} then 'platformUserId'
-        when coalesce(${fans.username}, '') ilike ${pattern} then 'username'
+        when ${fans.platformUserId} ilike ${pattern} escape '\\' then 'platformUserId'
+        when coalesce(${fans.username}, '') ilike ${pattern} escape '\\' then 'username'
         when ${aliasMatchSql} is not null then 'alias'
         else 'displayName'
       end
     `,
     matchedValue: sql<string | null>`
       case
-        when ${fans.platformUserId} ilike ${pattern} then ${fans.platformUserId}
-        when coalesce(${fans.username}, '') ilike ${pattern} then ${fans.username}
+        when ${fans.platformUserId} ilike ${pattern} escape '\\' then ${fans.platformUserId}
+        when coalesce(${fans.username}, '') ilike ${pattern} escape '\\' then ${fans.username}
         when ${aliasMatchSql} is not null then ${aliasMatchSql}
         else ${fans.displayName}
       end

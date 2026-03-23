@@ -3611,6 +3611,136 @@ describe("api integration", () => {
     expect(forbidden.statusCode).toBe(403);
   });
 
+  it("treats wildcard characters literally in subscriber, follower, and fan wildcard searches", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const [targetFan, distractorFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-api-wildcard-target",
+        username: "wild_100%buyer",
+        displayName: "Wildcard Api Target",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-api-wildcard-distractor",
+        username: "wildX100buyer",
+        displayName: "Wildcard Api Distractor",
+      },
+    ]);
+
+    await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: targetFan.platformUserId,
+      username: "api-renamed",
+      displayName: "Wildcard Api Target",
+    }]);
+
+    for (const [index, fan] of [targetFan, distractorFan].entries()) {
+      const followedAt = new Date(`2026-03-0${index + 2}T12:00:00.000Z`);
+      const subscriberSince = new Date(`2026-03-0${index + 1}T12:00:00.000Z`);
+      const endsAt = new Date(`2026-03-2${index}T12:00:00.000Z`);
+      await upsertFanPage(testDb.db, {
+        fanId: fan.id,
+        platformAccountId: fixture.lanaPage.id,
+        isFollower: true,
+        followerSince: followedAt,
+        isSubscriber: true,
+        subscriberSince,
+        subscriptionExpiresAt: endsAt,
+        autoRenew: index === 0 ? false : true,
+      });
+      await upsertPageFollow(testDb.db, {
+        platformAccountId: fixture.lanaPage.id,
+        fanId: fan.id,
+        platformFollowId: `follow-api-wildcard-${index}`,
+        followedAt,
+      });
+      await upsertPageSubscription(testDb.db, {
+        platformSubscriptionId: `sub-api-wildcard-${index}`,
+        platformAccountId: fixture.lanaPage.id,
+        fanId: fan.id,
+        rawStatus: 3,
+        canonicalStatus: "active",
+        priceMills: 5000n,
+        renewPriceMills: 5000n,
+        autoRenew: index === 0 ? false : true,
+        sourceCreatedAt: subscriberSince,
+        endsAt,
+      });
+    }
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+    const encodedQuery = encodeURIComponent("wild_100%");
+
+    const subscriberSearch = await server.inject({
+      method: "GET",
+      url: `/api/v1/pages/lana/subscribers?query=${encodedQuery}&limit=10&offset=0`,
+      headers: { cookie },
+    });
+
+    expect(subscriberSearch.statusCode).toBe(200);
+    expect(subscriberSearch.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-api-wildcard-target",
+        username: "api-renamed",
+      }),
+    ]);
+
+    const followerSearch = await server.inject({
+      method: "GET",
+      url: `/api/v1/pages/lana/followers?query=${encodedQuery}&limit=10&offset=0`,
+      headers: { cookie },
+    });
+
+    expect(followerSearch.statusCode).toBe(200);
+    expect(followerSearch.json().items).toEqual([
+      expect.objectContaining({
+        platformUserId: "fan-api-wildcard-target",
+        username: "api-renamed",
+      }),
+    ]);
+
+    const appContext = createTestAppContext(testDb);
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+    const fanSearch = await server.inject({
+      method: "GET",
+      url: `/api/v2/fans/search?scope=page&pageLabel=lana&query=${encodedQuery}&limit=10&offset=0`,
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+
+    expect(fanSearch.statusCode).toBe(200);
+    expect(fanSearch.json()).toMatchObject({
+      total: 1,
+      items: [
+        {
+          fan: {
+            platformUserId: "fan-api-wildcard-target",
+            username: "api-renamed",
+          },
+          matchKind: "alias",
+          matchedValue: "wild_100%buyer",
+        },
+      ],
+    });
+  });
+
   it("returns a typed 404 when onboarding references a missing model slug", async (context) => {
     if (!testDb || !server) {
       context.skip();
