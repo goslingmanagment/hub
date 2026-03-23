@@ -86,6 +86,18 @@ function computeEta(stream: StreamItem): string | null {
   return formatDuration(remaining);
 }
 
+function streamActivityLabel(stream: StreamItem): string {
+  if (stream.stalled && stream.activeRun) {
+    return `No activity ${formatDuration(Date.now() - new Date(stream.activeRun.lastActivityAt).getTime())}`;
+  }
+
+  if (stream.status === "running" && stream.activeRun) {
+    return `Running ${formatDuration(Date.now() - new Date(stream.activeRun.startedAt).getTime())}`;
+  }
+
+  return stream.lastSuccessAt ? formatRelativeTime(stream.lastSuccessAt) : "";
+}
+
 function num(v: number): string {
   return v.toLocaleString();
 }
@@ -338,10 +350,6 @@ function AttentionStreamRow({ stream }: { stream: StreamItem }) {
   const pillText = isFailed ? "text-danger" : isRunning ? "text-[#1e40af]" : "text-warning-dark";
   const statusLabel = stream.stalled ? "Stalled" : stream.status.replace("_", " ");
 
-  const elapsed = stream.activeRun
-    ? formatDuration(Date.now() - new Date(stream.activeRun.startedAt).getTime())
-    : null;
-
   return (
     <div
       className={`rounded-lg border px-4 py-3 ${
@@ -359,7 +367,7 @@ function AttentionStreamRow({ stream }: { stream: StreamItem }) {
           </span>
         </div>
         <span className="shrink-0 text-[12px] tabular-nums text-text-muted">
-          {isRunning && elapsed ? `Running ${elapsed}` : stream.lastSuccessAt ? formatRelativeTime(stream.lastSuccessAt) : ""}
+          {streamActivityLabel(stream)}
         </span>
       </div>
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
+  closeInactiveSyncRuns: vi.fn(),
   ensureSyncStreamStateRows: vi.fn(),
   promoteDueSyncStreamStateRows: vi.fn(),
   listRunnableSyncPages: vi.fn(),
@@ -27,18 +28,25 @@ import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.t
 
 describe("sync planner", () => {
   beforeEach(() => {
+    dbMocks.closeInactiveSyncRuns.mockReset();
     dbMocks.ensureSyncStreamStateRows.mockReset();
     dbMocks.promoteDueSyncStreamStateRows.mockReset();
     dbMocks.listRunnableSyncPages.mockReset();
     dbMocks.markSyncPageWakeupEnqueued.mockReset();
     queueMocks.sendSyncPageWakeup.mockReset();
+    dbMocks.closeInactiveSyncRuns.mockResolvedValue({
+      totalCount: 0,
+      failedCount: 0,
+      partialCount: 0,
+    });
   });
 
-  it("promotes due rows and emits one wakeup per runnable page", async () => {
+  it("runs inactive cleanup before promoting rows and emits one wakeup per runnable page", async () => {
     const boss = {
       send: vi.fn(),
     } as never;
     const now = new Date("2026-03-14T12:00:00.000Z");
+    const order: string[] = [];
     dbMocks.listRunnableSyncPages.mockResolvedValue([
       {
         platformAccountId: 11,
@@ -58,11 +66,38 @@ describe("sync planner", () => {
     queueMocks.sendSyncPageWakeup
       .mockResolvedValueOnce("job-11")
       .mockResolvedValueOnce("job-22");
+    dbMocks.closeInactiveSyncRuns.mockImplementation(async () => {
+      order.push("cleanup");
+      return {
+        totalCount: 0,
+        failedCount: 0,
+        partialCount: 0,
+      };
+    });
+    dbMocks.ensureSyncStreamStateRows.mockImplementation(async () => {
+      order.push("ensureSyncStreamStateRows");
+    });
+    dbMocks.promoteDueSyncStreamStateRows.mockImplementation(async () => {
+      order.push("promoteDueSyncStreamStateRows");
+    });
 
-    const pages = await runSyncPlannerCycle({ db: {} } as never, boss, now);
+    const pages = await runSyncPlannerCycle({
+      db: {},
+      logger: { info: vi.fn() },
+    } as never, boss, now);
 
+    expect(dbMocks.closeInactiveSyncRuns).toHaveBeenCalledWith({}, {
+      inactiveBefore: new Date("2026-03-14T11:57:00.000Z"),
+      finishedAt: now,
+      errorSummary: "Sync run auto-closed after inactivity",
+    });
     expect(dbMocks.ensureSyncStreamStateRows).toHaveBeenCalledWith({}, { now });
     expect(dbMocks.promoteDueSyncStreamStateRows).toHaveBeenCalledWith({}, now);
+    expect(order).toEqual([
+      "cleanup",
+      "ensureSyncStreamStateRows",
+      "promoteDueSyncStreamStateRows",
+    ]);
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenNthCalledWith(1, boss, {
       egressKey: "socks5://proxy-a.example:1080",
       platformAccountId: 11,
@@ -95,7 +130,10 @@ describe("sync planner", () => {
     ]);
     queueMocks.sendSyncPageWakeup.mockResolvedValue(null);
 
-    await runSyncPlannerCycle({ db: {} } as never, boss, now);
+    await runSyncPlannerCycle({
+      db: {},
+      logger: { info: vi.fn() },
+    } as never, boss, now);
 
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(boss, {
       egressKey: "direct",
@@ -104,5 +142,33 @@ describe("sync planner", () => {
       provider: "fansly",
     });
     expect(dbMocks.markSyncPageWakeupEnqueued).not.toHaveBeenCalled();
+  });
+
+  it("logs cleanup counts when inactive runs are auto-closed", async () => {
+    const boss = {
+      send: vi.fn(),
+    } as never;
+    const now = new Date("2026-03-14T12:02:00.000Z");
+    const logger = {
+      info: vi.fn(),
+    };
+    dbMocks.listRunnableSyncPages.mockResolvedValue([]);
+    dbMocks.closeInactiveSyncRuns.mockResolvedValue({
+      totalCount: 2,
+      failedCount: 1,
+      partialCount: 1,
+    });
+
+    await runSyncPlannerCycle({
+      db: {},
+      logger,
+    } as never, boss, now);
+
+    expect(logger.info).toHaveBeenCalledWith({
+      finishedAt: now,
+      inactiveRunTotal: 2,
+      inactiveRunFailed: 1,
+      inactiveRunPartial: 1,
+    }, "Inactive sync run cleanup complete");
   });
 });

@@ -422,6 +422,12 @@ export interface CloseOrphanedSyncRunsResult {
   partialCount: number;
 }
 
+export interface CloseInactiveSyncRunsResult {
+  totalCount: number;
+  failedCount: number;
+  partialCount: number;
+}
+
 export async function closeOrphanedSyncRuns(
   db: Database,
   input: {
@@ -455,6 +461,78 @@ export async function closeOrphanedSyncRuns(
         finished_at = ${input.finishedAt}
     from orphaned_runs
     where sr.id = orphaned_runs.id
+    returning sr.status as status
+  `);
+
+  let failedCount = 0;
+  let partialCount = 0;
+
+  for (const row of result.rows) {
+    if (row.status === "failed") {
+      failedCount += 1;
+    } else if (row.status === "partial") {
+      partialCount += 1;
+    }
+  }
+
+  return {
+    totalCount: failedCount + partialCount,
+    failedCount,
+    partialCount,
+  };
+}
+
+export async function closeInactiveSyncRuns(
+  db: Database,
+  input: {
+    inactiveBefore: Date;
+    finishedAt: Date;
+    errorSummary: string;
+  },
+): Promise<CloseInactiveSyncRunsResult> {
+  const result = await db.execute<{
+    status: "failed" | "partial";
+  }>(sql`
+    with request_activity as (
+      select a.sync_run_id as "runId",
+             max(coalesce(a.finished_at, a.started_at)) as "lastAttemptAt"
+      from ${syncRequestAttempts} a
+      group by a.sync_run_id
+    ),
+    event_activity as (
+      select e.sync_run_id as "runId",
+             max(e.emitted_at) as "lastEventAt"
+      from ${syncRunEvents} e
+      group by e.sync_run_id
+    ),
+    inactive_runs as (
+      select sr.id,
+             case
+               when exists (
+                 select 1
+                 from ${syncRunEvents} e
+                 where e.sync_run_id = sr.id
+                   and e.event_type = 'checkpoint_advanced'
+               )
+               then 'partial'::sync_run_status
+               else 'failed'::sync_run_status
+             end as next_status
+      from ${syncRuns} sr
+      left join request_activity ra on ra."runId" = sr.id
+      left join event_activity ea on ea."runId" = sr.id
+      where sr.status = 'running'
+        and greatest(
+          sr.started_at,
+          coalesce(ra."lastAttemptAt", sr.started_at),
+          coalesce(ea."lastEventAt", sr.started_at)
+        ) < ${input.inactiveBefore}
+    )
+    update ${syncRuns} sr
+    set status = inactive_runs.next_status,
+        error_summary = ${input.errorSummary},
+        finished_at = ${input.finishedAt}
+    from inactive_runs
+    where sr.id = inactive_runs.id
     returning sr.status as status
   `);
 

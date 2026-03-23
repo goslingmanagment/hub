@@ -1,4 +1,5 @@
 import {
+  closeInactiveSyncRuns,
   ensureSyncStreamStateRows,
   listRunnableSyncPages,
   markSyncPageWakeupEnqueued,
@@ -10,11 +11,29 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../../bootstrap.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
 
+const INACTIVE_SYNC_RUN_THRESHOLD_MS = 3 * 60 * 1000;
+const INACTIVE_SYNC_RUN_ERROR_SUMMARY = "Sync run auto-closed after inactivity";
+
 export async function runSyncPlannerCycle(
   app: AppContext,
   boss: Pick<PgBoss, "send">,
   now = new Date(),
 ) {
+  const inactiveRuns = await closeInactiveSyncRuns(app.db, {
+    inactiveBefore: new Date(now.getTime() - INACTIVE_SYNC_RUN_THRESHOLD_MS),
+    finishedAt: now,
+    errorSummary: INACTIVE_SYNC_RUN_ERROR_SUMMARY,
+  });
+
+  if (inactiveRuns.totalCount > 0) {
+    app.logger.info({
+      finishedAt: now,
+      inactiveRunTotal: inactiveRuns.totalCount,
+      inactiveRunFailed: inactiveRuns.failedCount,
+      inactiveRunPartial: inactiveRuns.partialCount,
+    }, "Inactive sync run cleanup complete");
+  }
+
   await ensureSyncStreamStateRows(app.db, { now });
   await promoteDueSyncStreamStateRows(app.db, now);
 
