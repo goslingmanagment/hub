@@ -1,5 +1,12 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 import { getTelegramSettings, type TelegramSettingsRow } from "@agency_hub_core/db";
-import { decryptJsonWithKeyVersion, redactSensitiveText } from "@agency_hub_core/shared";
+import {
+  classifyTransportError,
+  decryptJsonWithKeyVersion,
+  redactSensitiveText,
+  resolveRetryDelayMs,
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 
@@ -23,12 +30,19 @@ export interface ResolvedTelegramCredentials {
   chatId: string;
 }
 
+const TELEGRAM_SEND_TIMEOUT_MS = 10_000;
+const TELEGRAM_SEND_MAX_RETRIES = 2;
+
 function buildTelegramSendMessageUrl(botToken: string) {
   return `https://api.telegram.org/bot${botToken}/sendMessage`;
 }
 
 function describeTelegramFailure(error: unknown) {
   return redactSensitiveText(error instanceof Error ? error.message : String(error));
+}
+
+function shouldRetryTelegramResponse(status: number) {
+  return status === 429 || status >= 500;
 }
 
 export function resolveTelegramCredentials(
@@ -78,34 +92,51 @@ export async function sendTelegramMessage(
     };
   }
 
-  try {
-    const response = await fetch(buildTelegramSendMessageUrl(creds.botToken), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        chat_id: creds.chatId,
-        text: input.text,
-        ...(input.parseMode && { parse_mode: input.parseMode }),
-        disable_web_page_preview: true,
-      }),
-    });
-    const body = await response.json().catch(() => null) as
-      | {
-        ok?: boolean;
-        description?: string;
-        result?: {
-          message_id?: number;
+  for (let attemptNumber = 1; attemptNumber <= TELEGRAM_SEND_MAX_RETRIES + 1; attemptNumber += 1) {
+    try {
+      const response = await fetch(buildTelegramSendMessageUrl(creds.botToken), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          chat_id: creds.chatId,
+          text: input.text,
+          ...(input.parseMode && { parse_mode: input.parseMode }),
+          disable_web_page_preview: true,
+        }),
+        signal: AbortSignal.timeout(TELEGRAM_SEND_TIMEOUT_MS),
+      });
+      const body = await response.json().catch(() => null) as
+        | {
+          ok?: boolean;
+          description?: string;
+          result?: {
+            message_id?: number;
+          };
+        }
+        | null;
+
+      if (response.ok && body?.ok === true) {
+        return {
+          status: "sent",
+          chatId: creds.chatId,
+          messageId: typeof body.result?.message_id === "number" ? body.result.message_id : null,
         };
       }
-      | null;
 
-    if (!response.ok || body?.ok !== true) {
       const error = redactSensitiveText(
         body?.description ??
           `Telegram sendMessage failed with HTTP ${response.status}`,
       );
+      const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
+        && shouldRetryTelegramResponse(response.status);
+
+      if (canRetry) {
+        await delay(resolveRetryDelayMs(response.headers.get("retry-after"), attemptNumber));
+        continue;
+      }
+
       app.logger.warn({
         chatId: creds.chatId,
         httpStatus: response.status,
@@ -115,25 +146,32 @@ export async function sendTelegramMessage(
         status: "failed",
         error,
       };
-    }
+    } catch (error) {
+      const described = describeTelegramFailure(error);
+      const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
+        && (classifyTransportError(error) === "timeout" || classifyTransportError(error) === "transport");
 
-    return {
-      status: "sent",
-      chatId: creds.chatId,
-      messageId: typeof body.result?.message_id === "number" ? body.result.message_id : null,
-    };
-  } catch (error) {
-    const described = describeTelegramFailure(error);
-    app.logger.warn({
-      chatId: creds.chatId,
-      error: described,
-      err: error,
-    }, "Telegram notification failed; continuing");
-    return {
-      status: "failed",
-      error: described,
-    };
+      if (canRetry) {
+        await delay(resolveRetryDelayMs(null, attemptNumber));
+        continue;
+      }
+
+      app.logger.warn({
+        chatId: creds.chatId,
+        error: described,
+        err: error,
+      }, "Telegram notification failed; continuing");
+      return {
+        status: "failed",
+        error: described,
+      };
+    }
   }
+
+  return {
+    status: "failed",
+    error: "Telegram notification failed after exhausting retries",
+  };
 }
 
 export async function sendTelegramTestMessage(
