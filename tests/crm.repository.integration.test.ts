@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
@@ -277,6 +277,83 @@ describe("crm repository integration", () => {
     expect(shown.items).toHaveLength(1);
     expect(shown.items[0]?.isHandled).toBe(true);
     expect(shown.items[0]?.touchpointCode).toBe("3d");
+  });
+
+  it("issues a single SQL statement per retention query call", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-17T12:00:00.000Z");
+    const page = await createCrmPage(testDb, "crm-retention-single-query");
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-single-query",
+      username: "fan_single_query",
+      displayName: "Fan Single Query",
+    }]);
+
+    await upsertFanPage(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+      isSubscriber: true,
+      subscriberSince: new Date("2026-02-01T00:00:00.000Z"),
+      subscriptionExpiresAt: new Date("2026-03-20T12:00:00.000Z"),
+      autoRenew: true,
+    });
+    await upsertPageSubscription(testDb.db, {
+      platformSubscriptionId: "sub-single-query",
+      platformAccountId: page.id,
+      fanId: fan.id,
+      rawStatus: 3,
+      canonicalStatus: "active",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: true,
+      sourceCreatedAt: new Date("2026-02-01T00:00:00.000Z"),
+      endsAt: new Date("2026-03-20T12:00:00.000Z"),
+    });
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformConversationId: "single-query-conv",
+      partnerPlatformUserId: "fan-single-query",
+      partnerUsername: "fan_single_query",
+      partnerDisplayName: "Fan Single Query",
+      conversationFlags: 0,
+      unreadCount: 1,
+      subscriptionTierId: null,
+      lastMessageId: "single-query-msg",
+      lastUnreadMessageId: "single-query-msg",
+      lastMessageAt: new Date("2026-03-17T10:00:00.000Z"),
+      lastMessageSenderId: "fan-single-query",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "single query",
+      lastFanMessageAt: new Date("2026-03-17T10:00:00.000Z"),
+      lastModelMessageAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    const querySpy = vi.spyOn(testDb.pool, "query");
+
+    try {
+      const retention = await listCrmRetention(testDb.db, {
+        platformAccountId: page.id,
+        limit: 10,
+        offset: 0,
+        showHandled: false,
+        now,
+      });
+
+      expect(retention.total).toBe(1);
+      expect(retention.items).toHaveLength(1);
+      expect(querySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      querySpy.mockRestore();
+    }
   });
 
   it("computes reactivation score from mills and ignores fan_pages.last_seen_at", async (context) => {

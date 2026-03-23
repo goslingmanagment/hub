@@ -82,6 +82,21 @@ function normalizeNullableJsonRecord(value: unknown) {
   return value as Record<string, unknown>;
 }
 
+function normalizeJsonArray(value: unknown) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw new Error("Expected JSON array");
+}
+
 function searchPattern(query?: string | null) {
   const trimmed = query?.trim();
   return trimmed ? `%${trimmed}%` : null;
@@ -915,79 +930,136 @@ export async function listCrmRetention(
 ) {
   const base = retentionBaseQuery(input);
   const handledFilter = input.showHandled ? sql`` : sql`where is_handled = false`;
-  const totalResult = await db.execute<{ total: number }>(sql`
-    ${base}
-    select count(*)::int as "total"
-    from filtered
-    ${handledFilter}
-  `);
-  const countsResult = await db.execute<{
-    touchpointCode: CrmRetentionRow["touchpointCode"];
-    total: number;
-  }>(sql`
-    ${base}
-    select touchpoint_code as "touchpointCode",
-           count(*)::int as "total"
-    from filtered
-    ${handledFilter}
-    group by touchpoint_code
-  `);
-  const rowsResult = await db.execute<{
-    fanId: NumericValue;
-    platformUserId: string;
+  const result = await db.execute<{
+    totalCount: number;
+    touchpointCounts: unknown;
+    fanId: NumericValue | null;
+    platformUserId: string | null;
     username: string | null;
     displayName: string | null;
-    creatorNetAmountMills: NumericValue;
-    subscriptionExpiresAt: TimestampValue;
+    creatorNetAmountMills: NumericValue | null;
+    subscriptionExpiresAt: TimestampValue | null;
     autoRenew: boolean | null;
     subscriptionTierName: string | null;
-    unreadCount: NumericValue;
+    unreadCount: NumericValue | null;
     lastMessageAt: TimestampValue;
     lastMessagePreview: string | null;
     lastContactAt: TimestampValue;
     platformConversationId: string | null;
-    messageBackfillComplete: boolean;
-    storedMessageCount: NumericValue;
+    messageBackfillComplete: boolean | null;
+    storedMessageCount: NumericValue | null;
     lastMessageSenderRole: string | null;
-    touchpointCode: CrmRetentionRow["touchpointCode"];
-    touchpointDueAt: TimestampValue;
-    isSoftTouchpoint: boolean;
-    isHandled: boolean;
+    touchpointCode: CrmRetentionRow["touchpointCode"] | null;
+    touchpointDueAt: TimestampValue | null;
+    isSoftTouchpoint: boolean | null;
+    isHandled: boolean | null;
   }>(sql`
-    ${base}
-    select fan_id as "fanId",
-           platform_user_id as "platformUserId",
-           username as "username",
-           display_name as "displayName",
-           creator_net_amount_mills as "creatorNetAmountMills",
-           subscription_expires_at as "subscriptionExpiresAt",
-           auto_renew as "autoRenew",
-           subscription_tier_name as "subscriptionTierName",
-           unread_count as "unreadCount",
-           last_message_at as "lastMessageAt",
-           last_message_preview as "lastMessagePreview",
-           last_contact_at as "lastContactAt",
-           platform_conversation_id as "platformConversationId",
-           message_backfill_complete as "messageBackfillComplete",
-           stored_message_count as "storedMessageCount",
-           last_message_sender_role as "lastMessageSenderRole",
-           touchpoint_code as "touchpointCode",
-           touchpoint_due_at as "touchpointDueAt",
-           is_soft_touchpoint as "isSoftTouchpoint",
-           is_handled as "isHandled"
-    from filtered
-    ${handledFilter}
-    ${retentionSortSql(input.sortBy, input.sortDir)}
-    limit ${input.limit}
-    offset ${input.offset}
+    ${base},
+    scoped as materialized (
+      select *
+      from filtered
+      ${handledFilter}
+    ),
+    total_summary as (
+      select count(*)::int as "totalCount"
+      from scoped
+    ),
+    touchpoint_counts as (
+      select touchpoint_code as "touchpointCode",
+             count(*)::int as "total"
+      from scoped
+      group by touchpoint_code
+    ),
+    paged as (
+      select fan_id as "fanId",
+             platform_user_id as "platformUserId",
+             username as "username",
+             display_name as "displayName",
+             creator_net_amount_mills as "creatorNetAmountMills",
+             subscription_expires_at as "subscriptionExpiresAt",
+             auto_renew as "autoRenew",
+             subscription_tier_name as "subscriptionTierName",
+             unread_count as "unreadCount",
+             last_message_at as "lastMessageAt",
+             last_message_preview as "lastMessagePreview",
+             last_contact_at as "lastContactAt",
+             platform_conversation_id as "platformConversationId",
+             message_backfill_complete as "messageBackfillComplete",
+             stored_message_count as "storedMessageCount",
+             last_message_sender_role as "lastMessageSenderRole",
+             touchpoint_code as "touchpointCode",
+             touchpoint_due_at as "touchpointDueAt",
+             is_soft_touchpoint as "isSoftTouchpoint",
+             is_handled as "isHandled"
+      from scoped
+      ${retentionSortSql(input.sortBy, input.sortDir)}
+      limit ${input.limit}
+      offset ${input.offset}
+    )
+    select ts."totalCount",
+           coalesce((
+             select jsonb_agg(jsonb_build_object(
+               'touchpointCode', tc."touchpointCode",
+               'total', tc."total"
+             ))
+             from touchpoint_counts tc
+           ), '[]'::jsonb) as "touchpointCounts",
+           p."fanId",
+           p."platformUserId",
+           p."username",
+           p."displayName",
+           p."creatorNetAmountMills",
+           p."subscriptionExpiresAt",
+           p."autoRenew",
+           p."subscriptionTierName",
+           p."unreadCount",
+           p."lastMessageAt",
+           p."lastMessagePreview",
+           p."lastContactAt",
+           p."platformConversationId",
+           p."messageBackfillComplete",
+           p."storedMessageCount",
+           p."lastMessageSenderRole",
+           p."touchpointCode",
+           p."touchpointDueAt",
+           p."isSoftTouchpoint",
+           p."isHandled"
+    from total_summary ts
+    left join paged p on true
   `);
 
+  const touchpointCounts = normalizeJsonArray(result.rows[0]?.touchpointCounts ?? []);
+
   return {
-    total: totalResult.rows[0]?.total ?? 0,
+    total: result.rows[0]?.totalCount ?? 0,
     countsByTouchpoint: new Map(
-      countsResult.rows.map((row) => [row.touchpointCode, row.total] as const),
+      touchpointCounts.map((row) => {
+        if (typeof row !== "object" || row === null) {
+          throw new Error("Expected touchpoint count row to be an object");
+        }
+
+        const { touchpointCode, total } = row as {
+          touchpointCode: CrmRetentionRow["touchpointCode"];
+          total: number;
+        };
+        return [touchpointCode, total] as const;
+      }),
     ),
-    items: rowsResult.rows.map((row) => ({
+    items: result.rows
+      .filter((row): row is typeof row & {
+        fanId: NumericValue;
+        platformUserId: string;
+        creatorNetAmountMills: NumericValue;
+        subscriptionExpiresAt: TimestampValue;
+        unreadCount: NumericValue;
+        messageBackfillComplete: boolean;
+        storedMessageCount: NumericValue;
+        touchpointCode: CrmRetentionRow["touchpointCode"];
+        touchpointDueAt: TimestampValue;
+        isSoftTouchpoint: boolean;
+        isHandled: boolean;
+      } => row.fanId !== null)
+      .map((row) => ({
       fanId: normalizeNumber(row.fanId, "fanId"),
       platformUserId: row.platformUserId,
       username: row.username,
