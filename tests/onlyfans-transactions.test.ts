@@ -952,4 +952,63 @@ describe("syncOnlyFansTransactions", () => {
       rescanStart: new Date("2026-03-01T00:00:00.000Z"),
     })).rejects.toThrow("Manual OnlyFans transaction rescans are not allowed while an incomplete backfill exists");
   });
+
+  it("warns once per run for an unknown transaction type", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: new Date("2026-03-08T00:00:00.000Z"),
+      state: {},
+    });
+    const telemetry = createTelemetry();
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([
+          {
+            ...makeTransaction("tx-unknown-1", "2026-03-10T00:00:00.000Z"),
+            type: "mystery",
+          },
+          {
+            ...makeTransaction("tx-unknown-2", "2026-03-09T00:00:00.000Z"),
+            type: "mystery",
+          },
+        ]),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+    const app = createApp(adapter);
+
+    await syncOnlyFansTransactions(app, {
+      pageLabel: "onlyfans-page",
+      platformAccountId: 1,
+      platformAccountIdValue: "of-1",
+      pageMetadata: {},
+      commissionRate: 0.2,
+      rescanStart: null,
+      requestContext: {
+        auth: { token: "secret" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(app.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageLabel: "onlyfans-page",
+        platformAccountId: 1,
+        rawType: "mystery",
+      }),
+      "Unmapped OnlyFans transaction type fell back to other",
+    );
+    expect(telemetry.addAnomaly).toHaveBeenCalledTimes(1);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "unknown_transaction_type",
+      severity: "warn",
+      details: expect.objectContaining({
+        provider: "onlyfans",
+        rawType: "mystery",
+      }),
+    }));
+  });
 });

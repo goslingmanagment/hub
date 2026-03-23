@@ -32,6 +32,7 @@ function createTelemetry() {
   return {
     recordCheckpointLoaded: vi.fn(async () => {}),
     recordCheckpointAdvanced: vi.fn(async () => {}),
+    addNote: vi.fn(async () => {}),
     addAnomaly: vi.fn(async () => {}),
     setBoundarySummary: vi.fn(),
     setScanSummary: vi.fn(),
@@ -262,6 +263,77 @@ describe("syncTransactions", () => {
       details: expect.objectContaining({
         earlyStoppedBeyondBoundary: true,
         olderThanBoundaryPages: 2,
+      }),
+    }));
+  });
+
+  it("warns once per run for an unknown transaction type", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: new Date("2026-03-08T00:00:00.000Z"),
+      state: {},
+    });
+
+    const telemetry = createTelemetry();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi.fn(async () => ({
+          items: [
+            {
+              ...buildTransaction("tx-unknown-1", "2026-03-10T00:00:00.000Z"),
+              type: 999999,
+            },
+            {
+              ...buildTransaction("tx-unknown-2", "2026-03-09T00:00:00.000Z"),
+              type: 999999,
+            },
+          ],
+          total: 2,
+          done: true,
+          raw: {},
+        })),
+      },
+      logger,
+    } as never;
+
+    await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageLabel: "fansly-page",
+        platformAccountId: 1,
+        rawType: 999999,
+      }),
+      "Unmapped Fansly transaction type fell back to other",
+    );
+    expect(telemetry.addAnomaly).toHaveBeenCalledTimes(1);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "unknown_transaction_type",
+      severity: "warn",
+      details: expect.objectContaining({
+        provider: "fansly",
+        rawType: 999999,
       }),
     }));
   });

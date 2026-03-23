@@ -2,6 +2,19 @@ import type { TransactionState, TransactionType } from "@agency_hub_core/shared"
 
 export const ONLYMONSTER_MAPPER_VERSION = "onlymonster-phase3-v1";
 
+const ONLYMONSTER_KNOWN_TRANSACTION_TYPES = new Set([
+  "Tip from",
+  "Payment for message",
+  "Subscription",
+  "Recurring subscription",
+  "Post purchase",
+  "Live stream",
+]);
+
+export function isKnownOnlyMonsterTransactionType(rawType: string) {
+  return ONLYMONSTER_KNOWN_TRANSACTION_TYPES.has(rawType);
+}
+
 export function mapOnlyMonsterTransactionType(rawType: string): TransactionType {
   switch (rawType) {
     case "Tip from":

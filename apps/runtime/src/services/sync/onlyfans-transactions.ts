@@ -13,6 +13,7 @@ import {
 } from "@agency_hub_core/db";
 import {
   ONLYMONSTER_MAPPER_VERSION,
+  isKnownOnlyMonsterTransactionType,
   mapOnlyMonsterTransactionState,
   mapOnlyMonsterTransactionType,
   OnlyMonsterApiError,
@@ -88,6 +89,39 @@ function maxDate(a: Date | null, b: Date | null) {
     return a;
   }
   return a >= b ? a : b;
+}
+
+async function recordUnknownOnlyFansTransactionType(
+  app: AppContext,
+  input: {
+    pageLabel: string;
+    platformAccountId: number;
+    telemetry: SyncRunTelemetry;
+  },
+  rawType: string,
+  seenRawTypes: Set<string>,
+) {
+  if (isKnownOnlyMonsterTransactionType(rawType) || seenRawTypes.has(rawType)) {
+    return;
+  }
+
+  seenRawTypes.add(rawType);
+  app.logger.warn({
+    pageLabel: input.pageLabel,
+    platformAccountId: input.platformAccountId,
+    rawType,
+  }, "Unmapped OnlyFans transaction type fell back to other");
+  await input.telemetry.addAnomaly({
+    code: "unknown_transaction_type",
+    severity: "warn",
+    message: "Unmapped OnlyFans transaction type fell back to other",
+    details: {
+      provider: "onlyfans",
+      rawType,
+      pageLabel: input.pageLabel,
+      platformAccountId: input.platformAccountId,
+    },
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -679,6 +713,7 @@ async function syncOnlyFansTransactionsIncremental(
   let olderThanBoundaryItems = state.olderThanBoundaryItems;
   let olderThanBoundaryPages = state.olderThanBoundaryPages;
   const sourceTransactionIds = new Set(state.keepTransactionIds);
+  const seenUnknownRawTypes = new Set<string>();
   let cleanupApplied = false;
   let currentRunProcessedTransactions = 0;
   let currentRunProcessedChargebacks = 0;
@@ -792,6 +827,10 @@ async function syncOnlyFansTransactionsIncremental(
         olderThanBoundaryPages,
         keepTransactionIds: nextKeepTransactionIds,
       });
+
+      for (const item of page.parsed.items) {
+        await recordUnknownOnlyFansTransactionType(app, input, item.type, seenUnknownRawTypes);
+      }
 
       await app.db.transaction(async (tx) => {
         const dbTx = tx as typeof app.db;
@@ -1245,6 +1284,7 @@ async function syncOnlyFansTransactionsBackfill(
   let newestSeenAt = state.newestSeenAt ? new Date(state.newestSeenAt) : null;
   let currentRunProcessedTransactions = 0;
   let currentRunProcessedChargebacks = 0;
+  const seenUnknownRawTypes = new Set<string>();
   let persistedState = buildOnlyFansPersistedResumeState(state, {});
 
   await input.telemetry.addNote(
@@ -1409,6 +1449,10 @@ async function syncOnlyFansTransactionsBackfill(
           newestSeenAt,
           emptyWindowCount: nextState.emptyWindowCount,
         });
+
+        for (const item of page.parsed.items) {
+          await recordUnknownOnlyFansTransactionType(app, input, item.type, seenUnknownRawTypes);
+        }
 
         await app.db.transaction(async (tx) => {
           const dbTx = tx as typeof app.db;

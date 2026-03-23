@@ -11,6 +11,7 @@ import {
 } from "@agency_hub_core/db";
 import {
   FANSLY_MAPPER_VERSION,
+  isKnownFanslyTransactionType,
   mapFanslyTransactionState,
   mapFanslyTransactionType,
 } from "@agency_hub_core/fansly";
@@ -76,6 +77,39 @@ async function flushFanslyDirtyRange(
   await rebuildRevenueRollups(app.db, platformAccountId, dirtyFrom);
 }
 
+async function recordUnknownFanslyTransactionType(
+  app: AppContext,
+  input: {
+    pageLabel: string;
+    platformAccountId: number;
+    telemetry: SyncRunTelemetry;
+  },
+  rawType: number,
+  seenRawTypes: Set<number>,
+) {
+  if (isKnownFanslyTransactionType(rawType) || seenRawTypes.has(rawType)) {
+    return;
+  }
+
+  seenRawTypes.add(rawType);
+  app.logger.warn({
+    pageLabel: input.pageLabel,
+    platformAccountId: input.platformAccountId,
+    rawType,
+  }, "Unmapped Fansly transaction type fell back to other");
+  await input.telemetry.addAnomaly({
+    code: "unknown_transaction_type",
+    severity: "warn",
+    message: "Unmapped Fansly transaction type fell back to other",
+    details: {
+      provider: "fansly",
+      rawType,
+      pageLabel: input.pageLabel,
+      platformAccountId: input.platformAccountId,
+    },
+  });
+}
+
 async function syncTransactionsIncremental(
   app: AppContext,
   input: {
@@ -135,6 +169,7 @@ async function syncTransactionsIncremental(
   let firstPageOlderThanBoundaryItems = 0;
   let earlyStoppedBeyondBoundary = false;
   const collectedItems: Awaited<ReturnType<AppContext["adapter"]["getTransactionsPage"]>>["items"] = [];
+  const seenUnknownRawTypes = new Set<number>();
   let providerReportedTotal: number | null = null;
 
   while (true) {
@@ -221,6 +256,9 @@ async function syncTransactionsIncremental(
       .filter((value): value is string => Boolean(value)),
     telemetry: input.telemetry,
   });
+  for (const item of collectedItems) {
+    await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
+  }
   await app.db.transaction(async (tx) => {
     const fans = await upsertFans(tx as typeof app.db, hydratedFans);
     const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
@@ -422,6 +460,7 @@ async function syncTransactionsBackfill(
   let oldestSeenAt: Date | null = null;
   let newestSeenAt = state.newestSeenAt ? new Date(state.newestSeenAt) : null;
   let currentRunProcessed = 0;
+  const seenUnknownRawTypes = new Set<number>();
   let providerReportedTotal: number | null = null;
 
   await input.telemetry.addNote(
@@ -530,6 +569,9 @@ async function syncTransactionsBackfill(
           .filter((value): value is string => Boolean(value)),
         telemetry: input.telemetry,
       });
+      for (const item of page.items) {
+        await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
+      }
 
       await app.db.transaction(async (tx) => {
         const dbTx = tx as typeof app.db;
