@@ -1,4 +1,6 @@
-FROM node:22-bookworm-slim AS base
+ARG BUILDPLATFORM
+
+FROM node:22-bookworm-slim AS target-base
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -7,7 +9,7 @@ RUN corepack enable
 
 WORKDIR /app
 
-FROM base AS prod-deps
+FROM target-base AS prod-deps
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/runtime/package.json ./apps/runtime/package.json
@@ -20,7 +22,14 @@ COPY packages/shared/package.json ./packages/shared/package.json
 RUN pnpm install --prod --frozen-lockfile --filter @agency_hub_core/runtime...
 RUN pnpm rebuild --pending --filter @agency_hub_core/runtime...
 
-FROM base AS build
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS build
+
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+
+RUN corepack enable
+
+WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json vitest.config.ts ./
 COPY apps ./apps

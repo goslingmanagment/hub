@@ -31,6 +31,9 @@ log() {
 }
 
 fail() {
+  if [[ "${STACK_RECREATED:-0}" == "1" ]]; then
+    dump_remote_diagnostics
+  fi
   printf '[deploy] error: %s\n' "$*" >&2
   exit 1
 }
@@ -124,6 +127,8 @@ if [[ -n "$IDENTITY_FILE" ]]; then
   SSH_ARGS+=(-i "$IDENTITY_FILE")
 fi
 
+STACK_RECREATED=0
+
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
 REMOTE_RELEASE_FILES=()
 for file in \
@@ -142,6 +147,12 @@ done
 run_remote() {
   local command="$1"
   ssh "${SSH_ARGS[@]}" "$REMOTE" "bash -lc $(printf '%q' "$command")"
+}
+
+dump_remote_diagnostics() {
+  log "Remote verification failed; collecting docker compose status and recent logs"
+  run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; docker compose -f docker-compose.production.yml ps; printf '\\n'; docker compose -f docker-compose.production.yml logs --tail=200 postgres api worker; exit 0" \
+    || log "Unable to collect remote diagnostics"
 }
 
 curl_status() {
@@ -201,6 +212,7 @@ run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.prod
 
 log "Recreating the remote production stack"
 run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && docker compose -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build"
+STACK_RECREATED=1
 
 log "Waiting for ${VERIFY_URL%/}/api/v1/health"
 wait_for_api_health "$HEALTH_FILE" || fail "API health never reached 200 at ${VERIFY_URL%/}/api/v1/health"

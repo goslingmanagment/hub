@@ -167,6 +167,8 @@ If you want to build locally and push the image to a remote host over SSH:
 scripts/deploy-production.sh user@server --verify-url http://SERVER_IP:3000
 ```
 
+On Apple Silicon workstations, this deploy path still targets `linux/amd64` for amd64 servers. The Docker build compiles the JS/TS artifacts in a native build stage while installing runtime dependencies for the target platform, which avoids running `esbuild` under amd64 emulation during the production build.
+
 What the script does:
 
 - builds `agency_hub_core/runtime:production` locally
@@ -174,6 +176,7 @@ What the script does:
 - syncs release files into `/opt/agency-hub` by default
 - runs `docker compose -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build`
 - verifies `/api/v1/health`, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
+- if verification fails after the stack is recreated, prints `docker compose ps` plus recent `postgres`, `api`, and `worker` logs automatically
 
 The script assumes the remote server already has `/opt/agency-hub/.env.production` populated.
 
@@ -219,6 +222,7 @@ docker compose -f docker-compose.production.yml ps
 
 - Confirm the app can connect to the DSN in `.env.production`.
 - Confirm the `postgres` service credentials match the `DATABASE_URL`.
+- If you deployed with `scripts/deploy-production.sh`, inspect the `docker compose ps` output and recent service logs that the script prints automatically after a verification failure.
 
 ### `/api/v1/health/sync` returns `503`
 
