@@ -27,7 +27,8 @@ describe("drizzle config", () => {
   it("uses DATABASE_URL when it is configured", async () => {
     process.env.DATABASE_URL = "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test";
 
-    const { default: config } = await importDrizzleConfig();
+    const imported = await importDrizzleConfig();
+    const config = imported.default as { dbCredentials: { url: string } };
 
     expect(config.dbCredentials.url).toBe(process.env.DATABASE_URL);
   });

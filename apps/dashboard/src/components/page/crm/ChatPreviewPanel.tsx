@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import type { CrmConversationPreviewResponse } from "@agency_hub_core/contracts";
 import { useCrmConversationPreview } from "@/api/queries";
 import { formatRelativeTime } from "@/lib/format";
 import { formatUsdFromCents } from "@/lib/format";
@@ -45,7 +46,7 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
   return (
     <div className="bg-hover/50 px-6 py-4 space-y-2">
       <div className="flex flex-col gap-1.5 max-h-[320px] overflow-y-auto">
-        {data.messages.map((msg) => {
+        {data.messages.map((msg: CrmConversationPreviewResponse["messages"][number]) => {
           const isModel = msg.senderRole === "model";
           return (
             <div

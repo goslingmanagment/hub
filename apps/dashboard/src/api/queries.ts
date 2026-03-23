@@ -47,7 +47,7 @@ import type {
   NotificationsReportSendResponse,
   NotificationsReportHistoryResponse,
 } from "@agency_hub_core/contracts";
-import { api } from "./client";
+import { api } from "./client.js";
 
 function qs(params: Record<string, string | number | boolean | Array<string | number | boolean> | undefined>): string {
   const searchParams = new URLSearchParams();
@@ -472,7 +472,7 @@ export function useSyncRequests(
         limit: params.limit,
       })}`);
     },
-    select: (items) => items.map((item) => ({
+    select: (items: SyncRequestsResponse) => items.map((item: SyncRequestsResponse[number]) => ({
       ...item,
       partnerUsername: item.partnerUsername ?? null,
       returnedItems: typeof item.returnedItems === "number" ? item.returnedItems : null,

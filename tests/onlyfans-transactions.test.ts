@@ -153,7 +153,7 @@ function createApp(adapter: ReturnType<typeof createAdapter>) {
       warn: vi.fn(),
       error: vi.fn(),
     },
-  } as never;
+  };
 }
 
 async function runOnlyFansTransactionsSync(input?: {
@@ -176,7 +176,7 @@ async function runOnlyFansTransactionsSync(input?: {
 
   dbMocks.getCheckpoint.mockResolvedValueOnce(input?.checkpoint ?? null);
 
-  return syncOnlyFansTransactions(createApp(adapter), {
+  return syncOnlyFansTransactions(createApp(adapter) as never, {
     pageLabel: "onlyfans-page",
     platformAccountId: 1,
     platformAccountIdValue: "of-1",
@@ -976,7 +976,7 @@ describe("syncOnlyFansTransactions", () => {
     });
     const app = createApp(adapter);
 
-    await syncOnlyFansTransactions(app, {
+    await syncOnlyFansTransactions(app as never, {
       pageLabel: "onlyfans-page",
       platformAccountId: 1,
       platformAccountIdValue: "of-1",

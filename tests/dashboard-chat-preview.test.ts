@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,7 +8,7 @@ const queryMocks = vi.hoisted(() => ({
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 vi.mock("react-router", () => ({
-  Link: ({ children, to, ...props }: { children: unknown; to: string }) =>
+  Link: ({ children, to, ...props }: { children?: ReactNode; to: string }) =>
     createElement("a", { href: to, ...props }, children),
 }));
 
