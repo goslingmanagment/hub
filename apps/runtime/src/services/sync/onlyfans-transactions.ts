@@ -329,6 +329,276 @@ function buildOnlyFansPersistedResumeState(
   };
 }
 
+type OnlyFansIncrementalResumeState = {
+  mode: "incremental";
+  completed: false;
+  provider: "onlyfans";
+  phase: "transactions" | "chargebacks";
+  start: string;
+  end: string;
+  cursor: string | null;
+  newestSeenAt: string | null;
+  oldestSeenAt: string | null;
+  dirtyFrom: string | null;
+  processedTransactions: number;
+  processedChargebacks: number;
+  transactionPages: number;
+  chargebackPages: number;
+  olderThanBoundaryItems: number;
+  olderThanBoundaryPages: number;
+  keepTransactionIds: string[];
+};
+
+function asStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return value.every((item) => typeof item === "string")
+    ? value
+    : null;
+}
+
+function asIsoString(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function asNullableIsoString(value: unknown) {
+  if (value === null) {
+    return null;
+  }
+
+  return asIsoString(value);
+}
+
+function asNonNegativeInt(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function asNullableString(value: unknown) {
+  return value === null || typeof value === "string" ? value : null;
+}
+
+function parseOnlyFansIncrementalResumeState(value: unknown): OnlyFansIncrementalResumeState | null {
+  const state = isRecord(value) ? value : null;
+  if (
+    !state ||
+    state.mode !== "incremental" ||
+    state.completed !== false ||
+    state.provider !== "onlyfans"
+  ) {
+    return null;
+  }
+
+  const start = asIsoString(state.start);
+  const end = asIsoString(state.end);
+  const cursor = asNullableString(state.cursor);
+  const newestSeenAt = asNullableIsoString(state.newestSeenAt);
+  const oldestSeenAt = asNullableIsoString(state.oldestSeenAt);
+  const dirtyFrom = asNullableIsoString(state.dirtyFrom);
+  const processedTransactions = asNonNegativeInt(state.processedTransactions);
+  const processedChargebacks = asNonNegativeInt(state.processedChargebacks);
+  const transactionPages = asNonNegativeInt(state.transactionPages);
+  const chargebackPages = asNonNegativeInt(state.chargebackPages);
+  const olderThanBoundaryItems = asNonNegativeInt(state.olderThanBoundaryItems);
+  const olderThanBoundaryPages = asNonNegativeInt(state.olderThanBoundaryPages);
+  const keepTransactionIds = asStringArray(state.keepTransactionIds);
+
+  if (
+    start === null ||
+    end === null ||
+    cursor === undefined ||
+    newestSeenAt === undefined ||
+    oldestSeenAt === undefined ||
+    dirtyFrom === undefined ||
+    processedTransactions === null ||
+    processedChargebacks === null ||
+    transactionPages === null ||
+    chargebackPages === null ||
+    olderThanBoundaryItems === null ||
+    olderThanBoundaryPages === null ||
+    keepTransactionIds === null ||
+    (state.phase !== "transactions" && state.phase !== "chargebacks")
+  ) {
+    return null;
+  }
+
+  return {
+    mode: "incremental",
+    completed: false,
+    provider: "onlyfans",
+    phase: state.phase,
+    start,
+    end,
+    cursor,
+    newestSeenAt,
+    oldestSeenAt,
+    dirtyFrom,
+    processedTransactions,
+    processedChargebacks,
+    transactionPages,
+    chargebackPages,
+    olderThanBoundaryItems,
+    olderThanBoundaryPages,
+    keepTransactionIds,
+  };
+}
+
+function buildOnlyFansIncrementalResumeState(input: {
+  phase: OnlyFansIncrementalResumeState["phase"];
+  start: Date | string;
+  end: Date | string;
+  cursor: string | null;
+  newestSeenAt: Date | null;
+  oldestSeenAt: Date | null;
+  dirtyFrom: Date | null;
+  processedTransactions: number;
+  processedChargebacks: number;
+  transactionPages: number;
+  chargebackPages: number;
+  olderThanBoundaryItems: number;
+  olderThanBoundaryPages: number;
+  keepTransactionIds: string[];
+}): OnlyFansIncrementalResumeState {
+  return {
+    mode: "incremental",
+    completed: false,
+    provider: "onlyfans",
+    phase: input.phase,
+    start: typeof input.start === "string" ? new Date(input.start).toISOString() : input.start.toISOString(),
+    end: typeof input.end === "string" ? new Date(input.end).toISOString() : input.end.toISOString(),
+    cursor: input.cursor,
+    newestSeenAt: isoDateOrNull(input.newestSeenAt),
+    oldestSeenAt: isoDateOrNull(input.oldestSeenAt),
+    dirtyFrom: isoDateOrNull(input.dirtyFrom),
+    processedTransactions: input.processedTransactions,
+    processedChargebacks: input.processedChargebacks,
+    transactionPages: input.transactionPages,
+    chargebackPages: input.chargebackPages,
+    olderThanBoundaryItems: input.olderThanBoundaryItems,
+    olderThanBoundaryPages: input.olderThanBoundaryPages,
+    keepTransactionIds: Array.from(new Set(input.keepTransactionIds)),
+  };
+}
+
+async function flushAndClearOnlyFansIncrementalDirtyRange(
+  app: AppContext,
+  platformAccountId: number,
+  state: OnlyFansIncrementalResumeState,
+) {
+  const dirtyFrom = state.dirtyFrom ? new Date(state.dirtyFrom) : null;
+  await flushOnlyFansDirtyRange(app, platformAccountId, dirtyFrom);
+  if (!dirtyFrom) {
+    return state;
+  }
+
+  const clearedState: OnlyFansIncrementalResumeState = {
+    ...state,
+    dirtyFrom: null,
+  };
+  await upsertCheckpointProgress(app.db, {
+    platformAccountId,
+    stream: "transactions",
+    state: clearedState,
+  });
+
+  return clearedState;
+}
+
+async function upsertOnlyFansIncrementalTransactionsPage(
+  db: AppContext["db"],
+  input: {
+    platformAccountId: number;
+    commissionRate: number;
+  },
+  items: OnlyMonsterTransaction[],
+) {
+  const fanPlatformIds = Array.from(new Set(items.map((item) => item.fan.id)));
+  const fans = fanPlatformIds.length > 0
+    ? await upsertFans(db, buildOnlyFansFanInputs(fanPlatformIds))
+    : [];
+  if (fans.length > 0) {
+    await upsertFanPages(db, fans.map((fan) => ({
+      fanId: fan.id,
+      platformAccountId: input.platformAccountId,
+    })));
+  }
+  const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
+
+  for (const item of items) {
+    const grossAmountMills = dollarsToMills(item.amount);
+    const creatorNetAmountMills = calculateNetMillsFromGross(
+      grossAmountMills,
+      input.commissionRate,
+    );
+
+    await upsertTransaction(db, {
+      platformAccountId: input.platformAccountId,
+      fanId: fanMap.get(item.fan.id) ?? null,
+      transactionId: item.id,
+      correlationAccountId: item.fan.id,
+      rawType: item.type,
+      canonicalType: mapOnlyMonsterTransactionType(item.type),
+      transactionState: mapOnlyMonsterTransactionState(item.status),
+      rawStatus: item.status,
+      grossAmountMills,
+      sourceDestinationAmountMills: grossAmountMills,
+      creatorNetAmountMills,
+      occurredAt: new Date(item.timestamp),
+    });
+  }
+}
+
+async function upsertOnlyFansIncrementalChargebacksPage(
+  db: AppContext["db"],
+  input: {
+    platformAccountId: number;
+    commissionRate: number;
+  },
+  items: OnlyMonsterChargeback[],
+) {
+  const fanPlatformIds = Array.from(new Set(items.map((item) => item.fan.id)));
+  const fans = fanPlatformIds.length > 0
+    ? await upsertFans(db, buildOnlyFansFanInputs(fanPlatformIds))
+    : [];
+  if (fans.length > 0) {
+    await upsertFanPages(db, fans.map((fan) => ({
+      fanId: fan.id,
+      platformAccountId: input.platformAccountId,
+    })));
+  }
+  const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
+
+  for (const item of items) {
+    const grossAmountMills = -dollarsToMills(item.amount);
+    const creatorNetAmountMills = calculateNetMillsFromGross(
+      grossAmountMills,
+      input.commissionRate,
+    );
+
+    await upsertTransaction(db, {
+      platformAccountId: input.platformAccountId,
+      fanId: fanMap.get(item.fan.id) ?? null,
+      transactionId: item.id,
+      correlationAccountId: item.fan.id,
+      rawType: item.type,
+      canonicalType: "chargeback",
+      transactionState: mapOnlyMonsterTransactionState(item.status),
+      rawStatus: item.status,
+      grossAmountMills,
+      sourceDestinationAmountMills: grossAmountMills,
+      creatorNetAmountMills,
+      occurredAt: new Date(item.chargeback_timestamp),
+      sourceUpdatedAt: new Date(item.transaction_timestamp),
+    });
+  }
+}
+
 async function syncOnlyFansTransactionsIncremental(
   app: AppContext,
   input: {
@@ -340,8 +610,10 @@ async function syncOnlyFansTransactionsIncremental(
     requestContext: Parameters<AppContext["onlyFansAdapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;
+    budget: SyncChunkBudget;
   },
   checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
+  existingState: OnlyFansIncrementalResumeState | null,
 ): Promise<OnlyFansTransactionSyncResult> {
   const oldestPendingAt = await getOldestPendingTransactionAt(app.db, input.platformAccountId);
   const lookbackStart = checkpoint?.cursorTimestamp
@@ -357,213 +629,348 @@ async function syncOnlyFansTransactionsIncremental(
     new Date(Date.now() - app.config.transactionRescanCapDays * DAY_MS),
     UTC_TIME_ZONE,
   );
-  const start = input.rescanStart ?? (
-    earliestRescanStart && earliestRescanStart < rescanCapStart
-      ? rescanCapStart
-      : (earliestRescanStart ?? rescanCapStart)
-  );
-  const end = new Date();
+  let state = existingState;
+  if (!state) {
+    const start = input.rescanStart ?? (
+      earliestRescanStart && earliestRescanStart < rescanCapStart
+        ? rescanCapStart
+        : (earliestRescanStart ?? rescanCapStart)
+    );
+    const end = new Date();
 
+    if (start >= end) {
+      throw new Error(`OnlyFans transaction rescan start must be before ${end.toISOString()}`);
+    }
+
+    if (input.rescanStart) {
+      await input.telemetry.addNote("Manual rescan override was applied", {
+        start: input.rescanStart.toISOString(),
+      });
+    }
+
+    state = buildOnlyFansIncrementalResumeState({
+      phase: "transactions",
+      start,
+      end,
+      cursor: null,
+      newestSeenAt: checkpoint?.cursorTimestamp ?? null,
+      oldestSeenAt: null,
+      dirtyFrom: null,
+      processedTransactions: 0,
+      processedChargebacks: 0,
+      transactionPages: 0,
+      chargebackPages: 0,
+      olderThanBoundaryItems: 0,
+      olderThanBoundaryPages: 0,
+      keepTransactionIds: [],
+    });
+  }
+
+  const start = new Date(state.start);
+  const end = new Date(state.end);
   if (start >= end) {
     throw new Error(`OnlyFans transaction rescan start must be before ${end.toISOString()}`);
   }
 
-  if (input.rescanStart) {
-    await input.telemetry.addNote("Manual rescan override was applied", {
-      start: input.rescanStart.toISOString(),
-    });
-  }
-
-  let newestSeenAt: Date | null = checkpoint?.cursorTimestamp ?? null;
-  let oldestSeenAt: Date | null = null;
-  let processedTransactions = 0;
-  let processedChargebacks = 0;
-  let transactionPages = 0;
-  let chargebackPages = 0;
-  let olderThanBoundaryItems = 0;
-  let olderThanBoundaryPages = 0;
-  const sourceTransactionIds = new Set<string>();
+  let newestSeenAt: Date | null = state.newestSeenAt
+    ? new Date(state.newestSeenAt)
+    : (checkpoint?.cursorTimestamp ?? null);
+  let oldestSeenAt: Date | null = state.oldestSeenAt ? new Date(state.oldestSeenAt) : null;
+  let olderThanBoundaryItems = state.olderThanBoundaryItems;
+  let olderThanBoundaryPages = state.olderThanBoundaryPages;
+  const sourceTransactionIds = new Set(state.keepTransactionIds);
   let cleanupApplied = false;
-  const transactionsToUpsert: Array<OnlyMonsterTransaction> = [];
-  const chargebacksToUpsert: Array<OnlyMonsterChargeback> = [];
-  const fanPlatformIds = new Set<string>();
+  let currentRunProcessedTransactions = 0;
+  let currentRunProcessedChargebacks = 0;
 
-  let transactionCursor: string | null = null;
-  let transactionPageIndex = 0;
-  do {
-    const page = await app.onlyFansAdapter.getTransactionsPage(
-      input.requestContext,
-      input.platformAccountIdValue,
-      {
+  await input.telemetry.addNote(
+    existingState
+      ? "Resuming incomplete OnlyFans incremental transaction rescan"
+      : "Starting OnlyFans incremental transaction rescan",
+    {
+      phase: state.phase,
+      start: state.start,
+      end: state.end,
+      cursor: state.cursor,
+      processedTransactions: state.processedTransactions,
+      processedChargebacks: state.processedChargebacks,
+      transactionPages: state.transactionPages,
+      chargebackPages: state.chargebackPages,
+    },
+  );
+
+  input.telemetry.setBoundarySummary({
+    kind: "start",
+    requestedLowerBound: start.toISOString(),
+    end: end.toISOString(),
+    lookbackStart: lookbackStart?.toISOString() ?? null,
+    oldestPendingAt: oldestPendingAt?.toISOString() ?? null,
+    rescanCapStart: rescanCapStart.toISOString(),
+    olderThanBoundaryItems,
+    olderThanBoundaryPages,
+  });
+  input.telemetry.setScanSummary({
+    transactionPages: state.transactionPages,
+    chargebackPages: state.chargebackPages,
+    processedTransactions: state.processedTransactions,
+    processedChargebacks: state.processedChargebacks,
+    oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+    newestSeenAt: newestSeenAt?.toISOString() ?? null,
+    deleteWindowApplied: cleanupApplied,
+    mode: "incremental",
+  });
+
+  try {
+    while (state.phase === "transactions") {
+      const transactionCursor = state.cursor;
+      const page = await app.onlyFansAdapter.getTransactionsPage(
+        input.requestContext,
+        input.platformAccountIdValue,
+        {
+          start,
+          end,
+          cursor: transactionCursor,
+          limit: 100,
+          pageIndex: state.transactionPages,
+        },
+      );
+
+      await persistRawPayload(app.db, {
+        platformAccountId: input.platformAccountId,
+        syncRunId: input.syncRunId,
+        endpoint: "onlymonster_transactions",
+        requestParams: {
+          start: start.toISOString(),
+          end: end.toISOString(),
+          cursor: transactionCursor,
+          limit: 100,
+        },
+        responsePayload: page.raw,
+        mapperVersion: ONLYMONSTER_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
+      }, {
+        action: "inserting onlymonster_transactions raw payload",
+      });
+
+      const pageOldestSeenAt = page.parsed.items.reduce<Date | null>(
+        (oldest, item) => minDate(oldest, new Date(item.timestamp)),
+        null,
+      );
+      const pageNewestSeenAt = page.parsed.items.reduce<Date | null>(
+        (latest, item) => maxDate(latest, new Date(item.timestamp)),
+        null,
+      );
+      oldestSeenAt = minDate(oldestSeenAt, pageOldestSeenAt);
+      newestSeenAt = maxDate(newestSeenAt, pageNewestSeenAt);
+
+      const olderItemsInPage = page.parsed.items.filter(
+        (item) => new Date(item.timestamp).getTime() < start.getTime(),
+      ).length;
+      olderThanBoundaryItems += olderItemsInPage;
+      if (olderItemsInPage > 0 && olderItemsInPage === page.parsed.items.length) {
+        olderThanBoundaryPages += 1;
+      }
+
+      const nextKeepTransactionIds = [
+        ...sourceTransactionIds,
+        ...page.parsed.items.map((item) => item.id),
+      ];
+      const nextState = buildOnlyFansIncrementalResumeState({
+        phase: page.parsed.cursor ? "transactions" : "chargebacks",
         start,
         end,
-        cursor: transactionCursor,
-        limit: 100,
-        pageIndex: transactionPageIndex,
-      },
-    );
-    transactionPages += 1;
+        cursor: page.parsed.cursor ?? null,
+        newestSeenAt,
+        oldestSeenAt,
+        dirtyFrom: minDate(state.dirtyFrom ? new Date(state.dirtyFrom) : null, pageOldestSeenAt),
+        processedTransactions: state.processedTransactions + page.parsed.items.length,
+        processedChargebacks: state.processedChargebacks,
+        transactionPages: state.transactionPages + 1,
+        chargebackPages: state.chargebackPages,
+        olderThanBoundaryItems,
+        olderThanBoundaryPages,
+        keepTransactionIds: nextKeepTransactionIds,
+      });
 
-    await persistRawPayload(app.db, {
-      platformAccountId: input.platformAccountId,
-      syncRunId: input.syncRunId,
-      endpoint: "onlymonster_transactions",
-      requestParams: {
-        start: start.toISOString(),
-        end: end.toISOString(),
-        cursor: transactionCursor,
-        limit: 100,
-      },
-      responsePayload: page.raw,
-      mapperVersion: ONLYMONSTER_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: "inserting onlymonster_transactions raw payload",
-    });
+      await app.db.transaction(async (tx) => {
+        const dbTx = tx as typeof app.db;
+        await upsertOnlyFansIncrementalTransactionsPage(dbTx, {
+          platformAccountId: input.platformAccountId,
+          commissionRate: input.commissionRate,
+        }, page.parsed.items);
+        await upsertCheckpointProgress(dbTx, {
+          platformAccountId: input.platformAccountId,
+          stream: "transactions",
+          state: nextState,
+        });
+      });
 
-    for (const item of page.parsed.items) {
-      fanPlatformIds.add(item.fan.id);
-      transactionsToUpsert.push(item);
-      sourceTransactionIds.add(item.id);
-      const occurredAt = new Date(item.timestamp);
+      for (const item of page.parsed.items) {
+        sourceTransactionIds.add(item.id);
+      }
+      state = nextState;
+      currentRunProcessedTransactions += page.parsed.items.length;
 
-      oldestSeenAt = minDate(oldestSeenAt, occurredAt);
-      newestSeenAt = maxDate(newestSeenAt, occurredAt);
+      if (input.budget.shouldYield()) {
+        state = await flushAndClearOnlyFansIncrementalDirtyRange(
+          app,
+          input.platformAccountId,
+          state,
+        );
+        input.telemetry.setScanSummary({
+          transactionPages: state.transactionPages,
+          chargebackPages: state.chargebackPages,
+          processedTransactions: state.processedTransactions,
+          processedChargebacks: state.processedChargebacks,
+          oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+          newestSeenAt: newestSeenAt?.toISOString() ?? null,
+          deleteWindowApplied: false,
+          mode: "incremental",
+        });
+        return {
+          satisfied: false,
+          yieldReason: input.budget.resolveYieldReason(),
+          processed: currentRunProcessedTransactions + currentRunProcessedChargebacks,
+          processedTransactions: currentRunProcessedTransactions,
+          processedChargebacks: currentRunProcessedChargebacks,
+          newestSeenAt: newestSeenAt ?? end,
+        };
+      }
     }
 
-    const olderItemsInPage = page.parsed.items.filter(
-      (item) => new Date(item.timestamp).getTime() < start.getTime(),
-    ).length;
-    olderThanBoundaryItems += olderItemsInPage;
-    if (olderItemsInPage > 0 && olderItemsInPage === page.parsed.items.length) {
-      olderThanBoundaryPages += 1;
-    }
+    while (true) {
+      const chargebackCursor = state.cursor;
+      const page = await app.onlyFansAdapter.getChargebacksPage(
+        input.requestContext,
+        input.platformAccountIdValue,
+        {
+          start,
+          end,
+          cursor: chargebackCursor,
+          limit: 100,
+          pageIndex: state.chargebackPages,
+        },
+      );
 
-    processedTransactions += page.parsed.items.length;
-    transactionCursor = page.parsed.cursor ?? null;
-    transactionPageIndex += 1;
-  } while (transactionCursor);
+      await persistRawPayload(app.db, {
+        platformAccountId: input.platformAccountId,
+        syncRunId: input.syncRunId,
+        endpoint: "onlymonster_chargebacks",
+        requestParams: {
+          start: start.toISOString(),
+          end: end.toISOString(),
+          cursor: chargebackCursor,
+          limit: 100,
+        },
+        responsePayload: page.raw,
+        mapperVersion: ONLYMONSTER_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
+      }, {
+        action: "inserting onlymonster_chargebacks raw payload",
+      });
 
-  let chargebackCursor: string | null = null;
-  let chargebackPageIndex = 0;
-  do {
-    const page = await app.onlyFansAdapter.getChargebacksPage(
-      input.requestContext,
-      input.platformAccountIdValue,
-      {
+      const pageOldestSeenAt = page.parsed.items.reduce<Date | null>(
+        (oldest, item) => minDate(oldest, new Date(item.chargeback_timestamp)),
+        null,
+      );
+      const pageNewestSeenAt = page.parsed.items.reduce<Date | null>(
+        (latest, item) => maxDate(latest, new Date(item.chargeback_timestamp)),
+        null,
+      );
+      oldestSeenAt = minDate(oldestSeenAt, pageOldestSeenAt);
+      newestSeenAt = maxDate(newestSeenAt, pageNewestSeenAt);
+
+      const olderItemsInPage = page.parsed.items.filter(
+        (item) => new Date(item.chargeback_timestamp).getTime() < start.getTime(),
+      ).length;
+      olderThanBoundaryItems += olderItemsInPage;
+      if (olderItemsInPage > 0 && olderItemsInPage === page.parsed.items.length) {
+        olderThanBoundaryPages += 1;
+      }
+
+      const nextKeepTransactionIds = [
+        ...sourceTransactionIds,
+        ...page.parsed.items.map((item) => item.id),
+      ];
+      const nextState = buildOnlyFansIncrementalResumeState({
+        phase: "chargebacks",
         start,
         end,
-        cursor: chargebackCursor,
-        limit: 100,
-        pageIndex: chargebackPageIndex,
-      },
+        cursor: page.parsed.cursor ?? null,
+        newestSeenAt,
+        oldestSeenAt,
+        dirtyFrom: minDate(state.dirtyFrom ? new Date(state.dirtyFrom) : null, pageOldestSeenAt),
+        processedTransactions: state.processedTransactions,
+        processedChargebacks: state.processedChargebacks + page.parsed.items.length,
+        transactionPages: state.transactionPages,
+        chargebackPages: state.chargebackPages + 1,
+        olderThanBoundaryItems,
+        olderThanBoundaryPages,
+        keepTransactionIds: nextKeepTransactionIds,
+      });
+
+      await app.db.transaction(async (tx) => {
+        const dbTx = tx as typeof app.db;
+        await upsertOnlyFansIncrementalChargebacksPage(dbTx, {
+          platformAccountId: input.platformAccountId,
+          commissionRate: input.commissionRate,
+        }, page.parsed.items);
+        await upsertCheckpointProgress(dbTx, {
+          platformAccountId: input.platformAccountId,
+          stream: "transactions",
+          state: nextState,
+        });
+      });
+
+      for (const item of page.parsed.items) {
+        sourceTransactionIds.add(item.id);
+      }
+      state = nextState;
+      currentRunProcessedChargebacks += page.parsed.items.length;
+
+      if (!page.parsed.cursor) {
+        break;
+      }
+
+      if (input.budget.shouldYield()) {
+        state = await flushAndClearOnlyFansIncrementalDirtyRange(
+          app,
+          input.platformAccountId,
+          state,
+        );
+        input.telemetry.setScanSummary({
+          transactionPages: state.transactionPages,
+          chargebackPages: state.chargebackPages,
+          processedTransactions: state.processedTransactions,
+          processedChargebacks: state.processedChargebacks,
+          oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+          newestSeenAt: newestSeenAt?.toISOString() ?? null,
+          deleteWindowApplied: false,
+          mode: "incremental",
+        });
+        return {
+          satisfied: false,
+          yieldReason: input.budget.resolveYieldReason(),
+          processed: currentRunProcessedTransactions + currentRunProcessedChargebacks,
+          processedTransactions: currentRunProcessedTransactions,
+          processedChargebacks: currentRunProcessedChargebacks,
+          newestSeenAt: newestSeenAt ?? end,
+        };
+      }
+    }
+  } catch (error) {
+    state = await flushAndClearOnlyFansIncrementalDirtyRange(
+      app,
+      input.platformAccountId,
+      state,
     );
-    chargebackPages += 1;
-
-    await persistRawPayload(app.db, {
-      platformAccountId: input.platformAccountId,
-      syncRunId: input.syncRunId,
-      endpoint: "onlymonster_chargebacks",
-      requestParams: {
-        start: start.toISOString(),
-        end: end.toISOString(),
-        cursor: chargebackCursor,
-        limit: 100,
-      },
-      responsePayload: page.raw,
-      mapperVersion: ONLYMONSTER_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: "inserting onlymonster_chargebacks raw payload",
-    });
-
-    for (const item of page.parsed.items) {
-      fanPlatformIds.add(item.fan.id);
-      chargebacksToUpsert.push(item);
-      sourceTransactionIds.add(item.id);
-      const occurredAt = new Date(item.chargeback_timestamp);
-
-      oldestSeenAt = minDate(oldestSeenAt, occurredAt);
-      newestSeenAt = maxDate(newestSeenAt, occurredAt);
-    }
-
-    const olderItemsInPage = page.parsed.items.filter(
-      (item) => new Date(item.chargeback_timestamp).getTime() < start.getTime(),
-    ).length;
-    olderThanBoundaryItems += olderItemsInPage;
-    if (olderItemsInPage > 0 && olderItemsInPage === page.parsed.items.length) {
-      olderThanBoundaryPages += 1;
-    }
-
-    processedChargebacks += page.parsed.items.length;
-    chargebackCursor = page.parsed.cursor ?? null;
-    chargebackPageIndex += 1;
-  } while (chargebackCursor);
+    throw error;
+  }
 
   let checkpointAfter = null;
   await app.db.transaction(async (tx) => {
-    const fans = await upsertFans(
-      tx as typeof app.db,
-      buildOnlyFansFanInputs(Array.from(fanPlatformIds)),
-    );
-    const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
-    await upsertFanPages(
-      tx as typeof app.db,
-      fans.map((fan) => ({
-        fanId: fan.id,
-        platformAccountId: input.platformAccountId,
-      })),
-    );
-
-    for (const item of transactionsToUpsert) {
-      const grossAmountMills = dollarsToMills(item.amount);
-      const creatorNetAmountMills = calculateNetMillsFromGross(
-        grossAmountMills,
-        input.commissionRate,
-      );
-
-      await upsertTransaction(tx as typeof app.db, {
-        platformAccountId: input.platformAccountId,
-        fanId: fanMap.get(item.fan.id) ?? null,
-        transactionId: item.id,
-        correlationAccountId: item.fan.id,
-        rawType: item.type,
-        canonicalType: mapOnlyMonsterTransactionType(item.type),
-        transactionState: mapOnlyMonsterTransactionState(item.status),
-        rawStatus: item.status,
-        grossAmountMills,
-        sourceDestinationAmountMills: grossAmountMills,
-        creatorNetAmountMills,
-        occurredAt: new Date(item.timestamp),
-      });
-    }
-
-    for (const item of chargebacksToUpsert) {
-      const grossAmountMills = -dollarsToMills(item.amount);
-      const creatorNetAmountMills = calculateNetMillsFromGross(
-        grossAmountMills,
-        input.commissionRate,
-      );
-
-      await upsertTransaction(tx as typeof app.db, {
-        platformAccountId: input.platformAccountId,
-        fanId: fanMap.get(item.fan.id) ?? null,
-        transactionId: item.id,
-        correlationAccountId: item.fan.id,
-        rawType: item.type,
-        canonicalType: "chargeback",
-        transactionState: mapOnlyMonsterTransactionState(item.status),
-        rawStatus: item.status,
-        grossAmountMills,
-        sourceDestinationAmountMills: grossAmountMills,
-        creatorNetAmountMills,
-        occurredAt: new Date(item.chargeback_timestamp),
-        sourceUpdatedAt: new Date(item.transaction_timestamp),
-      });
-    }
-
     cleanupApplied = true;
     await deleteTransactionsMissingFromWindow(tx as typeof app.db, {
       platformAccountId: input.platformAccountId,
@@ -572,11 +979,8 @@ async function syncOnlyFansTransactionsIncremental(
       cleanupMode: sourceTransactionIds.size > 0 ? "keep_set" : "authoritative_empty",
       keepTransactionIds: Array.from(sourceTransactionIds),
     });
-    const dirtyFrom = cleanupApplied ? start : oldestSeenAt;
-    if (dirtyFrom) {
-      await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId, dirtyFrom);
-      await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId, dirtyFrom);
-    }
+    await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId, start);
+    await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId, start);
 
     if (newestSeenAt) {
       checkpointAfter = await upsertCheckpoint(tx as typeof app.db, {
@@ -585,8 +989,8 @@ async function syncOnlyFansTransactionsIncremental(
         cursorTimestamp: newestSeenAt,
         state: {
           pageLabel: input.pageLabel,
-          processedTransactions,
-          processedChargebacks,
+          processedTransactions: state.processedTransactions,
+          processedChargebacks: state.processedChargebacks,
         },
         lastSuccessfulRunId: input.syncRunId,
       });
@@ -605,10 +1009,10 @@ async function syncOnlyFansTransactionsIncremental(
     olderThanBoundaryPages,
   });
   input.telemetry.setScanSummary({
-    transactionPages,
-    chargebackPages,
-    processedTransactions,
-    processedChargebacks,
+    transactionPages: state.transactionPages,
+    chargebackPages: state.chargebackPages,
+    processedTransactions: state.processedTransactions,
+    processedChargebacks: state.processedChargebacks,
     oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
     deleteWindowApplied: cleanupApplied,
@@ -650,7 +1054,7 @@ async function syncOnlyFansTransactionsIncremental(
     checkpoint?.cursorTimestamp &&
     newestSeenAt &&
     newestSeenAt.getTime() <= checkpoint.cursorTimestamp.getTime() &&
-    (processedTransactions + processedChargebacks) > 0
+    (state.processedTransactions + state.processedChargebacks) > 0
   ) {
     await input.telemetry.addAnomaly({
       code: "checkpoint_stalled",
@@ -688,9 +1092,9 @@ async function syncOnlyFansTransactionsIncremental(
   return {
     satisfied: true,
     yieldReason: null,
-    processed: processedTransactions + processedChargebacks,
-    processedTransactions,
-    processedChargebacks,
+    processed: currentRunProcessedTransactions + currentRunProcessedChargebacks,
+    processedTransactions: currentRunProcessedTransactions,
+    processedChargebacks: currentRunProcessedChargebacks,
     newestSeenAt: newestSeenAt ?? end,
   };
 }
@@ -1433,8 +1837,13 @@ export async function syncOnlyFansTransactions(
     );
   }
 
+  const incrementalState = parseOnlyFansIncrementalResumeState(checkpoint?.state);
+  if (incrementalState) {
+    return syncOnlyFansTransactionsIncremental(app, input, checkpoint, incrementalState);
+  }
+
   if (checkpoint?.cursorTimestamp) {
-    return syncOnlyFansTransactionsIncremental(app, input, checkpoint);
+    return syncOnlyFansTransactionsIncremental(app, input, checkpoint, null);
   }
 
   return syncOnlyFansTransactionsBackfill(app, input, null);

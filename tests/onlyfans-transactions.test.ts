@@ -817,6 +817,116 @@ describe("syncOnlyFansTransactions", () => {
     );
   });
 
+  it("yields and resumes incremental transaction scans with a persisted live cursor", async () => {
+    const firstAdapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")], "tx-cursor-1"),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    const firstResult = await runOnlyFansTransactionsSync({
+      adapter: firstAdapter,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: {},
+      },
+      budget: new SyncChunkBudget(1, 60_000),
+    });
+
+    expect(firstResult.satisfied).toBe(false);
+    expect(firstResult.yieldReason).toBe("request_budget");
+
+    const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)![1].state;
+    expect(yieldedState.mode).toBe("incremental");
+    expect(yieldedState.phase).toBe("transactions");
+    expect(yieldedState.cursor).toBe("tx-cursor-1");
+    expect(yieldedState.keepTransactionIds).toEqual(["tx-1"]);
+    expect(yieldedState.dirtyFrom).toBeNull();
+
+    const resumedAdapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-2", "2026-03-09T00:00:00.000Z")]),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    const resumedResult = await runOnlyFansTransactionsSync({
+      adapter: resumedAdapter,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: yieldedState,
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(resumedAdapter.getTransactionsPage.mock.calls[0]![2].cursor).toBe("tx-cursor-1");
+    expect(resumedResult.satisfied).toBe(true);
+    expect(dbMocks.deleteTransactionsMissingFromWindow).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        cleanupMode: "keep_set",
+        keepTransactionIds: ["tx-1", "tx-2"],
+      }),
+    );
+  });
+
+  it("yields and resumes incremental chargeback scans with a persisted live cursor", async () => {
+    const firstAdapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")]),
+      ],
+      chargebackPages: [
+        makeCursorPage([makeChargeback("cb-1", "2026-03-09T00:00:00.000Z")], "cb-cursor-1"),
+      ],
+    });
+
+    const firstResult = await runOnlyFansTransactionsSync({
+      adapter: firstAdapter,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: {},
+      },
+      budget: new SyncChunkBudget(2, 60_000),
+    });
+
+    expect(firstResult.satisfied).toBe(false);
+    expect(firstResult.yieldReason).toBe("request_budget");
+
+    const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)![1].state;
+    expect(yieldedState.mode).toBe("incremental");
+    expect(yieldedState.phase).toBe("chargebacks");
+    expect(yieldedState.cursor).toBe("cb-cursor-1");
+    expect(yieldedState.keepTransactionIds).toEqual(["tx-1", "cb-1"]);
+    expect(yieldedState.dirtyFrom).toBeNull();
+
+    const resumedAdapter = createAdapter({
+      transactionPages: [makeCursorPage([])],
+      chargebackPages: [
+        makeCursorPage([makeChargeback("cb-2", "2026-03-08T00:00:00.000Z")]),
+      ],
+    });
+
+    const resumedResult = await runOnlyFansTransactionsSync({
+      adapter: resumedAdapter,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: yieldedState,
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(resumedAdapter.getChargebacksPage.mock.calls[0]![2].cursor).toBe("cb-cursor-1");
+    expect(resumedResult.satisfied).toBe(true);
+    expect(dbMocks.deleteTransactionsMissingFromWindow).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        cleanupMode: "keep_set",
+        keepTransactionIds: ["tx-1", "cb-1", "cb-2"],
+      }),
+    );
+  });
+
   it("rejects manual rescans while an incomplete backfill exists", async () => {
     await expect(runOnlyFansTransactionsSync({
       checkpoint: {
