@@ -112,6 +112,25 @@ describe("money helpers", () => {
     });
   });
 
+  it("treats same-day custom ranges as a single inclusive day", () => {
+    const now = new Date("2026-03-09T12:00:00.000Z");
+    const bounds = resolveRevenuePeriodBoundsForPlatform("fansly", "custom", now, {
+      from: "2026-03-09",
+      to: "2026-03-09",
+    });
+    const businessRange = resolveBusinessDateRangeForPlatform("fansly", "custom", now, {
+      from: "2026-03-09",
+      to: "2026-03-09",
+    });
+
+    expect(bounds.from?.toISOString()).toBe("2026-03-09T00:00:00.000Z");
+    expect(bounds.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(businessRange).toEqual({
+      from: "2026-03-09",
+      toExclusive: "2026-03-10",
+    });
+  });
+
   it("keeps UTC today revenue windows unchanged", () => {
     const now = new Date("2026-03-09T12:00:00.000Z");
     const today = resolveRevenuePeriodBoundsForPlatform("fansly", "today", now);

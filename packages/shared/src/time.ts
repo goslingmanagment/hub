@@ -228,6 +228,16 @@ export function businessDateToUtcStart(value: string, timeZone = MOSCOW_TIME_ZON
   return zonedDateTimeToUtc({ year, month, day }, timeZone);
 }
 
+function nextBusinessDateParts(value: string) {
+  const { year, month, day } = parseBusinessDate(value);
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  return {
+    year: next.getUTCFullYear(),
+    month: next.getUTCMonth() + 1,
+    day: next.getUTCDate(),
+  };
+}
+
 function resolveCustomPeriodBounds(
   custom: { from: string; to: string },
   timeZone: string,
@@ -242,9 +252,13 @@ function resolveCustomPeriodBounds(
     { year: fromYear, month: fromMonth, day: fromDay },
     timeZone,
   );
-  // Custom ranges already use an exclusive upper bound: [from, to).
+  const exclusiveToParts = custom.from === custom.to
+    ? nextBusinessDateParts(custom.to)
+    : { year: toYear, month: toMonth, day: toDay };
+  // Custom ranges use an exclusive upper bound: [from, to). Same-day ranges
+  // advance the upper bound to cover that single calendar day.
   const to = zonedDateTimeToUtc(
-    { year: toYear, month: toMonth, day: toDay },
+    exclusiveToParts,
     timeZone,
   );
 
