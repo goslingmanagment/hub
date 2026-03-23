@@ -5,6 +5,7 @@ import { Badge } from "@/components/shared/Badge";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
+import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
 import { resolveFanLabel } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime } from "@/lib/format";
 
@@ -98,6 +99,12 @@ export function FollowersPage() {
             {items.map((follower) => {
               const recentFollow = isNew24h(follower.followedAt);
               const fanLabel = resolveFanLabel(follower);
+              const fanNavigation = buildFanProfileNavigation(
+                pageLabel!,
+                platform,
+                follower.platformUserId,
+                buildPageSectionRoute(pageLabel!, "followers"),
+              );
 
               return (
                 <tr
@@ -107,7 +114,8 @@ export function FollowersPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <Link
-                        to={`/pages/${pageLabel}/fans/${platform}/${follower.platformUserId}`}
+                        to={fanNavigation.to}
+                        state={fanNavigation.state}
                         className="text-[15px] font-semibold text-text-primary hover:text-accent"
                       >
                         {fanLabel.label}

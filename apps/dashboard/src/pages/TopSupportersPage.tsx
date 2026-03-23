@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router";
 import { useSpenders, useSpenderBatch } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
+import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
 import { usePeriodStore } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
 import { formatRelativeTime } from "@/lib/format";
@@ -180,11 +181,17 @@ export function TopSupportersPage() {
               const isInactive = lastActive
                 ? Date.now() - new Date(lastActive).getTime() > FOURTEEN_DAYS_MS
                 : false;
+              const fanNavigation = buildFanProfileNavigation(
+                pageLabel!,
+                platform!,
+                item.fan.platformUserId,
+                buildPageSectionRoute(pageLabel!, "top-supporters"),
+              );
 
               return (
                 <tr
                   key={item.fan.platformUserId}
-                  onClick={() => navigate(`/pages/${pageLabel}/fans/${platform}/${item.fan.platformUserId}`)}
+                  onClick={() => navigate(fanNavigation.to, { state: fanNavigation.state })}
                   className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
                 >
                   <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">

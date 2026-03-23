@@ -15,6 +15,7 @@ import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
 import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
+import { buildFanProfileNavigation, buildPageRoute } from "@/lib/navigation";
 import { usePeriodStore } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
 import {
@@ -267,15 +268,17 @@ export function PageDetailPage() {
               const days = item.endsAt ? daysRemaining(item.endsAt) : null;
               const fanLabel = resolveFanLabel(item);
               const isNew = isRecent(item.startedAt);
+              const fanNavigation = buildFanProfileNavigation(
+                pageLabel!,
+                page.platform,
+                item.platformUserId,
+                buildPageRoute(pageLabel!),
+              );
 
               return (
                 <tr
                   key={item.platformSubscriptionId}
-                  onClick={() =>
-                    navigate(
-                      `/pages/${pageLabel}/fans/${page.platform}/${item.platformUserId}`,
-                    )
-                  }
+                  onClick={() => navigate(fanNavigation.to, { state: fanNavigation.state })}
                   className="cursor-pointer hover:bg-hover-alt transition-colors"
                 >
                   <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
@@ -459,11 +462,17 @@ export function PageDetailPage() {
               {(spenders?.items ?? []).map((item, index) => {
                 const windowMetrics = item.metrics.window;
                 const fanLabel = resolveFanLabel(item.fan);
+                const fanNavigation = buildFanProfileNavigation(
+                  pageLabel!,
+                  page.platform,
+                  item.fan.platformUserId,
+                  buildPageRoute(pageLabel!),
+                );
 
                 return (
                   <tr
                     key={item.fan.platformUserId}
-                    onClick={() => navigate(`/pages/${pageLabel}/fans/${page.platform}/${item.fan.platformUserId}`)}
+                    onClick={() => navigate(fanNavigation.to, { state: fanNavigation.state })}
                     className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
                   >
                     <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">

@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { useState } from "react";
 import { ArrowLeft, ChevronDown } from "lucide-react";
 import {
@@ -18,11 +18,13 @@ import { formatDate, formatDateTime, transactionTypeLabel } from "@/lib/format";
 import { usePeriodStore } from "@/stores/periodStore";
 import { toast } from "sonner";
 import { TRANSACTION_STATE_COLORS } from "@/lib/constants";
+import { resolveFanProfileBackTarget } from "@/lib/navigation";
 
 const PAGE_SIZE = 50;
 
 export function FanProfilePage() {
   const { pageLabel, platform, platformUserId } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const [txOffset, setTxOffset] = useState(0);
   const [noteBody, setNoteBody] = useState("");
@@ -66,6 +68,7 @@ export function FanProfilePage() {
 
   const { fan, page } = data;
   const fanLabel = resolveFanLabel(fan);
+  const backTo = resolveFanProfileBackTarget(location.state, pageLabel);
 
   // Type breakdown from spender detail
   const typeBreakdown = spenderDetail?.typeBreakdown ?? [];
@@ -150,7 +153,7 @@ export function FanProfilePage() {
       {/* Back button */}
       <button
         type="button"
-        onClick={() => navigate(-1)}
+        onClick={() => navigate(backTo)}
         className="mb-4 flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-text-secondary transition-colors hover:bg-hover hover:text-text-primary"
       >
         <ArrowLeft size={14} />

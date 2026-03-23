@@ -6,6 +6,7 @@ import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { SearchInput } from "@/components/shared/SearchInput";
+import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
 import { resolveFanLabel } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, daysRemaining, formatUsdFromCents } from "@/lib/format";
 
@@ -106,6 +107,12 @@ export function SubscribersPage() {
               const days = sub.endsAt ? daysRemaining(sub.endsAt) : null;
               const isNew = isNewWithin24Hours(sub.startedAt);
               const fanLabel = resolveFanLabel(sub);
+              const fanNavigation = buildFanProfileNavigation(
+                pageLabel!,
+                platform,
+                sub.platformUserId,
+                buildPageSectionRoute(pageLabel!, "subscribers"),
+              );
 
               return (
                 <tr
@@ -115,7 +122,8 @@ export function SubscribersPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <Link
-                        to={`/pages/${pageLabel}/fans/${platform}/${sub.platformUserId}`}
+                        to={fanNavigation.to}
+                        state={fanNavigation.state}
                         className="text-[15px] font-semibold text-text-primary hover:text-accent"
                       >
                         {fanLabel.label}
