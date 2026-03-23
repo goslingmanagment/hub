@@ -206,12 +206,19 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
   };
 }
 
-function sessionCookieFrom(response: { headers: Record<string, string | string[] | number | undefined> }) {
+function setCookieHeaderFrom(response: {
+  headers: Record<string, string | string[] | number | undefined>;
+}) {
   const header = response.headers["set-cookie"];
   const value = Array.isArray(header) ? header[0] : header;
   if (!value || typeof value !== "string") {
     throw new Error("Expected set-cookie header");
   }
+  return value;
+}
+
+function sessionCookieFrom(response: { headers: Record<string, string | string[] | number | undefined> }) {
+  const value = setCookieHeaderFrom(response);
   return value.split(";")[0]!;
 }
 
@@ -1429,6 +1436,7 @@ describe("api integration", () => {
     });
     expect(login.statusCode).toBe(200);
     expect(login.cookies.find((cookie) => cookie.name === SESSION_COOKIE_NAME)?.value).toBeTruthy();
+    expect(setCookieHeaderFrom(login)).not.toContain("Secure");
     expect(login.json()).toMatchObject({
       authMethod: "session",
       user: {
@@ -1597,6 +1605,44 @@ describe("api integration", () => {
       },
     });
     expect(newPassword.statusCode).toBe(200);
+  });
+
+  it("marks the login cookie Secure for trusted https proxy requests", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const appContext = createTestAppContext(testDb, {
+      trustProxy: true,
+    });
+    await createUserAccount(appContext, {
+      username: "proxy-owner",
+      role: "owner",
+      password: "proxy-secret",
+    }, { source: "cli" });
+
+    const proxyServer = await buildApiServer(appContext);
+    await proxyServer.ready();
+
+    try {
+      const login = await proxyServer.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        headers: {
+          "x-forwarded-proto": "https",
+        },
+        payload: {
+          username: "proxy-owner",
+          password: "proxy-secret",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+      expect(setCookieHeaderFrom(login)).toContain("Secure");
+    } finally {
+      await proxyServer.close();
+    }
   });
 
   it("scopes chatter API keys to assigned pages", async (context) => {

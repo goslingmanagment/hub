@@ -37,6 +37,7 @@ const bootstrapMocks = vi.hoisted(() => {
       logLevel: "silent",
       apiHost: "0.0.0.0",
       apiPort: 3000,
+      trustProxy: false,
       sessionTtlDays: 30,
       fanslyBaseUrl: "https://example.invalid",
       onlyMonsterBaseUrl: "https://example.invalid",

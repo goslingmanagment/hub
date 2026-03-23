@@ -30,6 +30,16 @@ describe("config", () => {
     expect(config.fanslyDmMessagesDelayMs).toBe(7500);
     expect(config.onlyFansDefaultDelayMs).toBe(1000);
     expect(config.syncPageExecutorConcurrency).toBe(4);
+    expect(config.trustProxy).toBe(false);
+  });
+
+  it("accepts an explicit trust proxy override", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      TRUST_PROXY: "true",
+    });
+
+    expect(config.trustProxy).toBe(true);
   });
 
   it("accepts explicit Fansly DM delay overrides", () => {

@@ -28,6 +28,20 @@ const optionalTelegramHourSchema = z.preprocess((value) => {
   return value;
 }, z.coerce.number().int().min(0).max(23).optional());
 
+const booleanSchema = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+
+  return value;
+}, z.boolean());
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   APP_ENCRYPTION_KEY: z.string().min(1),
@@ -36,6 +50,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default("info"),
   API_HOST: z.string().default("0.0.0.0"),
   API_PORT: z.coerce.number().int().positive().default(3000),
+  TRUST_PROXY: booleanSchema.default(false),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
   ONLYMONSTER_BASE_URL: z.string().url().default("https://omapi.onlymonster.ai"),
@@ -47,19 +62,7 @@ const envSchema = z.object({
   FANSLY_DM_CONVERSATIONS_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(7500),
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
-  SYNC_SHARED_RATE_LIMIT_ENABLED: z.preprocess((value) => {
-    if (typeof value === "string") {
-      const normalized = value.trim().toLowerCase();
-      if (normalized === "true") {
-        return true;
-      }
-      if (normalized === "false") {
-        return false;
-      }
-    }
-
-    return value;
-  }, z.boolean().default(false)),
+  SYNC_SHARED_RATE_LIMIT_ENABLED: booleanSchema.default(false),
   SYNC_PAGE_EXECUTOR_CONCURRENCY: z.coerce.number().int().positive().default(4),
   TRANSACTION_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
   TRANSACTION_RESCAN_CAP_DAYS: z.coerce.number().int().positive().default(30),
@@ -79,6 +82,7 @@ export interface AppConfig {
   logLevel: string;
   apiHost: string;
   apiPort: number;
+  trustProxy: boolean;
   sessionTtlDays: number;
   fanslyBaseUrl: string;
   onlyMonsterBaseUrl: string;
@@ -149,6 +153,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     logLevel: parsed.LOG_LEVEL,
     apiHost: parsed.API_HOST,
     apiPort: parsed.API_PORT,
+    trustProxy: parsed.TRUST_PROXY,
     sessionTtlDays: parsed.SESSION_TTL_DAYS,
     fanslyBaseUrl: parsed.FANSLY_BASE_URL,
     onlyMonsterBaseUrl: parsed.ONLYMONSTER_BASE_URL,

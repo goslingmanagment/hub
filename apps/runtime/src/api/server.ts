@@ -150,10 +150,6 @@ declare module "fastify" {
   }
 }
 
-function isProduction() {
-  return process.env.NODE_ENV === "production";
-}
-
 function pageScopeFor(principal: AuthPrincipal) {
   return principal.user.role === "owner" ? undefined : principal.assignedPageIds;
 }
@@ -164,7 +160,7 @@ function applyCookie(reply: {
   reply.setCookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: isProduction(),
+    secure: "auto",
     path: "/",
     expires: new Date(Date.now() + appContext.config.sessionTtlDays * 24 * 60 * 60 * 1000),
   });
@@ -201,6 +197,7 @@ function toNumber(value: number | string | bigint) {
 export async function buildApiServer(appContext: AppContext) {
   const server = Fastify({
     loggerInstance: appContext.logger ?? createLogger(appContext.config.logLevel),
+    trustProxy: appContext.config.trustProxy,
   }).withTypeProvider<ZodTypeProvider>();
 
   server.setValidatorCompiler(validatorCompiler);

@@ -19,6 +19,7 @@ export function createTestAppContext(
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
     syncSharedRateLimitEnabled?: boolean;
+    trustProxy?: boolean;
   },
 ) {
   const encryptionKey = overrides?.encryptionKey ?? Buffer.alloc(32, 7);
@@ -40,6 +41,7 @@ export function createTestAppContext(
       logLevel: "silent",
       apiHost: "0.0.0.0",
       apiPort: 3000,
+      trustProxy: overrides?.trustProxy ?? false,
       sessionTtlDays: overrides?.sessionTtlDays ?? 30,
       fanslyBaseUrl: "https://example.invalid",
       onlyMonsterBaseUrl: "https://example.invalid",

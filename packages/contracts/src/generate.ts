@@ -18,6 +18,7 @@ async function main() {
       logLevel: "silent",
       apiHost: "0.0.0.0",
       apiPort: 3000,
+      trustProxy: false,
       sessionTtlDays: 30,
       fanslyBaseUrl: "https://apiv3.fansly.com/api/v1",
       onlyMonsterBaseUrl: "https://omapi.onlymonster.ai",
