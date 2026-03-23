@@ -200,7 +200,7 @@ function isLegacyOnlyFansTransactionBackfillState(value: unknown) {
     Number.isInteger(value.windowPageCount) &&
     value.windowPageCount >= 0;
 
-  return !windowEndValid || !windowPageCountValid || typeof value.cursor === "string";
+  return !windowEndValid || !windowPageCountValid;
 }
 
 function upgradeOnlyFansBackfillState(

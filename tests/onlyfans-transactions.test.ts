@@ -440,6 +440,44 @@ describe("syncOnlyFansTransactions", () => {
     expect(result.satisfied).toBe(true);
   });
 
+  it("preserves current transaction backfill cursors when modern window state is present", async () => {
+    const adapter = createAdapter({
+      transactionPages: [makeCursorPage([])],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    await runOnlyFansTransactionsSync({
+      adapter,
+      checkpoint: {
+        state: {
+          mode: "backfill",
+          completed: false,
+          provider: "onlyfans",
+          phase: "transactions",
+          snapshotEnd: "2026-03-15T00:00:00.000Z",
+          newestSeenAt: "2026-03-12T00:00:00.000Z",
+          oldestSeenAt: "2026-03-09T00:00:00.000Z",
+          dirtyFrom: "2026-03-09T00:00:00.000Z",
+          processedTransactions: 250,
+          processedChargebacks: 0,
+          transactionPages: 5,
+          chargebackPages: 0,
+          start: "2026-03-01T00:00:00.000Z",
+          fallbackStartUsed: false,
+          cursor: "live-cursor",
+          windowEnd: "2026-03-11T00:00:00.000Z",
+          windowPageCount: 2,
+          emptyWindowCount: 0,
+        },
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    const firstRequest = adapter.getTransactionsPage.mock.calls[0]![2];
+    expect(firstRequest.cursor).toBe("live-cursor");
+    expect(firstRequest.end!.toISOString()).toBe("2026-03-11T00:00:00.000Z");
+  });
+
   it("persists a cursorless transition into chargebacks and finalizes the checkpoint", async () => {
     const adapter = createAdapter({
       transactionPages: [
