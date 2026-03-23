@@ -11,22 +11,21 @@ None.
 
 ## P2 — Backlog
 
-- [ ] ERROR-HANDLING-003: `adminVerifyPage` wraps all failures as `400 Bad Request`, including unexpected server-side errors. File: `apps/runtime/src/api/server.ts:1600-1626`. Fix: only convert domain validation and credential errors into 400s; let unexpected failures propagate as 500s.
-- [ ] ERROR-HANDLING-004: Failed-login audit writes can still turn a normal bad-password path into a `500` instead of a `401`. File: `apps/runtime/src/services/auth.ts:423-440`. Fix: make failed-login auditing best-effort, or defer it so an audit insert failure cannot replace the intended auth response.
-- [ ] FRONTEND-005: `ChatPreviewPanel` still renders the generic empty state when the preview request fails. File: `apps/dashboard/src/components/page/crm/ChatPreviewPanel.tsx:12-29`. Fix: handle `isError` explicitly so a failed preview load is distinguishable from a genuinely empty conversation.
-- [ ] FRONTEND-006: `DbStatsPage` labels its first migration column "Name", but renders a hash prefix instead. File: `apps/dashboard/src/pages/dev/DbStatsPage.tsx:90-120`, `packages/contracts/src/routes.ts:1605-1613`, `apps/runtime/src/api/server.ts:1748-1759`. Fix: either rename the column to match the actual data, or extend the API to return a real migration name instead of duplicating hash-like identifiers.
-- [ ] FRONTEND-007: `FanProfilePage` still uses `navigate(-1)` for Back navigation. File: `apps/dashboard/src/pages/FanProfilePage.tsx:151-154`. Fix: use a route-aware fallback so direct-entry pages stay inside the app instead of depending on browser history state.
-- [ ] PERFORMANCE-010: `listCrmRetention` still executes the same heavy retention CTE three times for total, counts, and rows. File: `packages/db/src/repositories/crm.ts:912-983`. Fix: materialize `filtered` once or return counts and rows from a single query path instead of recomputing the full CTE for each result shape.
-- [ ] RELIABILITY-016: Same-day custom ranges still silently become a zero-width `[from, from)` window. File: `packages/shared/src/time.ts:231-251`. Fix: treat same-day custom ranges as an inclusive single day, or reject them explicitly instead of returning an empty window silently.
-- [ ] RELIABILITY-018: Telegram sends still have no explicit timeout or bounded retry policy. File: `apps/runtime/src/services/telegram.ts:81-125`. Fix: wrap `fetch` with an `AbortSignal` timeout and a small retry policy so hung Telegram calls cannot block requests or worker jobs indefinitely.
-- [ ] RELIABILITY-020: Unknown transaction types still fall through to `other` without any warning or telemetry. File: `packages/fansly/src/mappers.ts:30-34`, `packages/onlyfans/src/mappers.ts:5-20`. Fix: emit a warning log or sync telemetry event whenever an unmapped raw transaction type falls through.
-- [ ] API-CORRECTNESS-008: Search endpoints still treat `%` and `_` inside user queries as SQL wildcards. File: `packages/db/src/repositories/crm.ts:85-88`, `packages/db/src/repositories/reporting.ts:351-363`, `packages/db/src/repositories/spenders.ts:1017-1032`. Fix: escape `%` and `_` before building `ILIKE` patterns and use consistent `ESCAPE '\\'` semantics across the affected queries.
-- [ ] CONFIGURATION-009: `drizzle.config.ts` still passes an empty string when `DATABASE_URL` is missing, which fails late and unclearly. File: `packages/db/drizzle.config.ts:3-9`. Fix: throw a clear configuration error before invoking drizzle-kit when `DATABASE_URL` is unset.
-- [ ] TEST-GAPS-002: Integration suites allow 30s container startup in the helper, but still rely on Vitest's shorter default hook budget. File: `tests/helpers/db.ts:11-13`, `vitest.config.ts:18-24`, `tests/api.integration.test.ts:3-58`. Fix: raise hook and test timeouts to match the Testcontainers startup budget used by the integration harness.
-- [ ] TEST-GAPS-003: `listenOnLoopback()` still calls `removeAllListeners("error")` on the shared server. File: `tests/helpers/network.ts:10-15`. Fix: remove only the helper's own one-shot error listener instead of clearing unrelated listeners from the server instance.
-
 ## Done
 
+- [x] ERROR-HANDLING-003: Fixed `adminVerifyPage` so unexpected failures propagate instead of being collapsed into `400 Bad Request`. Commit: `8e2cd555f82b`.
+- [x] ERROR-HANDLING-004: Fixed failed-login auditing so audit write failures no longer replace the intended `401`. Commit: `8c36fe3a0445`.
+- [x] FRONTEND-005: Fixed `ChatPreviewPanel` so preview load failures render an explicit error state. Commit: `b883a2915af2`.
+- [x] FRONTEND-006: Fixed `DbStatsPage` so the migration hash prefix column is labeled accurately. Commit: `b7a260062d5c`.
+- [x] FRONTEND-007: Fixed `FanProfilePage` Back navigation so direct-entry pages stay inside the app. Commit: `2ebf5ddbbc8c`.
+- [x] PERFORMANCE-010: Fixed `listCrmRetention` so total, touchpoint counts, and rows come from one query path. Commit: `a4a4c74505f0`.
+- [x] RELIABILITY-016: Fixed same-day custom ranges so they resolve to an inclusive single day. Commit: `f3ee5c275f19`.
+- [x] RELIABILITY-018: Fixed Telegram sends with a bounded timeout and retry policy. Commit: `b9764e9956d2`.
+- [x] RELIABILITY-020: Fixed unmapped transaction types so they emit warning logs and telemetry anomalies. Commit: `57781eb8a983`.
+- [x] API-CORRECTNESS-008: Fixed search queries so `%` and `_` are treated literally with escaped `ILIKE` patterns. Commit: `3a9dff6eb252`.
+- [x] CONFIGURATION-009: Fixed `drizzle.config.ts` so missing `DATABASE_URL` fails fast with a clear configuration error. Commit: `a99d6ec4fd15`.
+- [x] TEST-GAPS-002: Fixed integration test budgets so Vitest hook and test timeouts match the 30s container startup budget. Commit: `5dd5995d54b3`.
+- [x] TEST-GAPS-003: Fixed `listenOnLoopback()` so it removes only its own bind-time error listener. Commit: `670228b78d44`.
 - [x] CONCURRENCY-002: Fixed the `openNotificationIncident` race so concurrent callers no longer fail each other. Commit: `77b48c38593b`.
 - [x] RELIABILITY-001: Fixed sync job completion ordering so continuation wakeup failures no longer strand execution. Commit: `1e4caf5d3622`.
 - [x] API-CORRECTNESS-002: Fixed credentials updates so stored proxies can be cleared. Commit: `4e778a2d42e4`.
