@@ -108,6 +108,19 @@ describe("config", () => {
     expect(config.telegramReportHourUtc).toBe(9);
   });
 
+  it("treats blank optional sync env values as unset", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      SYNC_HTTP_TRACE_FILE: "   ",
+      FANSLY_DEFAULT_DELAY_MS: "",
+      FANSLY_GLOBAL_DELAY_MS: " ",
+      FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "",
+    });
+
+    expect(config.syncHttpTraceFile).toBeNull();
+    expect(config.fanslyDefaultDelayMs).toBe(2500);
+  });
+
   it("accepts an explicit Telegram report hour", () => {
     const config = loadConfig({
       ...baseEnv,

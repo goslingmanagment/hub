@@ -1,13 +1,9 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type { Pool } from "pg";
 
-const DEFAULT_MIGRATIONS_DIR = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../migrations",
-);
+const DEFAULT_MIGRATIONS_DIR = path.resolve(process.cwd(), "packages/db/migrations");
 
 type ColumnShapeRow = {
   data_type: string;

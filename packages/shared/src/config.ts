@@ -10,6 +10,15 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
   return value;
 }, z.string().min(1).optional());
 
+const optionalPositiveIntSchema = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  return value;
+}, z.coerce.number().int().positive().optional());
+
 const optionalTelegramHourSchema = z.preprocess((value) => {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -30,10 +39,10 @@ const envSchema = z.object({
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
   ONLYMONSTER_BASE_URL: z.string().url().default("https://omapi.onlymonster.ai"),
-  SYNC_HTTP_TRACE_FILE: z.string().min(1).optional(),
-  FANSLY_DEFAULT_DELAY_MS: z.coerce.number().int().positive().optional(),
-  FANSLY_GLOBAL_DELAY_MS: z.coerce.number().int().positive().optional(),
-  FANSLY_ACCOUNT_LOOKUP_DELAY_MS: z.coerce.number().int().positive().optional(),
+  SYNC_HTTP_TRACE_FILE: optionalTrimmedStringSchema,
+  FANSLY_DEFAULT_DELAY_MS: optionalPositiveIntSchema,
+  FANSLY_GLOBAL_DELAY_MS: optionalPositiveIntSchema,
+  FANSLY_ACCOUNT_LOOKUP_DELAY_MS: optionalPositiveIntSchema,
   FOLLOWER_PAGE_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_CONVERSATIONS_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(7500),

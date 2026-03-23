@@ -40,7 +40,7 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   TELEGRAM_DAILY_REPORT_QUEUE: "telegram.daily-report",
 }));
 
-import { startWorkerServices } from "../apps/runtime/src/worker.ts";
+import { startWorkerServices } from "../apps/runtime/src/worker-services.ts";
 
 describe("worker startup", () => {
   beforeEach(() => {

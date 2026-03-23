@@ -1,9 +1,9 @@
 import { createPool } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
 
-import { runMigrations } from "../../../packages/db/src/migrate.ts";
-import { main as runApi } from "./api.ts";
-import { main as runWorker } from "./worker.ts";
+import { runMigrations } from "../../../packages/db/src/migrate-runner.ts";
+import { runApiRuntime } from "./api-runtime.ts";
+import { runWorkerRuntime } from "./worker-runtime.ts";
 
 const MIGRATION_LOCK_KEY_1 = 31415;
 const MIGRATION_LOCK_KEY_2 = 27182;
@@ -20,6 +20,7 @@ async function runStartupMigrations() {
     ]);
     await runMigrations({
       databaseUrl: config.databaseUrl,
+      db: client,
     });
   } finally {
     await client.query("select pg_advisory_unlock($1, $2)", [
@@ -45,11 +46,11 @@ export async function main() {
   await runStartupMigrations();
 
   if (role === "api") {
-    await runApi();
+    await runApiRuntime();
     return;
   }
 
-  await runWorker();
+  await runWorkerRuntime();
 }
 
 main().catch((error) => {

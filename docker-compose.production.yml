@@ -55,7 +55,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "import('pg').then(async ({ Client }) => { const client = new Client({ connectionString: process.env.DATABASE_URL }); await client.connect(); await client.query('select 1'); await client.end(); }).catch(() => process.exit(1));",
+          "const { Client } = require('./apps/runtime/node_modules/pg'); const client = new Client({ connectionString: process.env.DATABASE_URL }); client.connect().then(() => client.query('select 1')).then(() => client.end()).catch((error) => { console.error(error); process.exit(1); });",
         ]
       interval: 30s
       timeout: 5s

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(rootDir, "..");
 const execFileAsync = promisify(execFile);
-const esbuildBin = path.join(workspaceRoot, "node_modules/.bin/esbuild");
+const pnpmBin = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 const workspaceAliases = {
   "@agency_hub_core/contracts": path.join(workspaceRoot, "packages/contracts/src/index.ts"),
@@ -48,12 +48,12 @@ async function cleanDist(relativePath) {
 
 async function buildPackage(packageDir, entryPoints, options = {}) {
   const args = [
-    ...Object.values(entryPoints),
+    ...Object.values(entryPoints).map((entryPoint) => path.join(workspaceRoot, entryPoint)),
     "--bundle",
     "--entry-names=[name]",
     "--format=esm",
     "--log-level=info",
-    `--outdir=${packageDir}`,
+    `--outdir=${path.join(workspaceRoot, packageDir)}`,
     `--platform=${options.platform ?? "node"}`,
     `--target=${options.target ?? "node22"}`,
   ];
@@ -66,7 +66,11 @@ async function buildPackage(packageDir, entryPoints, options = {}) {
     args.push(`--external:${externalPackage}`);
   }
 
-  const { stdout, stderr } = await execFileAsync(esbuildBin, args, {
+  const { stdout, stderr } = await execFileAsync(pnpmBin, [
+    "exec",
+    "esbuild",
+    ...args,
+  ], {
     cwd: workspaceRoot,
   });
 
