@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { defineConfig } from "vitest/config";
+import { INTEGRATION_TEST_TIMEOUT_MS } from "./tests/helpers/timeouts.ts";
 
 export default defineConfig({
   resolve: {
@@ -18,6 +19,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    hookTimeout: INTEGRATION_TEST_TIMEOUT_MS,
+    testTimeout: INTEGRATION_TEST_TIMEOUT_MS,
     coverage: {
       reporter: ["text", "lcov"],
     },

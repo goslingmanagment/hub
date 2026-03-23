@@ -7,10 +7,10 @@ import { createLogger, encryptJson, type FanslySessionBundle } from "@agency_hub
 import { GenericContainer } from "testcontainers";
 
 import { acquireTestPrerequisite } from "./prerequisites.ts";
+import { INTEGRATION_TEST_TIMEOUT_MS } from "./timeouts.ts";
 
 const DATABASE_READY_TIMEOUT_MS = 10_000;
 const DATABASE_READY_POLL_MS = 100;
-const CONTAINER_STARTUP_TIMEOUT_MS = 30_000;
 
 async function waitForDatabaseReady(pool: ReturnType<typeof createPool>) {
   const deadline = Date.now() + DATABASE_READY_TIMEOUT_MS;
@@ -41,7 +41,7 @@ export async function startTestDatabase(input?: {
       POSTGRES_USER: "postgres",
       POSTGRES_PASSWORD: "postgres",
     })
-    .withStartupTimeout(CONTAINER_STARTUP_TIMEOUT_MS)
+    .withStartupTimeout(INTEGRATION_TEST_TIMEOUT_MS)
     .withExposedPorts(5432)
     .start();
   const connectionString = `postgres://postgres:postgres@${container.getHost()}:${container.getMappedPort(5432)}/testdb`;
