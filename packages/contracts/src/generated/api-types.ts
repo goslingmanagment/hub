@@ -5144,7 +5144,7 @@ export interface paths {
                     "application/json": {
                         username: string;
                         /** @enum {string} */
-                        role: "owner" | "team_lead" | "chatter" | "content_manager";
+                        role: "owner" | "team_lead" | "chatter";
                         password?: string;
                     };
                 };

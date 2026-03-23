@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
-import type { AdminCreateUserBody, AuthUser, ConnectionItem, VerifyCredentialsBody } from "@agency_hub_core/contracts";
-import { userRoles } from "@agency_hub_core/shared";
+import type { AdminCreateUserBody, ConnectionItem, VerifyCredentialsBody } from "@agency_hub_core/contracts";
+import { creatableUserRoles } from "@agency_hub_core/shared";
 import {
   useAdminConnections,
   useAdminCreateUser,
@@ -497,7 +497,7 @@ function CredentialsModal({
 function CreateUserModal({ onClose }: { onClose: () => void }) {
   const createUser = useAdminCreateUser();
   const [username, setUsername] = useState("");
-  const [role, setRole] = useState<AuthUser["role"]>("team_lead");
+  const [role, setRole] = useState<AdminCreateUserBody["role"]>("team_lead");
   const [password, setPassword] = useState("");
 
   const requiresPassword = role === "owner" || role === "team_lead";
@@ -531,7 +531,7 @@ function CreateUserModal({ onClose }: { onClose: () => void }) {
           <select
             value={role}
             onChange={(event) => {
-              const nextRole = event.target.value as AuthUser["role"];
+              const nextRole = event.target.value as AdminCreateUserBody["role"];
               setRole(nextRole);
               if (nextRole !== "owner" && nextRole !== "team_lead") {
                 setPassword("");
@@ -539,7 +539,7 @@ function CreateUserModal({ onClose }: { onClose: () => void }) {
             }}
             className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
           >
-            {userRoles.map((option) => (
+            {creatableUserRoles.map((option) => (
               <option key={option} value={option}>
                 {option.replaceAll("_", " ")}
               </option>

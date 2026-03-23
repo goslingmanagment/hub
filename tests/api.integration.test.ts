@@ -1645,6 +1645,63 @@ describe("api integration", () => {
     }
   });
 
+  it("reads legacy content_manager users but rejects creating new ones through admin APIs", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await testDb.pool.query(`
+      insert into users (username, role, password_hash)
+      values ('legacy-content-manager', 'content_manager', null)
+    `);
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const list = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/users",
+      headers: {
+        cookie,
+      },
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        username: "legacy-content-manager",
+        role: "content_manager",
+      }),
+    ]));
+
+    const create = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/users",
+      headers: {
+        cookie,
+      },
+      payload: {
+        username: "new-content-manager",
+        role: "content_manager",
+      },
+    });
+    expect(create.statusCode).toBe(400);
+
+    const createdRows = await testDb.pool.query<{ count: string }>(`
+      select count(*)::text as count
+      from users
+      where username = 'new-content-manager'
+    `);
+    expect(createdRows.rows[0]?.count).toBe("0");
+  });
+
   it("scopes chatter API keys to assigned pages", async (context) => {
     if (!testDb || !server) {
       context.skip();

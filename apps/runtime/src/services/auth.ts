@@ -25,9 +25,10 @@ import {
   updateUserPasswordHash,
 } from "@agency_hub_core/db";
 import {
+  creatableUserRoles,
   randomToken,
   sha256Hex,
-  userRoles,
+  type CreatableUserRole,
   type UserRole,
 } from "@agency_hub_core/shared";
 
@@ -139,12 +140,12 @@ export async function createUserAccount(
   app: AppContext,
   input: {
     username: string;
-    role: UserRole;
+    role: CreatableUserRole;
     password?: string | null;
   },
   audit: AuditContext,
 ) {
-  if (!userRoles.includes(input.role)) {
+  if (!creatableUserRoles.includes(input.role)) {
     throw new BadRequestError(`Unsupported role "${input.role}"`);
   }
 

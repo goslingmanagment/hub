@@ -2,6 +2,7 @@ import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
   SPENDER_SERIES_GRANULARITIES,
+  creatableUserRoles,
   fanFlagTypes,
   isValidBusinessDateString,
   platforms,
@@ -27,6 +28,7 @@ const transactionReportingBucketEnum = z.enum(transactionReportingBuckets);
 const transactionTypeEnum = z.enum(transactionTypes);
 const transactionStateEnum = z.enum(transactionStates);
 const userRoleEnum = z.enum(userRoles);
+const creatableUserRoleEnum = z.enum(creatableUserRoles);
 const fanFlagEnum = z.enum(fanFlagTypes);
 const spenderScopeKindEnum = z.enum(["page", "model", "agency"]);
 const sortDirEnum = z.enum(["asc", "desc"]);
@@ -1242,7 +1244,7 @@ export const fanFlagsResponseSchema = z.object({
 // Admin schemas
 export const adminCreateUserBodySchema = z.object({
   username: z.string().min(1).max(100),
-  role: userRoleEnum,
+  role: creatableUserRoleEnum,
   password: z.string().min(8).max(256).optional(),
 });
 

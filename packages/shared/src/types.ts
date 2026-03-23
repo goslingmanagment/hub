@@ -103,6 +103,8 @@ export type TransactionState = (typeof transactionStates)[number];
 
 export const userRoles = ["owner", "team_lead", "chatter", "content_manager"] as const;
 export type UserRole = (typeof userRoles)[number];
+export const creatableUserRoles = ["owner", "team_lead", "chatter"] as const;
+export type CreatableUserRole = (typeof creatableUserRoles)[number];
 
 export const fanFlagTypes = ["whale", "vip", "risky"] as const;
 export type FanFlagType = (typeof fanFlagTypes)[number];
