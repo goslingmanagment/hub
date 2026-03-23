@@ -271,6 +271,27 @@ export async function getPageDmConversationById(
   return row ? normalizeConversationRow(row) : null;
 }
 
+export async function listPageDmConversationsByPlatformConversationIds(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    platformConversationIds: string[];
+  },
+) {
+  if (input.platformConversationIds.length === 0) {
+    return [] as PageDmConversationRow[];
+  }
+
+  const rows = await db.select()
+    .from(pageDmConversations)
+    .where(and(
+      eq(pageDmConversations.platformAccountId, input.platformAccountId),
+      inArray(pageDmConversations.platformConversationId, input.platformConversationIds),
+    ));
+
+  return rows.map((row) => normalizeConversationRow(row));
+}
+
 export async function findVisiblePageDmConversationByPlatformConversationId(
   db: Database,
   input: {

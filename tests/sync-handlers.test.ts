@@ -14,6 +14,7 @@ const dbMocks = vi.hoisted(() => ({
   getCurrentSubscribers: vi.fn(),
   getExistingPageDmMessageIds: vi.fn(),
   getPageDmConversationById: vi.fn(),
+  listPageDmConversationsByPlatformConversationIds: vi.fn(),
   markPageDmConversationsInvisibleByGeneration: vi.fn(),
   rebuildFollowerRollups: vi.fn(),
   rebuildSubscriberRollups: vi.fn(),
@@ -127,6 +128,7 @@ describe("sync executor handlers", () => {
     });
     dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
     dbMocks.getPageDmConversationById.mockResolvedValue(null);
+    dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([]);
     dbMocks.markPageDmConversationsInvisibleByGeneration.mockResolvedValue(undefined);
     dbMocks.rebuildFollowerRollups.mockResolvedValue(undefined);
     dbMocks.rebuildSubscriberRollups.mockResolvedValue(undefined);
@@ -538,13 +540,7 @@ describe("sync executor handlers", () => {
       done: true,
       };
     });
-    const db = {
-      query: {
-        pageDmConversations: {
-          findFirst: vi.fn(async () => null),
-        },
-      },
-    };
+    const db = {};
     const app = {
       db,
       config: {
@@ -594,6 +590,10 @@ describe("sync executor handlers", () => {
       offset: 100,
       limit: 100,
     }));
+    expect(dbMocks.listPageDmConversationsByPlatformConversationIds).toHaveBeenCalledWith(db, {
+      platformAccountId: 55,
+      platformConversationIds: [],
+    });
     expect(dbMocks.markPageDmConversationsInvisibleByGeneration).toHaveBeenCalledWith(db, {
       platformAccountId: 55,
       generation: 7,
@@ -833,13 +833,7 @@ describe("sync executor handlers", () => {
         },
       };
     });
-    const db = {
-      query: {
-        pageDmConversations: {
-          findFirst: vi.fn(async () => null),
-        },
-      },
-    };
+    const db = {};
     const app = {
       db,
       config: {
@@ -942,44 +936,7 @@ describe("sync executor handlers", () => {
         },
       },
     }));
-    const db = {
-      query: {
-        pageDmConversations: {
-          findFirst: vi.fn(async () => ({
-            id: 777,
-            platformAccountId: 55,
-            fanId: 101,
-            platformConversationId: "group-missing",
-            partnerPlatformUserId: "fan-missing",
-            partnerUsername: "fan_missing",
-            partnerDisplayName: "Fan Missing",
-            conversationFlags: 0,
-            unreadCount: 1,
-            subscriptionTierId: null,
-            lastMessageId: "msg-79",
-            lastUnreadMessageId: "msg-79",
-            lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
-            lastMessageSenderId: "fan-missing",
-            lastMessageSenderRole: "fan",
-            lastMessagePreview: "previous",
-            lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
-            lastModelMessageAt: null,
-            storedMessageCount: 7,
-            newestStoredMessageId: "msg-79",
-            oldestStoredMessageId: "msg-73",
-            messageBackfillComplete: false,
-            lastMessageSyncAt: new Date("2026-03-10T00:05:00.000Z"),
-            isVisible: true,
-            lastSeenGeneration: 1,
-            firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
-            lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
-            metadata: {},
-            createdAt: new Date("2026-03-01T00:00:00.000Z"),
-            updatedAt: new Date("2026-03-10T00:00:00.000Z"),
-          })),
-        },
-      },
-    };
+    const db = {};
     const app = {
       db,
       config: {
@@ -991,6 +948,38 @@ describe("sync executor handlers", () => {
     } as never;
 
     dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([{
+      id: 777,
+      platformAccountId: 55,
+      fanId: 101,
+      platformConversationId: "group-missing",
+      partnerPlatformUserId: "fan-missing",
+      partnerUsername: "fan_missing",
+      partnerDisplayName: "Fan Missing",
+      conversationFlags: 0,
+      unreadCount: 1,
+      subscriptionTierId: null,
+      lastMessageId: "msg-79",
+      lastUnreadMessageId: "msg-79",
+      lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastMessageSenderId: "fan-missing",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "previous",
+      lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: 7,
+      newestStoredMessageId: "msg-79",
+      oldestStoredMessageId: "msg-73",
+      messageBackfillComplete: false,
+      lastMessageSyncAt: new Date("2026-03-10T00:05:00.000Z"),
+      isVisible: true,
+      lastSeenGeneration: 1,
+      firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
+      lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+      metadata: {},
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-03-10T00:00:00.000Z"),
+    }]);
 
     const result = await executeDmConversationsChunk(app, {
       pageContext: {
@@ -1087,47 +1076,7 @@ describe("sync executor handlers", () => {
         },
       },
     }));
-    const db = {
-      query: {
-        pageDmConversations: {
-          findFirst: vi.fn(async () => ({
-            id: 778,
-            platformAccountId: 55,
-            fanId: 101,
-            platformConversationId: "group-recovered",
-            partnerPlatformUserId: "fan-live",
-            partnerUsername: "fan_live",
-            partnerDisplayName: "Fan Live",
-            conversationFlags: 0,
-            unreadCount: 1,
-            subscriptionTierId: null,
-            lastMessageId: "msg-79",
-            lastUnreadMessageId: "msg-79",
-            lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
-            lastMessageSenderId: "fan-live",
-            lastMessageSenderRole: "fan",
-            lastMessagePreview: "previous",
-            lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
-            lastModelMessageAt: null,
-            storedMessageCount: 7,
-            newestStoredMessageId: "msg-79",
-            oldestStoredMessageId: "msg-73",
-            messageBackfillComplete: false,
-            lastMessageSyncAt: new Date("2026-03-10T00:05:00.000Z"),
-            isVisible: true,
-            lastSeenGeneration: 1,
-            firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
-            lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
-            metadata: {
-              [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
-                FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
-            },
-            createdAt: new Date("2026-03-01T00:00:00.000Z"),
-            updatedAt: new Date("2026-03-10T00:00:00.000Z"),
-          })),
-        },
-      },
-    };
+    const db = {};
     const app = {
       db,
       config: {
@@ -1139,6 +1088,41 @@ describe("sync executor handlers", () => {
     } as never;
 
     dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([{
+      id: 778,
+      platformAccountId: 55,
+      fanId: 101,
+      platformConversationId: "group-recovered",
+      partnerPlatformUserId: "fan-live",
+      partnerUsername: "fan_live",
+      partnerDisplayName: "Fan Live",
+      conversationFlags: 0,
+      unreadCount: 1,
+      subscriptionTierId: null,
+      lastMessageId: "msg-79",
+      lastUnreadMessageId: "msg-79",
+      lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastMessageSenderId: "fan-live",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "previous",
+      lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+      lastModelMessageAt: null,
+      storedMessageCount: 7,
+      newestStoredMessageId: "msg-79",
+      oldestStoredMessageId: "msg-73",
+      messageBackfillComplete: false,
+      lastMessageSyncAt: new Date("2026-03-10T00:05:00.000Z"),
+      isVisible: true,
+      lastSeenGeneration: 1,
+      firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
+      lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+      },
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-03-10T00:00:00.000Z"),
+    }]);
     dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-live" }]);
 
     const result = await executeDmConversationsChunk(app, {

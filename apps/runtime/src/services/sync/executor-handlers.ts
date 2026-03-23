@@ -7,9 +7,9 @@ import {
   getPageDmConversationById,
   getCheckpoint,
   getCurrentSubscribers,
+  listPageDmConversationsByPlatformConversationIds,
   markPageDmConversationsInvisibleByGeneration,
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
-  pageDmConversations,
   rebuildFollowerRollups,
   rebuildSubscriberRollups,
   requestSyncStreamRevisions,
@@ -45,7 +45,6 @@ import {
   type HttpRequestEvent,
   type HttpRequestObserver,
 } from "@agency_hub_core/shared";
-import { and, eq } from "drizzle-orm";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
@@ -1273,15 +1272,20 @@ export async function executeDmConversationsChunk(
 
     const accountsById = new Map(page.accounts.map((account) => [account.id, account]));
     const groupsById = new Map(page.groups.map((group) => [group.id, group]));
+    const existingConversations = await listPageDmConversationsByPlatformConversationIds(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      platformConversationIds: page.items.map((conversation) => conversation.groupId),
+    });
+    const existingByGroupId = new Map(
+      existingConversations.map((conversation) => [
+        conversation.platformConversationId,
+        conversation,
+      ]),
+    );
     let unchangedPage = true;
 
     for (const conversation of page.items) {
-      const existing = await app.db.query.pageDmConversations.findFirst({
-        where: and(
-          eq(pageDmConversations.platformAccountId, input.pageContext.page.id),
-          eq(pageDmConversations.platformConversationId, conversation.groupId),
-        ),
-      });
+      const existing = existingByGroupId.get(conversation.groupId) ?? null;
       const group = groupsById.get(conversation.groupId);
       const aggregatedPartnerIds = Array.from(new Set(
         (group?.users ?? [])
