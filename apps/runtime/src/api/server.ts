@@ -802,18 +802,16 @@ export async function buildApiServer(appContext: AppContext) {
     for (const p of pages) {
       modelSet.set(p.modelSlug, { slug: p.modelSlug, name: p.modelName });
     }
-    const fanCount = await countDistinctFansForPages(appContext.db, pageIds);
-    const [connectionStatuses, syncSnapshot] = await Promise.all([
-      listConnectionStatuses(appContext, {
-        pageIds: pageScope,
-        pages,
-      }),
-      getSyncMonitorSnapshot(appContext, {
-        pageIds,
-      }),
-    ]);
-    const statusByPageId = new Map(connectionStatuses.map((c) => [c.id, c]));
+    const syncSnapshot = await getSyncMonitorSnapshot(appContext, {
+      pageIds,
+    });
     const syncByPageId = new Map(syncSnapshot.pages.map((page) => [page.pageId, page.syncUx]));
+    const connectionStatuses = await listConnectionStatuses(appContext, {
+      pageIds: pageScope,
+      pages,
+      syncUxByPageId: syncByPageId,
+    });
+    const statusByPageId = new Map(connectionStatuses.map((c) => [c.id, c]));
 
     // Revenue 7d and 30d
     const groupedPageIds = new Map<Platform, number[]>();
@@ -921,7 +919,7 @@ export async function buildApiServer(appContext: AppContext) {
       counts: {
         models: modelSet.size,
         pages: pages.length,
-        fans: fanCount,
+        fans: syncSnapshot.overall.counts.fans,
       },
       revenue: {
         "7d": {

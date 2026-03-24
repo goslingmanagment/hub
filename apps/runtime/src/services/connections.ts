@@ -4,6 +4,7 @@ import {
   findPageByLabel,
   storePlatformCredentials,
 } from "@agency_hub_core/db";
+import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
   encryptJson,
   normalizeProxyConfig,
@@ -99,6 +100,7 @@ export async function listConnectionStatuses(
   input?: {
     pageIds?: number[];
     pages?: Awaited<ReturnType<typeof listVisiblePages>>;
+    syncUxByPageId?: ReadonlyMap<number, SyncUxSummary>;
   },
 ) {
   const pages = input?.pages ?? await listVisiblePages(app.db, input?.pageIds);
@@ -111,10 +113,14 @@ export async function listConnectionStatuses(
     getLatestSyncRunPerPage(app.db, allPageIds, {
       stream: "light",
     }),
-    getSyncMonitorSnapshot(app, { pageIds: allPageIds }),
+    input?.syncUxByPageId
+      ? Promise.resolve(null)
+      : getSyncMonitorSnapshot(app, { pageIds: allPageIds }),
   ]);
   const runsByPageId = new Map(latestRuns.map((r) => [r.platformAccountId, r]));
-  const syncByPageId = new Map(snapshot.pages.map((page) => [page.pageId, page.syncUx]));
+  const syncByPageId = input?.syncUxByPageId ?? new Map(
+    (snapshot?.pages ?? []).map((page) => [page.pageId, page.syncUx]),
+  );
 
   return pages.map((page) => {
     const latestRun = runsByPageId.get(page.id) ?? null;

@@ -17,7 +17,7 @@ type RequestItem = SyncRequestsResponse[number];
 type ActivityTab = "events" | "requests";
 type LiveRequestsWindow = "1m" | "5m" | "15m";
 type SyncUxState = SyncMonitorResponse["overall"]["syncUx"]["state"];
-type StreamGroupKey = "attention" | "syncing" | "queued" | "healthy";
+type StreamGroupKey = "attention" | "off" | "syncing" | "queued" | "healthy";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -48,13 +48,19 @@ function heroLevelFor(state: SyncUxState): {
   level: "healthy" | "warning" | "critical";
 } {
   if (state === "attention") return { level: "critical" };
-  if (state === "retrying" || state === "catching_up" || state === "setup") return { level: "warning" };
+  if (state === "off" || state === "retrying" || state === "catching_up" || state === "setup") {
+    return { level: "warning" };
+  }
   return { level: "healthy" };
 }
 
 function streamGroupFor(stream: StreamItem): StreamGroupKey {
   if (stream.syncUx.state === "attention") {
     return "attention";
+  }
+
+  if (stream.syncUx.state === "off") {
+    return "off";
   }
 
   if (stream.syncUx.state === "syncing") {
@@ -76,6 +82,8 @@ function streamGroupTitle(group: StreamGroupKey, count: number) {
   switch (group) {
     case "attention":
       return count === 1 ? "Needs attention" : "Needs attention";
+    case "off":
+      return count === 1 ? "Off" : "Off";
     case "syncing":
       return count === 1 ? "Syncing now" : "Syncing now";
     case "queued":
@@ -89,12 +97,12 @@ function streamGroupTitle(group: StreamGroupKey, count: number) {
 function compareStreams(a: StreamItem, b: StreamItem) {
   const statePriority: Record<SyncUxState, number> = {
     attention: 0,
-    syncing: 1,
-    retrying: 2,
-    catching_up: 3,
-    setup: 4,
-    healthy: 5,
-    off: 6,
+    off: 1,
+    syncing: 2,
+    retrying: 3,
+    catching_up: 4,
+    setup: 5,
+    healthy: 6,
   };
   const priorityDiff = statePriority[a.syncUx.state] - statePriority[b.syncUx.state];
   if (priorityDiff !== 0) {
@@ -483,6 +491,7 @@ function PageCard({ page }: { page: PageItem }) {
   });
   const groupedStreams = {
     attention: page.streams.filter((stream) => streamGroupFor(stream) === "attention").sort(compareStreams),
+    off: page.streams.filter((stream) => streamGroupFor(stream) === "off").sort(compareStreams),
     syncing: page.streams.filter((stream) => streamGroupFor(stream) === "syncing").sort(compareStreams),
     queued: page.streams.filter((stream) => streamGroupFor(stream) === "queued").sort(compareStreams),
     healthy: page.streams.filter((stream) => streamGroupFor(stream) === "healthy").sort(compareStreams),
@@ -539,6 +548,10 @@ function PageCard({ page }: { page: PageItem }) {
         <StreamGroupSection
           title={streamGroupTitle("attention", groupedStreams.attention.length)}
           streams={groupedStreams.attention}
+        />
+        <StreamGroupSection
+          title={streamGroupTitle("off", groupedStreams.off.length)}
+          streams={groupedStreams.off}
         />
         <StreamGroupSection
           title={streamGroupTitle("syncing", groupedStreams.syncing.length)}

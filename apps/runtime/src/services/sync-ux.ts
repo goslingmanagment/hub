@@ -41,6 +41,7 @@ export interface SyncUxStreamLike {
   } | null;
   lastSuccessAt: string | null;
   lastFailureAt: string | null;
+  lastErrorCode?: string | null;
   lastErrorSummary: string | null;
   consecutiveFailures: number;
 }
@@ -122,12 +123,28 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
   const repeatedFailures = stream.consecutiveFailures >= 3 ||
     stream.recentErrors.failedRuns >= 3 ||
     stream.recentErrors.failedAttempts >= 3;
+  const hasRateLimitFailureEvidence = stream.lastErrorCode === "http_429" || stream.recentErrors.total429s > 0;
+  const hasNonRateLimitFailureEvidence = (
+    stream.lastErrorCode !== null &&
+    stream.lastErrorCode !== undefined &&
+    stream.lastErrorCode !== "http_429" &&
+    stream.lastErrorCode !== "auth_failed"
+  ) || stream.recentErrors.total5xxs > 0;
 
-  if (stream.status === "paused" || stream.status === "disabled") {
+  if (stream.status === "paused") {
     return buildSummary("off", {
-      label: "Off",
-      headline: "Sync is off",
-      detail: "This sync is paused or disabled.",
+      label: "Paused",
+      headline: "Sync is paused",
+      detail: "This sync is paused.",
+      updatedAt,
+    });
+  }
+
+  if (stream.status === "disabled") {
+    return buildSummary("off", {
+      label: "Disabled",
+      headline: "Sync is disabled",
+      detail: "This sync is disabled.",
       updatedAt,
     });
   }
@@ -164,7 +181,7 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
   }
 
   if (stream.backoffUntil) {
-    if (repeatedFailures && stream.rateHealth.state !== "limited") {
+    if (repeatedFailures && (hasNonRateLimitFailureEvidence || !hasRateLimitFailureEvidence)) {
       return buildSummary("attention", {
         label: "Attention",
         headline: "Sync needs attention",
@@ -175,10 +192,11 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
       });
     }
 
+    const slowedByRateLimit = stream.rateHealth.state === "limited" && hasRateLimitFailureEvidence;
     return buildSummary("retrying", {
       label: "Retrying",
       headline: "Retrying automatically",
-      detail: stream.rateHealth.state === "limited"
+      detail: slowedByRateLimit
         ? "Rate limits slowed this sync. It will resume automatically."
         : "A temporary sync issue occurred. It will retry automatically.",
       progressLabel,
@@ -282,6 +300,21 @@ export function buildPageSyncUx(items: SyncUxSummary[]): SyncUxSummary {
       });
   }
 
+  const off = items.filter((item) => item.state === "off");
+  if (off.length > 0) {
+    return chooseSummary("off", off, off.length === items.length
+      ? {
+        label: "Off",
+        headline: "Sync is off",
+        detail: "All background syncs are off for this page.",
+      }
+      : {
+        label: "Off",
+        headline: "Some syncs are off",
+        detail: `${pluralize(off.length, "sync")} are paused or disabled on this page.`,
+      });
+  }
+
   const syncing = items.filter((item) => item.state === "syncing");
   if (syncing.length > 0) {
     return chooseSummary("syncing", syncing, {
@@ -318,16 +351,7 @@ export function buildPageSyncUx(items: SyncUxSummary[]): SyncUxSummary {
     });
   }
 
-  const active = items.filter((item) => item.state !== "off");
-  if (active.length === 0) {
-    return chooseSummary("off", items, {
-      label: "Off",
-      headline: "Sync is off",
-      detail: "All background syncs are off for this page.",
-    });
-  }
-
-  return chooseSummary("healthy", active, {
+  return chooseSummary("healthy", items, {
     label: "Up to date",
     headline: "Up to date",
     detail: "All page syncs are current.",
@@ -357,6 +381,21 @@ export function buildOverallSyncUx(items: SyncUxSummary[]): SyncUxSummary {
         label: "Needs attention",
         headline: "Sync needs attention",
         detail: `${pluralize(attention.length, "page")} need help before they can catch up.`,
+      });
+  }
+
+  const off = items.filter((item) => item.state === "off");
+  if (off.length > 0) {
+    return chooseSummary("off", off, off.length === items.length
+      ? {
+        label: "Off",
+        headline: "Sync is off",
+        detail: "All background syncs are currently off.",
+      }
+      : {
+        label: "Off",
+        headline: "Some syncs are off",
+        detail: `${pluralize(off.length, "page")} have paused or disabled syncs.`,
       });
   }
 
@@ -396,16 +435,7 @@ export function buildOverallSyncUx(items: SyncUxSummary[]): SyncUxSummary {
     });
   }
 
-  const active = items.filter((item) => item.state !== "off");
-  if (active.length === 0) {
-    return chooseSummary("off", items, {
-      label: "Off",
-      headline: "Sync is off",
-      detail: "All background syncs are currently off.",
-    });
-  }
-
-  return chooseSummary("healthy", active, {
+  return chooseSummary("healthy", items, {
     label: "Up to date",
     headline: "Up to date",
     detail: "All pages are current.",
@@ -445,6 +475,16 @@ export function buildCrmMessageSyncUx(input: {
       label: "Needs attention",
       headline: "Conversation history needs attention",
       detail: "Conversation history stopped making progress.",
+      nextRetryAt,
+      updatedAt,
+    });
+  }
+
+  if (items.some((item) => item.state === "off")) {
+    return buildSummary("off", {
+      label: "Off",
+      headline: "Conversation history is off",
+      detail: "One or more conversation syncs are paused or disabled.",
       nextRetryAt,
       updatedAt,
     });

@@ -38,16 +38,21 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
 
   if (!data || data.messages.length === 0) {
     const syncing = data && previewSyncingStates.has(data.messageSyncUx.state);
+    const syncRelevantEmptyState = data && data.messageSyncUx.state !== "healthy";
     const headline = syncing
       ? "Conversation history is still syncing"
-      : data?.messageSyncUx.headline ?? "No messages to show.";
+      : syncRelevantEmptyState
+        ? data.messageSyncUx.headline
+        : "No messages to show.";
     const detail = syncing
       ? "This preview will fill in automatically as messages catch up."
-      : data?.messageSyncUx.detail ?? null;
+      : syncRelevantEmptyState
+        ? data.messageSyncUx.detail
+        : null;
 
     return (
       <div className="bg-hover/50 px-6 py-4">
-        {data && (
+        {data && syncRelevantEmptyState && (
           <div className="mb-2">
             <SyncUxBadge summary={data.messageSyncUx} />
           </div>
@@ -59,11 +64,12 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
   }
 
   const previewIncomplete = !data.conversation.messageBackfillComplete || previewSyncingStates.has(data.messageSyncUx.state);
-  const footerText = data.messageSyncUx.requiresAction
+  const showFooterSync = data.messageSyncUx.requiresAction ||
+    data.messageSyncUx.state === "off" ||
+    previewIncomplete;
+  const footerText = data.messageSyncUx.requiresAction || data.messageSyncUx.state === "off"
     ? data.messageSyncUx.headline
-    : previewIncomplete
-      ? "Preview may be incomplete while messages catch up"
-      : "Conversation history is ready";
+    : "Preview may be incomplete while messages catch up";
 
   return (
     <div className="bg-hover/50 px-6 py-4 space-y-2">
@@ -99,10 +105,14 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
         })}
       </div>
       <div className="flex items-center justify-between pt-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <SyncUxBadge summary={data.messageSyncUx} />
-          <span className="text-[11px] text-text-muted">{footerText}</span>
-        </div>
+        {showFooterSync ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <SyncUxBadge summary={data.messageSyncUx} />
+            <span className="text-[11px] text-text-muted">{footerText}</span>
+          </div>
+        ) : (
+          <span />
+        )}
         <Link
           to={profileHref}
           onClick={(e) => e.stopPropagation()}

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
+import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal";
 
 export function CredentialsTab() {
@@ -22,7 +23,18 @@ export function CredentialsTab() {
         {items.length === 0 && (
           <p className="text-sm text-text-muted">No connections configured.</p>
         )}
-        {items.map((conn) => (
+        {items.map((conn) => {
+          const syncMode = getSyncUxDisplayMode(conn.syncUx, "credentials");
+          const syncMeta = syncMode !== "badge"
+            ? formatSyncUxMeta(conn.syncUx, {
+              updatedPrefix: "Updated",
+              retryPrefix: "Retrying",
+            })
+            : null;
+          const showDetail = syncMode === "full" || conn.syncUx.state === "retrying";
+          const reconnect = conn.syncUx.requiresAction;
+
+          return (
           <div
             key={conn.id}
             className="flex items-start justify-between gap-4 rounded-xl border border-border bg-card p-4"
@@ -42,41 +54,34 @@ export function CredentialsTab() {
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <SyncUxBadge summary={conn.syncUx} />
-                  <span className="text-xs font-medium text-text-secondary">{conn.syncUx.headline}</span>
-                  {formatSyncUxMeta(conn.syncUx, {
-                    updatedPrefix: "Updated",
-                    retryPrefix: "Retrying",
-                  }) && (
-                    <span className="text-xs text-text-muted">
-                      {formatSyncUxMeta(conn.syncUx, {
-                        updatedPrefix: "Updated",
-                        retryPrefix: "Retrying",
-                      })}
-                    </span>
+                  {syncMode !== "badge" && (
+                    <span className="text-xs font-medium text-text-secondary">{conn.syncUx.headline}</span>
                   )}
+                  {syncMeta && <span className="text-xs text-text-muted">{syncMeta}</span>}
                 </div>
-                {conn.syncUx.detail && (
+                {showDetail && conn.syncUx.detail && (
                   <div className="mt-1 text-xs text-text-muted">{conn.syncUx.detail}</div>
                 )}
               </div>
             </div>
-            {conn.syncUx.requiresAction && (
-              <button
-                type="button"
-                onClick={() =>
-                  setSelectedConnection({
-                    label: conn.label,
-                    platform: conn.platform,
-                    proxyUrl: conn.proxyUrl,
-                    proxyHasAuth: conn.proxyHasAuth,
-                  })}
-                className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10"
-              >
-                Reconnect
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() =>
+                setSelectedConnection({
+                  label: conn.label,
+                  platform: conn.platform,
+                  proxyUrl: conn.proxyUrl,
+                  proxyHasAuth: conn.proxyHasAuth,
+                })}
+              className={reconnect
+                ? "rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10"
+                : "rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"}
+            >
+              {reconnect ? "Reconnect" : "Update Credentials"}
+            </button>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {selectedConnection && (

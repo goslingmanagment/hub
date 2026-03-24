@@ -16,6 +16,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
+import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { buildFanProfileNavigation, buildPageRoute } from "@/lib/navigation";
 import { usePeriodStore } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
@@ -127,6 +128,7 @@ export function PageDetailPage() {
     updatedPrefix: "Updated",
     retryPrefix: "Retrying",
   });
+  const syncMode = getSyncUxDisplayMode(page.syncUx, "page_detail");
 
   function breakdownAmount(canonicalType: string): number {
     if (!selectedRevenue?.breakdown) return 0;
@@ -163,11 +165,11 @@ export function PageDetailPage() {
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <SyncUxBadge summary={page.syncUx} />
           <span className="text-sm font-medium text-text-secondary">{page.syncUx.headline}</span>
-          {syncMeta && (
+          {syncMode === "full" && syncMeta && (
             <span className="text-sm text-text-muted">{syncMeta}</span>
           )}
         </div>
-        {page.syncUx.detail && (
+        {syncMode === "full" && page.syncUx.detail && (
           <p className="mt-1 text-sm text-text-muted">{page.syncUx.detail}</p>
         )}
       </div>

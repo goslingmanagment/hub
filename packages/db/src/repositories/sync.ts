@@ -1312,9 +1312,13 @@ export async function listSyncMonitorStreamRows(
     pageIds?: number[];
     pageLabel?: string;
     windowStart?: Date;
+    streams?: SyncControlStream[];
   },
 ) {
-  if (input?.pageIds !== undefined && input.pageIds.length === 0) {
+  if (
+    (input?.pageIds !== undefined && input.pageIds.length === 0) ||
+    (input?.streams !== undefined && input.streams.length === 0)
+  ) {
     return [] as SyncMonitorStreamRow[];
   }
 
@@ -1327,8 +1331,18 @@ export async function listSyncMonitorStreamRows(
   }
 
   const windowStart = input?.windowStart ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const fanslyStreams = SYNC_CONTROL_STREAMS.map((stream) => `'${stream}'`).join(", ");
-  const onlyFansStreams = ["light", "transactions"].map((stream) => `'${stream}'`).join(", ");
+  const requestedStreams = input?.streams ?? SYNC_CONTROL_STREAMS;
+  const requestedStreamsSql = sql.raw(
+    `ARRAY[${requestedStreams.map((stream) => `'${stream}'`).join(", ")}]::sync_stream[]`,
+  );
+  const fanslyStreams = requestedStreams
+    .filter((stream) => getSyncStreamsForPlatform("fansly").includes(stream))
+    .map((stream) => `'${stream}'`)
+    .join(", ");
+  const onlyFansStreams = requestedStreams
+    .filter((stream) => getSyncStreamsForPlatform("onlyfans").includes(stream))
+    .map((stream) => `'${stream}'`)
+    .join(", ");
 
   const result = await db.execute<{
     pageId: NumericValue;
@@ -1527,6 +1541,7 @@ export async function listSyncMonitorStreamRows(
         left join request_activity ra on ra."runId" = sr.id
         left join event_activity ea on ea."runId" = sr.id
         where sr.status = 'running'
+          and sr.stream = any(${requestedStreamsSql})
       ) ranked
       where ranked."rank" = 1
     ),
@@ -1554,6 +1569,7 @@ export async function listSyncMonitorStreamRows(
         inner join visible_pages vp on vp."pageId" = sr.platform_account_id
         where sr.status <> 'running'
           and sr.finished_at is not null
+          and sr.stream = any(${requestedStreamsSql})
       ) ranked
       where ranked."rank" = 1
     ),
@@ -1568,6 +1584,7 @@ export async function listSyncMonitorStreamRows(
       from ${syncRuns} sr
       inner join visible_pages vp on vp."pageId" = sr.platform_account_id
       where sr.started_at >= ${windowStart}
+        and sr.stream = any(${requestedStreamsSql})
       group by sr.platform_account_id, sr.stream
     ),
     recent_attempt_counts as (
@@ -1584,6 +1601,7 @@ export async function listSyncMonitorStreamRows(
       from ${syncRequestAttempts} a
       inner join visible_pages vp on vp."pageId" = a.platform_account_id
       where a.started_at >= ${windowStart}
+        and a.stream = any(${requestedStreamsSql})
       group by a.platform_account_id, a.stream
     ),
     provider_rate_limits as (

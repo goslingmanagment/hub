@@ -193,4 +193,131 @@ describe("SyncMonitorPage", () => {
     expect(html).toContain("needs the worker to recover");
     expect(html).not.toContain("Running 20m");
   });
+
+  it("renders paused streams in an off section instead of healthy", () => {
+    queryMocks.useSyncMonitor.mockReturnValue({
+      data: {
+        generatedAt: "2026-03-24T11:59:30.000Z",
+        overall: {
+          pages: 1,
+          streams: 1,
+          runningStreams: 0,
+          failedStreams: 0,
+          stalledStreams: 0,
+          pendingStreams: 0,
+          backoffStreams: 0,
+          recentRuns: {
+            running: 0,
+            success: 0,
+            partial: 0,
+            failed: 0,
+            skipped: 0,
+          },
+          recentErrors: {
+            total429s: 0,
+            total5xxs: 0,
+            failedRuns: 0,
+            failedAttempts: 0,
+            retryAttempts: 0,
+            last429At: null,
+            last5xxAt: null,
+          },
+          providers: [],
+          syncUx: buildSyncUx({
+            state: "off",
+            label: "Off",
+            headline: "Some syncs are off",
+            detail: "1 sync is paused or disabled on this page.",
+            updatedAt: "2026-03-24T11:49:00.000Z",
+          }),
+        },
+        pages: [{
+          pageId: 1,
+          pageLabel: "lora-1",
+          platform: "fansly",
+          modelSlug: "lora",
+          modelName: "Lora Vie",
+          username: "LoraVie",
+          displayName: "Lora Vie",
+          counts: {
+            fans: 0,
+            followers: 0,
+            subscribers: 0,
+            transactions: 0,
+            conversations: 0,
+            messages: 0,
+          },
+          summary: {
+            runningStreams: 0,
+            failedStreams: 0,
+            stalledStreams: 0,
+            pendingStreams: 0,
+            backoffStreams: 0,
+          },
+          syncUx: buildSyncUx({
+            state: "off",
+            label: "Off",
+            headline: "Some syncs are off",
+            detail: "1 sync is paused or disabled on this page.",
+            updatedAt: "2026-03-24T11:49:00.000Z",
+          }),
+          streams: [{
+            stream: "followers",
+            status: "paused",
+            stalled: false,
+            pending: false,
+            backoffUntil: null,
+            progress: null,
+            recentRuns: {
+              running: 0,
+              success: 0,
+              partial: 0,
+              failed: 0,
+              skipped: 0,
+            },
+            recentErrors: {
+              total429s: 0,
+              total5xxs: 0,
+              failedRuns: 0,
+              failedAttempts: 0,
+              retryAttempts: 0,
+              last429At: null,
+              last5xxAt: null,
+            },
+            rateHealth: {
+              state: "healthy",
+              last429At: null,
+              nextAvailableAt: null,
+            },
+            activeRun: null,
+            lastCompletion: null,
+            lastSuccessAt: "2026-03-24T11:49:00.000Z",
+            lastFailureAt: null,
+            lastErrorSummary: null,
+            consecutiveFailures: 0,
+            syncUx: buildSyncUx({
+              state: "off",
+              label: "Paused",
+              headline: "Sync is paused",
+              detail: "This sync is paused.",
+              updatedAt: "2026-03-24T11:49:00.000Z",
+            }),
+          }],
+        }],
+        recentEvents: [],
+        window: {
+          hours: 24,
+          startedAt: "2026-03-23T12:00:00.000Z",
+        },
+      },
+      isLoading: false,
+    });
+
+    const html = renderPage();
+
+    expect(html).toContain("Some syncs are off");
+    expect(html).toContain("Off");
+    expect(html).toContain("Sync is paused");
+    expect(html).not.toContain("Healthy (1)");
+  });
 });

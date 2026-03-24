@@ -2,6 +2,7 @@ import type { SyncRunItem, SyncUxSummary } from "@agency_hub_core/contracts";
 import { useAdminConnections, useAdminSyncRuns, useAdminSyncTrigger } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
+import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { formatDateTime } from "@/lib/format";
 import { toast } from "sonner";
 
@@ -114,53 +115,51 @@ export function SyncTab() {
       <div className="mb-6">
         <h2 className="text-sm font-bold text-text-primary mb-3">Manual Sync</h2>
         <div className="space-y-2">
-          {items.map((conn) => (
-            <div
-              key={conn.id}
-              className="flex items-start justify-between gap-4 rounded-xl border border-border bg-card px-4 py-4"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-text-primary">{conn.label}</span>
-                  <PlatformBadge platform={conn.platform} />
-                </div>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <SyncUxBadge summary={conn.syncUx} />
-                  <span className="text-xs font-medium text-text-secondary">{conn.syncUx.headline}</span>
-                  {formatSyncUxMeta(conn.syncUx, {
-                    updatedPrefix: "Updated",
-                    retryPrefix: "Retrying",
-                  }) && (
-                    <span className="text-xs text-text-muted">
-                      {formatSyncUxMeta(conn.syncUx, {
-                        updatedPrefix: "Updated",
-                        retryPrefix: "Retrying",
-                      })}
-                    </span>
+          {items.map((conn) => {
+            const syncMode = getSyncUxDisplayMode(conn.syncUx, "sync_settings");
+            const syncMeta = formatSyncUxMeta(conn.syncUx, {
+              updatedPrefix: "Updated",
+              retryPrefix: "Retrying",
+            });
+
+            return (
+              <div
+                key={conn.id}
+                className="flex items-start justify-between gap-4 rounded-xl border border-border bg-card px-4 py-4"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-text-primary">{conn.label}</span>
+                    <PlatformBadge platform={conn.platform} />
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <SyncUxBadge summary={conn.syncUx} />
+                    <span className="text-xs font-medium text-text-secondary">{conn.syncUx.headline}</span>
+                    {syncMeta && <span className="text-xs text-text-muted">{syncMeta}</span>}
+                  </div>
+                  {syncMode === "full" && conn.syncUx.detail && (
+                    <div className="mt-1 text-xs text-text-muted">{conn.syncUx.detail}</div>
                   )}
                 </div>
-                {conn.syncUx.detail && (
-                  <div className="mt-1 text-xs text-text-muted">{conn.syncUx.detail}</div>
-                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleTrigger(conn.label, "light")}
+                    disabled={triggerSync.isPending}
+                    className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-40"
+                  >
+                    Light Sync
+                  </button>
+                  <button
+                    onClick={() => handleTrigger(conn.label, "all")}
+                    disabled={triggerSync.isPending}
+                    className="rounded-lg border border-border bg-card px-3 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-hover disabled:opacity-40"
+                  >
+                    Full Sync
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleTrigger(conn.label, "light")}
-                  disabled={triggerSync.isPending}
-                  className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-40"
-                >
-                  Light Sync
-                </button>
-                <button
-                  onClick={() => handleTrigger(conn.label, "all")}
-                  disabled={triggerSync.isPending}
-                  className="rounded-lg border border-border bg-card px-3 py-1 text-xs font-semibold text-text-secondary transition-colors hover:bg-hover disabled:opacity-40"
-                >
-                  Full Sync
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

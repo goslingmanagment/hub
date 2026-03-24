@@ -820,11 +820,45 @@ function streamItemFor(row: SyncMonitorStreamRow, now: Date): SyncMonitorStreamI
     lastErrorSummary: row.lastErrorSummary ?? row.lastCompletedErrorSummary,
     consecutiveFailures: row.consecutiveFailures,
   } satisfies Omit<SyncMonitorStreamItem, "syncUx">;
+  const syncUxInput = {
+    ...item,
+    lastErrorCode: row.lastErrorCode,
+  };
 
   return {
     ...item,
-    syncUx: buildStreamSyncUx(item),
+    syncUx: buildStreamSyncUx(syncUxInput),
   };
+}
+
+export async function getPageStreamSyncUxByStream(
+  app: AppContext,
+  input: {
+    pageId: number;
+    streams: SyncControlStream[];
+    windowHours?: number;
+    now?: Date;
+  },
+) {
+  if (input.streams.length === 0) {
+    return new Map<SyncControlStream, SyncUxSummary>();
+  }
+
+  const now = input.now ?? new Date();
+  const windowHours = input.windowHours ?? DEFAULT_WINDOW_HOURS;
+  const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+  const rows = await listSyncMonitorStreamRows(app.db, {
+    pageIds: [input.pageId],
+    streams: input.streams,
+    windowStart,
+  });
+
+  return new Map(
+    rows.map((row) => {
+      const stream = streamItemFor(row, now);
+      return [row.stream, stream.syncUx] satisfies [SyncControlStream, SyncUxSummary];
+    }),
+  );
 }
 
 function comparePages(a: SyncMonitorPageItem, b: SyncMonitorPageItem) {

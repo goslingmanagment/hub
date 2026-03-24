@@ -6024,6 +6024,51 @@ describe("api integration", () => {
     expect(ofOverview.newFollowersToday).toBe(0);
   });
 
+  it("reuses the overview sync snapshot instead of recomputing it for connection statuses", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const cookie = sessionCookieFrom(login);
+    const querySpy = vi.spyOn(testDb.pool, "query");
+
+    try {
+      const overview = await server.inject({
+        method: "GET",
+        url: "/api/v1/overview",
+        headers: { cookie },
+      });
+
+      expect(overview.statusCode).toBe(200);
+
+      const statements = querySpy.mock.calls
+        .map((call) => {
+          const statement = call[0];
+          if (typeof statement === "string") {
+            return statement;
+          }
+          if (statement && typeof statement === "object" && "text" in statement) {
+            const text = (statement as { text?: unknown }).text;
+            return typeof text === "string" ? text : "";
+          }
+          return "";
+        })
+        .filter((statement) => statement.length > 0);
+      const syncMonitorStatements = statements.filter((statement) =>
+        statement.includes("page_streams as (") && statement.includes("provider_rate_limits as ("));
+
+      expect(syncMonitorStatements).toHaveLength(1);
+    } finally {
+      querySpy.mockRestore();
+    }
+  });
+
   it("returns period-aware growth metrics from /api/v1/overview/growth", async (context) => {
     if (!testDb || !server) {
       context.skip();

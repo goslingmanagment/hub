@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useAdminSyncTriggerAll, useLogout, useOverview } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
+import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { clearDashboardSession } from "@/lib/queryClient";
 
 interface TopbarProps {
@@ -58,6 +59,7 @@ export function Topbar({ user }: TopbarProps) {
       retryPrefix: "Retrying",
     })
     : null;
+  const agencySyncMode = agencySync ? getSyncUxDisplayMode(agencySync, "topbar") : "hidden";
 
   return (
     <div className="h-[56px] bg-card border-b border-border flex items-center justify-between px-7 fixed top-0 left-[248px] right-0 z-10">
@@ -92,7 +94,14 @@ export function Topbar({ user }: TopbarProps) {
           </button>
         )}
 
-        {agencySync && (
+        {agencySync && agencySyncMode === "badge" && (
+          <span
+            className="ml-2 inline-flex h-2 w-2 rounded-full bg-green"
+            title="Sync is healthy"
+          />
+        )}
+
+        {agencySync && agencySyncMode === "compact" && (
           <div className="ml-2 flex items-center gap-2 rounded-full border border-border bg-hover-alt/40 px-2 py-1">
             <SyncUxBadge summary={agencySync} />
             <span className="text-[12px] font-medium text-text-secondary">{agencySync.headline}</span>

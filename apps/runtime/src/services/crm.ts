@@ -26,8 +26,10 @@ import { millsToNumber } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
-import { getSyncMonitorSnapshot } from "./sync-monitor.ts";
+import { getPageStreamSyncUxByStream } from "./sync-monitor.ts";
 import { buildCrmMessageSyncUx } from "./sync-ux.ts";
+
+const CRM_DM_STREAMS = ["dm_conversations", "dm_messages"] as const;
 
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
@@ -72,10 +74,12 @@ async function resolveCrmMessageSyncUx(
   pageId: number,
   freshness: Awaited<ReturnType<typeof getCrmFreshnessCoverage>>,
 ) {
-  const snapshot = await getSyncMonitorSnapshot(app, { pageIds: [pageId] });
-  const page = snapshot.pages[0];
-  const conversationSyncUx = page?.streams.find((stream) => stream.stream === "dm_conversations")?.syncUx ?? null;
-  const messageSyncUx = page?.streams.find((stream) => stream.stream === "dm_messages")?.syncUx ?? null;
+  const syncUxByStream = await getPageStreamSyncUxByStream(app, {
+    pageId,
+    streams: [...CRM_DM_STREAMS],
+  });
+  const conversationSyncUx = syncUxByStream.get("dm_conversations") ?? null;
+  const messageSyncUx = syncUxByStream.get("dm_messages") ?? null;
 
   return buildCrmMessageSyncUx({
     conversationSyncUx,

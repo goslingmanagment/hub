@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router";
 import { useOverview, useOverviewRevenue, useOverviewGrowth } from "@/api/queries";
 import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
+import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { PLATFORM_COLORS } from "@/lib/constants";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
@@ -101,25 +102,28 @@ export function OverviewPage() {
     updatedPrefix: "Updated",
     retryPrefix: "Retrying",
   });
+  const overallSyncMode = getSyncUxDisplayMode(data.overall.syncUx, "overview_banner");
 
   return (
     <div>
-      <section className="mb-5 rounded-xl border border-border bg-card px-5 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <SyncUxBadge summary={data.overall.syncUx} />
-              <span className="text-sm font-semibold text-text-primary">{data.overall.syncUx.headline}</span>
+      {overallSyncMode === "full" && (
+        <section className="mb-5 rounded-xl border border-border bg-card px-5 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <SyncUxBadge summary={data.overall.syncUx} />
+                <span className="text-sm font-semibold text-text-primary">{data.overall.syncUx.headline}</span>
+              </div>
+              {data.overall.syncUx.detail && (
+                <p className="mt-1 text-sm text-text-muted">{data.overall.syncUx.detail}</p>
+              )}
             </div>
-            {data.overall.syncUx.detail && (
-              <p className="mt-1 text-sm text-text-muted">{data.overall.syncUx.detail}</p>
+            {overallSyncMeta && (
+              <span className="text-xs text-text-muted">{overallSyncMeta}</span>
             )}
           </div>
-          {overallSyncMeta && (
-            <span className="text-xs text-text-muted">{overallSyncMeta}</span>
-          )}
-        </div>
-      </section>
+        </section>
+      )}
 
       <table className="w-full border-collapse overflow-hidden rounded-xl border border-border bg-card">
         <colgroup>
@@ -251,6 +255,13 @@ function ModelGroupRows({
         const isFansly = page.platform === "fansly";
         const pageFollowers = growthReady ? (followersByPageId.get(page.id) ?? 0) : null;
         const pageSubscribers = growthReady ? (subsByPageId.get(page.id) ?? 0) : null;
+        const syncMode = getSyncUxDisplayMode(page.syncUx, "overview_row");
+        const syncMeta = syncMode === "full"
+          ? formatSyncUxMeta(page.syncUx, {
+            updatedPrefix: "Updated",
+            retryPrefix: "Retrying",
+          })
+          : null;
 
         return (
           <tr
@@ -269,23 +280,16 @@ function ModelGroupRows({
                     {platformCfg.label}
                   </span>
                 )}
+                {syncMode === "badge" && <SyncUxBadge summary={page.syncUx} />}
               </div>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <SyncUxBadge summary={page.syncUx} />
-                <span className="text-[12px] text-text-secondary">{page.syncUx.headline}</span>
-                {formatSyncUxMeta(page.syncUx, {
-                  updatedPrefix: "Updated",
-                  retryPrefix: "Retrying",
-                }) && (
-                  <span className="text-[12px] text-text-muted">
-                    {formatSyncUxMeta(page.syncUx, {
-                      updatedPrefix: "Updated",
-                      retryPrefix: "Retrying",
-                    })}
-                  </span>
-                )}
-              </div>
-              {page.syncUx.detail && (
+              {syncMode !== "badge" && (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <SyncUxBadge summary={page.syncUx} />
+                  <span className="text-[12px] text-text-secondary">{page.syncUx.headline}</span>
+                  {syncMeta && <span className="text-[12px] text-text-muted">{syncMeta}</span>}
+                </div>
+              )}
+              {syncMode === "full" && page.syncUx.detail && (
                 <div className="mt-1 text-[12px] text-text-muted">{page.syncUx.detail}</div>
               )}
             </td>
