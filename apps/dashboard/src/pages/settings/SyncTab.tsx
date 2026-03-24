@@ -1,4 +1,5 @@
 import { Fragment, useState } from "react";
+import type { SyncRunItem } from "@agency_hub_core/contracts";
 import { Link } from "react-router";
 import { useAuthMe, useAdminSyncTrigger, useAdminSyncRuns, useAdminSyncRunDetail } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -212,6 +213,7 @@ function RunDetail({ runId }: { runId: number }) {
   if (!data) return null;
 
   const events = data.events ?? [];
+  const runError = data.run.errorSummary;
 
   return (
     <div className="px-6 py-4 bg-hover-alt/40 space-y-3">
@@ -243,9 +245,9 @@ function RunDetail({ runId }: { runId: number }) {
           ))}
         </div>
       )}
-      {data.error && (
+      {runError && (
         <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 overflow-x-auto">
-          {typeof data.error === "string" ? data.error : JSON.stringify(data.error, null, 2)}
+          {runError}
         </pre>
       )}
     </div>
@@ -297,7 +299,7 @@ function DiagnosticsSection() {
                       </td>
                     </tr>
                   )}
-                  {(runs ?? []).map((run: any) => {
+                  {(runs ?? []).map((run: SyncRunItem) => {
                     const isExpanded = expandedRunId === run.runId;
                     return (
                       <Fragment key={run.runId}>
@@ -328,7 +330,7 @@ function DiagnosticsSection() {
                             {formatDuration(run.startedAt, run.finishedAt)}
                           </td>
                           <td className="px-4 py-3 text-sm text-danger max-w-xs truncate">
-                            {run.error ?? ""}
+                            {run.errorSummary ?? ""}
                           </td>
                         </tr>
                         {isExpanded && (

@@ -32,6 +32,7 @@ import type {
   SpenderBatchResponse,
   ConnectionItem,
   SyncRunItem,
+  SyncRunDetailResponse,
   SyncMonitorResponse,
   FanNoteResponse,
   FanFlagsResponse,
@@ -480,10 +481,17 @@ export function useAdminRevokeApiKeys(username: string) {
 }
 
 export function useAdminSyncTrigger() {
+  const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: { pageLabel: string; scope: "light" | "followers" | "all" | "data" | "messages" }) =>
       api.post("/api/v1/admin/sync/trigger", body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
+      void qc.invalidateQueries({ queryKey: ["admin", "syncRuns"] });
+      void qc.invalidateQueries({ queryKey: ["overview"] });
+      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
+    },
   });
 }
 
@@ -497,6 +505,8 @@ export function useAdminSyncRuns(params: { pageLabel?: string; limit?: number; s
   return useQuery({
     queryKey: ["admin", "syncRuns", params],
     queryFn: () => api.get<SyncRunItem[]>(`/api/v1/admin/sync/runs${qs(params)}`),
+    refetchInterval: 10_000,
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -532,7 +542,7 @@ export function useAdminLogs(params: { severity?: string; limit?: number } = {})
 export function useAdminSyncRunDetail(runId: number) {
   return useQuery({
     queryKey: ["admin", "syncRunDetail", runId],
-    queryFn: () => api.get<any>(`/api/v1/admin/sync/runs/${runId}`),
+    queryFn: () => api.get<SyncRunDetailResponse>(`/api/v1/admin/sync/runs/${runId}`),
     enabled: runId > 0,
   });
 }

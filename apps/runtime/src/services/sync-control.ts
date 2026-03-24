@@ -42,7 +42,7 @@ export function resolveStreamsForScope(
 
   if (scope === "data") {
     return platform === "fansly"
-      ? ["light", "transactions", "subscribers", "followers"]
+      ? ["light", "transactions", "subscribers", "followers", "followers_reconcile"]
       : ["light", "transactions"];
   }
 

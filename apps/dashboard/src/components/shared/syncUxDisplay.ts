@@ -30,17 +30,6 @@ export function getSyncUxExceptionKind(summary: SyncUxSummary): SyncUxExceptionK
   return null;
 }
 
-export function getSyncUxSettingsTab(summary: SyncUxSummary): "credentials" | "sync" | null {
-  const kind = getSyncUxExceptionKind(summary);
-  if (kind === "credentials") {
-    return "credentials";
-  }
-  if (kind === "attention" || kind === "off") {
-    return "sync";
-  }
-  return null;
-}
-
 export function getSyncUxDisplayMode(
   summary: SyncUxSummary,
   surface: SyncUxDisplaySurface,
