@@ -8,6 +8,7 @@ const queryMocks = vi.hoisted(() => ({
   useOverview: vi.fn(),
   useOverviewGrowth: vi.fn(),
   useOverviewRevenue: vi.fn(),
+  useOverviewRevenueDaily: vi.fn(),
   usePageFollowersDaily: vi.fn(),
   usePageRevenue: vi.fn(),
   usePageRevenueDaily: vi.fn(),
@@ -129,6 +130,7 @@ describe("dashboard sync product surfaces", () => {
     queryMocks.useOverview.mockReset();
     queryMocks.useOverviewGrowth.mockReset();
     queryMocks.useOverviewRevenue.mockReset();
+    queryMocks.useOverviewRevenueDaily.mockReset();
     queryMocks.usePageFollowersDaily.mockReset();
     queryMocks.usePageRevenue.mockReset();
     queryMocks.usePageRevenueDaily.mockReset();
@@ -147,6 +149,7 @@ describe("dashboard sync product surfaces", () => {
         pages: [{ pageId: 1, netEarningsMills: 0 }],
       },
     });
+    queryMocks.useOverviewRevenueDaily.mockReturnValue({ data: { series: [] } });
     queryMocks.useOverviewGrowth.mockReturnValue({
       data: {
         pages: [{ pageId: 1, newFollowers: 0, newSubscribers: 0 }],

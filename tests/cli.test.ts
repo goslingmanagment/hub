@@ -39,10 +39,12 @@ const cliMocks = vi.hoisted(() => {
     bossBehavior,
     bossInstances,
     createAppContext: vi.fn(),
+    findPageByLabel: vi.fn(),
     handleSuccessfulPageVerificationRecovery: vi.fn(),
     listPages: vi.fn(),
     onboardFanslyPage: vi.fn(),
     onboardOnlyFansPage: vi.fn(),
+    request: vi.fn(),
     requestPageSync: vi.fn(),
     waitForRequestedSyncRevisions: vi.fn(),
     removePageProxy: vi.fn(),
@@ -55,6 +57,19 @@ const cliMocks = vi.hoisted(() => {
 
 vi.mock("pg-boss", () => ({
   PgBoss: cliMocks.PgBossMock,
+}));
+
+vi.mock("@agency_hub_core/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@agency_hub_core/db")>();
+
+  return {
+    ...actual,
+    findPageByLabel: cliMocks.findPageByLabel,
+  };
+});
+
+vi.mock("undici", () => ({
+  request: cliMocks.request,
 }));
 
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
@@ -143,9 +158,11 @@ describe("CLI parsing", () => {
     cliMocks.bossBehavior.sendResult = "job-1";
     cliMocks.bossInstances.length = 0;
     cliMocks.createAppContext.mockReset();
+    cliMocks.findPageByLabel.mockReset();
     cliMocks.listPages.mockReset();
     cliMocks.onboardFanslyPage.mockReset();
     cliMocks.onboardOnlyFansPage.mockReset();
+    cliMocks.request.mockReset();
     cliMocks.requestPageSync.mockReset();
     cliMocks.waitForRequestedSyncRevisions.mockReset();
     cliMocks.removePageProxy.mockReset();
@@ -166,7 +183,22 @@ describe("CLI parsing", () => {
       onlyFansAdapter: {},
       close: vi.fn(async () => {}),
     });
+    cliMocks.findPageByLabel.mockResolvedValue({
+      page: {
+        id: 44,
+        label: "lora-main",
+        platform: "fansly",
+      },
+      credentials: null,
+      proxy: null,
+    });
     cliMocks.listPages.mockResolvedValue([]);
+    cliMocks.request.mockResolvedValue({
+      statusCode: 200,
+      body: {
+        text: vi.fn(async () => JSON.stringify({ ip: "203.0.113.10" })),
+      },
+    });
     cliMocks.requestPageSync.mockResolvedValue({
       page: { id: 1, label: "page" },
       revisions: [],
@@ -449,6 +481,15 @@ describe("CLI parsing", () => {
 
   it("supports sync --no-wait without polling sync_stream_state", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    cliMocks.findPageByLabel.mockResolvedValueOnce({
+      page: {
+        id: 55,
+        label: "lora-main",
+        platform: "fansly",
+      },
+      credentials: null,
+      proxy: null,
+    });
     cliMocks.requestPageSync.mockResolvedValue({
       page: { id: 55, label: "lora-main" },
       revisions: [{ stream: "followers", desiredRevision: 1 }],
