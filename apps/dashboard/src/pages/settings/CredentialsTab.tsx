@@ -48,7 +48,7 @@ export function CredentialsTab() {
                   </div>
                   {syncMode === "exception" && (
                     <div className="mt-2 text-xs text-danger">
-                      Reconnect credentials to keep this page updating.
+                      Credentials may need updating
                     </div>
                   )}
                 </div>

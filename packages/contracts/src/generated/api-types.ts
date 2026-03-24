@@ -2237,6 +2237,17 @@ export interface paths {
                                 pendingMessageBackfillCount: number;
                                 previewReadyConversationCount: number;
                             };
+                            messageSyncUx: {
+                                /** @enum {string} */
+                                state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
+                                label: string;
+                                headline: string;
+                                detail: string | null;
+                                progressLabel: string | null;
+                                nextRetryAt: string | null;
+                                updatedAt: string | null;
+                                requiresAction: boolean;
+                            };
                         };
                     };
                 };
@@ -2699,6 +2710,17 @@ export interface paths {
                                 lastMessageSyncAt: string | null;
                                 unreadCount: number;
                                 lastMessageAt: string | null;
+                            };
+                            messageSyncUx: {
+                                /** @enum {string} */
+                                state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
+                                label: string;
+                                headline: string;
+                                detail: string | null;
+                                progressLabel: string | null;
+                                nextRetryAt: string | null;
+                                updatedAt: string | null;
+                                requiresAction: boolean;
                             };
                             messages: {
                                 platformMessageId: string;
@@ -3902,6 +3924,19 @@ export interface paths {
                                     deltaPct: number | null;
                                 };
                             };
+                            overall: {
+                                syncUx: {
+                                    /** @enum {string} */
+                                    state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
+                                    label: string;
+                                    headline: string;
+                                    detail: string | null;
+                                    progressLabel: string | null;
+                                    nextRetryAt: string | null;
+                                    updatedAt: string | null;
+                                    requiresAction: boolean;
+                                };
+                            };
                             pages: {
                                 id: number;
                                 label: string;
@@ -3922,6 +3957,17 @@ export interface paths {
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                                 lastSyncError: string | null;
+                                syncUx: {
+                                    /** @enum {string} */
+                                    state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
+                                    label: string;
+                                    headline: string;
+                                    detail: string | null;
+                                    progressLabel: string | null;
+                                    nextRetryAt: string | null;
+                                    updatedAt: string | null;
+                                    requiresAction: boolean;
+                                };
                             }[];
                             setup: {
                                 hasPages: boolean;
@@ -4044,6 +4090,17 @@ export interface paths {
                                     recent429s: number;
                                     recent5xxs: number;
                                 }[];
+                                syncUx: {
+                                    /** @enum {string} */
+                                    state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
+                                    label: string;
+                                    headline: string;
+                                    detail: string | null;
+                                    progressLabel: string | null;
+                                    nextRetryAt: string | null;
+                                    updatedAt: string | null;
+                                    requiresAction: boolean;
+                                };
                             };
                             pages: {
                                 pageId: number;
@@ -4125,7 +4182,30 @@ export interface paths {
                                     lastSuccessAt: string | null;
                                     lastFailureAt: string | null;
                                     lastErrorSummary: string | null;
+                                    consecutiveFailures: number;
+                                    syncUx: {
+                                        /** @enum {string} */
+                                        state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
+                                        label: string;
+                                        headline: string;
+                                        detail: string | null;
+                                        progressLabel: string | null;
+                                        nextRetryAt: string | null;
+                                        updatedAt: string | null;
+                                        requiresAction: boolean;
+                                    };
                                 }[];
+                                syncUx: {
+                                    /** @enum {string} */
+                                    state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
+                                    label: string;
+                                    headline: string;
+                                    detail: string | null;
+                                    progressLabel: string | null;
+                                    nextRetryAt: string | null;
+                                    updatedAt: string | null;
+                                    requiresAction: boolean;
+                                };
                             }[];
                             recentEvents: {
                                 id: number;
@@ -5928,7 +6008,7 @@ export interface paths {
                     "application/json": {
                         pageLabel: string;
                         /** @enum {string} */
-                        scope: "light" | "followers" | "all";
+                        scope: "light" | "followers" | "all" | "data" | "messages";
                     };
                 };
             };
@@ -5944,7 +6024,7 @@ export interface paths {
                             accepted: true;
                             pageLabel: string;
                             /** @enum {string} */
-                            scope: "light" | "followers" | "all";
+                            scope: "light" | "followers" | "all" | "data" | "messages";
                         };
                     };
                 };
@@ -6102,6 +6182,17 @@ export interface paths {
                             followerCount: number;
                             proxyUrl: string | null;
                             proxyHasAuth: boolean;
+                            syncUx: {
+                                /** @enum {string} */
+                                state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
+                                label: string;
+                                headline: string;
+                                detail: string | null;
+                                progressLabel: string | null;
+                                nextRetryAt: string | null;
+                                updatedAt: string | null;
+                                requiresAction: boolean;
+                            };
                         }[];
                     };
                 };

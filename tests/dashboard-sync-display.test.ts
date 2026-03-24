@@ -25,9 +25,7 @@ describe("dashboard sync display policy", () => {
   it("hides healthy sync outside the sync workspace", () => {
     const summary = buildSyncUx();
 
-    expect(getSyncUxDisplayMode(summary, "topbar")).toBe("hidden");
     expect(getSyncUxDisplayMode(summary, "overview_row")).toBe("hidden");
-    expect(getSyncUxDisplayMode(summary, "overview_banner")).toBe("hidden");
     expect(getSyncUxDisplayMode(summary, "page_detail")).toBe("hidden");
     expect(getSyncUxDisplayMode(summary, "credentials")).toBe("hidden");
     expect(getSyncUxDisplayMode(summary, "crm_header", {
@@ -72,9 +70,5 @@ describe("dashboard sync display policy", () => {
     }), "crm_header", {
       hasIncompleteData: false,
     })).toBe("exception");
-  });
-
-  it("keeps diagnostics on a dedicated diagnostic surface", () => {
-    expect(getSyncUxDisplayMode(buildSyncUx(), "sync_diagnostics")).toBe("diagnostic");
   });
 });

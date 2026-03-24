@@ -17,7 +17,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
-import { getSyncUxDisplayMode, getSyncUxExceptionKind, getSyncUxSettingsTab } from "@/components/shared/syncUxDisplay";
+import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
 import { buildFanProfileNavigation, buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
 import { usePeriodStore } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
@@ -39,18 +39,6 @@ function isRecent(iso: string | null) {
   return iso ? Date.now() - new Date(iso).getTime() < 86_400_000 : false;
 }
 
-function getPageDetailExceptionMessage(
-  kind: NonNullable<ReturnType<typeof getSyncUxExceptionKind>>,
-) {
-  switch (kind) {
-    case "credentials":
-      return "Reconnect credentials before this page can refresh with new data.";
-    case "off":
-      return "Page updates are paused, so recent numbers may not change yet.";
-    case "attention":
-      return "Recent page data may be incomplete while background updates recover.";
-  }
-}
 
 export function PageDetailPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
@@ -141,7 +129,6 @@ export function PageDetailPage() {
         : "30 Days";
   const syncMode = getSyncUxDisplayMode(page.syncUx, "page_detail");
   const exceptionKind = getSyncUxExceptionKind(page.syncUx);
-  const exceptionTab = getSyncUxSettingsTab(page.syncUx);
   const syncTone = getSyncUxTone(page.syncUx.state);
   const isOwner = auth?.user.role === "owner";
 
@@ -177,14 +164,14 @@ export function PageDetailPage() {
         <p className="text-sm text-text-muted">
           @{page.username ?? "unknown"} &middot; Model: {page.modelName}
         </p>
-        {syncMode === "exception" && exceptionKind && (
+        {syncMode === "exception" && exceptionKind && exceptionKind !== "credentials" && (
           <div className={`mt-3 flex flex-wrap items-center gap-2 rounded-xl border px-4 py-3 text-sm ${syncTone.panel}`}>
             <span className={`font-medium ${syncTone.text}`}>
-              {getPageDetailExceptionMessage(exceptionKind)}
+              Data updates paused &mdash; check sync settings
             </span>
-            {isOwner && exceptionTab && (
-              <Link to={buildSettingsRoute(exceptionTab)} className="font-semibold text-accent hover:underline">
-                {exceptionTab === "credentials" ? "Open Credentials" : "Open Sync"}
+            {isOwner && (
+              <Link to={buildSettingsRoute("sync")} className="font-semibold text-accent hover:underline">
+                Open Sync Settings
               </Link>
             )}
           </div>

@@ -1,23 +1,23 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
+import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 
 const queryMocks = vi.hoisted(() => ({
   useAdminConnections: vi.fn(),
   useAdminSyncRuns: vi.fn(),
+  useAdminSyncRunDetail: vi.fn(),
   useAdminSyncTrigger: vi.fn(),
   useAdminSyncTriggerAll: vi.fn(),
   useAuthMe: vi.fn(),
   useLogout: vi.fn(),
   useOverview: vi.fn(),
+  useSyncMonitor: vi.fn(),
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
-import { OwnerRoute } from "../apps/dashboard/src/components/layout/OwnerRoute.tsx";
 import { Sidebar } from "../apps/dashboard/src/components/layout/Sidebar.tsx";
-import { Topbar } from "../apps/dashboard/src/components/layout/Topbar.tsx";
 import { SettingsPage } from "../apps/dashboard/src/pages/SettingsPage.tsx";
 
 function buildSyncUx(
@@ -94,6 +94,41 @@ function buildConnection(overrides: Partial<{
   };
 }
 
+function buildMonitorResponse() {
+  return {
+    generatedAt: "2026-03-24T12:00:00.000Z",
+    window: { hours: 24, startedAt: "2026-03-23T12:00:00.000Z" },
+    overall: {
+      pages: 1,
+      streams: 7,
+      runningStreams: 0,
+      failedStreams: 0,
+      stalledStreams: 0,
+      pendingStreams: 0,
+      backoffStreams: 0,
+      counts: { fans: 0, followers: 34, subscribers: 12, transactions: 100, conversations: 10, messages: 200 },
+      recentRuns: { running: 0, success: 1, partial: 0, failed: 0, skipped: 0 },
+      recentErrors: { total429s: 0, total5xxs: 0, failedRuns: 0, failedAttempts: 0, retryAttempts: 0, last429At: null, last5xxAt: null },
+      providers: [],
+      syncUx: buildSyncUx(),
+    },
+    pages: [{
+      pageId: 1,
+      pageLabel: "lana",
+      platform: "fansly" as const,
+      modelSlug: "lana",
+      modelName: "Lana",
+      username: "lana",
+      displayName: "Lana",
+      counts: { fans: 0, followers: 34, subscribers: 12, transactions: 100, conversations: 10, messages: 200 },
+      summary: { runningStreams: 0, failedStreams: 0, stalledStreams: 0, pendingStreams: 0, backoffStreams: 0, recentErrors: 0 },
+      streams: [],
+      syncUx: buildSyncUx(),
+    }],
+    recentEvents: [],
+  };
+}
+
 function renderWithRouter(element: ReturnType<typeof createElement>, initialEntries = ["/"]) {
   return renderToStaticMarkup(createElement(
     MemoryRouter,
@@ -106,11 +141,13 @@ describe("dashboard sync layout", () => {
   beforeEach(() => {
     queryMocks.useAdminConnections.mockReset();
     queryMocks.useAdminSyncRuns.mockReset();
+    queryMocks.useAdminSyncRunDetail.mockReset();
     queryMocks.useAdminSyncTrigger.mockReset();
     queryMocks.useAdminSyncTriggerAll.mockReset();
     queryMocks.useAuthMe.mockReset();
     queryMocks.useLogout.mockReset();
     queryMocks.useOverview.mockReset();
+    queryMocks.useSyncMonitor.mockReset();
 
     queryMocks.useOverview.mockReturnValue({ data: buildOverview() });
     queryMocks.useLogout.mockReturnValue({ mutateAsync: vi.fn() });
@@ -126,6 +163,10 @@ describe("dashboard sync layout", () => {
       data: [],
       isLoading: false,
     });
+    queryMocks.useAdminSyncRunDetail.mockReturnValue({
+      data: null,
+      isLoading: false,
+    });
     queryMocks.useAdminSyncTrigger.mockReturnValue({
       isPending: false,
       mutateAsync: vi.fn(),
@@ -134,18 +175,10 @@ describe("dashboard sync layout", () => {
       isPending: false,
       mutateAsync: vi.fn(),
     });
-  });
-
-  it("removes topbar sync chrome and uses the diagnostics breadcrumb label", () => {
-    const html = renderWithRouter(
-      createElement(Topbar, { user: { username: "owner", role: "owner" } }),
-      ["/sync"],
-    );
-
-    expect(html).toContain("Sync Diagnostics");
-    expect(html).not.toContain(">Sync</button>");
-    expect(html).not.toContain("Syncing now");
-    expect(html).not.toContain("Updated just now");
+    queryMocks.useSyncMonitor.mockReturnValue({
+      data: buildMonitorResponse(),
+      isLoading: false,
+    });
   });
 
   it("removes sync diagnostics from the primary sidebar", () => {
@@ -163,56 +196,15 @@ describe("dashboard sync layout", () => {
     const html = renderWithRouter(createElement(SettingsPage), ["/settings"]);
 
     expect(html).toContain("Update Credentials");
-    expect(html).toContain("Reconnect credentials to keep this page updating.");
-    expect(html).not.toContain("Reconnect to resume sync");
+    expect(html).toContain("Credentials may need updating");
     expect(html).not.toContain("Sync All Pages");
   });
 
   it("supports settings tab deep links for the sync workspace", () => {
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("Sync All Pages");
-    expect(html).toContain("Open Diagnostics");
-    expect(html).toContain("Recent Activity");
+    expect(html).toContain("Sync Data");
+    expect(html).toContain("Sync diagnostics");
     expect(html).not.toContain("Update Credentials");
-  });
-
-  it("keeps sync diagnostics owner-only", () => {
-    const ownerHtml = renderWithRouter(
-      createElement(Routes, undefined,
-        createElement(Route, {
-          path: "/",
-          element: createElement("div", undefined, "Overview"),
-        }),
-        createElement(Route, {
-          path: "/sync",
-          element: createElement(OwnerRoute, undefined, createElement("div", undefined, "Sync Diagnostics Page")),
-        }),
-      ),
-      ["/sync"],
-    );
-
-    expect(ownerHtml).toContain("Sync Diagnostics Page");
-
-    queryMocks.useAuthMe.mockReturnValue({
-      data: { user: { username: "lead", role: "team_lead" } },
-      isLoading: false,
-    });
-
-    const nonOwnerHtml = renderWithRouter(
-      createElement(Routes, undefined,
-        createElement(Route, {
-          path: "/",
-          element: createElement("div", undefined, "Overview"),
-        }),
-        createElement(Route, {
-          path: "/sync",
-          element: createElement(OwnerRoute, undefined, createElement("div", undefined, "Sync Diagnostics Page")),
-        }),
-      ),
-      ["/sync"],
-    );
-
-    expect(nonOwnerHtml).not.toContain("Sync Diagnostics Page");
   });
 });

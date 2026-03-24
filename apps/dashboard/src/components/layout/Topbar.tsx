@@ -106,8 +106,6 @@ function buildBreadcrumbs(
 
   if (parts.length === 0) return [{ label: "Overview" }];
 
-  if (parts[0] === "sync") return [{ label: "Overview", href: "/" }, { label: "Sync Diagnostics" }];
-
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
 
   if (parts[0] === "dev") {

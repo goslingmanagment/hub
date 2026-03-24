@@ -6517,6 +6517,83 @@
                         "previewReadyConversationCount"
                       ],
                       "additionalProperties": false
+                    },
+                    "messageSyncUx": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "healthy",
+                            "syncing",
+                            "catching_up",
+                            "retrying",
+                            "attention",
+                            "setup",
+                            "off"
+                          ]
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "headline": {
+                          "type": "string"
+                        },
+                        "detail": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "progressLabel": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "nextRetryAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "updatedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "requiresAction": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "label",
+                        "headline",
+                        "detail",
+                        "progressLabel",
+                        "nextRetryAt",
+                        "updatedAt",
+                        "requiresAction"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -6524,7 +6601,8 @@
                     "retention",
                     "reactivation",
                     "freshness",
-                    "coverage"
+                    "coverage",
+                    "messageSyncUx"
                   ],
                   "additionalProperties": false
                 }
@@ -8325,6 +8403,83 @@
                       ],
                       "additionalProperties": false
                     },
+                    "messageSyncUx": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "healthy",
+                            "syncing",
+                            "catching_up",
+                            "retrying",
+                            "attention",
+                            "setup",
+                            "off"
+                          ]
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "headline": {
+                          "type": "string"
+                        },
+                        "detail": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "progressLabel": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "nextRetryAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "updatedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "requiresAction": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "label",
+                        "headline",
+                        "detail",
+                        "progressLabel",
+                        "nextRetryAt",
+                        "updatedAt",
+                        "requiresAction"
+                      ],
+                      "additionalProperties": false
+                    },
                     "messages": {
                       "type": "array",
                       "items": {
@@ -8380,6 +8535,7 @@
                     "page",
                     "fan",
                     "conversation",
+                    "messageSyncUx",
                     "messages"
                   ],
                   "additionalProperties": false
@@ -12729,6 +12885,92 @@
                       ],
                       "additionalProperties": false
                     },
+                    "overall": {
+                      "type": "object",
+                      "properties": {
+                        "syncUx": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "healthy",
+                                "syncing",
+                                "catching_up",
+                                "retrying",
+                                "attention",
+                                "setup",
+                                "off"
+                              ]
+                            },
+                            "label": {
+                              "type": "string"
+                            },
+                            "headline": {
+                              "type": "string"
+                            },
+                            "detail": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "progressLabel": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "nextRetryAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "updatedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "requiresAction": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "label",
+                            "headline",
+                            "detail",
+                            "progressLabel",
+                            "nextRetryAt",
+                            "updatedAt",
+                            "requiresAction"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "syncUx"
+                      ],
+                      "additionalProperties": false
+                    },
                     "pages": {
                       "type": "array",
                       "items": {
@@ -12840,6 +13082,83 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "syncUx": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "healthy",
+                                  "syncing",
+                                  "catching_up",
+                                  "retrying",
+                                  "attention",
+                                  "setup",
+                                  "off"
+                                ]
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "headline": {
+                                "type": "string"
+                              },
+                              "detail": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "progressLabel": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "nextRetryAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "updatedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "requiresAction": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "label",
+                              "headline",
+                              "detail",
+                              "progressLabel",
+                              "nextRetryAt",
+                              "updatedAt",
+                              "requiresAction"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -12859,7 +13178,8 @@
                           "connectionStatus",
                           "lastLightSyncAt",
                           "lastFollowerSyncAt",
-                          "lastSyncError"
+                          "lastSyncError",
+                          "syncUx"
                         ],
                         "additionalProperties": false
                       }
@@ -12888,6 +13208,7 @@
                   "required": [
                     "counts",
                     "revenue",
+                    "overall",
                     "pages",
                     "setup"
                   ],
@@ -13280,6 +13601,83 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "syncUx": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "healthy",
+                                "syncing",
+                                "catching_up",
+                                "retrying",
+                                "attention",
+                                "setup",
+                                "off"
+                              ]
+                            },
+                            "label": {
+                              "type": "string"
+                            },
+                            "headline": {
+                              "type": "string"
+                            },
+                            "detail": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "progressLabel": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "nextRetryAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "updatedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "requiresAction": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "label",
+                            "headline",
+                            "detail",
+                            "progressLabel",
+                            "nextRetryAt",
+                            "updatedAt",
+                            "requiresAction"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -13293,7 +13691,8 @@
                         "counts",
                         "recentRuns",
                         "recentErrors",
-                        "providers"
+                        "providers",
+                        "syncUx"
                       ],
                       "additionalProperties": false
                     },
@@ -13789,6 +14188,88 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "consecutiveFailures": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "syncUx": {
+                                  "type": "object",
+                                  "properties": {
+                                    "state": {
+                                      "type": "string",
+                                      "enum": [
+                                        "healthy",
+                                        "syncing",
+                                        "catching_up",
+                                        "retrying",
+                                        "attention",
+                                        "setup",
+                                        "off"
+                                      ]
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "headline": {
+                                      "type": "string"
+                                    },
+                                    "detail": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "progressLabel": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "nextRetryAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "updatedAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "requiresAction": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "state",
+                                    "label",
+                                    "headline",
+                                    "detail",
+                                    "progressLabel",
+                                    "nextRetryAt",
+                                    "updatedAt",
+                                    "requiresAction"
+                                  ],
+                                  "additionalProperties": false
                                 }
                               },
                               "required": [
@@ -13805,10 +14286,89 @@
                                 "lastCompletion",
                                 "lastSuccessAt",
                                 "lastFailureAt",
-                                "lastErrorSummary"
+                                "lastErrorSummary",
+                                "consecutiveFailures",
+                                "syncUx"
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "syncUx": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "healthy",
+                                  "syncing",
+                                  "catching_up",
+                                  "retrying",
+                                  "attention",
+                                  "setup",
+                                  "off"
+                                ]
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "headline": {
+                                "type": "string"
+                              },
+                              "detail": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "progressLabel": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "nextRetryAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "updatedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "requiresAction": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "label",
+                              "headline",
+                              "detail",
+                              "progressLabel",
+                              "nextRetryAt",
+                              "updatedAt",
+                              "requiresAction"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -13821,7 +14381,8 @@
                           "displayName",
                           "counts",
                           "summary",
-                          "streams"
+                          "streams",
+                          "syncUx"
                         ],
                         "additionalProperties": false
                       }
@@ -18221,7 +18782,9 @@
                     "enum": [
                       "light",
                       "followers",
-                      "all"
+                      "all",
+                      "data",
+                      "messages"
                     ]
                   }
                 },
@@ -18260,7 +18823,9 @@
                       "enum": [
                         "light",
                         "followers",
-                        "all"
+                        "all",
+                        "data",
+                        "messages"
                       ]
                     }
                   },
@@ -18590,6 +19155,83 @@
                       },
                       "proxyHasAuth": {
                         "type": "boolean"
+                      },
+                      "syncUx": {
+                        "type": "object",
+                        "properties": {
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "healthy",
+                              "syncing",
+                              "catching_up",
+                              "retrying",
+                              "attention",
+                              "setup",
+                              "off"
+                            ]
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "headline": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "progressLabel": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "nextRetryAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "updatedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "requiresAction": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "state",
+                          "label",
+                          "headline",
+                          "detail",
+                          "progressLabel",
+                          "nextRetryAt",
+                          "updatedAt",
+                          "requiresAction"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [
@@ -18607,7 +19249,8 @@
                       "subscriberCount",
                       "followerCount",
                       "proxyUrl",
-                      "proxyHasAuth"
+                      "proxyHasAuth",
+                      "syncUx"
                     ],
                     "additionalProperties": false
                   }

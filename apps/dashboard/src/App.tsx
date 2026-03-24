@@ -5,7 +5,6 @@ import { ProtectedLayout } from "./components/layout/ProtectedLayout";
 
 const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })));
 const OverviewPage = lazy(() => import("./pages/OverviewPage").then((m) => ({ default: m.OverviewPage })));
-const SyncMonitorPage = lazy(() => import("./pages/SyncMonitorPage").then((m) => ({ default: m.SyncMonitorPage })));
 const PageDetailPage = lazy(() => import("./pages/PageDetailPage").then((m) => ({ default: m.PageDetailPage })));
 const SubscribersPage = lazy(() => import("./pages/SubscribersPage").then((m) => ({ default: m.SubscribersPage })));
 const FollowersPage = lazy(() => import("./pages/FollowersPage").then((m) => ({ default: m.FollowersPage })));
@@ -15,7 +14,6 @@ const CrmPage = lazy(() => import("./pages/CrmPage").then((m) => ({ default: m.C
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage").then((m) => ({ default: m.NotificationsPage })));
 const LogPage = lazy(() => import("./pages/dev/LogPage").then((m) => ({ default: m.LogPage })));
-const SyncStatusPage = lazy(() => import("./pages/dev/SyncStatusPage").then((m) => ({ default: m.SyncStatusPage })));
 const QueuePage = lazy(() => import("./pages/dev/QueuePage").then((m) => ({ default: m.QueuePage })));
 const DbStatsPage = lazy(() => import("./pages/dev/DbStatsPage").then((m) => ({ default: m.DbStatsPage })));
 const IncidentsPage = lazy(() => import("./pages/dev/IncidentsPage").then((m) => ({ default: m.IncidentsPage })));
@@ -31,7 +29,6 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route element={<ProtectedLayout />}>
           <Route index element={<OverviewPage />} />
-          <Route path="sync" element={<OwnerRoute><SyncMonitorPage /></OwnerRoute>} />
           <Route path="pages/:pageLabel" element={<PageDetailPage />} />
           <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
           <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />
@@ -48,7 +45,6 @@ export function App() {
             )}
           />
           <Route path="dev/log" element={<OwnerRoute><LogPage /></OwnerRoute>} />
-          <Route path="dev/sync-status" element={<OwnerRoute><SyncStatusPage /></OwnerRoute>} />
           <Route path="dev/queue" element={<OwnerRoute><QueuePage /></OwnerRoute>} />
           <Route path="dev/db-stats" element={<OwnerRoute><DbStatsPage /></OwnerRoute>} />
           <Route path="dev/incidents" element={<OwnerRoute><IncidentsPage /></OwnerRoute>} />

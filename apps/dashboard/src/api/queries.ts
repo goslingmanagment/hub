@@ -33,7 +33,6 @@ import type {
   ConnectionItem,
   SyncRunItem,
   SyncMonitorResponse,
-  SyncRequestsResponse,
   FanNoteResponse,
   FanFlagsResponse,
   FanListResponse,
@@ -44,7 +43,6 @@ import type {
   CrmRetentionResponse,
   CrmReactivationResponse,
   CrmConversationPreviewResponse,
-  PageConversationMessagesResponse,
   NotificationsSettingsResponse,
   NotificationsSettingsUpdateBody,
   NotificationsTestMessageResponse,
@@ -484,7 +482,7 @@ export function useAdminRevokeApiKeys(username: string) {
 export function useAdminSyncTrigger() {
   return useMutation({
     meta: { suppressGlobalError: true },
-    mutationFn: (body: { pageLabel: string; scope: "light" | "followers" | "all" }) =>
+    mutationFn: (body: { pageLabel: string; scope: "light" | "followers" | "all" | "data" | "messages" }) =>
       api.post("/api/v1/admin/sync/trigger", body),
   });
 }
@@ -510,32 +508,6 @@ export function useSyncMonitor(params: { pageLabel?: string; windowHours?: numbe
   });
 }
 
-export function useSyncRequests(
-  params: { windowMs?: number; limit?: number } = {},
-  options: { enabled?: boolean } = {},
-) {
-  return useQuery({
-    queryKey: ["syncRequests", params],
-    queryFn: () => {
-      const since = params.windowMs !== undefined
-        ? new Date(Date.now() - params.windowMs).toISOString()
-        : undefined;
-      return api.get<SyncRequestsResponse>(`/api/v1/sync/requests${qs({
-        since,
-        limit: params.limit,
-      })}`);
-    },
-    select: (items: SyncRequestsResponse) => items.map((item: SyncRequestsResponse[number]) => ({
-      ...item,
-      partnerUsername: item.partnerUsername ?? null,
-      returnedItems: typeof item.returnedItems === "number" ? item.returnedItems : null,
-      syncDone: typeof item.syncDone === "boolean" ? item.syncDone : null,
-    })),
-    enabled: options.enabled ?? true,
-    refetchInterval: 3_000,
-    placeholderData: (previousData) => previousData,
-  });
-}
 
 export function useAdminUpdateCredentials(pageLabel: string) {
   const qc = useQueryClient();
@@ -665,22 +637,6 @@ export function useCrmConversationPreview(
   });
 }
 
-export function usePageConversationMessages(
-  pageLabel: string,
-  conversationId: string | null,
-  params: { limit?: number } = {},
-  options: { enabled?: boolean } = {},
-) {
-  return useQuery({
-    queryKey: ["pageConversationMessages", pageLabel, conversationId, params],
-    queryFn: () =>
-      api.get<PageConversationMessagesResponse>(
-        `/api/v1/pages/${pageLabel}/conversations/${conversationId}/messages${qs(params)}`,
-      ),
-    enabled: !!conversationId && (options.enabled ?? true),
-    meta: { suppressGlobalError: true },
-  });
-}
 
 // Notifications
 export function useNotificationsSettings() {

@@ -8,7 +8,7 @@ export const SYNC_PAGE_EXECUTE_DLQ_QUEUE = "sync.page.execute.dlq";
 export const RAW_PAYLOAD_CLEANUP_QUEUE = "fansly.raw-payload-cleanup";
 export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 
-export type SyncTriggerScope = "light" | "followers" | "all";
+export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages";
 
 export interface SyncPageExecutePayload {
   platformAccountId: number;
