@@ -1089,6 +1089,57 @@ export async function listSyncRequestAttempts(
   return result.rows.map((row) => normalizeSyncRequestAttemptRow(row));
 }
 
+export async function countRecentTerminalDmMessageConversationFailureStreak(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    platformConversationId: string;
+    limit?: number;
+  },
+) {
+  const result = await db.execute<{
+    logicalRequestId: string;
+    terminalState: "success" | "failed";
+    httpStatus: number | null;
+    terminalAt: Date | string;
+  }>(sql`
+    with logical_requests as (
+      select a.logical_request_id as "logicalRequestId",
+             max(a.id) filter (where a.state in ('success', 'failed')) as "terminalAttemptId"
+      from ${syncRequestAttempts} a
+      where a.platform_account_id = ${input.platformAccountId}
+        and a.stream = 'dm_messages'
+        and a.operation = 'messages'
+        and a.request_shape ->> 'groupId' = ${input.platformConversationId}
+      group by a.logical_request_id
+    )
+    select a.logical_request_id as "logicalRequestId",
+           a.state as "terminalState",
+           a.http_status as "httpStatus",
+           coalesce(a.finished_at, a.started_at) as "terminalAt"
+    from logical_requests lr
+    inner join ${syncRequestAttempts} a on a.id = lr."terminalAttemptId"
+    order by "terminalAt" desc, a.id desc
+    limit ${input.limit ?? 20}
+  `);
+
+  let streak = 0;
+  for (const row of result.rows) {
+    if (row.terminalState !== "failed") {
+      break;
+    }
+
+    const httpStatus = normalizeNullableNumber(row.httpStatus, "httpStatus");
+    if (httpStatus === null || httpStatus < 500 || httpStatus >= 600) {
+      break;
+    }
+
+    streak += 1;
+  }
+
+  return streak;
+}
+
 export async function hasRecentTerminalProxyFailure(
   db: Database,
   input: {

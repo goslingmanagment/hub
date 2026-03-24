@@ -1,4 +1,5 @@
 import {
+  countRecentTerminalDmMessageConversationFailureStreak,
   countActivePageFollows,
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
@@ -32,16 +33,19 @@ import {
 } from "@agency_hub_core/db";
 import {
   FANSLY_MAPPER_VERSION,
+  FanslyApiError,
   mapFanslySubscriptionStatus,
 } from "@agency_hub_core/fansly";
 import {
   buildFanslyDmConversationMetadata,
   buildProxyEgressKey,
   fanslyFollowIdToDate,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
   getFanslyDmMessageSyncExcludedReason,
   isFanslyDmMessageSyncExcluded,
   toMills,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
   type HttpRequestEvent,
   type HttpRequestObserver,
 } from "@agency_hub_core/shared";
@@ -76,6 +80,8 @@ type ExecutorRequestContext = {
   pageContext: ResolvedPageContext;
   telemetry: SyncRunTelemetry;
 };
+
+const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
 
 function createPageRateLimitWaiter(
   app: AppContext,
@@ -206,6 +212,36 @@ function asNullableString(value: unknown) {
 
 function hasUnresolvedIdentityMetadata(metadata: Record<string, unknown> | null | undefined) {
   return metadata?.unresolvedIdentity === true;
+}
+
+type FanslyAccountResolution = "resolved" | "unresolved" | "unknown";
+
+function isTerminalFanslyServerError(error: unknown): error is FanslyApiError & { status: number } {
+  return error instanceof FanslyApiError &&
+    typeof error.status === "number" &&
+    error.status >= 500 &&
+    error.status < 600;
+}
+
+async function probeFanslyAccountResolution(
+  app: AppContext,
+  requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0],
+  partnerPlatformUserId: string,
+): Promise<FanslyAccountResolution> {
+  try {
+    const response = await app.adapter.getAccountsByIdsPage(requestContext, [partnerPlatformUserId]);
+    if (!Array.isArray(response?.parsed)) {
+      return "unknown";
+    }
+    if (response.parsed.length === 0) {
+      return "unresolved";
+    }
+    return response.parsed.some((account) => account.id === partnerPlatformUserId)
+      ? "resolved"
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 function parseSubscribersCheckpointState(
@@ -1410,11 +1446,41 @@ export async function executeDmConversationsChunk(
       const preservedLastModelMessageAt = lastMessageAt && lastMessageSenderRole === "model"
         ? lastMessageAt
         : existing?.lastModelMessageAt ?? null;
+      const existingExcludedReason = getFanslyDmMessageSyncExcludedReason(existing?.metadata);
+      let messageSyncExcludedReason = partnerMissingFromAggregationAccounts
+        ? FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
+        : null;
+
+      if (
+        existingExcludedReason ===
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP
+      ) {
+        let shouldClearUnresolvableExclusion = Boolean(
+          partnerPlatformUserId && accountsById.has(partnerPlatformUserId),
+        );
+
+        if (
+          !shouldClearUnresolvableExclusion &&
+          partnerPlatformUserId &&
+          input.budget.hasRequestCapacity() &&
+          input.budget.hasWallClockCapacity()
+        ) {
+          const resolution = await probeFanslyAccountResolution(
+            app,
+            requestContext,
+            partnerPlatformUserId,
+          );
+          shouldClearUnresolvableExclusion = resolution === "resolved";
+        }
+
+        messageSyncExcludedReason = shouldClearUnresolvableExclusion
+          ? null
+          : FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP;
+      }
+
       const metadata = buildFanslyDmConversationMetadata({
         unresolvedIdentity: !partnerPlatformUserId,
-        messageSyncExcludedReason: partnerMissingFromAggregationAccounts
-          ? FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
-          : null,
+        messageSyncExcludedReason,
       });
 
       if (
@@ -1594,7 +1660,7 @@ export async function executeDmMessagesChunk(
   };
 
   try {
-    while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+    conversationLoop: while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
       let conversation = state.currentConversationId
         ? await getPageDmConversationById(app.db, state.currentConversationId)
         : null;
@@ -1665,11 +1731,99 @@ export async function executeDmMessagesChunk(
       while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
         dmMessagesRequestObserver.recordConversationTouched(conversation.id);
 
-        const page = await app.adapter.getMessagesPage(requestContext, {
-          groupId: conversation.platformConversationId,
-          limit: 25,
-          before: state.currentBeforeMessageId,
-        });
+        let page;
+        try {
+          page = await app.adapter.getMessagesPage(requestContext, {
+            groupId: conversation.platformConversationId,
+            limit: 25,
+            before: state.currentBeforeMessageId,
+          });
+        } catch (error) {
+          if (
+            !isTerminalFanslyServerError(error) ||
+            !conversation.partnerPlatformUserId
+          ) {
+            throw error;
+          }
+
+          const failureStreak = await countRecentTerminalDmMessageConversationFailureStreak(
+            app.db,
+            {
+              platformAccountId: input.pageContext.page.id,
+              platformConversationId: conversation.platformConversationId,
+            },
+          );
+          if (failureStreak < DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD) {
+            throw error;
+          }
+
+          if (!input.budget.hasRequestCapacity() || !input.budget.hasWallClockCapacity()) {
+            throw error;
+          }
+
+          const resolution = await probeFanslyAccountResolution(
+            app,
+            requestContext,
+            conversation.partnerPlatformUserId,
+          );
+          if (resolution !== "unresolved") {
+            throw error;
+          }
+
+          await upsertPageDmConversation(app.db, {
+            platformAccountId: conversation.platformAccountId,
+            fanId: conversation.fanId,
+            platformConversationId: conversation.platformConversationId,
+            partnerPlatformUserId: conversation.partnerPlatformUserId,
+            partnerUsername: conversation.partnerUsername,
+            partnerDisplayName: conversation.partnerDisplayName,
+            conversationFlags: conversation.conversationFlags,
+            unreadCount: conversation.unreadCount,
+            subscriptionTierId: conversation.subscriptionTierId,
+            lastMessageId: conversation.lastMessageId,
+            lastUnreadMessageId: conversation.lastUnreadMessageId,
+            lastMessageAt: conversation.lastMessageAt,
+            lastMessageSenderId: conversation.lastMessageSenderId,
+            lastMessageSenderRole: conversation.lastMessageSenderRole,
+            lastMessagePreview: conversation.lastMessagePreview,
+            lastFanMessageAt: conversation.lastFanMessageAt,
+            lastModelMessageAt: conversation.lastModelMessageAt,
+            storedMessageCount: conversation.storedMessageCount,
+            newestStoredMessageId: conversation.newestStoredMessageId,
+            oldestStoredMessageId: conversation.oldestStoredMessageId,
+            messageBackfillComplete: conversation.messageBackfillComplete,
+            lastMessageSyncAt: conversation.lastMessageSyncAt,
+            isVisible: conversation.isVisible,
+            lastSeenGeneration: conversation.lastSeenGeneration,
+            metadata: {
+              ...conversation.metadata,
+              [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+                FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+            },
+          });
+          await input.telemetry.addNote(
+            "Excluded DM conversation after repeated 5xx because partner account is unresolvable",
+            {
+              groupId: conversation.platformConversationId,
+              partnerPlatformUserId: conversation.partnerPlatformUserId,
+              failureStreak,
+              exclusionReason:
+                FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+            },
+          );
+
+          state = emptyDmMessagesCheckpointState();
+          const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "dm_messages",
+            state,
+          });
+          await input.telemetry.recordCheckpointAdvanced(
+            "dm_messages",
+            summarizeCheckpoint(progressCheckpoint),
+          );
+          continue conversationLoop;
+        }
         const existingIds = await getExistingPageDmMessageIds(app.db, {
           conversationId: conversation.id,
           platformMessageIds: page.items.map((message) => message.id),

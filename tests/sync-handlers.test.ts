@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PAGE_DM_MESSAGE_HISTORY_LIMIT } from "@agency_hub_core/db";
+import { FanslyApiError } from "@agency_hub_core/fansly";
 import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
 } from "@agency_hub_core/shared";
 
 const dbMocks = vi.hoisted(() => ({
+  countRecentTerminalDmMessageConversationFailureStreak: vi.fn(),
   countActivePageFollows: vi.fn(),
   deactivatePageFollowsByGeneration: vi.fn(),
   deactivatePageSubscriptionsByGeneration: vi.fn(),
@@ -83,6 +86,7 @@ function createTelemetry() {
     recordCheckpointLoaded: vi.fn(async () => {}),
     recordCheckpointAdvanced: vi.fn(async () => {}),
     recordDmMessagesChunkSummary: vi.fn(async () => {}),
+    addNote: vi.fn(async () => {}),
     addAnomaly: vi.fn(async () => {}),
     getRequestObserver: vi.fn(() => null),
   };
@@ -98,6 +102,59 @@ async function recordStartedRequest(requestObserver: { onRequestEvent(event: unk
     timestamp: new Date("2026-03-10T00:00:00.000Z"),
     state: "started",
   });
+}
+
+function buildDmMessageSyncCandidate(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 777,
+    platformConversationId: "group-1",
+    fanId: 101,
+    partnerPlatformUserId: "fan-1",
+    unreadCount: 2,
+    lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+    lastMessageId: "msg-80",
+    newestStoredMessageId: null,
+    storedMessageCount: 0,
+    messageBackfillComplete: false,
+    lastMessageSyncAt: null,
+    ...overrides,
+  };
+}
+
+function buildDmConversation(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 777,
+    platformAccountId: 55,
+    fanId: 101,
+    platformConversationId: "group-1",
+    partnerPlatformUserId: "fan-1",
+    partnerUsername: "fan_1",
+    partnerDisplayName: "Fan 1",
+    conversationFlags: 0,
+    unreadCount: 2,
+    subscriptionTierId: null,
+    lastMessageId: "msg-80",
+    lastUnreadMessageId: "msg-80",
+    lastMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+    lastMessageSenderId: "fan-1",
+    lastMessageSenderRole: "fan",
+    lastMessagePreview: "previous",
+    lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+    lastModelMessageAt: null,
+    storedMessageCount: 0,
+    newestStoredMessageId: null,
+    oldestStoredMessageId: null,
+    messageBackfillComplete: false,
+    lastMessageSyncAt: null,
+    isVisible: true,
+    lastSeenGeneration: 1,
+    firstSeenAt: new Date("2026-03-01T00:00:00.000Z"),
+    lastSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+    metadata: {},
+    createdAt: new Date("2026-03-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-03-10T00:00:00.000Z"),
+    ...overrides,
+  };
 }
 
 describe("sync executor handlers", () => {
@@ -130,6 +187,7 @@ describe("sync executor handlers", () => {
     dbMocks.getPageDmConversationById.mockResolvedValue(null);
     dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([]);
     dbMocks.markPageDmConversationsInvisibleByGeneration.mockResolvedValue(undefined);
+    dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValue(0);
     dbMocks.rebuildFollowerRollups.mockResolvedValue(undefined);
     dbMocks.rebuildSubscriberRollups.mockResolvedValue(undefined);
     dbMocks.updateLegacySyncTimestamp.mockResolvedValue(undefined);
@@ -1159,6 +1217,119 @@ describe("sync executor handlers", () => {
     }));
   });
 
+  it("clears the unresolvable exclusion marker when account lookup resolves the partner again", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async () => ({
+      total: 1,
+      items: [{
+        groupId: "group-recheck",
+        partnerAccountId: "fan-recheck",
+        partnerUsername: "fan_recheck",
+        flags: 0,
+        unreadCount: 2,
+        subscriptionTierId: null,
+        lastMessageId: "msg-80",
+        lastUnreadMessageId: "msg-80",
+      }],
+      accounts: [],
+      groups: [{
+        id: "group-recheck",
+        users: [
+          { groupId: "group-recheck", userId: "acct-dm", type: 1, permissionFlags: 0 },
+          { groupId: "group-recheck", userId: "fan-recheck", type: 1, permissionFlags: 0 },
+        ],
+        lastMessage: {
+          id: "msg-80",
+          type: 1,
+          dataVersion: 1,
+          content: "hello there",
+          groupId: "group-recheck",
+          senderId: "fan-recheck",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_770_000_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 0,
+        },
+      }],
+      offset: 0,
+      done: true,
+      raw: {
+        data: [],
+        aggregationData: {
+          total: 1,
+          accounts: [],
+          groups: [],
+        },
+      },
+    }));
+    const getAccountsByIdsPage = vi.fn(async () => ({
+      parsed: [{
+        id: "fan-recheck",
+        username: "fan_recheck",
+        displayName: "Fan Recheck",
+        createdAt: 1_770_000_000_000,
+      }],
+      raw: {},
+    }));
+    const db = {};
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+        getAccountsByIdsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([buildDmConversation({
+      id: 779,
+      platformConversationId: "group-recheck",
+      partnerPlatformUserId: "fan-recheck",
+      partnerUsername: "fan_recheck",
+      partnerDisplayName: "Fan Recheck",
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+      },
+    })]);
+    dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-recheck" }]);
+
+    const result = await executeDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 1,
+      },
+      syncRunId: 9051,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(2),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(getAccountsByIdsPage).toHaveBeenCalledWith(expect.anything(), ["fan-recheck"]);
+    expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith(db, expect.objectContaining({
+      platformConversationId: "group-recheck",
+      metadata: {},
+    }));
+  });
+
   it("yields dm_messages when the chunk budget is exhausted mid-conversation", async () => {
     const telemetry = createTelemetry();
     const getMessagesPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {
@@ -1464,6 +1635,232 @@ describe("sync executor handlers", () => {
         averageGapMs: 7_600,
       },
     });
+  });
+
+  it("excludes unresolvable partners after repeated terminal dm_messages 5xx failures and continues", async () => {
+    const telemetry = createTelemetry();
+    const getMessagesPage = vi.fn(async (
+      context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+      params: { groupId: string },
+    ) => {
+      await recordStartedRequest(context.requestObserver, "messages");
+      if (params.groupId === "group-broken") {
+        throw new FanslyApiError("provider failure", 500);
+      }
+
+      return {
+        items: [{
+          id: "msg-81",
+          type: 1,
+          dataVersion: 1,
+          content: "recovered conversation",
+          groupId: "group-live",
+          senderId: "fan-live",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_770_000_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 0,
+        }],
+        groupId: "group-live",
+        before: null,
+        done: true,
+        raw: {
+          messages: [],
+        },
+      };
+    });
+    const getAccountsByIdsPage = vi.fn(async () => ({
+      parsed: [],
+      raw: {},
+    }));
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagesPage,
+        getAccountsByIdsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.selectNextPageDmMessageSyncCandidate
+      .mockResolvedValueOnce(buildDmMessageSyncCandidate({
+        id: 777,
+        platformConversationId: "group-broken",
+        partnerPlatformUserId: "fan-missing",
+      }))
+      .mockResolvedValueOnce(buildDmMessageSyncCandidate({
+        id: 778,
+        platformConversationId: "group-live",
+        partnerPlatformUserId: "fan-live",
+      }))
+      .mockResolvedValueOnce(null);
+    dbMocks.getPageDmConversationById.mockImplementation(async (_db: unknown, id: number) => {
+      if (id === 777) {
+        return buildDmConversation({
+          id: 777,
+          platformConversationId: "group-broken",
+          partnerPlatformUserId: "fan-missing",
+          partnerUsername: "fan_missing",
+          partnerDisplayName: "Fan Missing",
+          lastMessageSenderId: "fan-missing",
+          lastMessageSenderRole: "fan",
+        });
+      }
+
+      if (id === 778) {
+        return buildDmConversation({
+          id: 778,
+          platformConversationId: "group-live",
+          partnerPlatformUserId: "fan-live",
+          partnerUsername: "fan_live",
+          partnerDisplayName: "Fan Live",
+          lastMessageSenderId: "fan-live",
+          lastMessageSenderRole: "fan",
+        });
+      }
+
+      return null;
+    });
+    dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValueOnce(3);
+    dbMocks.finalizePageDmConversationMessageSync.mockResolvedValue({
+      conversation: {
+        id: 778,
+      },
+      deletedCount: 0,
+      summary: {
+        storedMessageCount: 1,
+        newestStoredMessageId: "msg-81",
+        oldestStoredMessageId: "msg-81",
+        lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+        lastModelMessageAt: null,
+      },
+    });
+
+    const result = await executeDmMessagesChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 1,
+      },
+      syncRunId: 907,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(5),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(dbMocks.countRecentTerminalDmMessageConversationFailureStreak).toHaveBeenCalledWith({}, {
+      platformAccountId: 55,
+      platformConversationId: "group-broken",
+    });
+    expect(getAccountsByIdsPage).toHaveBeenCalledWith(expect.anything(), ["fan-missing"]);
+    expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith({}, expect.objectContaining({
+      platformConversationId: "group-broken",
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+      },
+    }));
+    expect(telemetry.addNote).toHaveBeenCalledWith(
+      "Excluded DM conversation after repeated 5xx because partner account is unresolvable",
+      expect.objectContaining({
+        groupId: "group-broken",
+        partnerPlatformUserId: "fan-missing",
+        failureStreak: 3,
+      }),
+    );
+    expect(getMessagesPage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      groupId: "group-live",
+    }));
+    expect(dbMocks.finalizePageDmConversationMessageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      conversationId: 778,
+    }));
+  });
+
+  it("does not exclude repeated dm_messages 5xx failures when the partner still resolves", async () => {
+    const telemetry = createTelemetry();
+    const getMessagesPage = vi.fn(async (
+      context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+    ) => {
+      await recordStartedRequest(context.requestObserver, "messages");
+      throw new FanslyApiError("provider failure", 500);
+    });
+    const getAccountsByIdsPage = vi.fn(async () => ({
+      parsed: [{
+        id: "fan-live",
+        username: "fan_live",
+        displayName: "Fan Live",
+        createdAt: 1_770_000_000_000,
+      }],
+      raw: {},
+    }));
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagesPage,
+        getAccountsByIdsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValueOnce(buildDmMessageSyncCandidate({
+      id: 777,
+      platformConversationId: "group-live",
+      partnerPlatformUserId: "fan-live",
+    }));
+    dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation({
+      id: 777,
+      platformConversationId: "group-live",
+      partnerPlatformUserId: "fan-live",
+      partnerUsername: "fan_live",
+      partnerDisplayName: "Fan Live",
+      lastMessageSenderId: "fan-live",
+      lastMessageSenderRole: "fan",
+    }));
+    dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValueOnce(3);
+
+    await expect(executeDmMessagesChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        desiredRevision: 1,
+      },
+      syncRunId: 908,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(5),
+    } as never)).rejects.toThrow("provider failure");
+
+    expect(getAccountsByIdsPage).toHaveBeenCalledWith(expect.anything(), ["fan-live"]);
+    expect(dbMocks.upsertPageDmConversation).not.toHaveBeenCalled();
+    expect(telemetry.addNote).not.toHaveBeenCalled();
   });
 
   it("drops checkpointed conversations that are marked excluded before fetching messages", async () => {

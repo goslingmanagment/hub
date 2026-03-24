@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  countRecentTerminalDmMessageConversationFailureStreak,
   computeSyncStreamSlotOffsetSeconds,
   ensureSyncProviderRateLimitProfile,
   getSyncRun,
@@ -182,6 +183,86 @@ describe("sync repository timestamp normalization", () => {
     expect(extractSqlText(query)).toContain("order by a.started_at desc, a.id desc");
     expect(extractQueryParams(query)).toContain(8);
     expect(extractQueryParams(query)).toContain(2_000);
+  });
+
+  it("counts the recent terminal dm_messages 5xx streak per conversation", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      rows: [
+        {
+          logicalRequestId: "messages:3",
+          terminalState: "failed",
+          httpStatus: 503,
+          terminalAt: "2026-03-10T10:03:00.000Z",
+        },
+        {
+          logicalRequestId: "messages:2",
+          terminalState: "failed",
+          httpStatus: 500,
+          terminalAt: "2026-03-10T10:02:00.000Z",
+        },
+        {
+          logicalRequestId: "messages:1",
+          terminalState: "success",
+          httpStatus: 200,
+          terminalAt: "2026-03-10T10:01:00.000Z",
+        },
+      ],
+    });
+    const db = {
+      execute,
+    } as never;
+
+    const streak = await countRecentTerminalDmMessageConversationFailureStreak(db, {
+      platformAccountId: 55,
+      platformConversationId: "group-1",
+      limit: 10,
+    });
+
+    expect(streak).toBe(2);
+
+    const query = execute.mock.calls[0]?.[0];
+    expect(extractSqlText(query)).toContain("a.state in ('success', 'failed')");
+    expect(extractSqlText(query)).toContain("a.request_shape ->> 'groupId'");
+    expect(extractQueryParams(query)).toEqual(expect.arrayContaining([
+      55,
+      "group-1",
+      10,
+    ]));
+  });
+
+  it("stops the dm_messages failure streak on the first non-5xx terminal result", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      rows: [
+        {
+          logicalRequestId: "messages:4",
+          terminalState: "failed",
+          httpStatus: 502,
+          terminalAt: "2026-03-10T10:04:00.000Z",
+        },
+        {
+          logicalRequestId: "messages:3",
+          terminalState: "failed",
+          httpStatus: 404,
+          terminalAt: "2026-03-10T10:03:00.000Z",
+        },
+        {
+          logicalRequestId: "messages:2",
+          terminalState: "failed",
+          httpStatus: 500,
+          terminalAt: "2026-03-10T10:02:00.000Z",
+        },
+      ],
+    });
+    const db = {
+      execute,
+    } as never;
+
+    const streak = await countRecentTerminalDmMessageConversationFailureStreak(db, {
+      platformAccountId: 55,
+      platformConversationId: "group-1",
+    });
+
+    expect(streak).toBe(1);
   });
 
   it("normalizes last activity timestamps for running run snapshots", async () => {

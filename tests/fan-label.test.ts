@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveFanLabel } from "@agency_hub_core/shared";
+import {
+  buildFanslyDmConversationMetadata,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+  getFanslyDmMessageSyncExcludedReason,
+  isFanslyDmMessageSyncExcluded,
+  resolveFanLabel,
+} from "@agency_hub_core/shared";
 
 describe("resolveFanLabel", () => {
   it("prefers displayName over username", () => {
@@ -70,5 +76,19 @@ describe("resolveFanLabel", () => {
     expect(first.label).toBe("Deleted user · 11111111");
     expect(second.label).toBe("Deleted user · 22222222");
     expect(first.label).not.toBe(second.label);
+  });
+});
+
+describe("Fansly dm message exclusion helpers", () => {
+  it("recognizes the unresolvable account lookup exclusion reason", () => {
+    const metadata = buildFanslyDmConversationMetadata({
+      messageSyncExcludedReason:
+        FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+    });
+
+    expect(getFanslyDmMessageSyncExcludedReason(metadata)).toBe(
+      FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+    );
+    expect(isFanslyDmMessageSyncExcluded(metadata)).toBe(true);
   });
 });

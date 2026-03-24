@@ -14,9 +14,12 @@ export interface ResolvedFanLabel {
 export const FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY = "messageSyncExcludedReason";
 export const FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS =
   "partner_missing_from_aggregation_accounts" as const;
+export const FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP =
+  "partner_unresolvable_from_account_lookup" as const;
 
 export type FanslyDmMessageSyncExcludedReason =
-  typeof FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS;
+  | typeof FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
+  | typeof FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP;
 
 function normalizeFanNamePart(value: string | null | undefined) {
   if (typeof value !== "string") {
@@ -72,7 +75,8 @@ export function getFanslyDmMessageSyncExcludedReason(
   }
 
   const reason = metadata[FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY];
-  return reason === FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
+  return reason === FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS ||
+      reason === FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP
     ? reason
     : null;
 }
