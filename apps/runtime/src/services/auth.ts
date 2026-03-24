@@ -58,6 +58,17 @@ export interface AuthenticatedUser {
   }>;
 }
 
+export interface AdminUserApiKeyStatus {
+  activeKeyPrefix: string | null;
+  activeKeyCount: number;
+  activeKeyCreatedAt: string | null;
+  activeKeyLastUsedAt: string | null;
+}
+
+export interface AdminUserDetailed extends AuthenticatedUser {
+  apiKeyStatus: AdminUserApiKeyStatus | null;
+}
+
 export interface AuthPrincipal {
   authMethod: "session" | "api_key";
   user: AuthenticatedUser;
@@ -76,6 +87,18 @@ function roleCanUseSession(role: UserRole) {
   return role === "owner" || role === "team_lead";
 }
 
+function mapAssignedPages(
+  assignedPages: Awaited<ReturnType<typeof listUserPageAssignments>>,
+): AuthenticatedUser["assignedPages"] {
+  return assignedPages.map((page) => ({
+    id: page.pageId,
+    label: page.label,
+    platform: page.platform,
+    modelSlug: page.modelSlug,
+    modelName: page.modelName,
+  }));
+}
+
 async function getAuthenticatedUserById(app: AppContext, userId: number) {
   const user = await findUserById(app.db, userId);
   if (!user) {
@@ -87,13 +110,7 @@ async function getAuthenticatedUserById(app: AppContext, userId: number) {
     id: user.id,
     username: user.username,
     role: user.role,
-    assignedPages: assignedPages.map((page) => ({
-      id: page.pageId,
-      label: page.label,
-      platform: page.platform,
-      modelSlug: page.modelSlug,
-      modelName: page.modelName,
-    })),
+    assignedPages: mapAssignedPages(assignedPages),
   } satisfies AuthenticatedUser;
 }
 
@@ -104,6 +121,33 @@ async function getAuthenticatedUserByUsername(app: AppContext, username: string)
   }
 
   return getAuthenticatedUserById(app, user.id);
+}
+
+async function getAdminUserById(app: AppContext, userId: number) {
+  const user = await findUserById(app.db, userId);
+  if (!user) {
+    return null;
+  }
+
+  const [assignedPages, activeApiKeys] = await Promise.all([
+    listUserPageAssignments(app.db, user.id),
+    roleCanUseApiKey(user.role) ? findActiveApiKeysForUser(app.db, user.id) : Promise.resolve([]),
+  ]);
+
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    assignedPages: mapAssignedPages(assignedPages),
+    apiKeyStatus: roleCanUseApiKey(user.role)
+      ? {
+        activeKeyPrefix: activeApiKeys[0]?.keyPrefix ?? null,
+        activeKeyCount: activeApiKeys.length,
+        activeKeyCreatedAt: activeApiKeys[0]?.createdAt?.toISOString() ?? null,
+        activeKeyLastUsedAt: activeApiKeys[0]?.lastUsedAt?.toISOString() ?? null,
+      }
+      : null,
+  } satisfies AdminUserDetailed;
 }
 
 async function recordAudit(app: Pick<AppContext, "db">, input: AuditContext & {
@@ -147,10 +191,10 @@ async function recordFailedLoginAuditBestEffort(
 
 export async function listUsersDetailed(app: AppContext) {
   const users = await listUsers(app.db);
-  const result: AuthenticatedUser[] = [];
+  const result: AdminUserDetailed[] = [];
 
   for (const user of users) {
-    const detailed = await getAuthenticatedUserById(app, user.id);
+    const detailed = await getAdminUserById(app, user.id);
     if (detailed) {
       result.push(detailed);
     }
@@ -374,9 +418,12 @@ export async function issueChatterApiKey(
     );
   });
 
+  const assignedPages = await listUserPageAssignments(app.db, user.id);
+
   return {
     key: rawKey,
     keyPrefix,
+    assignedPages: mapAssignedPages(assignedPages),
   };
 }
 

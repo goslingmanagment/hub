@@ -97,6 +97,17 @@ export const authUserSchema = z.object({
   assignedPages: z.array(pageRefSchema),
 });
 
+export const adminUserApiKeyStatusSchema = z.object({
+  activeKeyPrefix: z.string().nullable(),
+  activeKeyCount: z.number().int().nonnegative(),
+  activeKeyCreatedAt: isoTimestamp.nullable(),
+  activeKeyLastUsedAt: isoTimestamp.nullable(),
+});
+
+export const adminUserSchema = authUserSchema.extend({
+  apiKeyStatus: adminUserApiKeyStatusSchema.nullable(),
+});
+
 export const authStateSchema = z.object({
   authMethod: z.enum(["session", "api_key"]),
   user: authUserSchema,
@@ -1265,7 +1276,9 @@ export const apiKeyItemSchema = z.object({
   id: intId,
   keyPrefix: z.string(),
   userId: z.number().int(),
+  isActive: z.boolean(),
   revokedAt: isoTimestamp.nullable(),
+  revokedReason: z.string().nullable(),
   createdAt: isoTimestamp,
   lastUsedAt: isoTimestamp.nullable(),
 });
@@ -1273,6 +1286,7 @@ export const apiKeyItemSchema = z.object({
 export const issuedApiKeyResponseSchema = z.object({
   key: z.string(),
   keyPrefix: z.string(),
+  assignedPages: z.array(pageRefSchema),
 });
 
 export const syncRunItemSchema = z.object({
@@ -2415,7 +2429,7 @@ export const routeSchemas = {
     summary: "List all users",
     security: cookieOnlySecurity,
     response: {
-      200: z.array(authUserSchema),
+      200: z.array(adminUserSchema),
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
@@ -2842,6 +2856,7 @@ export const routeSchemas = {
 export type RouteSchemas = typeof routeSchemas;
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;
+export type AdminUser = z.infer<typeof adminUserSchema>;
 export type AssignedPage = z.infer<typeof assignedPageSchema>;
 export type CrossPageFanDetailResponse = z.infer<typeof crossPageFanDetailResponseSchema>;
 export type FanListQuery = z.infer<typeof fanListQuerySchema>;

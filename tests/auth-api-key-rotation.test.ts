@@ -94,8 +94,20 @@ beforeEach(() => {
 
   repoMocks.findUserByUsername.mockImplementation(async (db: MockDb, username: string) =>
     db.state.users.find((user) => user.username === username) ?? null);
+  repoMocks.findUserById.mockImplementation(async (db: MockDb, userId: number) =>
+    db.state.users.find((user) => user.id === userId) ?? null);
   repoMocks.findPageSummaryByLabel.mockImplementation(async (db: MockDb, label: string) =>
     db.state.pages.find((page) => page.label === label) ?? null);
+  repoMocks.listUserPageAssignments.mockImplementation(async (db: MockDb, userId: number) =>
+    db.state.assignments
+      .filter((assignment) => assignment.userId === userId)
+      .map((assignment) => ({
+        pageId: assignment.platformAccountId,
+        label: db.state.pages.find((page) => page.id === assignment.platformAccountId)?.label ?? "unknown",
+        platform: "fansly" as const,
+        modelSlug: "mock-model",
+        modelName: "Mock Model",
+      })));
   repoMocks.assignUserToPage.mockImplementation(async (db: MockDb, userId: number, platformAccountId: number) => {
     const existing = db.state.assignments.find((assignment) =>
       assignment.userId === userId && assignment.platformAccountId === platformAccountId);
@@ -200,6 +212,13 @@ describe("API key rotation transactions", () => {
     const replacementKey = db.state.apiKeys.find((apiKey) => apiKey.id !== 9);
     expect(replacementKey?.revokedAt).toBeNull();
     expect(replacementKey?.keyPrefix).toBe(result.keyPrefix);
+    expect(result.assignedPages).toEqual([{
+      id: 55,
+      label: "lana",
+      platform: "fansly",
+      modelSlug: "mock-model",
+      modelName: "Mock Model",
+    }]);
     expect(db.state.auditEvents).toEqual([expect.objectContaining({
       eventType: "api_key.issued",
       targetUserId: 2,

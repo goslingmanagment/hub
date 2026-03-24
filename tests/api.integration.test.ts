@@ -1702,6 +1702,81 @@ describe("api integration", () => {
     expect(createdRows.rows[0]?.count).toBe("0");
   });
 
+  it("lists admin users with api key summaries and exposes key activity details", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const appContext = createTestAppContext(testDb);
+    const firstKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+    const secondKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+    }, { source: "cli" });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const usersResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/users",
+      headers: {
+        cookie,
+      },
+    });
+    expect(usersResponse.statusCode).toBe(200);
+    expect(usersResponse.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        username: "anton",
+        role: "chatter",
+        apiKeyStatus: {
+          activeKeyPrefix: secondKey.keyPrefix,
+          activeKeyCount: 1,
+          activeKeyCreatedAt: expect.any(String),
+          activeKeyLastUsedAt: null,
+        },
+      }),
+      expect.objectContaining({
+        username: "dima",
+        role: "owner",
+        apiKeyStatus: null,
+      }),
+    ]));
+
+    const apiKeysResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/users/anton/api-keys",
+      headers: {
+        cookie,
+      },
+    });
+    expect(apiKeysResponse.statusCode).toBe(200);
+    expect(apiKeysResponse.json()).toEqual([
+      expect.objectContaining({
+        keyPrefix: secondKey.keyPrefix,
+        isActive: true,
+        revokedAt: null,
+        revokedReason: null,
+      }),
+      expect.objectContaining({
+        keyPrefix: firstKey.keyPrefix,
+        isActive: false,
+        revokedAt: expect.any(String),
+        revokedReason: "rotated",
+      }),
+    ]);
+  });
+
   it("scopes chatter API keys to assigned pages", async (context) => {
     if (!testDb || !server) {
       context.skip();
@@ -1825,9 +1900,10 @@ describe("api integration", () => {
     }
 
     const appContext = createTestAppContext(testDb);
-    const { key } = await issueChatterApiKey(appContext, {
+    const { key, assignedPages } = await issueChatterApiKey(appContext, {
       username: "anton",
     }, { source: "cli" });
+    expect(assignedPages).toEqual([]);
 
     const me = await server.inject({
       method: "GET",

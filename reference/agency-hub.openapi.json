@@ -16283,13 +16283,68 @@
                           ],
                           "additionalProperties": false
                         }
+                      },
+                      "apiKeyStatus": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "activeKeyPrefix": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "activeKeyCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "activeKeyCreatedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "activeKeyLastUsedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "activeKeyPrefix",
+                              "activeKeyCount",
+                              "activeKeyCreatedAt",
+                              "activeKeyLastUsedAt"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     },
                     "required": [
                       "id",
                       "username",
                       "role",
-                      "assignedPages"
+                      "assignedPages",
+                      "apiKeyStatus"
                     ],
                     "additionalProperties": false
                   }
@@ -17085,7 +17140,20 @@
                         "minimum": -9007199254740991,
                         "maximum": 9007199254740991
                       },
+                      "isActive": {
+                        "type": "boolean"
+                      },
                       "revokedAt": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "revokedReason": {
                         "anyOf": [
                           {
                             "type": "string"
@@ -17113,7 +17181,9 @@
                       "id",
                       "keyPrefix",
                       "userId",
+                      "isActive",
                       "revokedAt",
+                      "revokedReason",
                       "createdAt",
                       "lastUsedAt"
                     ],
@@ -17233,11 +17303,49 @@
                     },
                     "keyPrefix": {
                       "type": "string"
+                    },
+                    "assignedPages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
+                          },
+                          "modelSlug": {
+                            "type": "string"
+                          },
+                          "modelName": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "platform",
+                          "modelSlug",
+                          "modelName"
+                        ],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": [
                     "key",
-                    "keyPrefix"
+                    "keyPrefix",
+                    "assignedPages"
                   ],
                   "additionalProperties": false
                 }

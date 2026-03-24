@@ -1417,7 +1417,9 @@ export async function buildApiServer(appContext: AppContext) {
       id: k.id,
       keyPrefix: k.keyPrefix,
       userId: k.userId,
+      isActive: k.revokedAt === null,
       revokedAt: k.revokedAt?.toISOString() ?? null,
+      revokedReason: k.revokedReason ?? null,
       createdAt: k.createdAt.toISOString(),
       lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
     }));

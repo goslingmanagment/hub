@@ -5099,6 +5099,12 @@ export interface paths {
                                 modelSlug: string;
                                 modelName: string;
                             }[];
+                            apiKeyStatus: {
+                                activeKeyPrefix: string | null;
+                                activeKeyCount: number;
+                                activeKeyCreatedAt: string | null;
+                                activeKeyLastUsedAt: string | null;
+                            } | null;
                         }[];
                     };
                 };
@@ -5498,7 +5504,9 @@ export interface paths {
                             id: number;
                             keyPrefix: string;
                             userId: number;
+                            isActive: boolean;
                             revokedAt: string | null;
+                            revokedReason: string | null;
                             createdAt: string;
                             lastUsedAt: string | null;
                         }[];
@@ -5560,6 +5568,14 @@ export interface paths {
                         "application/json": {
                             key: string;
                             keyPrefix: string;
+                            assignedPages: {
+                                id: number;
+                                label: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                            }[];
                         };
                     };
                 };
