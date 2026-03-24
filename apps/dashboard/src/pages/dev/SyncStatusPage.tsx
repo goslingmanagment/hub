@@ -134,13 +134,13 @@ export function SyncStatusPage() {
               </tr>
             )}
             {runs.map((run: any) => {
-              const isExpanded = expandedRunId === run.id;
+              const isExpanded = expandedRunId === run.runId;
 
               return (
-                <Fragment key={run.id}>
+                <Fragment key={run.runId}>
                   <tr
                     className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-                    onClick={() => toggleRun(run.id)}
+                    onClick={() => toggleRun(run.runId)}
                   >
                     <td className="px-4 py-3 text-sm text-text-primary font-medium">
                       {run.pageLabel ?? "\u2014"}
@@ -171,7 +171,7 @@ export function SyncStatusPage() {
                   {isExpanded && (
                     <tr>
                       <td colSpan={7} className="p-0">
-                        <RunDetail runId={run.id} />
+                        <RunDetail runId={run.runId} />
                       </td>
                     </tr>
                   )}

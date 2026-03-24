@@ -90,10 +90,7 @@ export function SyncTab() {
                           : "text-text-muted";
 
                   return (
-                    <tr
-                      key={`${run.pageLabel}-${run.startedAt}-${i}`}
-                      className="border-t border-border"
-                    >
+                    <tr key={run.runId ?? `${run.pageLabel}-${run.startedAt}-${i}`} className="border-t border-border">
                       <td className="px-4 py-3 text-sm font-medium text-text-primary">
                         {run.pageLabel}
                       </td>
