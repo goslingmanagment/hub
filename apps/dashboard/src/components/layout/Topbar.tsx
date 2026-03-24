@@ -4,8 +4,8 @@ import { RefreshCw, LogOut, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { useAdminSyncTriggerAll, useLogout, useOverview } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
+import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
 import { clearDashboardSession } from "@/lib/queryClient";
-import { formatRelativeTime } from "@/lib/format";
 
 interface TopbarProps {
   user: { username: string; role: string };
@@ -51,11 +51,13 @@ export function Topbar({ user }: TopbarProps) {
     }
   }
 
-  const lastSync = overview?.pages
-    .map((p) => p.lastLightSyncAt)
-    .filter(Boolean)
-    .sort()
-    .reverse()[0];
+  const agencySync = overview?.overall.syncUx ?? null;
+  const agencySyncMeta = agencySync
+    ? formatSyncUxMeta(agencySync, {
+      updatedPrefix: "Updated",
+      retryPrefix: "Retrying",
+    })
+    : null;
 
   return (
     <div className="h-[56px] bg-card border-b border-border flex items-center justify-between px-7 fixed top-0 left-[248px] right-0 z-10">
@@ -90,10 +92,13 @@ export function Topbar({ user }: TopbarProps) {
           </button>
         )}
 
-        {lastSync && (
-          <div className="flex items-center gap-1.5 text-[12px] text-text-muted ml-2 font-[450]">
-            <div className="w-1.5 h-1.5 rounded-full bg-green" />
-            {formatRelativeTime(lastSync)}
+        {agencySync && (
+          <div className="ml-2 flex items-center gap-2 rounded-full border border-border bg-hover-alt/40 px-2 py-1">
+            <SyncUxBadge summary={agencySync} />
+            <span className="text-[12px] font-medium text-text-secondary">{agencySync.headline}</span>
+            {agencySyncMeta && (
+              <span className="text-[12px] text-text-muted">{agencySyncMeta}</span>
+            )}
           </div>
         )}
 

@@ -556,10 +556,10 @@ describe("sync integration", () => {
         "light",
         "transactions",
         "subscribers",
-        "dm_conversations",
-        "dm_messages",
         "followers",
         "followers_reconcile",
+        "dm_conversations",
+        "dm_messages",
       ]);
       expect(stateRows.every((row) => row.desiredRevision === row.satisfiedRevision)).toBe(true);
 
@@ -571,9 +571,19 @@ describe("sync integration", () => {
       const runRows = await testDb.db.select({
         stream: syncRuns.stream,
         status: syncRuns.status,
-      }).from(syncRuns);
+        startedAt: syncRuns.startedAt,
+      }).from(syncRuns).orderBy(syncRuns.startedAt);
       expect(runRows).toHaveLength(7);
       expect(runRows.every((row) => row.status === "success")).toBe(true);
+      expect(runRows.map((row) => row.stream)).toEqual([
+        "light",
+        "transactions",
+        "subscribers",
+        "followers",
+        "followers_reconcile",
+        "dm_conversations",
+        "dm_messages",
+      ]);
     } finally {
       abortController.abort();
       await executorPromise;

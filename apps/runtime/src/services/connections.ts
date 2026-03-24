@@ -18,6 +18,8 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { removeProxy, resolveStoredProxyConfig, saveProxy } from "./page-context.ts";
+import { getSyncMonitorSnapshot } from "./sync-monitor.ts";
+import { buildPageSyncUx } from "./sync-ux.ts";
 
 export type ConnectionStatus =
   | "active"
@@ -79,7 +81,7 @@ function classifyConnectionStatus(
       return "expired";
     }
 
-    if (latestRun.status === "failed" || latestRun.status === "partial") {
+    if (latestRun.status === "failed") {
       return "error";
     }
   }
@@ -105,10 +107,14 @@ export async function listConnectionStatuses(
   }
 
   const allPageIds = pages.map((p) => p.id);
-  const latestRuns = await getLatestSyncRunPerPage(app.db, allPageIds, {
-    stream: "light",
-  });
+  const [latestRuns, snapshot] = await Promise.all([
+    getLatestSyncRunPerPage(app.db, allPageIds, {
+      stream: "light",
+    }),
+    getSyncMonitorSnapshot(app, { pageIds: allPageIds }),
+  ]);
   const runsByPageId = new Map(latestRuns.map((r) => [r.platformAccountId, r]));
+  const syncByPageId = new Map(snapshot.pages.map((page) => [page.pageId, page.syncUx]));
 
   return pages.map((page) => {
     const latestRun = runsByPageId.get(page.id) ?? null;
@@ -139,6 +145,7 @@ export async function listConnectionStatuses(
       followerCount: page.followerCount,
       proxyUrl: page.proxyUrl ?? null,
       proxyHasAuth: page.proxyHasAuth ?? false,
+      syncUx: syncByPageId.get(page.id) ?? buildPageSyncUx([]),
     };
   });
 }

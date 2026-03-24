@@ -4,6 +4,7 @@ import {
   listRunnableSyncPages,
   markSyncPageWakeupEnqueued,
   promoteDueSyncStreamStateRows,
+  rebalanceSyncStreamPriorities,
 } from "@agency_hub_core/db";
 import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
@@ -34,6 +35,7 @@ export async function runSyncPlannerCycle(
     }, "Inactive sync run cleanup complete");
   }
 
+  await rebalanceSyncStreamPriorities(app.db, { now });
   await ensureSyncStreamStateRows(app.db, { now });
   await promoteDueSyncStreamStateRows(app.db, now);
 

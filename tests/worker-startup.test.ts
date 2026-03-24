@@ -22,6 +22,10 @@ const queueMocks = vi.hoisted(() => ({
   ensureTelegramDailyReportSchedule: vi.fn(),
 }));
 
+const plannerMocks = vi.hoisted(() => ({
+  runSyncPlannerCycle: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
@@ -29,7 +33,7 @@ vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
 vi.mock("../apps/runtime/src/services/sync/executor.ts", () => executorMocks);
 vi.mock("../apps/runtime/src/services/telegram-report.ts", () => telegramReportMocks);
 vi.mock("../apps/runtime/src/services/sync/planner.ts", () => ({
-  runSyncPlannerCycle: vi.fn(),
+  runSyncPlannerCycle: plannerMocks.runSyncPlannerCycle,
 }));
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
@@ -73,6 +77,7 @@ describe("worker startup", () => {
     for (const mock of Object.values(queueMocks)) {
       mock.mockReset();
     }
+    plannerMocks.runSyncPlannerCycle.mockReset();
 
     dbMocks.closeOrphanedSyncRuns.mockResolvedValue({
       totalCount: 2,
@@ -82,6 +87,7 @@ describe("worker startup", () => {
     queueMocks.ensurePlannerSchedule.mockResolvedValue(undefined);
     queueMocks.ensureSyncQueues.mockResolvedValue(undefined);
     executorMocks.startSyncPageExecutor.mockResolvedValue(undefined);
+    plannerMocks.runSyncPlannerCycle.mockResolvedValue([]);
     dbMocks.getLatestScheduledReportDateOnOrBefore.mockResolvedValue(null);
     telegramReportMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
       delivery: {
@@ -151,6 +157,10 @@ describe("worker startup", () => {
     queueMocks.ensurePlannerSchedule.mockImplementation(async () => {
       order.push("ensurePlannerSchedule");
     });
+    plannerMocks.runSyncPlannerCycle.mockImplementation(async () => {
+      order.push("runSyncPlannerCycle");
+      return [];
+    });
     executorMocks.startSyncPageExecutor.mockImplementation(async () => {
       order.push("startSyncPageExecutor");
     });
@@ -166,6 +176,8 @@ describe("worker startup", () => {
     expect(order.indexOf("cleanup")).toBeLessThan(order.indexOf("boss.start"));
     expect(order.indexOf("cleanup")).toBeLessThan(order.indexOf("ensureSyncQueues"));
     expect(order.indexOf("cleanup")).toBeLessThan(order.indexOf("startSyncPageExecutor"));
+    expect(order.indexOf("runSyncPlannerCycle")).toBeGreaterThan(order.indexOf("ensureSyncQueues"));
+    expect(order.indexOf("runSyncPlannerCycle")).toBeLessThan(order.indexOf("startSyncPageExecutor"));
     expect(app.logger.info).toHaveBeenCalledWith(expect.objectContaining({
       processStartedAt,
       orphanedRunTotal: 2,
@@ -212,6 +224,7 @@ describe("worker startup", () => {
 
     expect(queueMocks.ensureSyncQueues).toHaveBeenCalledWith(boss, expect.any(Set));
     expect(queueMocks.ensurePlannerSchedule).toHaveBeenCalledWith(boss);
+    expect(plannerMocks.runSyncPlannerCycle).toHaveBeenCalledWith(app, boss);
     expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledTimes(1);
     expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledWith(boss);
     expect(boss.work).toHaveBeenCalledWith(

@@ -27,6 +27,7 @@ const telemetryMocks = vi.hoisted(() => ({
   instances: [] as Array<{
     metadata: Record<string, unknown>;
     recordRunStarted: ReturnType<typeof vi.fn>;
+    recordWorkerHeartbeat: ReturnType<typeof vi.fn>;
     finish: ReturnType<typeof vi.fn>;
   }>,
 }));
@@ -47,6 +48,7 @@ vi.mock("../apps/runtime/src/services/sync/observability.ts", () => ({
   SyncRunTelemetry: class {
     readonly metadata: Record<string, unknown>;
     readonly recordRunStarted = vi.fn(async () => undefined);
+    readonly recordWorkerHeartbeat = vi.fn(async () => undefined);
     readonly finish = vi.fn(async () => undefined);
 
     constructor(_app: unknown, metadata: Record<string, unknown>) {
@@ -364,6 +366,30 @@ describe("sync executor", () => {
       runId: 777,
       needsContinuation: false,
     });
+  });
+
+  it("keeps long-running chunks alive with a worker heartbeat", async () => {
+    vi.useFakeTimers();
+
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.listRunnableSyncStreamStatesForPage
+      .mockResolvedValueOnce([streamState])
+      .mockResolvedValueOnce([]);
+    handlerMocks.executeStreamChunk.mockImplementation(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+      return {
+        satisfied: true,
+        stats: { processedThisChunk: 1 },
+      };
+    });
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(telemetryMocks.instances[0]?.recordWorkerHeartbeat).toHaveBeenCalledTimes(1);
   });
 
   it("executor workers fetch with groupConcurrency and ignore active groups", async () => {

@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { SyncMonitorResponse, SyncRequestsResponse } from "@agency_hub_core/contracts";
 import { ApiError } from "@/api/client";
 import { usePageConversationMessages, useSyncMonitor, useSyncRequests } from "@/api/queries";
+import { SyncUxBadge, formatSyncUxMeta, getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { PLATFORM_COLORS } from "@/lib/constants";
 import { formatDateTime, formatRelativeTime, formatUsdFromCents } from "@/lib/format";
 
@@ -15,6 +16,8 @@ type EventItem = SyncMonitorResponse["recentEvents"][number];
 type RequestItem = SyncRequestsResponse[number];
 type ActivityTab = "events" | "requests";
 type LiveRequestsWindow = "1m" | "5m" | "15m";
+type SyncUxState = SyncMonitorResponse["overall"]["syncUx"]["state"];
+type StreamGroupKey = "attention" | "syncing" | "queued" | "healthy";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -41,31 +44,64 @@ const LIVE_REQUEST_WINDOWS: Array<{ key: LiveRequestsWindow; label: string; wind
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-/** A stream is "healthy" when it's done/idle with no flags or errors. */
-function isStreamHealthy(s: StreamItem): boolean {
-  if (s.status === "running" || s.status === "failed" || s.status === "auth_failed" || s.status === "paused") {
-    return false;
-  }
-  return (
-    !s.stalled &&
-    s.recentErrors.failedRuns === 0 &&
-    s.recentErrors.total429s === 0 &&
-    s.recentErrors.total5xxs === 0 &&
-    !s.lastErrorSummary
-  );
+function heroLevelFor(state: SyncUxState): {
+  level: "healthy" | "warning" | "critical";
+} {
+  if (state === "attention") return { level: "critical" };
+  if (state === "retrying" || state === "catching_up" || state === "setup") return { level: "warning" };
+  return { level: "healthy" };
 }
 
-function computeHeroStatus(overall: SyncMonitorResponse["overall"]): {
-  level: "healthy" | "warning" | "critical";
-  label: string;
-} {
-  const issues = overall.failedStreams + overall.stalledStreams;
-  if (issues > 0) return { level: "critical", label: `${issues} ${issues === 1 ? "Issue" : "Issues"} Detected` };
+function streamGroupFor(stream: StreamItem): StreamGroupKey {
+  if (stream.syncUx.state === "attention") {
+    return "attention";
+  }
 
-  const warnings = overall.recentErrors.total429s + overall.recentErrors.total5xxs;
-  if (warnings > 0) return { level: "warning", label: "Warnings" };
+  if (stream.syncUx.state === "syncing") {
+    return "syncing";
+  }
 
-  return { level: "healthy", label: "All Systems Healthy" };
+  if (
+    stream.syncUx.state === "retrying" ||
+    stream.syncUx.state === "catching_up" ||
+    stream.syncUx.state === "setup"
+  ) {
+    return "queued";
+  }
+
+  return "healthy";
+}
+
+function streamGroupTitle(group: StreamGroupKey, count: number) {
+  switch (group) {
+    case "attention":
+      return count === 1 ? "Needs attention" : "Needs attention";
+    case "syncing":
+      return count === 1 ? "Syncing now" : "Syncing now";
+    case "queued":
+      return count === 1 ? "Queued to continue" : "Queued to continue";
+    case "healthy":
+    default:
+      return count === 1 ? "Healthy" : "Healthy";
+  }
+}
+
+function compareStreams(a: StreamItem, b: StreamItem) {
+  const statePriority: Record<SyncUxState, number> = {
+    attention: 0,
+    syncing: 1,
+    retrying: 2,
+    catching_up: 3,
+    setup: 4,
+    healthy: 5,
+    off: 6,
+  };
+  const priorityDiff = statePriority[a.syncUx.state] - statePriority[b.syncUx.state];
+  if (priorityDiff !== 0) {
+    return priorityDiff;
+  }
+
+  return (STREAM_LABELS[a.stream] ?? a.stream).localeCompare(STREAM_LABELS[b.stream] ?? b.stream);
 }
 
 function formatDuration(ms: number): string {
@@ -206,7 +242,12 @@ function Chevron({ open }: { open: boolean }) {
 /* ------------------------------------------------------------------ */
 
 function HeroBanner({ data }: { data: SyncMonitorResponse }) {
-  const hero = computeHeroStatus(data.overall);
+  const hero = heroLevelFor(data.overall.syncUx.state);
+  const heroMeta = formatSyncUxMeta(data.overall.syncUx, {
+    updatedPrefix: "Updated",
+    retryPrefix: "Retrying",
+  });
+  const tone = getSyncUxTone(data.overall.syncUx.state);
   const border =
     hero.level === "critical"
       ? "border-danger/30"
@@ -219,13 +260,24 @@ function HeroBanner({ data }: { data: SyncMonitorResponse }) {
   return (
     <div className={`rounded-xl border ${border} ${bg} px-6 py-5`}>
       <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-start gap-3">
           <LiveDot level={hero.level} />
-          <h1 className="text-xl font-extrabold text-text-primary">{hero.label}</h1>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <SyncUxBadge summary={data.overall.syncUx} />
+              <h1 className="text-xl font-extrabold text-text-primary">{data.overall.syncUx.headline}</h1>
+            </div>
+            {data.overall.syncUx.detail && (
+              <p className="mt-1 text-sm text-text-secondary">{data.overall.syncUx.detail}</p>
+            )}
+            {data.overall.syncUx.progressLabel && (
+              <p className={`mt-2 text-[12px] font-medium ${tone.text}`}>{data.overall.syncUx.progressLabel}</p>
+            )}
+          </div>
         </div>
-        <span className="shrink-0 text-[13px] text-text-muted">
-          Updated {formatRelativeTime(data.generatedAt)}
-        </span>
+        <div className="shrink-0 text-right text-[13px] text-text-muted">
+          <div>{heroMeta ?? `Updated ${formatRelativeTime(data.generatedAt)}`}</div>
+        </div>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-text-secondary">
@@ -237,20 +289,11 @@ function HeroBanner({ data }: { data: SyncMonitorResponse }) {
         {data.overall.runningStreams > 0 && (
           <span className="font-medium text-[#1e40af]">{data.overall.runningStreams} running</span>
         )}
-        {data.overall.failedStreams > 0 && (
-          <span className="font-medium text-danger">{data.overall.failedStreams} failed</span>
-        )}
-        {data.overall.stalledStreams > 0 && (
-          <span className="font-medium text-danger">{data.overall.stalledStreams} stalled</span>
-        )}
         {data.overall.pendingStreams > 0 && (
-          <span className="font-medium text-warning-dark">{data.overall.pendingStreams} pending</span>
+          <span className="font-medium text-warning-dark">{data.overall.pendingStreams} queued</span>
         )}
-        {data.overall.recentErrors.total429s > 0 && (
-          <span className="font-medium text-warning-dark">{data.overall.recentErrors.total429s} rate limits</span>
-        )}
-        {data.overall.recentErrors.total5xxs > 0 && (
-          <span className="font-medium text-danger">{data.overall.recentErrors.total5xxs} server errors</span>
+        {data.overall.backoffStreams > 0 && (
+          <span className="font-medium text-warning-dark">{data.overall.backoffStreams} retrying</span>
         )}
       </div>
     </div>
@@ -339,141 +382,111 @@ function StreamProgress({ stream }: { stream: StreamItem }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Attention stream row (running / failed / flagged)                  */
+/*  Stream rows and grouped page cards                                 */
 /* ------------------------------------------------------------------ */
 
-function AttentionStreamRow({ stream }: { stream: StreamItem }) {
-  const isFailed = stream.status === "failed" || stream.status === "auth_failed" || stream.stalled;
-  const isRunning = stream.status === "running";
-
-  const pillBg = isFailed ? "bg-danger/10" : isRunning ? "bg-[#dbeafe]" : "bg-warning/10";
-  const pillText = isFailed ? "text-danger" : isRunning ? "text-[#1e40af]" : "text-warning-dark";
-  const statusLabel = stream.stalled ? "Stalled" : stream.status.replace("_", " ");
+function StreamRow({ stream }: { stream: StreamItem }) {
+  const tone = getSyncUxTone(stream.syncUx.state);
+  const streamMeta = formatSyncUxMeta(stream.syncUx, {
+    updatedPrefix: "Updated",
+    retryPrefix: "Retrying",
+  }) ?? streamActivityLabel(stream);
+  const technicalDetails = [
+    `State: ${stream.stalled ? "stalled" : stream.status.replaceAll("_", " ")}`,
+    stream.recentErrors.total429s > 0 ? `${stream.recentErrors.total429s} recent rate limits` : null,
+    stream.recentErrors.total5xxs > 0 ? `${stream.recentErrors.total5xxs} recent server errors` : null,
+    stream.recentErrors.failedRuns > 0 ? `${stream.recentErrors.failedRuns} recent failed runs` : null,
+    stream.lastErrorSummary ? `Last error: ${stream.lastErrorSummary}` : null,
+  ].filter((item): item is string => item !== null);
 
   return (
-    <div
-      className={`rounded-lg border px-4 py-3 ${
-        isFailed ? "border-danger/20 bg-danger/[0.03]" : "border-border-light bg-hover-alt/40"
-      }`}
-    >
-      {/* header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold capitalize ${pillBg} ${pillText}`}>
-            {statusLabel}
-          </span>
-          <span className="text-[14px] font-semibold text-text-primary">
-            {STREAM_LABELS[stream.stream] ?? stream.stream}
-          </span>
+    <div className={`rounded-lg border px-4 py-3 ${tone.panel}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[14px] font-semibold text-text-primary">
+              {STREAM_LABELS[stream.stream] ?? stream.stream}
+            </span>
+            <SyncUxBadge summary={stream.syncUx} />
+          </div>
+          <div className="mt-1 text-[13px] font-medium text-text-secondary">{stream.syncUx.headline}</div>
+          {stream.syncUx.detail && (
+            <div className="mt-1 text-[12px] text-text-muted">{stream.syncUx.detail}</div>
+          )}
+          {stream.syncUx.progressLabel && (
+            <div className={`mt-1 text-[12px] font-medium ${tone.text}`}>{stream.syncUx.progressLabel}</div>
+          )}
         </div>
-        <span className="shrink-0 text-[12px] tabular-nums text-text-muted">
-          {streamActivityLabel(stream)}
-        </span>
+        <span className="shrink-0 text-[12px] tabular-nums text-text-muted">{streamMeta}</span>
       </div>
 
-      {/* progress */}
       <StreamProgress stream={stream} />
 
-      {/* error counters – only when non-zero */}
-      {(stream.recentErrors.total429s > 0 ||
-        stream.recentErrors.total5xxs > 0 ||
-        stream.recentErrors.failedRuns > 0) && (
-        <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
-          {stream.recentErrors.total429s > 0 && (
-            <span className="text-warning-dark">{stream.recentErrors.total429s} rate limits</span>
-          )}
-          {stream.recentErrors.total5xxs > 0 && (
-            <span className="text-danger">{stream.recentErrors.total5xxs} server errors</span>
-          )}
-          {stream.recentErrors.failedRuns > 0 && (
-            <span className="text-danger">{stream.recentErrors.failedRuns} failed runs</span>
-          )}
-        </div>
-      )}
-
-      {/* last error message */}
-      {stream.lastErrorSummary && (
-        <div className="mt-2 rounded-md bg-danger/5 px-3 py-2 text-[12px] text-danger">
-          {stream.lastErrorSummary}
-        </div>
+      {technicalDetails.length > 0 && (
+        <details className="mt-2 rounded-lg border border-border-light bg-card/70 px-3 py-2">
+          <summary className="cursor-pointer text-[12px] font-medium text-text-muted">Technical details</summary>
+          <div className="mt-2 space-y-1 text-[12px] text-text-muted">
+            {technicalDetails.map((detail) => (
+              <div key={detail}>{detail}</div>
+            ))}
+          </div>
+        </details>
       )}
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Healthy streams – collapsible summary                              */
-/* ------------------------------------------------------------------ */
-
-function HealthyStreamsSummary({
+function StreamGroupSection({
+  title,
   streams,
-  expanded,
-  onToggle,
+  collapsible = false,
 }: {
+  title: string;
   streams: StreamItem[];
-  expanded: boolean;
-  onToggle: () => void;
+  collapsible?: boolean;
 }) {
-  if (streams.length === 0) return null;
+  if (streams.length === 0) {
+    return null;
+  }
 
-  const latestActivity = streams.reduce<string | null>((best, s) => {
-    const t = s.lastSuccessAt ?? s.lastCompletion?.finishedAt ?? null;
-    if (!t) return best;
-    if (!best) return t;
-    return new Date(t) > new Date(best) ? t : best;
-  }, null);
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full cursor-pointer items-center justify-between rounded-lg border border-border-light bg-hover-alt/30 px-4 py-2.5 text-left transition-colors hover:bg-hover-alt"
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-[14px] text-green">✓</span>
-          <span className="text-[13px] font-medium text-text-secondary">
-            {streams.length === 1 ? "1 stream healthy" : `${streams.length} streams healthy`}
-          </span>
-          {latestActivity && (
-            <span className="text-[12px] text-text-muted">· last activity {formatRelativeTime(latestActivity)}</span>
-          )}
-        </div>
-        <Chevron open={expanded} />
-      </button>
-
-      {expanded && (
-        <div className="mt-1.5 space-y-px">
-          {streams.map((s) => (
-            <div key={s.stream} className="flex items-center justify-between rounded-lg px-4 py-2 text-[13px]">
-              <div className="flex items-center gap-2">
-                <span className="text-[13px] text-green">✓</span>
-                <span className="text-text-primary">{STREAM_LABELS[s.stream] ?? s.stream}</span>
-                {s.status === "disabled" && <span className="text-[11px] text-text-muted">(disabled)</span>}
-              </div>
-              <span className="tabular-nums text-[12px] text-text-muted">
-                {s.lastSuccessAt ? formatRelativeTime(s.lastSuccessAt) : "—"}
-              </span>
-            </div>
+  if (collapsible) {
+    return (
+      <details className="rounded-lg border border-border-light bg-hover-alt/30 px-4 py-3">
+        <summary className="cursor-pointer text-[13px] font-medium text-text-secondary">
+          {title} ({streams.length})
+        </summary>
+        <div className="mt-3 space-y-2">
+          {streams.map((stream) => (
+            <StreamRow key={stream.stream} stream={stream} />
           ))}
         </div>
-      )}
+      </details>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-[12px] font-semibold uppercase tracking-[0.08em] text-text-muted">{title}</div>
+      {streams.map((stream) => (
+        <StreamRow key={stream.stream} stream={stream} />
+      ))}
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Page card                                                          */
-/* ------------------------------------------------------------------ */
-
 function PageCard({ page }: { page: PageItem }) {
-  const [healthyOpen, setHealthyOpen] = useState(false);
   const platformCfg = PLATFORM_COLORS[page.platform];
-
-  const healthy = page.streams.filter(isStreamHealthy);
-  const attention = page.streams.filter((s) => !isStreamHealthy(s));
-  const hasFailures = page.summary.failedStreams > 0 || page.summary.stalledStreams > 0;
-
+  const pageTone = getSyncUxTone(page.syncUx.state);
+  const pageMeta = formatSyncUxMeta(page.syncUx, {
+    updatedPrefix: "Updated",
+    retryPrefix: "Retrying",
+  });
+  const groupedStreams = {
+    attention: page.streams.filter((stream) => streamGroupFor(stream) === "attention").sort(compareStreams),
+    syncing: page.streams.filter((stream) => streamGroupFor(stream) === "syncing").sort(compareStreams),
+    queued: page.streams.filter((stream) => streamGroupFor(stream) === "queued").sort(compareStreams),
+    healthy: page.streams.filter((stream) => streamGroupFor(stream) === "healthy").sort(compareStreams),
+  };
   const counts = [
     page.counts.fans > 0 ? `${num(page.counts.fans)} fans` : null,
     page.counts.followers > 0 ? `${num(page.counts.followers)} followers` : null,
@@ -484,11 +497,10 @@ function PageCard({ page }: { page: PageItem }) {
   ].filter((c): c is string => c !== null);
 
   return (
-    <section className={`rounded-xl border bg-card p-5 ${hasFailures ? "border-danger/20" : "border-border"}`}>
-      {/* header */}
+    <section className={`rounded-xl border bg-card p-5 ${pageTone.panel}`}>
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2.5">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2.5">
             <h2 className="text-[17px] font-bold text-text-primary">{page.pageLabel}</h2>
             <span
               className="inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold"
@@ -496,15 +508,25 @@ function PageCard({ page }: { page: PageItem }) {
             >
               {platformCfg.label}
             </span>
+            <SyncUxBadge summary={page.syncUx} />
           </div>
           <div className="mt-1 text-[13px] text-text-muted">
             {page.modelName}
             {page.username ? ` · @${page.username}` : ""}
           </div>
+          <div className="mt-2 text-[14px] font-medium text-text-secondary">{page.syncUx.headline}</div>
+          {page.syncUx.detail && (
+            <div className="mt-1 text-[12px] text-text-muted">{page.syncUx.detail}</div>
+          )}
+          {page.syncUx.progressLabel && (
+            <div className={`mt-1 text-[12px] font-medium ${pageTone.text}`}>{page.syncUx.progressLabel}</div>
+          )}
         </div>
+        {pageMeta && (
+          <span className="shrink-0 text-[12px] text-text-muted">{pageMeta}</span>
+        )}
       </div>
 
-      {/* compact counts */}
       {counts.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] tabular-nums text-text-secondary">
           {counts.map((c) => (
@@ -513,12 +535,24 @@ function PageCard({ page }: { page: PageItem }) {
         </div>
       )}
 
-      {/* streams */}
-      <div className="mt-4 space-y-2">
-        {attention.map((s) => (
-          <AttentionStreamRow key={s.stream} stream={s} />
-        ))}
-        <HealthyStreamsSummary streams={healthy} expanded={healthyOpen} onToggle={() => setHealthyOpen((v) => !v)} />
+      <div className="mt-4 space-y-4">
+        <StreamGroupSection
+          title={streamGroupTitle("attention", groupedStreams.attention.length)}
+          streams={groupedStreams.attention}
+        />
+        <StreamGroupSection
+          title={streamGroupTitle("syncing", groupedStreams.syncing.length)}
+          streams={groupedStreams.syncing}
+        />
+        <StreamGroupSection
+          title={streamGroupTitle("queued", groupedStreams.queued.length)}
+          streams={groupedStreams.queued}
+        />
+        <StreamGroupSection
+          title={streamGroupTitle("healthy", groupedStreams.healthy.length)}
+          streams={groupedStreams.healthy}
+          collapsible
+        />
       </div>
     </section>
   );
@@ -869,42 +903,45 @@ function ActivitySection({
   onLiveRequestsWindowChange: (window: LiveRequestsWindow) => void;
 }) {
   return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => onChange("events")}
-          className={`rounded-button px-4 py-2 text-sm font-medium transition-colors ${
-            activeTab === "events"
-              ? "bg-[#1a1a1a] text-white"
-              : "border border-border bg-card text-text-secondary hover:bg-hover"
-          }`}
-        >
-          Events
-        </button>
-        <button
-          type="button"
-          onClick={() => onChange("requests")}
-          className={`rounded-button px-4 py-2 text-sm font-medium transition-colors ${
-            activeTab === "requests"
-              ? "bg-[#1a1a1a] text-white"
-              : "border border-border bg-card text-text-secondary hover:bg-hover"
-          }`}
-        >
-          Live Requests
-        </button>
+    <details className="rounded-xl border border-border bg-card px-5 py-4">
+      <summary className="cursor-pointer text-[15px] font-bold text-text-primary">Technical activity</summary>
+      <div className="mt-4 space-y-3">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => onChange("events")}
+            className={`rounded-button px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === "events"
+                ? "bg-[#1a1a1a] text-white"
+                : "border border-border bg-card text-text-secondary hover:bg-hover"
+            }`}
+          >
+            Events
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange("requests")}
+            className={`rounded-button px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === "requests"
+                ? "bg-[#1a1a1a] text-white"
+                : "border border-border bg-card text-text-secondary hover:bg-hover"
+            }`}
+          >
+            Live Requests
+          </button>
+        </div>
+        {activeTab === "events"
+          ? <EventTimeline events={events} />
+          : (
+            <LiveRequestsPanel
+              items={requests}
+              isLoading={requestsLoading}
+              activeWindow={liveRequestsWindow}
+              onWindowChange={onLiveRequestsWindowChange}
+            />
+          )}
       </div>
-      {activeTab === "events"
-        ? <EventTimeline events={events} />
-        : (
-          <LiveRequestsPanel
-            items={requests}
-            isLoading={requestsLoading}
-            activeWindow={liveRequestsWindow}
-            onWindowChange={onLiveRequestsWindowChange}
-          />
-        )}
-    </section>
+    </details>
   );
 }
 

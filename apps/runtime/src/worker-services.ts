@@ -139,6 +139,7 @@ export async function startWorkerServices(
     }
   });
 
+  await runSyncPlannerCycle(app, boss);
   const executorPromise = startSyncPageExecutor(app, boss, {
     signal: abortController.signal,
   });

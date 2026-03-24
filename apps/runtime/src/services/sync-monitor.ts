@@ -12,6 +12,8 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError } from "./errors.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
+import { buildOverallSyncUx, buildPageSyncUx, buildStreamSyncUx } from "./sync-ux.ts";
+import type { SyncUxSummary } from "@agency_hub_core/contracts";
 
 const DEFAULT_WINDOW_HOURS = 24;
 const DEFAULT_EVENT_LIMIT = 50;
@@ -96,6 +98,8 @@ export interface SyncMonitorStreamItem {
   lastSuccessAt: string | null;
   lastFailureAt: string | null;
   lastErrorSummary: string | null;
+  consecutiveFailures: number;
+  syncUx: SyncUxSummary;
 }
 
 export interface SyncMonitorPageCounts {
@@ -126,6 +130,7 @@ export interface SyncMonitorPageItem {
   counts: SyncMonitorPageCounts;
   summary: SyncMonitorPageSummary;
   streams: SyncMonitorStreamItem[];
+  syncUx: SyncUxSummary;
 }
 
 export interface SyncMonitorProviderSummary {
@@ -147,6 +152,7 @@ export interface SyncMonitorOverall {
   recentRuns: SyncMonitorRecentRuns;
   recentErrors: SyncMonitorRecentErrors;
   providers: SyncMonitorProviderSummary[];
+  syncUx: SyncUxSummary;
 }
 
 export interface SyncMonitorRecentEvent {
@@ -793,8 +799,7 @@ function streamItemFor(row: SyncMonitorStreamRow, now: Date): SyncMonitorStreamI
   const stalled = isStalled(row, now);
   const pending = isPending(row);
   const backoffUntil = isBackoff(row, now) ? row.backoffUntil : null;
-
-  return {
+  const item = {
     stream: row.stream,
     status,
     stalled,
@@ -813,6 +818,12 @@ function streamItemFor(row: SyncMonitorStreamRow, now: Date): SyncMonitorStreamI
     lastSuccessAt: iso(lastSuccessAt(row)),
     lastFailureAt: iso(lastFailureAt(row)),
     lastErrorSummary: row.lastErrorSummary ?? row.lastCompletedErrorSummary,
+    consecutiveFailures: row.consecutiveFailures,
+  } satisfies Omit<SyncMonitorStreamItem, "syncUx">;
+
+  return {
+    ...item,
+    syncUx: buildStreamSyncUx(item),
   };
 }
 
@@ -929,6 +940,7 @@ export async function getSyncMonitorSnapshot(
         backoffStreams: 0,
       },
       streams: [],
+      syncUx: buildPageSyncUx([]),
     };
 
     const stream = streamItemFor(row, now);
@@ -952,7 +964,12 @@ export async function getSyncMonitorSnapshot(
     pageMap.set(row.pageId, page);
   }
 
-  const pages = Array.from(pageMap.values()).sort(comparePages);
+  const pages = Array.from(pageMap.values())
+    .map((page) => ({
+      ...page,
+      syncUx: buildPageSyncUx(page.streams.map((stream) => stream.syncUx)),
+    }))
+    .sort(comparePages);
   const visiblePageIds = pages.map((page) => page.pageId);
   const distinctFans = await countDistinctFansForPages(app.db, visiblePageIds);
 
@@ -1025,6 +1042,7 @@ export async function getSyncMonitorSnapshot(
       last5xxAt: null,
     },
     providers: [],
+    syncUx: buildOverallSyncUx([]),
   });
   overall.counts.fans = distinctFans;
 
@@ -1059,6 +1077,7 @@ export async function getSyncMonitorSnapshot(
         recent5xxs: provider.total5xxs,
       };
     });
+  overall.syncUx = buildOverallSyncUx(pages.map((page) => page.syncUx));
 
   return {
     generatedAt: now.toISOString(),

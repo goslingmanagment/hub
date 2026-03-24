@@ -26,6 +26,8 @@ import { millsToNumber } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
+import { getSyncMonitorSnapshot } from "./sync-monitor.ts";
+import { buildCrmMessageSyncUx } from "./sync-ux.ts";
 
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
@@ -63,6 +65,24 @@ function serializeFreshnessCoverage(freshness: Awaited<ReturnType<typeof getCrmF
       previewReadyConversationCount: freshness.previewReadyConversationCount,
     },
   };
+}
+
+async function resolveCrmMessageSyncUx(
+  app: AppContext,
+  pageId: number,
+  freshness: Awaited<ReturnType<typeof getCrmFreshnessCoverage>>,
+) {
+  const snapshot = await getSyncMonitorSnapshot(app, { pageIds: [pageId] });
+  const page = snapshot.pages[0];
+  const conversationSyncUx = page?.streams.find((stream) => stream.stream === "dm_conversations")?.syncUx ?? null;
+  const messageSyncUx = page?.streams.find((stream) => stream.stream === "dm_messages")?.syncUx ?? null;
+
+  return buildCrmMessageSyncUx({
+    conversationSyncUx,
+    messageSyncUx,
+    pendingMessageBackfillCount: freshness.pendingMessageBackfillCount,
+    previewReadyConversationCount: freshness.previewReadyConversationCount,
+  });
 }
 
 async function resolveCrmPage(
@@ -111,6 +131,7 @@ export async function getCrmSummaryReport(
     platformAccountId: page.id,
   });
   const freshnessCoverage = serializeFreshnessCoverage(summary.freshness);
+  const messageSyncUx = await resolveCrmMessageSyncUx(app, page.id, summary.freshness);
 
   return {
     page: serializePage(page),
@@ -123,6 +144,7 @@ export async function getCrmSummaryReport(
     },
     freshness: freshnessCoverage.freshness,
     coverage: freshnessCoverage.coverage,
+    messageSyncUx,
   };
 }
 
@@ -282,15 +304,20 @@ export async function getCrmConversationPreviewReport(
   query: CrmConversationPreviewQuery,
 ): Promise<CrmConversationPreviewResponse> {
   const page = await resolveCrmPage(app, principal, params.pageLabel);
-  const preview = await getCrmConversationPreview(app.db, {
-    platformAccountId: page.id,
-    platformConversationId: params.platformConversationId,
-    limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
-  });
+  const [preview, freshness] = await Promise.all([
+    getCrmConversationPreview(app.db, {
+      platformAccountId: page.id,
+      platformConversationId: params.platformConversationId,
+      limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
+    }),
+    getCrmFreshnessCoverage(app.db, page.id),
+  ]);
 
   if (!preview) {
     throw new NotFoundError("Conversation preview was not found");
   }
+
+  const messageSyncUx = await resolveCrmMessageSyncUx(app, page.id, freshness);
 
   return {
     page: serializePage(page),
@@ -311,6 +338,7 @@ export async function getCrmConversationPreviewReport(
       unreadCount: preview.conversation.unreadCount,
       lastMessageAt: serializeTimestamp(preview.conversation.lastMessageAt),
     },
+    messageSyncUx,
     messages: preview.messages.map((message) => ({
       platformMessageId: message.platformMessageId,
       senderPlatformUserId: message.senderPlatformUserId,

@@ -48,30 +48,81 @@ export const SYNC_STREAM_CONFIG: Record<SyncControlStream, SyncStreamConfig> = {
   light: { stream: "light", cadenceSeconds: 3600, basePriority: 60, streamIndex: 1 },
   transactions: { stream: "transactions", cadenceSeconds: 3600, basePriority: 50, streamIndex: 2 },
   subscribers: { stream: "subscribers", cadenceSeconds: 3600, basePriority: 40, streamIndex: 3 },
+  followers: { stream: "followers", cadenceSeconds: 43200, basePriority: 35, streamIndex: 4 },
+  followers_reconcile: {
+    stream: "followers_reconcile",
+    cadenceSeconds: 172800,
+    basePriority: 34,
+    streamIndex: 5,
+  },
   dm_conversations: {
     stream: "dm_conversations",
     cadenceSeconds: 1800,
     basePriority: 30,
-    streamIndex: 4,
+    streamIndex: 6,
   },
-  dm_messages: { stream: "dm_messages", cadenceSeconds: 7200, basePriority: 25, streamIndex: 5 },
-  followers: { stream: "followers", cadenceSeconds: 43200, basePriority: 20, streamIndex: 6 },
-  followers_reconcile: {
-    stream: "followers_reconcile",
-    cadenceSeconds: 172800,
-    basePriority: 10,
-    streamIndex: 7,
-  },
+  dm_messages: { stream: "dm_messages", cadenceSeconds: 7200, basePriority: 25, streamIndex: 7 },
 };
 
 const SYNC_STREAM_TIE_BREAK_ORDER: Record<SyncControlStream, number> = {
   light: 1,
   transactions: 2,
   subscribers: 3,
-  dm_conversations: 4,
-  dm_messages: 5,
-  followers: 6,
-  followers_reconcile: 7,
+  followers: 4,
+  followers_reconcile: 5,
+  dm_conversations: 6,
+  dm_messages: 7,
+};
+
+const SYNC_REQUEST_PRIORITY_BY_REASON: Record<
+  SyncRequestReason,
+  Record<SyncControlStream, number>
+> = {
+  scheduled: {
+    light: 60,
+    transactions: 50,
+    subscribers: 40,
+    followers: 35,
+    followers_reconcile: 34,
+    dm_conversations: 30,
+    dm_messages: 25,
+  },
+  recovery: {
+    light: 70,
+    transactions: 60,
+    subscribers: 50,
+    followers: 45,
+    followers_reconcile: 44,
+    dm_conversations: 40,
+    dm_messages: 35,
+  },
+  anomaly: {
+    light: 70,
+    transactions: 60,
+    subscribers: 50,
+    followers: 45,
+    followers_reconcile: 44,
+    dm_conversations: 40,
+    dm_messages: 35,
+  },
+  manual: {
+    light: 100,
+    transactions: 90,
+    subscribers: 80,
+    followers: 75,
+    followers_reconcile: 74,
+    dm_conversations: 70,
+    dm_messages: 65,
+  },
+  onboarding: {
+    light: 100,
+    transactions: 90,
+    subscribers: 80,
+    followers: 75,
+    followers_reconcile: 74,
+    dm_conversations: 70,
+    dm_messages: 65,
+  },
 };
 
 function asSyncAuditStream(stream: string): SyncAuditStream {
@@ -353,19 +404,51 @@ export function resolveSyncRequestPriority(
   stream: SyncControlStream,
   reason: SyncRequestReason,
 ) {
-  const basePriority = SYNC_STREAM_CONFIG[stream].basePriority;
-  switch (reason) {
-    case "manual":
-      return 90;
-    case "onboarding":
-      return 100;
-    case "anomaly":
-    case "recovery":
-      return Math.max(basePriority, 45);
-    case "scheduled":
-    default:
-      return basePriority;
-  }
+  return SYNC_REQUEST_PRIORITY_BY_REASON[reason][stream];
+}
+
+function syncBasePriorityCaseSql(streamColumnName: string) {
+  return sql.raw(`
+    case ${streamColumnName}
+      when 'light' then ${SYNC_STREAM_CONFIG.light.basePriority}
+      when 'transactions' then ${SYNC_STREAM_CONFIG.transactions.basePriority}
+      when 'subscribers' then ${SYNC_STREAM_CONFIG.subscribers.basePriority}
+      when 'followers' then ${SYNC_STREAM_CONFIG.followers.basePriority}
+      when 'followers_reconcile' then ${SYNC_STREAM_CONFIG.followers_reconcile.basePriority}
+      when 'dm_conversations' then ${SYNC_STREAM_CONFIG.dm_conversations.basePriority}
+      when 'dm_messages' then ${SYNC_STREAM_CONFIG.dm_messages.basePriority}
+      else 0
+    end
+  `);
+}
+
+function syncRequestedPriorityCaseSql(
+  streamColumnName: string,
+  reasonColumnName: string,
+) {
+  const priorityCase = (reason: SyncRequestReason) => `
+    case ${streamColumnName}
+      when 'light' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].light}
+      when 'transactions' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].transactions}
+      when 'subscribers' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].subscribers}
+      when 'followers' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].followers}
+      when 'followers_reconcile' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].followers_reconcile}
+      when 'dm_conversations' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].dm_conversations}
+      when 'dm_messages' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].dm_messages}
+      else 0
+    end
+  `;
+
+  return sql.raw(`
+    case ${reasonColumnName}
+      when 'scheduled' then ${priorityCase("scheduled")}
+      when 'recovery' then ${priorityCase("recovery")}
+      when 'anomaly' then ${priorityCase("anomaly")}
+      when 'manual' then ${priorityCase("manual")}
+      when 'onboarding' then ${priorityCase("onboarding")}
+      else ${priorityCase("scheduled")}
+    end
+  `);
 }
 
 function resolveBackoffDelaySeconds(consecutiveFailures: number) {
@@ -896,6 +979,8 @@ export async function listSyncRunEvents(
   if (input.platformAccountId !== undefined) {
     clauses.push(sql`e.platform_account_id = ${input.platformAccountId}`);
   }
+
+  clauses.push(sql`e.event_type <> 'worker_heartbeat'`);
 
   const result = await db.execute<{
     id: number;
@@ -1629,6 +1714,7 @@ export async function listSyncMonitorRecentEvents(
   if (input?.since) {
     eventClauses.push(sql`e.emitted_at >= ${input.since}`);
   }
+  eventClauses.push(sql`e.event_type <> 'worker_heartbeat'`);
 
   const result = await db.execute<{
     id: NumericValue;
@@ -2254,13 +2340,47 @@ export async function ensureSyncStreamStateRows(
     );
 
   if (values.length === 0) {
+    await rebalanceSyncStreamPriorities(db, {
+      platformAccountId: input?.platformAccountId,
+      now,
+    });
     return existingRows;
   }
 
   await db.insert(syncStreamState).values(values).onConflictDoNothing();
+  await rebalanceSyncStreamPriorities(db, {
+    platformAccountId: input?.platformAccountId,
+    now,
+  });
   return listSyncStreamStateRows(db, input?.platformAccountId !== undefined
     ? { platformAccountId: input.platformAccountId }
     : undefined);
+}
+
+export async function rebalanceSyncStreamPriorities(
+  db: Database,
+  input?: {
+    platformAccountId?: number;
+    now?: Date;
+  },
+) {
+  const now = input?.now ?? new Date();
+  const clauses = [sql`true`];
+  if (input?.platformAccountId !== undefined) {
+    clauses.push(sql`platform_account_id = ${input.platformAccountId}`);
+  }
+
+  await db.execute(sql`
+    update sync_stream_state
+    set base_priority = ${syncBasePriorityCaseSql("stream")},
+        effective_priority = case
+          when desired_revision > satisfied_revision
+            then ${syncRequestedPriorityCaseSql("stream", "pending_reason")}
+          else ${syncBasePriorityCaseSql("stream")}
+        end,
+        updated_at = ${now}
+    where ${and(...clauses)}
+  `);
 }
 
 export async function promoteDueSyncStreamStateRows(

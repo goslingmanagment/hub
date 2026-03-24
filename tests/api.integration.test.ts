@@ -4570,6 +4570,11 @@ describe("api integration", () => {
         lastSyncError: null,
         proxyUrl: null,
         proxyHasAuth: false,
+        syncUx: expect.objectContaining({
+          state: expect.any(String),
+          headline: expect.any(String),
+          requiresAction: expect.any(Boolean),
+        }),
       }),
     ]));
   });
@@ -5995,9 +6000,19 @@ describe("api integration", () => {
     expect(overview.statusCode).toBe(200);
 
     const body = overview.json();
+    expect(body.overall.syncUx).toMatchObject({
+      state: expect.any(String),
+      headline: expect.any(String),
+      requiresAction: expect.any(Boolean),
+    });
     for (const page of body.pages) {
       expect(typeof page.newFollowersToday).toBe("number");
       expect(Number.isInteger(page.newFollowersToday)).toBe(true);
+      expect(page.syncUx).toMatchObject({
+        state: expect.any(String),
+        headline: expect.any(String),
+        requiresAction: expect.any(Boolean),
+      });
     }
 
     const lanaOverview = body.pages.find((p: any) => p.label === "lana");
@@ -6216,6 +6231,11 @@ describe("api integration", () => {
         pendingMessageBackfillCount: 0,
         previewReadyConversationCount: 1,
       },
+      messageSyncUx: {
+        state: "healthy",
+        headline: "Conversation history is ready",
+        requiresAction: false,
+      },
     });
 
     const retention = await server.inject({
@@ -6281,6 +6301,11 @@ describe("api integration", () => {
         storedMessageCount: 4,
         messageBackfillComplete: true,
         lastMessageSyncAt: "2026-03-17T11:45:00.000Z",
+      },
+      messageSyncUx: {
+        state: "healthy",
+        headline: "Conversation history is ready",
+        requiresAction: false,
       },
     });
     expect(preview.json().messages.map((message: { platformMessageId: string }) => message.platformMessageId)).toEqual([
@@ -6453,6 +6478,11 @@ describe("api integration", () => {
     expect(ownerBody.window.hours).toBe(24);
     expect(ownerBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana", "lily1"]);
     expect(ownerBody.overall.pages).toBe(2);
+    expect(ownerBody.overall.syncUx).toMatchObject({
+      state: "attention",
+      requiresAction: true,
+      headline: "Reconnect to resume sync",
+    });
     expect(ownerBody.overall.recentRuns).toMatchObject({
       running: 1,
       success: 1,
@@ -6483,6 +6513,11 @@ describe("api integration", () => {
 
     const lana = ownerBody.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana");
     expect(lana).toBeTruthy();
+    expect(lana.syncUx).toMatchObject({
+      state: "attention",
+      requiresAction: true,
+      headline: "Reconnect to resume sync",
+    });
     expect(lana.summary).toMatchObject({
       runningStreams: 1,
       failedStreams: 2,
@@ -6506,6 +6541,10 @@ describe("api integration", () => {
     expect(streams.get("light")).toMatchObject({
       status: "running",
       stalled: true,
+      syncUx: expect.objectContaining({
+        state: "attention",
+        headline: "Sync needs attention",
+      }),
       pending: false,
       activeRun: expect.objectContaining({
         startedAt: seeded.lightRunningStartedAt.toISOString(),
@@ -6523,6 +6562,10 @@ describe("api integration", () => {
       status: "idle",
       pending: true,
       backoffUntil: seeded.backoffUntil.toISOString(),
+      syncUx: expect.objectContaining({
+        state: "retrying",
+        headline: "Retrying automatically",
+      }),
       progress: {
         label: "17 items backfilled",
         current: 17,
@@ -6555,6 +6598,11 @@ describe("api integration", () => {
     expect(streams.get("dm_conversations")).toMatchObject({
       status: "auth_failed",
       lastErrorSummary: "Session expired",
+      syncUx: expect.objectContaining({
+        state: "attention",
+        headline: "Reconnect to resume sync",
+        requiresAction: true,
+      }),
       progress: {
         label: "2/4 conversations",
         current: 2,
@@ -6566,6 +6614,10 @@ describe("api integration", () => {
     expect(streams.get("dm_messages")).toMatchObject({
       status: "completed",
       lastSuccessAt: seeded.completedSyncAt.toISOString(),
+      syncUx: expect.objectContaining({
+        state: "healthy",
+        headline: "Up to date",
+      }),
       progress: {
         label: "1/3 conversations backfilled, 1 lagging",
         current: 1,

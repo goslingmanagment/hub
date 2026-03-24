@@ -33,6 +33,7 @@ import { persistFailedSyncPayload } from "./shared.ts";
 
 const PAGE_EXECUTOR_IDLE_POLL_MS = 1_000;
 const PAGE_EXECUTOR_HEARTBEAT_MS = 15_000;
+const SYNC_RUN_HEARTBEAT_MS = 30_000;
 const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 
 export interface SyncPageChunkResult {
@@ -148,6 +149,14 @@ export async function executeNextSyncPageChunk(
   const budget = new SyncChunkBudget();
   await recordSyncStreamChunkStarted(app.db, platformAccountId, streamState.stream);
   let pageContext: Awaited<ReturnType<typeof resolveExecutorPageContext>> | null = null;
+  const runHeartbeat = setInterval(() => {
+    void telemetry.recordWorkerHeartbeat().catch((error) => {
+      app.logger.warn(
+        { err: error, runId: run.id, platformAccountId, stream: streamState.stream },
+        "Failed to record sync worker heartbeat",
+      );
+    });
+  }, SYNC_RUN_HEARTBEAT_MS);
 
   try {
     pageContext = await resolveExecutorPageContext(app, streamState.platformAccountId);
@@ -266,6 +275,8 @@ export async function executeNextSyncPageChunk(
     });
     const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
     return buildContinuationResult(platformAccountId, streamState.stream, run.id, "failed", nextRows);
+  } finally {
+    clearInterval(runHeartbeat);
   }
 }
 

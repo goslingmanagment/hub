@@ -364,6 +364,23 @@ export class SyncRunTelemetry {
     });
   }
 
+  async recordWorkerHeartbeat(emittedAt = new Date()) {
+    await this.safeTelemetryOp(
+      "worker_heartbeat",
+      () => insertSyncRunEvent(this.app.db, {
+        syncRunId: this.metadata.runId,
+        platformAccountId: this.metadata.platformAccountId,
+        provider: this.metadata.provider,
+        stream: this.metadata.stream,
+        eventType: "worker_heartbeat",
+        severity: "info",
+        message: "Worker heartbeat",
+        details: {},
+        emittedAt,
+      }),
+    );
+  }
+
   async recordPhaseStarted(name: string, details?: Record<string, unknown>) {
     this.phaseNames.push(name);
     await this.recordEvent("phase_started", `Phase started: ${name}`, {
@@ -722,14 +739,6 @@ export class SyncRunTelemetry {
   }
 
   private applyAutomaticAnomalies(status: "success" | "partial" | "failed" | "skipped") {
-    if (status === "partial" && !this.anomalies.has("partial_stream_failure")) {
-      this.anomalies.set("partial_stream_failure", {
-        code: "partial_stream_failure",
-        severity: "warn",
-        message: "One or more sync phases failed while others completed",
-      });
-    }
-
     if (this.requestSummaryCollector.getRequestTotalsSnapshot().retryAttempts > 3 && !this.anomalies.has("high_retry_volume")) {
       this.anomalies.set("high_retry_volume", {
         code: "high_retry_volume",

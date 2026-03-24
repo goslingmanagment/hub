@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import type { CrmConversationPreviewResponse } from "@agency_hub_core/contracts";
 import { useCrmConversationPreview } from "@/api/queries";
+import { SyncUxBadge } from "@/components/shared/SyncUxBadge";
 import { formatRelativeTime } from "@/lib/format";
 import { formatUsdFromCents } from "@/lib/format";
 
@@ -33,15 +34,36 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
     );
   }
 
+  const previewSyncingStates = new Set(["syncing", "catching_up", "retrying", "setup"]);
+
   if (!data || data.messages.length === 0) {
+    const syncing = data && previewSyncingStates.has(data.messageSyncUx.state);
+    const headline = syncing
+      ? "Conversation history is still syncing"
+      : data?.messageSyncUx.headline ?? "No messages to show.";
+    const detail = syncing
+      ? "This preview will fill in automatically as messages catch up."
+      : data?.messageSyncUx.detail ?? null;
+
     return (
       <div className="bg-hover/50 px-6 py-4">
-        <span className="text-sm text-text-muted">No messages to show.</span>
+        {data && (
+          <div className="mb-2">
+            <SyncUxBadge summary={data.messageSyncUx} />
+          </div>
+        )}
+        <div className="text-sm text-text-secondary">{headline}</div>
+        {detail && <div className="mt-1 text-sm text-text-muted">{detail}</div>}
       </div>
     );
   }
 
-  const syncing = !data.conversation.messageBackfillComplete;
+  const previewIncomplete = !data.conversation.messageBackfillComplete || previewSyncingStates.has(data.messageSyncUx.state);
+  const footerText = data.messageSyncUx.requiresAction
+    ? data.messageSyncUx.headline
+    : previewIncomplete
+      ? "Preview may be incomplete while messages catch up"
+      : "Conversation history is ready";
 
   return (
     <div className="bg-hover/50 px-6 py-4 space-y-2">
@@ -77,9 +99,10 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
         })}
       </div>
       <div className="flex items-center justify-between pt-1">
-        <span className="text-[11px] text-text-muted">
-          {syncing ? "Message backfill in progress" : "Messages may be up to 2 hours old"}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <SyncUxBadge summary={data.messageSyncUx} />
+          <span className="text-[11px] text-text-muted">{footerText}</span>
+        </div>
         <Link
           to={profileHref}
           onClick={(e) => e.stopPropagation()}

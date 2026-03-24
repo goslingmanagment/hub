@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router";
 import { useOverview, useOverviewRevenue, useOverviewGrowth } from "@/api/queries";
+import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
 import { PLATFORM_COLORS } from "@/lib/constants";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
@@ -96,9 +97,30 @@ export function OverviewPage() {
     : null;
 
   const periodLabel = PERIOD_LABELS[selectedPeriod] ?? "30 Days";
+  const overallSyncMeta = formatSyncUxMeta(data.overall.syncUx, {
+    updatedPrefix: "Updated",
+    retryPrefix: "Retrying",
+  });
 
   return (
     <div>
+      <section className="mb-5 rounded-xl border border-border bg-card px-5 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <SyncUxBadge summary={data.overall.syncUx} />
+              <span className="text-sm font-semibold text-text-primary">{data.overall.syncUx.headline}</span>
+            </div>
+            {data.overall.syncUx.detail && (
+              <p className="mt-1 text-sm text-text-muted">{data.overall.syncUx.detail}</p>
+            )}
+          </div>
+          {overallSyncMeta && (
+            <span className="text-xs text-text-muted">{overallSyncMeta}</span>
+          )}
+        </div>
+      </section>
+
       <table className="w-full border-collapse overflow-hidden rounded-xl border border-border bg-card">
         <colgroup>
           <col />
@@ -248,6 +270,24 @@ function ModelGroupRows({
                   </span>
                 )}
               </div>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <SyncUxBadge summary={page.syncUx} />
+                <span className="text-[12px] text-text-secondary">{page.syncUx.headline}</span>
+                {formatSyncUxMeta(page.syncUx, {
+                  updatedPrefix: "Updated",
+                  retryPrefix: "Retrying",
+                }) && (
+                  <span className="text-[12px] text-text-muted">
+                    {formatSyncUxMeta(page.syncUx, {
+                      updatedPrefix: "Updated",
+                      retryPrefix: "Retrying",
+                    })}
+                  </span>
+                )}
+              </div>
+              {page.syncUx.detail && (
+                <div className="mt-1 text-[12px] text-text-muted">{page.syncUx.detail}</div>
+              )}
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
               {formatUsdFromMills(pageRevenue)}

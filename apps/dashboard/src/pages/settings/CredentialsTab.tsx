@@ -1,9 +1,7 @@
 import { useState } from "react";
-import type { ConnectionItem } from "@agency_hub_core/contracts";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
-import { StatusDot } from "@/components/shared/StatusDot";
-import { formatRelativeTime } from "@/lib/format";
+import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal";
 
 export function CredentialsTab() {
@@ -27,10 +25,9 @@ export function CredentialsTab() {
         {items.map((conn) => (
           <div
             key={conn.id}
-            className="flex items-center justify-between rounded-xl border border-border bg-card p-4"
+            className="flex items-start justify-between gap-4 rounded-xl border border-border bg-card p-4"
           >
-            <div className="flex items-center gap-3">
-              <StatusDot status={conn.connectionStatus} />
+            <div className="min-w-0 flex-1">
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-[15px] font-semibold text-text-primary">
@@ -40,30 +37,44 @@ export function CredentialsTab() {
                 </div>
                 <div className="mt-0.5 text-xs text-text-muted">
                   @{conn.username ?? conn.displayName ?? "unknown"}
-                  {conn.lastLightSyncAt && (
-                    <> &middot; Last sync: {formatRelativeTime(conn.lastLightSyncAt)}</>
-                  )}
                   <> &middot; {conn.subscriberCount} subs</>
                   {conn.platform === "fansly" && <> &middot; {conn.followerCount} followers</>}
                 </div>
-                {conn.lastSyncError && (
-                  <div className="mt-1 text-xs text-danger">{conn.lastSyncError}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <SyncUxBadge summary={conn.syncUx} />
+                  <span className="text-xs font-medium text-text-secondary">{conn.syncUx.headline}</span>
+                  {formatSyncUxMeta(conn.syncUx, {
+                    updatedPrefix: "Updated",
+                    retryPrefix: "Retrying",
+                  }) && (
+                    <span className="text-xs text-text-muted">
+                      {formatSyncUxMeta(conn.syncUx, {
+                        updatedPrefix: "Updated",
+                        retryPrefix: "Retrying",
+                      })}
+                    </span>
+                  )}
+                </div>
+                {conn.syncUx.detail && (
+                  <div className="mt-1 text-xs text-text-muted">{conn.syncUx.detail}</div>
                 )}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() =>
-                setSelectedConnection({
-                  label: conn.label,
-                  platform: conn.platform,
-                  proxyUrl: conn.proxyUrl,
-                  proxyHasAuth: conn.proxyHasAuth,
-                })}
-              className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
-            >
-              Update Credentials
-            </button>
+            {conn.syncUx.requiresAction && (
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedConnection({
+                    label: conn.label,
+                    platform: conn.platform,
+                    proxyUrl: conn.proxyUrl,
+                    proxyHasAuth: conn.proxyHasAuth,
+                  })}
+                className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10"
+              >
+                Reconnect
+              </button>
+            )}
           </div>
         ))}
       </div>

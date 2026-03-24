@@ -803,11 +803,17 @@ export async function buildApiServer(appContext: AppContext) {
       modelSet.set(p.modelSlug, { slug: p.modelSlug, name: p.modelName });
     }
     const fanCount = await countDistinctFansForPages(appContext.db, pageIds);
-    const connectionStatuses = await listConnectionStatuses(appContext, {
-      pageIds: pageScope,
-      pages,
-    });
+    const [connectionStatuses, syncSnapshot] = await Promise.all([
+      listConnectionStatuses(appContext, {
+        pageIds: pageScope,
+        pages,
+      }),
+      getSyncMonitorSnapshot(appContext, {
+        pageIds,
+      }),
+    ]);
     const statusByPageId = new Map(connectionStatuses.map((c) => [c.id, c]));
+    const syncByPageId = new Map(syncSnapshot.pages.map((page) => [page.pageId, page.syncUx]));
 
     // Revenue 7d and 30d
     const groupedPageIds = new Map<Platform, number[]>();
@@ -935,6 +941,9 @@ export async function buildApiServer(appContext: AppContext) {
           deltaPct: computeDeltaPct(rev30d.netEarningsMills, prevRev30d.netEarningsMills),
         },
       },
+      overall: {
+        syncUx: syncSnapshot.overall.syncUx,
+      },
       pages: pages.map((p) => {
         const status = statusByPageId.get(p.id);
         return {
@@ -955,6 +964,7 @@ export async function buildApiServer(appContext: AppContext) {
           lastLightSyncAt: p.lastLightSyncAt?.toISOString() ?? null,
           lastFollowerSyncAt: p.lastFollowerSyncAt?.toISOString() ?? null,
           lastSyncError: status?.lastSyncError ?? null,
+          syncUx: syncByPageId.get(p.id) ?? syncSnapshot.overall.syncUx,
         };
       }),
       setup: {

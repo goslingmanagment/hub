@@ -123,6 +123,26 @@ const healthConnectionStatusEnum = z.enum([
   "never_synced",
   "unverified",
 ]);
+const syncUxStateEnum = z.enum([
+  "healthy",
+  "syncing",
+  "catching_up",
+  "retrying",
+  "attention",
+  "setup",
+  "off",
+]);
+
+export const syncUxSummarySchema = z.object({
+  state: syncUxStateEnum,
+  label: z.string(),
+  headline: z.string(),
+  detail: z.string().nullable(),
+  progressLabel: z.string().nullable(),
+  nextRetryAt: isoTimestamp.nullable(),
+  updatedAt: isoTimestamp.nullable(),
+  requiresAction: z.boolean(),
+});
 
 export const systemCheckSchema = z.object({
   status: systemCheckStatusEnum,
@@ -979,6 +999,7 @@ export const crmSummaryResponseSchema = z.object({
   }),
   freshness: crmFreshnessSchema,
   coverage: crmCoverageSchema,
+  messageSyncUx: syncUxSummarySchema,
 });
 
 export const crmRetentionResponseSchema = z.object({
@@ -1021,6 +1042,7 @@ export const crmConversationPreviewResponseSchema = z.object({
   page: assignedPageSchema,
   fan: crmFanIdentitySchema.nullable(),
   conversation: crmPreviewConversationSchema,
+  messageSyncUx: syncUxSummarySchema,
   messages: z.array(crmPreviewMessageSchema),
 });
 
@@ -1089,6 +1111,7 @@ export const connectionItemSchema = z.object({
   followerCount: z.number().int(),
   proxyUrl: z.string().nullable(),
   proxyHasAuth: z.boolean(),
+  syncUx: syncUxSummarySchema,
 });
 
 export const overviewResponseSchema = z.object({
@@ -1115,6 +1138,9 @@ export const overviewResponseSchema = z.object({
       deltaPct: z.number().nullable(),
     }),
   }),
+  overall: z.object({
+    syncUx: syncUxSummarySchema,
+  }),
   pages: z.array(z.object({
     id: intId,
     label: z.string(),
@@ -1133,6 +1159,7 @@ export const overviewResponseSchema = z.object({
     lastLightSyncAt: isoTimestamp.nullable(),
     lastFollowerSyncAt: isoTimestamp.nullable(),
     lastSyncError: z.string().nullable(),
+    syncUx: syncUxSummarySchema,
   })),
   setup: z.object({
     hasPages: z.boolean(),
@@ -1424,6 +1451,8 @@ export const syncMonitorStreamItemSchema = z.object({
   lastSuccessAt: isoTimestamp.nullable(),
   lastFailureAt: isoTimestamp.nullable(),
   lastErrorSummary: z.string().nullable(),
+  consecutiveFailures: z.number().int(),
+  syncUx: syncUxSummarySchema,
 });
 
 export const syncMonitorPageCountsSchema = z.object({
@@ -1454,6 +1483,7 @@ export const syncMonitorPageItemSchema = z.object({
   counts: syncMonitorPageCountsSchema,
   summary: syncMonitorPageSummarySchema,
   streams: z.array(syncMonitorStreamItemSchema),
+  syncUx: syncUxSummarySchema,
 });
 
 export const syncMonitorProviderSummarySchema = z.object({
@@ -1475,6 +1505,7 @@ export const syncMonitorOverallSchema = z.object({
   recentRuns: syncMonitorRecentRunsSchema,
   recentErrors: syncMonitorRecentErrorsSchema,
   providers: z.array(syncMonitorProviderSummarySchema),
+  syncUx: syncUxSummarySchema,
 });
 
 export const syncMonitorRecentEventSchema = z.object({
@@ -2858,6 +2889,7 @@ export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;
 export type AdminUser = z.infer<typeof adminUserSchema>;
 export type AssignedPage = z.infer<typeof assignedPageSchema>;
+export type SyncUxSummary = z.infer<typeof syncUxSummarySchema>;
 export type CrossPageFanDetailResponse = z.infer<typeof crossPageFanDetailResponseSchema>;
 export type FanListQuery = z.infer<typeof fanListQuerySchema>;
 export type FanListResponse = z.infer<typeof fanListResponseSchema>;

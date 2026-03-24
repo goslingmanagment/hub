@@ -9,6 +9,7 @@ import {
   listRunningSyncRuns,
   listSyncRequestAttempts,
   listSyncRunEvents,
+  rebalanceSyncStreamPriorities,
   reserveSyncProviderRateLimit,
   resolveSyncRequestPriority,
 } from "../packages/db/src/repositories/sync.ts";
@@ -219,10 +220,41 @@ describe("sync repository timestamp normalization", () => {
     expect(computeSyncStreamSlotOffsetSeconds(42, "light")).not.toBe(
       computeSyncStreamSlotOffsetSeconds(42, "followers"),
     );
-    expect(resolveSyncRequestPriority("followers_reconcile", "anomaly")).toBe(45);
+    expect(resolveSyncRequestPriority("followers", "scheduled")).toBeGreaterThan(
+      resolveSyncRequestPriority("dm_conversations", "scheduled"),
+    );
+    expect(resolveSyncRequestPriority("followers", "manual")).toBeGreaterThan(
+      resolveSyncRequestPriority("dm_messages", "manual"),
+    );
+    expect(resolveSyncRequestPriority("followers_reconcile", "anomaly")).toBe(44);
     expect(resolveSyncRequestPriority("light", "manual")).toBeGreaterThan(
       resolveSyncRequestPriority("light", "scheduled"),
     );
+  });
+
+  it("rebalances existing stream-state priorities using pending reasons without touching revisions", async () => {
+    const execute = vi.fn().mockResolvedValue({ rows: [] });
+    const db = { execute } as never;
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    await rebalanceSyncStreamPriorities(db, {
+      platformAccountId: 55,
+      now,
+    });
+
+    const query = execute.mock.calls[0]?.[0];
+    const sqlText = extractSqlText(query);
+    const params = extractQueryParams(query);
+
+    expect(sqlText).toContain("update sync_stream_state");
+    expect(sqlText).toContain("set base_priority =");
+    expect(sqlText).toContain("case stream");
+    expect(sqlText).toContain("effective_priority = case");
+    expect(sqlText).toContain("pending_reason");
+    expect(sqlText).not.toContain("desired_revision =");
+    expect(sqlText).not.toContain("satisfied_revision =");
+    expect(params).toContain(55);
+    expect(params).toContain(now);
   });
 
   it("reserves shared provider rate-limit rows at the latest available slot", async () => {

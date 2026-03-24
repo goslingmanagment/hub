@@ -1,42 +1,33 @@
 import type { CrmSummaryResponse } from "@agency_hub_core/contracts";
-import { formatRelativeTime } from "@/lib/format";
+import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
 
 interface CrmSummaryHeaderProps {
   summary: CrmSummaryResponse;
 }
 
-function isStale(iso: string | null, thresholdMs: number): boolean {
-  if (!iso) return true;
-  return Date.now() - new Date(iso).getTime() > thresholdMs;
-}
-
 export function CrmSummaryHeader({ summary }: CrmSummaryHeaderProps) {
-  const convStale = isStale(summary.freshness.lastConversationChunkSucceededAt, 60 * 60 * 1000);
-  const msgStale = isStale(summary.freshness.lastMessageChunkSucceededAt, 4 * 60 * 60 * 1000);
-  const pendingBackfill = summary.coverage.pendingMessageBackfillCount > 0;
+  const syncMeta = formatSyncUxMeta(summary.messageSyncUx, {
+    updatedPrefix: "Updated",
+    retryPrefix: "Retrying",
+  });
 
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[12px] text-text-muted">
-      <span>
-        Retention: <span className="font-semibold text-text-primary">{summary.retention.total}</span>
-      </span>
-      <span>
-        Reactivation: <span className="font-semibold text-text-primary">{summary.reactivation.total}</span>
-      </span>
-      {summary.freshness.lastConversationChunkSucceededAt && (
-        <span className={convStale ? "text-amber-400" : ""}>
-          Conversations synced {formatRelativeTime(summary.freshness.lastConversationChunkSucceededAt)}
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[12px] text-text-muted">
+        <span>
+          Retention: <span className="font-semibold text-text-primary">{summary.retention.total}</span>
         </span>
-      )}
-      {summary.freshness.lastMessageChunkSucceededAt && (
-        <span className={msgStale ? "text-amber-400" : ""}>
-          Messages synced {formatRelativeTime(summary.freshness.lastMessageChunkSucceededAt)}
+        <span>
+          Reactivation: <span className="font-semibold text-text-primary">{summary.reactivation.total}</span>
         </span>
-      )}
-      {pendingBackfill && (
-        <span className="text-amber-400">
-          {summary.coverage.pendingMessageBackfillCount} conversations pending message backfill
-        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-[12px] text-text-muted">
+        <SyncUxBadge summary={summary.messageSyncUx} />
+        <span className="font-medium text-text-secondary">{summary.messageSyncUx.headline}</span>
+        {syncMeta && <span>{syncMeta}</span>}
+      </div>
+      {summary.messageSyncUx.detail && (
+        <div className="text-[12px] text-text-muted">{summary.messageSyncUx.detail}</div>
       )}
     </div>
   );

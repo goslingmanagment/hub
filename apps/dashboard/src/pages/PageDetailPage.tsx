@@ -15,6 +15,7 @@ import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
 import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
+import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
 import { buildFanProfileNavigation, buildPageRoute } from "@/lib/navigation";
 import { usePeriodStore } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
@@ -24,7 +25,6 @@ import {
   formatUsdFromCents,
   transactionTypeLabel,
   daysRemaining,
-  formatRelativeTime,
 } from "@/lib/format";
 type TabKey = "transactions" | "spenders" | "followers";
 
@@ -123,6 +123,10 @@ export function PageDetailPage() {
       : selectedPeriod === "all"
         ? "All Time"
         : "30 Days";
+  const syncMeta = formatSyncUxMeta(page.syncUx, {
+    updatedPrefix: "Updated",
+    retryPrefix: "Retrying",
+  });
 
   function breakdownAmount(canonicalType: string): number {
     if (!selectedRevenue?.breakdown) return 0;
@@ -155,13 +159,17 @@ export function PageDetailPage() {
         </div>
         <p className="text-sm text-text-muted">
           @{page.username ?? "unknown"} &middot; Model: {page.modelName}
-          {page.lastLightSyncAt && (
-            <>
-              {" "}
-              &middot; Synced {formatRelativeTime(page.lastLightSyncAt)}
-            </>
-          )}
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <SyncUxBadge summary={page.syncUx} />
+          <span className="text-sm font-medium text-text-secondary">{page.syncUx.headline}</span>
+          {syncMeta && (
+            <span className="text-sm text-text-muted">{syncMeta}</span>
+          )}
+        </div>
+        {page.syncUx.detail && (
+          <p className="mt-1 text-sm text-text-muted">{page.syncUx.detail}</p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-6">

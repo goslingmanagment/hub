@@ -16,6 +16,31 @@ function renderPage() {
   return renderToStaticMarkup(createElement(SyncMonitorPage));
 }
 
+function buildSyncUx(
+  overrides: Partial<{
+    state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
+    label: string;
+    headline: string;
+    detail: string | null;
+    progressLabel: string | null;
+    nextRetryAt: string | null;
+    updatedAt: string | null;
+    requiresAction: boolean;
+  }> = {},
+) {
+  return {
+    state: "healthy" as const,
+    label: "Up to date",
+    headline: "Up to date",
+    detail: "All syncs are current.",
+    progressLabel: null,
+    nextRetryAt: null,
+    updatedAt: "2026-03-24T11:55:00.000Z",
+    requiresAction: false,
+    ...overrides,
+  };
+}
+
 describe("SyncMonitorPage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -38,7 +63,7 @@ describe("SyncMonitorPage", () => {
     vi.useRealTimers();
   });
 
-  it("renders stalled streams with a no-activity label instead of running duration", () => {
+  it("renders friendly attention copy for stalled streams", () => {
     queryMocks.useSyncMonitor.mockReturnValue({
       data: {
         generatedAt: "2026-03-24T11:59:30.000Z",
@@ -67,6 +92,13 @@ describe("SyncMonitorPage", () => {
             last5xxAt: null,
           },
           providers: [],
+          syncUx: buildSyncUx({
+            state: "attention",
+            label: "Needs attention",
+            headline: "Sync needs attention",
+            detail: "One or more syncs need help before they can catch up.",
+            updatedAt: "2026-03-24T11:49:00.000Z",
+          }),
         },
         pages: [{
           pageId: 1,
@@ -91,6 +123,13 @@ describe("SyncMonitorPage", () => {
             pendingStreams: 0,
             backoffStreams: 0,
           },
+          syncUx: buildSyncUx({
+            state: "attention",
+            label: "Needs attention",
+            headline: "Sync needs attention",
+            detail: "One or more syncs need help before they can catch up.",
+            updatedAt: "2026-03-24T11:49:00.000Z",
+          }),
           streams: [{
             stream: "followers",
             status: "running",
@@ -129,6 +168,14 @@ describe("SyncMonitorPage", () => {
             lastSuccessAt: null,
             lastFailureAt: null,
             lastErrorSummary: null,
+            consecutiveFailures: 0,
+            syncUx: buildSyncUx({
+              state: "attention",
+              label: "Needs attention",
+              headline: "Sync needs attention",
+              detail: "This sync stopped making progress and needs the worker to recover.",
+              updatedAt: "2026-03-24T11:49:00.000Z",
+            }),
           }],
         }],
         recentEvents: [],
@@ -142,8 +189,8 @@ describe("SyncMonitorPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("Stalled");
-    expect(html).toContain("No activity");
+    expect(html).toContain("Sync needs attention");
+    expect(html).toContain("needs the worker to recover");
     expect(html).not.toContain("Running 20m");
   });
 });
