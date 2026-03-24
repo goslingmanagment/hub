@@ -1,11 +1,11 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "@agency_hub_core/shared";
 import type { QueryResult } from "pg";
 
 import { createPool } from "./client.ts";
+import { resolveMigrationFiles } from "./migrations-dir.ts";
 
 function assertUniqueMigrationPrefixes(files: string[]) {
   const seenPrefixes = new Map<string, string>();
@@ -31,26 +31,6 @@ type MigrationDb = {
   query: (text: string, params?: unknown[]) => Promise<QueryResult>;
 };
 
-function resolveMigrationsDir(override?: string) {
-  if (override) {
-    return override;
-  }
-
-  return fileURLToPath(new URL("../migrations", import.meta.url));
-}
-
-async function listMigrationFiles(migrationsDir: string) {
-  const files = (await readdir(migrationsDir))
-    .filter((file) => file.endsWith(".sql"))
-    .sort();
-
-  if (files.length === 0) {
-    throw new Error(`No SQL migrations were found in ${migrationsDir}`);
-  }
-
-  return files;
-}
-
 export async function runMigrations(input?: {
   databaseUrl?: string;
   db?: MigrationDb;
@@ -64,8 +44,9 @@ export async function runMigrations(input?: {
       )
     `);
 
-    const migrationsDir = resolveMigrationsDir(input?.migrationsDir);
-    const files = await listMigrationFiles(migrationsDir);
+    const { files, migrationsDir } = await resolveMigrationFiles({
+      migrationsDir: input?.migrationsDir,
+    });
     assertUniqueMigrationPrefixes(files);
 
     for (const file of files) {

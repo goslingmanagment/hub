@@ -1,9 +1,5 @@
-import { readdir } from "node:fs/promises";
-import path from "node:path";
-
 import type { Pool } from "pg";
-
-const DEFAULT_MIGRATIONS_DIR = path.resolve(process.cwd(), "packages/db/migrations");
+import { resolveMigrationFiles } from "./migrations-dir.ts";
 
 type ColumnShapeRow = {
   data_type: string;
@@ -51,22 +47,16 @@ function driftError(detail: string) {
   );
 }
 
-async function listMigrationFiles(migrationsDir: string) {
-  const files = (await readdir(migrationsDir))
-    .filter((file) => file.endsWith(".sql"))
-    .sort();
-  assertUniqueMigrationPrefixes(files);
-  return files;
-}
-
 export async function assertRuntimeSchemaReady(
   pool: Pick<Pool, "query">,
   input?: {
     migrationsDir?: string;
   },
 ) {
-  const migrationsDir = input?.migrationsDir ?? DEFAULT_MIGRATIONS_DIR;
-  const migrationFiles = await listMigrationFiles(migrationsDir);
+  const { files: migrationFiles, migrationsDir } = await resolveMigrationFiles({
+    migrationsDir: input?.migrationsDir,
+  });
+  assertUniqueMigrationPrefixes(migrationFiles);
   const latestMigration = migrationFiles.at(-1);
 
   if (!latestMigration) {

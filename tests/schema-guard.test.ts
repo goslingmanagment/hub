@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { assertRuntimeSchemaReady } from "@agency_hub_core/db";
 
@@ -8,6 +12,50 @@ import { acquireTestPrerequisite } from "./helpers/prerequisites.ts";
 describe("runtime schema guard", () => {
   afterEach(() => {
     delete process.env.DOTENV_CONFIG_QUIET;
+  });
+
+  it("prefers cwd-relative migrations when present", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-schema-guard-"));
+    const originalCwd = process.cwd();
+    const migrationsDir = path.join(tempDir, "packages/db/migrations");
+    const pool = {
+      query: vi.fn(async (text: string, params?: unknown[]) => {
+        if (text.includes("select to_regclass")) {
+          return {
+            rows: [{ name: "schema_migrations" }],
+          };
+        }
+
+        if (text.includes("select id from schema_migrations")) {
+          return {
+            rows: [{ id: params?.[0] }],
+          };
+        }
+
+        return {
+          rows: [{
+            column_default: "'{}'::jsonb",
+            data_type: "jsonb",
+            is_nullable: "NO",
+          }],
+        };
+      }),
+    };
+
+    try {
+      await mkdir(migrationsDir, { recursive: true });
+      await writeFile(path.join(migrationsDir, "9999_runtime.sql"), "select 1;\n");
+      process.chdir(tempDir);
+
+      await expect(assertRuntimeSchemaReady(pool as never)).resolves.toBeUndefined();
+      expect(pool.query).toHaveBeenCalledWith(
+        "select id from schema_migrations where id = $1 limit 1",
+        ["9999_runtime.sql"],
+      );
+    } finally {
+      process.chdir(originalCwd);
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("passes when the latest migration is applied and sync_runs.stats has the expected shape", async () => {
