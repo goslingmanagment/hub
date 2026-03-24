@@ -1,7 +1,7 @@
 import { Link, useNavigate } from "react-router";
 import { useAuthMe, useOverview, useOverviewRevenue, useOverviewGrowth } from "@/api/queries";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
-import { getSyncUxDisplayMode, getSyncUxExceptionKind, getSyncUxSettingsTab } from "@/components/shared/syncUxDisplay";
+import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
 import { buildSettingsRoute } from "@/lib/navigation";
 import { PLATFORM_COLORS } from "@/lib/constants";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
@@ -46,12 +46,12 @@ function getOverviewExceptionMessage(
   kind: NonNullable<ReturnType<typeof getSyncUxExceptionKind>>,
 ) {
   switch (kind) {
-    case "credentials":
-      return "Reconnect credentials to keep this page up to date.";
     case "off":
-      return "Page updates are paused for this page.";
+      return "Data updates paused";
     case "attention":
-      return "Recent page data may be incomplete while updates recover.";
+      return "Data may be incomplete \u2014 updates need attention";
+    default:
+      return null;
   }
 }
 
@@ -252,7 +252,6 @@ function ModelGroupRows({
         const pageSubscribers = growthReady ? (subsByPageId.get(page.id) ?? 0) : null;
         const syncMode = getSyncUxDisplayMode(page.syncUx, "overview_row");
         const exceptionKind = getSyncUxExceptionKind(page.syncUx);
-        const exceptionTab = getSyncUxSettingsTab(page.syncUx);
         const tone = getSyncUxTone(page.syncUx.state);
 
         return (
@@ -273,18 +272,18 @@ function ModelGroupRows({
                   </span>
                 )}
               </div>
-              {syncMode === "exception" && exceptionKind && (
+              {syncMode === "exception" && exceptionKind && exceptionKind !== "credentials" && (
                 <div className={`mt-2 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[12px] ${tone.panel}`}>
                   <span className={`font-medium ${tone.text}`}>
                     {getOverviewExceptionMessage(exceptionKind)}
                   </span>
-                  {isOwner && exceptionTab && (
+                  {isOwner && (
                     <Link
-                      to={buildSettingsRoute(exceptionTab)}
+                      to={buildSettingsRoute("sync")}
                       onClick={(event) => event.stopPropagation()}
                       className="font-semibold text-accent hover:underline"
                     >
-                      {exceptionTab === "credentials" ? "Open Credentials" : "Open Sync"}
+                      Check sync settings
                     </Link>
                   )}
                 </div>

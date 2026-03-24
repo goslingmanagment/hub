@@ -170,7 +170,7 @@ describe("dashboard sync product surfaces", () => {
     queryMocks.useSpenders.mockReturnValue({ data: { total: 0, items: [] } });
   });
 
-  it("shows a compact overview exception with an owner credentials CTA", () => {
+  it("suppresses credentials exceptions on overview and shows only attention/off", () => {
     queryMocks.useOverview.mockReturnValue({
       data: buildOverviewPage(buildSyncUx({
         state: "attention",
@@ -184,35 +184,28 @@ describe("dashboard sync product surfaces", () => {
 
     const html = renderWithRouter(createElement(OverviewPage));
 
-    expect(html).toContain("Reconnect credentials to keep this page up to date.");
-    expect(html).toContain("href=\"/settings?tab=credentials\"");
-    expect(html).not.toContain("Reconnect to resume sync");
-    expect(html).not.toContain("All syncs are current.");
-  });
-
-  it("keeps overview exceptions explanation-only for non-owners", () => {
-    queryMocks.useAuthMe.mockReturnValue({
-      data: { user: { username: "lead", role: "team_lead" } },
-      isLoading: false,
-    });
-    queryMocks.useOverview.mockReturnValue({
-      data: buildOverviewPage(buildSyncUx({
-        state: "attention",
-        label: "Reconnect",
-        headline: "Reconnect to resume sync",
-        detail: "Credentials expired.",
-        requiresAction: true,
-      })),
-      isLoading: false,
-    });
-
-    const html = renderWithRouter(createElement(OverviewPage));
-
-    expect(html).toContain("Reconnect credentials to keep this page up to date.");
+    expect(html).not.toContain("Reconnect credentials");
     expect(html).not.toContain("href=\"/settings?tab=credentials\"");
   });
 
-  it("shows page detail exceptions in data language with a sync settings CTA", () => {
+  it("shows overview attention banner with sync settings link", () => {
+    queryMocks.useOverview.mockReturnValue({
+      data: buildOverviewPage(buildSyncUx({
+        state: "attention",
+        label: "Needs attention",
+        headline: "Sync needs attention",
+      })),
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(createElement(OverviewPage));
+
+    expect(html).toContain("Data may be incomplete");
+    expect(html).toContain("Check sync settings");
+    expect(html).toContain("href=\"/settings?tab=sync\"");
+  });
+
+  it("shows page detail exceptions with generic sync copy", () => {
     queryMocks.useOverview.mockReturnValue({
       data: buildOverviewPage(buildSyncUx({
         state: "attention",
@@ -233,9 +226,35 @@ describe("dashboard sync product surfaces", () => {
       ["/pages/lana"],
     );
 
-    expect(html).toContain("Recent page data may be incomplete while background updates recover.");
+    expect(html).toContain("Data updates paused");
+    expect(html).toContain("check sync settings");
     expect(html).toContain("href=\"/settings?tab=sync\"");
     expect(html).not.toContain("Sync needs attention");
+  });
+
+  it("suppresses credentials exceptions on page detail", () => {
+    queryMocks.useOverview.mockReturnValue({
+      data: buildOverviewPage(buildSyncUx({
+        state: "attention",
+        label: "Reconnect",
+        headline: "Reconnect to resume sync",
+        requiresAction: true,
+      })),
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(
+      createElement(Routes, undefined,
+        createElement(Route, {
+          path: "/pages/:pageLabel",
+          element: createElement(PageDetailPage),
+        }),
+      ),
+      ["/pages/lana"],
+    );
+
+    expect(html).not.toContain("Data updates paused");
+    expect(html).not.toContain("Reconnect credentials");
   });
 
   it("uses CRM coverage language instead of generic sync chrome", () => {

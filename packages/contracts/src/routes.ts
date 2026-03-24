@@ -1091,7 +1091,7 @@ const connectionStatusEnum = z.enum([
   "active", "stale", "error", "expired", "never_synced", "unverified",
 ]);
 
-const syncTriggerScopeEnum = z.enum(["light", "followers", "all"]);
+const syncTriggerScopeEnum = z.enum(["light", "followers", "all", "data", "messages"]);
 
 const transactionSortByEnum = z.enum(["occurredAt", "grossAmountMills", "netAmountMills"]);
 

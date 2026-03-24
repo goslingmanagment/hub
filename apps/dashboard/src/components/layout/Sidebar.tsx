@@ -1,8 +1,9 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Bell, Settings, Users, Heart, Trophy, MessageSquare, Terminal, RefreshCw, ListTodo, Database, AlertTriangle, Code2, ChevronDown } from "lucide-react";
+import { BarChart3, Bell, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Code2, ChevronDown } from "lucide-react";
 import { useState } from "react";
-import { useOverview } from "@/api/queries";
+import { useOverview, useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
+import { isAlertState } from "@/components/shared/syncUxDisplay";
 
 interface SidebarProps {
   user: { username: string; role: string };
@@ -10,7 +11,6 @@ interface SidebarProps {
 
 const devLinks = [
   { to: "/dev/log", label: "Log", icon: Terminal },
-  { to: "/dev/sync-status", label: "Sync Status", icon: RefreshCw },
   { to: "/dev/queue", label: "Queue", icon: ListTodo },
   { to: "/dev/db-stats", label: "DB Stats", icon: Database },
   { to: "/dev/incidents", label: "Incidents", icon: AlertTriangle },
@@ -20,6 +20,8 @@ export function Sidebar({ user }: SidebarProps) {
   const { data } = useOverview();
   const location = useLocation();
   const [devOpen, setDevOpen] = useState(() => location.pathname.startsWith("/dev"));
+  const { data: connections } = useAdminConnections();
+  const hasSyncWarning = user.role === "owner" && (connections?.some((c) => isAlertState(c.syncUx)) ?? false);
 
   type PageItem = NonNullable<typeof data>["pages"][number];
   const modelPages = new Map<string, { modelName: string; pages: PageItem[] }>();
@@ -193,7 +195,12 @@ export function Sidebar({ user }: SidebarProps) {
               }`
             }
           >
-            <Settings size={16} />
+            <div className="relative">
+              <Settings size={16} />
+              {hasSyncWarning && (
+                <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-warning-dark" />
+              )}
+            </div>
             Settings
           </NavLink>
         </div>
