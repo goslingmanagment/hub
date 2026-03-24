@@ -20,7 +20,7 @@ export function Sidebar({ user }: SidebarProps) {
   const { data } = useOverview();
   const location = useLocation();
   const [devOpen, setDevOpen] = useState(() => location.pathname.startsWith("/dev"));
-  const { data: connections } = useAdminConnections();
+  const { data: connections } = useAdminConnections({ enabled: user.role === "owner" });
   const hasSyncWarning = user.role === "owner" && (connections?.some((c) => isAlertState(c.syncUx)) ?? false);
 
   type PageItem = NonNullable<typeof data>["pages"][number];

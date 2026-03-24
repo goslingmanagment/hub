@@ -422,10 +422,11 @@ export function useSpenderBatch(body: SpenderBatchBody | null) {
 }
 
 // Admin
-export function useAdminConnections() {
+export function useAdminConnections(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["admin", "connections"],
     queryFn: () => api.get<ConnectionItem[]>("/api/v1/admin/connections"),
+    enabled: options.enabled ?? true,
   });
 }
 

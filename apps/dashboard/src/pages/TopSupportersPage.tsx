@@ -44,15 +44,10 @@ export function TopSupportersPage() {
   const { pageLabel } = useParams();
   const navigate = useNavigate();
   const selectedPeriod = usePeriodStore((s) => s.period);
-  const setPeriod = usePeriodStore((s) => s.setPeriod);
   const customFrom = usePeriodStore((s) => s.customFrom);
   const customTo = usePeriodStore((s) => s.customTo);
   const [searchQuery, setSearchQuery] = useState("");
   const [offset, setOffset] = useState(0);
-
-  useEffect(() => {
-    setPeriod("all");
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 

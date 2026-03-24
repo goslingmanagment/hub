@@ -192,6 +192,15 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Settings");
   });
 
+  it("does not enable the owner-only connections query for non-owner sidebars", () => {
+    renderWithRouter(
+      createElement(Sidebar, { user: { username: "lead", role: "team_lead" } }),
+      ["/"],
+    );
+
+    expect(queryMocks.useAdminConnections).toHaveBeenCalledWith({ enabled: false });
+  });
+
   it("defaults settings to credentials when the tab query is absent", () => {
     const html = renderWithRouter(createElement(SettingsPage), ["/settings"]);
 
