@@ -22,35 +22,59 @@ function buildSyncUx(
 }
 
 describe("dashboard sync display policy", () => {
-  it("keeps healthy topbar and overview row states minimal", () => {
+  it("hides healthy sync outside the sync workspace", () => {
     const summary = buildSyncUx();
 
-    expect(getSyncUxDisplayMode(summary, "topbar")).toBe("badge");
-    expect(getSyncUxDisplayMode(summary, "overview_row")).toBe("badge");
+    expect(getSyncUxDisplayMode(summary, "topbar")).toBe("hidden");
+    expect(getSyncUxDisplayMode(summary, "overview_row")).toBe("hidden");
     expect(getSyncUxDisplayMode(summary, "overview_banner")).toBe("hidden");
+    expect(getSyncUxDisplayMode(summary, "page_detail")).toBe("hidden");
+    expect(getSyncUxDisplayMode(summary, "credentials")).toBe("hidden");
+    expect(getSyncUxDisplayMode(summary, "crm_header", {
+      hasIncompleteData: false,
+    })).toBe("hidden");
+    expect(getSyncUxDisplayMode(summary, "sync_settings")).toBe("home");
   });
 
-  it("keeps healthy focused page state compact", () => {
-    expect(getSyncUxDisplayMode(buildSyncUx(), "page_detail")).toBe("compact");
+  it("hides transient sync outside the sync workspace", () => {
+    const summary = buildSyncUx({ state: "retrying" });
+
+    expect(getSyncUxDisplayMode(summary, "overview_row")).toBe("hidden");
+    expect(getSyncUxDisplayMode(summary, "page_detail")).toBe("hidden");
+    expect(getSyncUxDisplayMode(summary, "credentials")).toBe("hidden");
+    expect(getSyncUxDisplayMode(summary, "sync_settings")).toBe("home");
   });
 
-  it("keeps credentials and sync settings compact until action is required", () => {
-    expect(getSyncUxDisplayMode(buildSyncUx(), "credentials")).toBe("badge");
-    expect(getSyncUxDisplayMode(buildSyncUx(), "sync_settings")).toBe("compact");
-    expect(getSyncUxDisplayMode(buildSyncUx({
+  it("shows compact exceptions on product surfaces when action is required", () => {
+    const summary = buildSyncUx({
       state: "attention",
       requiresAction: true,
-    }), "credentials")).toBe("full");
+    });
+
+    expect(getSyncUxDisplayMode(summary, "overview_row")).toBe("exception");
+    expect(getSyncUxDisplayMode(summary, "page_detail")).toBe("exception");
+    expect(getSyncUxDisplayMode(summary, "credentials")).toBe("exception");
   });
 
-  it("suppresses healthy CRM header chrome when coverage is complete", () => {
-    expect(getSyncUxDisplayMode(buildSyncUx(), "crm_header", {
+  it("shows CRM explanations only for incomplete data or blocking states", () => {
+    expect(getSyncUxDisplayMode(buildSyncUx({
+      state: "retrying",
+    }), "crm_header", {
       hasIncompleteData: false,
     })).toBe("hidden");
     expect(getSyncUxDisplayMode(buildSyncUx({
       state: "retrying",
     }), "crm_header", {
       hasIncompleteData: true,
-    })).toBe("compact");
+    })).toBe("exception");
+    expect(getSyncUxDisplayMode(buildSyncUx({
+      state: "off",
+    }), "crm_header", {
+      hasIncompleteData: false,
+    })).toBe("exception");
+  });
+
+  it("keeps diagnostics on a dedicated diagnostic surface", () => {
+    expect(getSyncUxDisplayMode(buildSyncUx(), "sync_diagnostics")).toBe("diagnostic");
   });
 });

@@ -1,7 +1,6 @@
 import { Link } from "react-router";
 import type { CrmConversationPreviewResponse } from "@agency_hub_core/contracts";
 import { useCrmConversationPreview } from "@/api/queries";
-import { SyncUxBadge } from "@/components/shared/SyncUxBadge";
 import { formatRelativeTime } from "@/lib/format";
 import { formatUsdFromCents } from "@/lib/format";
 
@@ -9,6 +8,69 @@ interface ChatPreviewPanelProps {
   pageLabel: string;
   platformConversationId: string;
   profileHref: string;
+}
+
+const PREVIEW_LOADING_STATES = new Set(["syncing", "catching_up", "retrying", "setup"]);
+
+function getEmptyPreviewCopy(data: CrmConversationPreviewResponse) {
+  const previewIncomplete = !data.conversation.messageBackfillComplete ||
+    PREVIEW_LOADING_STATES.has(data.messageSyncUx.state);
+
+  if (data.messageSyncUx.requiresAction) {
+    return {
+      headline: "Reconnect credentials to load conversation history.",
+      detail: "New messages will appear after credentials are updated.",
+    };
+  }
+
+  if (data.messageSyncUx.state === "off") {
+    return {
+      headline: "Conversation history updates are paused.",
+      detail: "This preview will stay incomplete until page updates resume.",
+    };
+  }
+
+  if (data.messageSyncUx.state === "attention") {
+    return {
+      headline: "Conversation history may be incomplete right now.",
+      detail: "Recent message updates need attention before this preview can fully refresh.",
+    };
+  }
+
+  if (previewIncomplete) {
+    return {
+      headline: "Conversation history is still loading.",
+      detail: "This preview will fill in automatically as more messages arrive.",
+    };
+  }
+
+  return {
+    headline: "No messages to show.",
+    detail: null,
+  };
+}
+
+function getPreviewFooterText(data: CrmConversationPreviewResponse) {
+  const previewIncomplete = !data.conversation.messageBackfillComplete ||
+    PREVIEW_LOADING_STATES.has(data.messageSyncUx.state);
+
+  if (data.messageSyncUx.requiresAction) {
+    return "Reconnect credentials to keep conversation history current.";
+  }
+
+  if (data.messageSyncUx.state === "off") {
+    return "Conversation history updates are paused for this page.";
+  }
+
+  if (data.messageSyncUx.state === "attention") {
+    return "Preview may be outdated while message updates recover.";
+  }
+
+  if (previewIncomplete) {
+    return "Preview may be incomplete while conversation history loads.";
+  }
+
+  return null;
 }
 
 export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHref }: ChatPreviewPanelProps) {
@@ -34,42 +96,18 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
     );
   }
 
-  const previewSyncingStates = new Set(["syncing", "catching_up", "retrying", "setup"]);
-
   if (!data || data.messages.length === 0) {
-    const syncing = data && previewSyncingStates.has(data.messageSyncUx.state);
-    const syncRelevantEmptyState = data && data.messageSyncUx.state !== "healthy";
-    const headline = syncing
-      ? "Conversation history is still syncing"
-      : syncRelevantEmptyState
-        ? data.messageSyncUx.headline
-        : "No messages to show.";
-    const detail = syncing
-      ? "This preview will fill in automatically as messages catch up."
-      : syncRelevantEmptyState
-        ? data.messageSyncUx.detail
-        : null;
+    const emptyState = data ? getEmptyPreviewCopy(data) : { headline: "No messages to show.", detail: null };
 
     return (
       <div className="bg-hover/50 px-6 py-4">
-        {data && syncRelevantEmptyState && (
-          <div className="mb-2">
-            <SyncUxBadge summary={data.messageSyncUx} />
-          </div>
-        )}
-        <div className="text-sm text-text-secondary">{headline}</div>
-        {detail && <div className="mt-1 text-sm text-text-muted">{detail}</div>}
+        <div className="text-sm text-text-secondary">{emptyState.headline}</div>
+        {emptyState.detail && <div className="mt-1 text-sm text-text-muted">{emptyState.detail}</div>}
       </div>
     );
   }
 
-  const previewIncomplete = !data.conversation.messageBackfillComplete || previewSyncingStates.has(data.messageSyncUx.state);
-  const showFooterSync = data.messageSyncUx.requiresAction ||
-    data.messageSyncUx.state === "off" ||
-    previewIncomplete;
-  const footerText = data.messageSyncUx.requiresAction || data.messageSyncUx.state === "off"
-    ? data.messageSyncUx.headline
-    : "Preview may be incomplete while messages catch up";
+  const footerText = getPreviewFooterText(data);
 
   return (
     <div className="bg-hover/50 px-6 py-4 space-y-2">
@@ -105,9 +143,8 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
         })}
       </div>
       <div className="flex items-center justify-between pt-1">
-        {showFooterSync ? (
+        {footerText ? (
           <div className="flex flex-wrap items-center gap-2">
-            <SyncUxBadge summary={data.messageSyncUx} />
             <span className="text-[11px] text-text-muted">{footerText}</span>
           </div>
         ) : (

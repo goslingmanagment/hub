@@ -1,5 +1,6 @@
+import { Link } from "react-router";
 import type { SyncRunItem, SyncUxSummary } from "@agency_hub_core/contracts";
-import { useAdminConnections, useAdminSyncRuns, useAdminSyncTrigger } from "@/api/queries";
+import { useAdminConnections, useAdminSyncRuns, useAdminSyncTrigger, useAdminSyncTriggerAll } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
@@ -93,10 +94,24 @@ function summaryForRun(run: SyncRunItem): SyncUxSummary {
   };
 }
 
+function getSyncStatusHelper(
+  summary: SyncUxSummary,
+  input?: {
+    updatedPrefix?: string;
+    retryPrefix?: string;
+  },
+) {
+  return summary.detail ??
+    summary.progressLabel ??
+    formatSyncUxMeta(summary, input) ??
+    summary.headline;
+}
+
 export function SyncTab() {
   const { data: connections } = useAdminConnections();
   const { data: runsData, isLoading: runsLoading } = useAdminSyncRuns({ limit: 20 });
   const triggerSync = useAdminSyncTrigger();
+  const triggerAllSync = useAdminSyncTriggerAll();
 
   const items = connections ?? [];
   const runs = runsData ?? [];
@@ -110,17 +125,46 @@ export function SyncTab() {
     }
   }
 
+  async function handleTriggerAll() {
+    try {
+      await triggerAllSync.mutateAsync();
+      toast.success("Sync triggered for all pages");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to trigger all pages");
+    }
+  }
+
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-sm font-bold text-text-primary mb-3">Manual Sync</h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-bold text-text-primary">Manual Sync</h2>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleTriggerAll}
+              disabled={triggerAllSync.isPending}
+              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-40"
+            >
+              Sync All Pages
+            </button>
+            <Link
+              to="/sync"
+              className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-hover"
+            >
+              Open Diagnostics
+            </Link>
+          </div>
+        </div>
         <div className="space-y-2">
           {items.map((conn) => {
             const syncMode = getSyncUxDisplayMode(conn.syncUx, "sync_settings");
-            const syncMeta = formatSyncUxMeta(conn.syncUx, {
-              updatedPrefix: "Updated",
-              retryPrefix: "Retrying",
-            });
+            const syncHelper = syncMode === "home"
+              ? getSyncStatusHelper(conn.syncUx, {
+                updatedPrefix: "Updated",
+                retryPrefix: "Retrying",
+              })
+              : null;
 
             return (
               <div
@@ -132,13 +176,11 @@ export function SyncTab() {
                     <span className="text-sm font-semibold text-text-primary">{conn.label}</span>
                     <PlatformBadge platform={conn.platform} />
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <div className="mt-2">
                     <SyncUxBadge summary={conn.syncUx} />
-                    <span className="text-xs font-medium text-text-secondary">{conn.syncUx.headline}</span>
-                    {syncMeta && <span className="text-xs text-text-muted">{syncMeta}</span>}
                   </div>
-                  {syncMode === "full" && conn.syncUx.detail && (
-                    <div className="mt-1 text-xs text-text-muted">{conn.syncUx.detail}</div>
+                  {syncHelper && (
+                    <div className="mt-2 text-xs text-text-muted">{syncHelper}</div>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
@@ -164,7 +206,7 @@ export function SyncTab() {
       </div>
 
       <div>
-        <h2 className="text-sm font-bold text-text-primary mb-3">Recent Sync Activity</h2>
+        <h2 className="text-sm font-bold text-text-primary mb-3">Recent Activity</h2>
         {runsLoading && (
           <p className="text-sm text-text-muted">Loading runs...</p>
         )}
@@ -179,6 +221,7 @@ export function SyncTab() {
                 updatedPrefix: "Finished",
                 retryPrefix: "Retrying",
               });
+              const runHelper = runSummary.detail ?? runSummary.progressLabel ?? runSummary.headline;
 
               return (
                 <article
@@ -196,15 +239,14 @@ export function SyncTab() {
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <SyncUxBadge summary={runSummary} />
-                        <span className="text-xs font-medium text-text-secondary">{runSummary.headline}</span>
                         {runMeta && <span className="text-xs text-text-muted">{runMeta}</span>}
                       </div>
                       <div className="mt-1 text-xs text-text-muted">
                         Started {formatDateTime(run.startedAt)}
                         {run.trigger ? <> &middot; Triggered by {run.trigger}</> : null}
                       </div>
-                      {runSummary.detail && (
-                        <div className="mt-1 text-xs text-text-muted">{runSummary.detail}</div>
+                      {runHelper && (
+                        <div className="mt-1 text-xs text-text-muted">{runHelper}</div>
                       )}
                     </div>
                   </div>

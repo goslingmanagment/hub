@@ -1,11 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "react-router";
-import { RefreshCw, LogOut, ChevronDown } from "lucide-react";
-import { toast } from "sonner";
-import { useAdminSyncTriggerAll, useLogout, useOverview } from "@/api/queries";
+import { LogOut, ChevronDown } from "lucide-react";
+import { useLogout, useOverview } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
-import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
-import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { clearDashboardSession } from "@/lib/queryClient";
 
 interface TopbarProps {
@@ -14,7 +11,6 @@ interface TopbarProps {
 
 export function Topbar({ user }: TopbarProps) {
   const location = useLocation();
-  const syncAll = useAdminSyncTriggerAll();
   const logout = useLogout();
   const { data: overview } = useOverview();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -37,12 +33,6 @@ export function Topbar({ user }: TopbarProps) {
     return () => window.removeEventListener("mousedown", handlePointerDown);
   }, [menuOpen]);
 
-  function handleSync() {
-    syncAll.mutate(undefined, {
-      onSuccess: () => toast.success("Sync triggered"),
-    });
-  }
-
   async function handleLogout() {
     try {
       await logout.mutateAsync();
@@ -51,15 +41,6 @@ export function Topbar({ user }: TopbarProps) {
       window.location.assign("/login");
     }
   }
-
-  const agencySync = overview?.overall.syncUx ?? null;
-  const agencySyncMeta = agencySync
-    ? formatSyncUxMeta(agencySync, {
-      updatedPrefix: "Updated",
-      retryPrefix: "Retrying",
-    })
-    : null;
-  const agencySyncMode = agencySync ? getSyncUxDisplayMode(agencySync, "topbar") : "hidden";
 
   return (
     <div className="h-[56px] bg-card border-b border-border flex items-center justify-between px-7 fixed top-0 left-[248px] right-0 z-10">
@@ -82,34 +63,6 @@ export function Topbar({ user }: TopbarProps) {
 
       <div className="flex items-center gap-2">
         <PeriodSelector />
-
-        {user.role === "owner" && (
-          <button
-            onClick={handleSync}
-            disabled={syncAll.isPending}
-            className="ml-2 px-3.5 py-1.5 rounded-lg border border-border bg-card text-text-secondary text-[13px] font-medium flex items-center gap-1.5 hover:border-text-muted/40 hover:bg-hover-alt cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw size={13} className={syncAll.isPending ? "animate-spin" : ""} />
-            Sync
-          </button>
-        )}
-
-        {agencySync && agencySyncMode === "badge" && (
-          <span
-            className="ml-2 inline-flex h-2 w-2 rounded-full bg-green"
-            title="Sync is healthy"
-          />
-        )}
-
-        {agencySync && agencySyncMode === "compact" && (
-          <div className="ml-2 flex items-center gap-2 rounded-full border border-border bg-hover-alt/40 px-2 py-1">
-            <SyncUxBadge summary={agencySync} />
-            <span className="text-[12px] font-medium text-text-secondary">{agencySync.headline}</span>
-            {agencySyncMeta && (
-              <span className="text-[12px] text-text-muted">{agencySyncMeta}</span>
-            )}
-          </div>
-        )}
 
         <div className="relative ml-2.5" ref={menuRef}>
           <button
@@ -153,7 +106,7 @@ function buildBreadcrumbs(
 
   if (parts.length === 0) return [{ label: "Overview" }];
 
-  if (parts[0] === "sync") return [{ label: "Overview", href: "/" }, { label: "Sync Monitor" }];
+  if (parts[0] === "sync") return [{ label: "Overview", href: "/" }, { label: "Sync Diagnostics" }];
 
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
 

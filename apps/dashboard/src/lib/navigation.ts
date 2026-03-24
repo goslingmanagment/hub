@@ -2,6 +2,16 @@ export interface FanProfileNavigationState {
   backTo: string;
 }
 
+export type SettingsTab = "credentials" | "sync" | "models" | "pages" | "users";
+
+const SETTINGS_TABS = new Set<SettingsTab>([
+  "credentials",
+  "sync",
+  "models",
+  "pages",
+  "users",
+]);
+
 export function buildPageRoute(pageLabel: string) {
   return `/pages/${pageLabel}`;
 }
@@ -28,6 +38,16 @@ export function buildFanProfileNavigation(
     to: buildFanProfileRoute(pageLabel, platform, platformUserId),
     state: { backTo } satisfies FanProfileNavigationState,
   };
+}
+
+export function buildSettingsRoute(tab: SettingsTab) {
+  return `/settings?tab=${tab}`;
+}
+
+export function resolveSettingsTab(value: string | null | undefined): SettingsTab {
+  return typeof value === "string" && SETTINGS_TABS.has(value as SettingsTab)
+    ? value as SettingsTab
+    : "credentials";
 }
 
 function isSafeInAppPath(value: string) {

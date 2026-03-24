@@ -31,7 +31,7 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route element={<ProtectedLayout />}>
           <Route index element={<OverviewPage />} />
-          <Route path="sync" element={<SyncMonitorPage />} />
+          <Route path="sync" element={<OwnerRoute><SyncMonitorPage /></OwnerRoute>} />
           <Route path="pages/:pageLabel" element={<PageDetailPage />} />
           <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
           <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />

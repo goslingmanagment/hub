@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router";
 import {
+  useAuthMe,
   useOverview,
   usePageRevenue,
   usePageSubscribers,
@@ -15,9 +16,9 @@ import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
 import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
-import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
-import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
-import { buildFanProfileNavigation, buildPageRoute } from "@/lib/navigation";
+import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
+import { getSyncUxDisplayMode, getSyncUxExceptionKind, getSyncUxSettingsTab } from "@/components/shared/syncUxDisplay";
+import { buildFanProfileNavigation, buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
 import { usePeriodStore } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
 import {
@@ -38,9 +39,23 @@ function isRecent(iso: string | null) {
   return iso ? Date.now() - new Date(iso).getTime() < 86_400_000 : false;
 }
 
+function getPageDetailExceptionMessage(
+  kind: NonNullable<ReturnType<typeof getSyncUxExceptionKind>>,
+) {
+  switch (kind) {
+    case "credentials":
+      return "Reconnect credentials before this page can refresh with new data.";
+    case "off":
+      return "Page updates are paused, so recent numbers may not change yet.";
+    case "attention":
+      return "Recent page data may be incomplete while background updates recover.";
+  }
+}
+
 export function PageDetailPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
   const navigate = useNavigate();
+  const { data: auth } = useAuthMe();
   const { period } = usePeriodStore();
   const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
 
@@ -124,11 +139,11 @@ export function PageDetailPage() {
       : selectedPeriod === "all"
         ? "All Time"
         : "30 Days";
-  const syncMeta = formatSyncUxMeta(page.syncUx, {
-    updatedPrefix: "Updated",
-    retryPrefix: "Retrying",
-  });
   const syncMode = getSyncUxDisplayMode(page.syncUx, "page_detail");
+  const exceptionKind = getSyncUxExceptionKind(page.syncUx);
+  const exceptionTab = getSyncUxSettingsTab(page.syncUx);
+  const syncTone = getSyncUxTone(page.syncUx.state);
+  const isOwner = auth?.user.role === "owner";
 
   function breakdownAmount(canonicalType: string): number {
     if (!selectedRevenue?.breakdown) return 0;
@@ -162,15 +177,17 @@ export function PageDetailPage() {
         <p className="text-sm text-text-muted">
           @{page.username ?? "unknown"} &middot; Model: {page.modelName}
         </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <SyncUxBadge summary={page.syncUx} />
-          <span className="text-sm font-medium text-text-secondary">{page.syncUx.headline}</span>
-          {syncMode === "full" && syncMeta && (
-            <span className="text-sm text-text-muted">{syncMeta}</span>
-          )}
-        </div>
-        {syncMode === "full" && page.syncUx.detail && (
-          <p className="mt-1 text-sm text-text-muted">{page.syncUx.detail}</p>
+        {syncMode === "exception" && exceptionKind && (
+          <div className={`mt-3 flex flex-wrap items-center gap-2 rounded-xl border px-4 py-3 text-sm ${syncTone.panel}`}>
+            <span className={`font-medium ${syncTone.text}`}>
+              {getPageDetailExceptionMessage(exceptionKind)}
+            </span>
+            {isOwner && exceptionTab && (
+              <Link to={buildSettingsRoute(exceptionTab)} className="font-semibold text-accent hover:underline">
+                {exceptionTab === "credentials" ? "Open Credentials" : "Open Sync"}
+              </Link>
+            )}
+          </div>
         )}
       </div>
 

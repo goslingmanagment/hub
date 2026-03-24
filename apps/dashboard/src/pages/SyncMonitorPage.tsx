@@ -255,7 +255,6 @@ function HeroBanner({ data }: { data: SyncMonitorResponse }) {
     updatedPrefix: "Updated",
     retryPrefix: "Retrying",
   });
-  const tone = getSyncUxTone(data.overall.syncUx.state);
   const border =
     hero.level === "critical"
       ? "border-danger/30"
@@ -271,15 +270,12 @@ function HeroBanner({ data }: { data: SyncMonitorResponse }) {
         <div className="flex items-start gap-3">
           <LiveDot level={hero.level} />
           <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <SyncUxBadge summary={data.overall.syncUx} />
-              <h1 className="text-xl font-extrabold text-text-primary">{data.overall.syncUx.headline}</h1>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
+              Sync Diagnostics
             </div>
+            <h1 className="mt-1 text-xl font-extrabold text-text-primary">{data.overall.syncUx.headline}</h1>
             {data.overall.syncUx.detail && (
               <p className="mt-1 text-sm text-text-secondary">{data.overall.syncUx.detail}</p>
-            )}
-            {data.overall.syncUx.progressLabel && (
-              <p className={`mt-2 text-[12px] font-medium ${tone.text}`}>{data.overall.syncUx.progressLabel}</p>
             )}
           </div>
         </div>
@@ -485,10 +481,6 @@ function StreamGroupSection({
 function PageCard({ page }: { page: PageItem }) {
   const platformCfg = PLATFORM_COLORS[page.platform];
   const pageTone = getSyncUxTone(page.syncUx.state);
-  const pageMeta = formatSyncUxMeta(page.syncUx, {
-    updatedPrefix: "Updated",
-    retryPrefix: "Retrying",
-  });
   const groupedStreams = {
     attention: page.streams.filter((stream) => streamGroupFor(stream) === "attention").sort(compareStreams),
     off: page.streams.filter((stream) => streamGroupFor(stream) === "off").sort(compareStreams),
@@ -517,23 +509,12 @@ function PageCard({ page }: { page: PageItem }) {
             >
               {platformCfg.label}
             </span>
-            <SyncUxBadge summary={page.syncUx} />
           </div>
           <div className="mt-1 text-[13px] text-text-muted">
             {page.modelName}
             {page.username ? ` · @${page.username}` : ""}
           </div>
-          <div className="mt-2 text-[14px] font-medium text-text-secondary">{page.syncUx.headline}</div>
-          {page.syncUx.detail && (
-            <div className="mt-1 text-[12px] text-text-muted">{page.syncUx.detail}</div>
-          )}
-          {page.syncUx.progressLabel && (
-            <div className={`mt-1 text-[12px] font-medium ${pageTone.text}`}>{page.syncUx.progressLabel}</div>
-          )}
         </div>
-        {pageMeta && (
-          <span className="shrink-0 text-[12px] text-text-muted">{pageMeta}</span>
-        )}
       </div>
 
       {counts.length > 0 && (

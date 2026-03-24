@@ -108,6 +108,29 @@ describe("ChatPreviewPanel", () => {
     const html = renderPanel();
 
     expect(html).not.toContain("Conversation history is ready");
-    expect(html).not.toContain("Preview may be incomplete while messages catch up");
+    expect(html).not.toContain("Preview may be incomplete while conversation history loads.");
+  });
+
+  it("uses data-loading language for transient empty previews", () => {
+    queryMocks.useCrmConversationPreview.mockReturnValue({
+      data: {
+        messageSyncUx: buildSyncUx({
+          state: "retrying",
+          headline: "Conversation history is still syncing",
+        }),
+        conversation: {
+          messageBackfillComplete: false,
+        },
+        messages: [],
+      },
+      isError: false,
+      isLoading: false,
+    });
+
+    const html = renderPanel();
+
+    expect(html).toContain("Conversation history is still loading.");
+    expect(html).toContain("This preview will fill in automatically as more messages arrive.");
+    expect(html).not.toContain("Conversation history is still syncing");
   });
 });

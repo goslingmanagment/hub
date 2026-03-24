@@ -1,9 +1,29 @@
 import type { CrmSummaryResponse } from "@agency_hub_core/contracts";
-import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 
 interface CrmSummaryHeaderProps {
   summary: CrmSummaryResponse;
+}
+
+function getCrmHeaderMessage(summary: CrmSummaryResponse) {
+  if (summary.messageSyncUx.requiresAction) {
+    return "Reconnect credentials to keep conversation history current.";
+  }
+
+  if (summary.messageSyncUx.state === "off") {
+    return "Conversation history updates are paused for this page.";
+  }
+
+  if (summary.coverage.pendingMessageBackfillCount > 0) {
+    const count = summary.coverage.pendingMessageBackfillCount;
+    return `${count} ${count === 1 ? "conversation is" : "conversations are"} still loading. Previews will fill in automatically.`;
+  }
+
+  if (summary.coverage.previewReadyConversationCount === 0) {
+    return "Conversation history is still loading for this page.";
+  }
+
+  return null;
 }
 
 export function CrmSummaryHeader({ summary }: CrmSummaryHeaderProps) {
@@ -12,10 +32,12 @@ export function CrmSummaryHeader({ summary }: CrmSummaryHeaderProps) {
   const syncMode = getSyncUxDisplayMode(summary.messageSyncUx, "crm_header", {
     hasIncompleteData,
   });
-  const syncMeta = formatSyncUxMeta(summary.messageSyncUx, {
-    updatedPrefix: "Updated",
-    retryPrefix: "Retrying",
-  });
+  const helperText = syncMode === "exception" ? getCrmHeaderMessage(summary) : null;
+  const helperClassName = summary.messageSyncUx.requiresAction
+    ? "text-danger"
+    : summary.messageSyncUx.state === "off"
+      ? "text-text-secondary"
+      : "text-text-muted";
 
   return (
     <div className="space-y-2">
@@ -27,17 +49,8 @@ export function CrmSummaryHeader({ summary }: CrmSummaryHeaderProps) {
           Reactivation: <span className="font-semibold text-text-primary">{summary.reactivation.total}</span>
         </span>
       </div>
-      {syncMode !== "hidden" && (
-        <div className="flex flex-wrap items-center gap-2 text-[12px] text-text-muted">
-          <SyncUxBadge summary={summary.messageSyncUx} />
-          {syncMode !== "badge" && (
-            <span className="font-medium text-text-secondary">{summary.messageSyncUx.headline}</span>
-          )}
-          {syncMeta && <span>{syncMeta}</span>}
-        </div>
-      )}
-      {syncMode === "full" && summary.messageSyncUx.detail && (
-        <div className="text-[12px] text-text-muted">{summary.messageSyncUx.detail}</div>
+      {helperText && (
+        <div className={`text-[12px] ${helperClassName}`}>{helperText}</div>
       )}
     </div>
   );

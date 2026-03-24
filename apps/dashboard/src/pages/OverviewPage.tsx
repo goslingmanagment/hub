@@ -1,7 +1,8 @@
-import { useNavigate } from "react-router";
-import { useOverview, useOverviewRevenue, useOverviewGrowth } from "@/api/queries";
-import { SyncUxBadge, formatSyncUxMeta } from "@/components/shared/SyncUxBadge";
-import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
+import { Link, useNavigate } from "react-router";
+import { useAuthMe, useOverview, useOverviewRevenue, useOverviewGrowth } from "@/api/queries";
+import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
+import { getSyncUxDisplayMode, getSyncUxExceptionKind, getSyncUxSettingsTab } from "@/components/shared/syncUxDisplay";
+import { buildSettingsRoute } from "@/lib/navigation";
 import { PLATFORM_COLORS } from "@/lib/constants";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
@@ -41,8 +42,22 @@ function formatGrowthValue(value: number | null) {
   return value === null ? GROWTH_PLACEHOLDER : `+${value.toLocaleString()}`;
 }
 
+function getOverviewExceptionMessage(
+  kind: NonNullable<ReturnType<typeof getSyncUxExceptionKind>>,
+) {
+  switch (kind) {
+    case "credentials":
+      return "Reconnect credentials to keep this page up to date.";
+    case "off":
+      return "Page updates are paused for this page.";
+    case "attention":
+      return "Recent page data may be incomplete while updates recover.";
+  }
+}
+
 export function OverviewPage() {
   const navigate = useNavigate();
+  const { data: auth } = useAuthMe();
   const { period } = usePeriodStore();
   const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
 
@@ -96,35 +111,12 @@ export function OverviewPage() {
   const totalNewFollowers = growthReady
     ? pages.reduce((sum, p) => sum + (followersByPageId.get(p.id) ?? 0), 0)
     : null;
+  const isOwner = auth?.user.role === "owner";
 
   const periodLabel = PERIOD_LABELS[selectedPeriod] ?? "30 Days";
-  const overallSyncMeta = formatSyncUxMeta(data.overall.syncUx, {
-    updatedPrefix: "Updated",
-    retryPrefix: "Retrying",
-  });
-  const overallSyncMode = getSyncUxDisplayMode(data.overall.syncUx, "overview_banner");
 
   return (
     <div>
-      {overallSyncMode === "full" && (
-        <section className="mb-5 rounded-xl border border-border bg-card px-5 py-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <SyncUxBadge summary={data.overall.syncUx} />
-                <span className="text-sm font-semibold text-text-primary">{data.overall.syncUx.headline}</span>
-              </div>
-              {data.overall.syncUx.detail && (
-                <p className="mt-1 text-sm text-text-muted">{data.overall.syncUx.detail}</p>
-              )}
-            </div>
-            {overallSyncMeta && (
-              <span className="text-xs text-text-muted">{overallSyncMeta}</span>
-            )}
-          </div>
-        </section>
-      )}
-
       <table className="w-full border-collapse overflow-hidden rounded-xl border border-border bg-card">
         <colgroup>
           <col />
@@ -162,6 +154,7 @@ export function OverviewPage() {
               followersByPageId={followersByPageId}
               subsByPageId={subsByPageId}
               growthReady={growthReady}
+              isOwner={isOwner}
             />
           ))}
           <tr className="border-t-2 border-border bg-hover-alt">
@@ -200,6 +193,7 @@ function ModelGroupRows({
   followersByPageId,
   subsByPageId,
   growthReady,
+  isOwner,
 }: {
   group: ModelGroup;
   navigate: ReturnType<typeof useNavigate>;
@@ -207,6 +201,7 @@ function ModelGroupRows({
   followersByPageId: Map<number, number>;
   subsByPageId: Map<number, number>;
   growthReady: boolean;
+  isOwner: boolean;
 }) {
   const modelName = group.modelName;
   const groupRevenue = group.pages.reduce((sum, p) => sum + (revenueByPageId.get(p.id) ?? 0), 0);
@@ -256,12 +251,9 @@ function ModelGroupRows({
         const pageFollowers = growthReady ? (followersByPageId.get(page.id) ?? 0) : null;
         const pageSubscribers = growthReady ? (subsByPageId.get(page.id) ?? 0) : null;
         const syncMode = getSyncUxDisplayMode(page.syncUx, "overview_row");
-        const syncMeta = syncMode === "full"
-          ? formatSyncUxMeta(page.syncUx, {
-            updatedPrefix: "Updated",
-            retryPrefix: "Retrying",
-          })
-          : null;
+        const exceptionKind = getSyncUxExceptionKind(page.syncUx);
+        const exceptionTab = getSyncUxSettingsTab(page.syncUx);
+        const tone = getSyncUxTone(page.syncUx.state);
 
         return (
           <tr
@@ -280,17 +272,22 @@ function ModelGroupRows({
                     {platformCfg.label}
                   </span>
                 )}
-                {syncMode === "badge" && <SyncUxBadge summary={page.syncUx} />}
               </div>
-              {syncMode !== "badge" && (
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <SyncUxBadge summary={page.syncUx} />
-                  <span className="text-[12px] text-text-secondary">{page.syncUx.headline}</span>
-                  {syncMeta && <span className="text-[12px] text-text-muted">{syncMeta}</span>}
+              {syncMode === "exception" && exceptionKind && (
+                <div className={`mt-2 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[12px] ${tone.panel}`}>
+                  <span className={`font-medium ${tone.text}`}>
+                    {getOverviewExceptionMessage(exceptionKind)}
+                  </span>
+                  {isOwner && exceptionTab && (
+                    <Link
+                      to={buildSettingsRoute(exceptionTab)}
+                      onClick={(event) => event.stopPropagation()}
+                      className="font-semibold text-accent hover:underline"
+                    >
+                      {exceptionTab === "credentials" ? "Open Credentials" : "Open Sync"}
+                    </Link>
+                  )}
                 </div>
-              )}
-              {syncMode === "full" && page.syncUx.detail && (
-                <div className="mt-1 text-[12px] text-text-muted">{page.syncUx.detail}</div>
               )}
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">

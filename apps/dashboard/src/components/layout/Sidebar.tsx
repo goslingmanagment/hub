@@ -58,18 +58,6 @@ export function Sidebar({ user }: SidebarProps) {
           Overview
         </NavLink>
 
-        <NavLink
-          to="/sync"
-          className={({ isActive }) =>
-            `mt-1 flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
-            }`
-          }
-        >
-          <RefreshCw size={16} />
-          Sync Monitor
-        </NavLink>
-
         {modelPages.size > 0 && (
           <div className="mt-4 px-3.5 pb-2 text-[11px] font-semibold text-text-muted uppercase tracking-[0.1em]">
             Models

@@ -1,13 +1,12 @@
-import { useState } from "react";
+import { useSearchParams } from "react-router";
+import { resolveSettingsTab, type SettingsTab } from "@/lib/navigation";
 import { CredentialsTab } from "./settings/CredentialsTab";
 import { SyncTab } from "./settings/SyncTab";
 import { ModelsTab } from "./settings/ModelsTab";
 import { PagesTab } from "./settings/PagesTab";
 import { UsersTab } from "./settings/UsersTab";
 
-type Tab = "credentials" | "sync" | "models" | "pages" | "users";
-
-const tabs: { key: Tab; label: string }[] = [
+const tabs: { key: SettingsTab; label: string }[] = [
   { key: "credentials", label: "Credentials" },
   { key: "sync", label: "Sync" },
   { key: "models", label: "Models" },
@@ -16,7 +15,14 @@ const tabs: { key: Tab; label: string }[] = [
 ];
 
 export function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("credentials");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = resolveSettingsTab(searchParams.get("tab"));
+
+  function handleTabChange(tab: SettingsTab) {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", tab);
+    setSearchParams(next);
+  }
 
   return (
     <div>
@@ -26,7 +32,8 @@ export function SettingsPage() {
         {tabs.map((tab) => (
           <button
             key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
+            type="button"
+            onClick={() => handleTabChange(tab.key)}
             className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
               activeTab === tab.key
                 ? "border-accent text-accent"

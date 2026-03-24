@@ -63,7 +63,7 @@ describe("SyncMonitorPage", () => {
     vi.useRealTimers();
   });
 
-  it("renders friendly attention copy for stalled streams", () => {
+  it("keeps the aggregate hero summary separate from stream-level diagnostics", () => {
     queryMocks.useSyncMonitor.mockReturnValue({
       data: {
         generatedAt: "2026-03-24T11:59:30.000Z",
@@ -188,9 +188,12 @@ describe("SyncMonitorPage", () => {
     });
 
     const html = renderPage();
+    const overallDetailMatches = html.match(/One or more syncs need help before they can catch up\./g) ?? [];
 
+    expect(html).toContain("Sync Diagnostics");
     expect(html).toContain("Sync needs attention");
     expect(html).toContain("needs the worker to recover");
+    expect(overallDetailMatches).toHaveLength(1);
     expect(html).not.toContain("Running 20m");
   });
 
@@ -314,10 +317,12 @@ describe("SyncMonitorPage", () => {
     });
 
     const html = renderPage();
+    const pageSummaryMatches = html.match(/Some syncs are off/g) ?? [];
 
     expect(html).toContain("Some syncs are off");
     expect(html).toContain("Off");
     expect(html).toContain("Sync is paused");
+    expect(pageSummaryMatches).toHaveLength(1);
     expect(html).not.toContain("Healthy (1)");
   });
 });

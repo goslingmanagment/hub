@@ -5,6 +5,8 @@ import {
   buildFanProfileRoute,
   buildPageRoute,
   buildPageSectionRoute,
+  buildSettingsRoute,
+  resolveSettingsTab,
   resolveFanProfileBackTarget,
 } from "../apps/dashboard/src/lib/navigation.ts";
 
@@ -37,5 +39,12 @@ describe("fan profile navigation", () => {
     expect(resolveFanProfileBackTarget({
       backTo: "//evil.invalid",
     }, "lana")).toBe(buildPageRoute("lana"));
+  });
+
+  it("builds stable settings deep links and defaults unknown tabs safely", () => {
+    expect(buildSettingsRoute("sync")).toBe("/settings?tab=sync");
+    expect(resolveSettingsTab("users")).toBe("users");
+    expect(resolveSettingsTab("missing")).toBe("credentials");
+    expect(resolveSettingsTab(null)).toBe("credentials");
   });
 });
