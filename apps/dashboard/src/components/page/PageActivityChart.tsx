@@ -7,6 +7,8 @@ import {
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
+  type TooltipProps,
+  type TooltipValueType,
   XAxis,
   YAxis,
 } from "recharts";
@@ -59,13 +61,11 @@ const xAxisProps = {
   interval: "preserveStartEnd" as const,
 };
 
-const AUTO_Y_AXIS_WIDTH = "auto" as unknown as number;
-
 const yAxisProps = {
   tick: { fontSize: 11, fill: "var(--color-text-muted, #888)" },
   axisLine: false,
   tickLine: false,
-  width: AUTO_Y_AXIS_WIDTH,
+  width: "auto" as const,
   allowDecimals: false,
 };
 
@@ -121,9 +121,20 @@ export function PageActivityChart(props: {
     ...(props.valueFormatter ? { tickFormatter: props.valueFormatter } : {}),
   };
 
-  const tooltipOverrides = props.valueFormatter
-    ? { formatter: (v: number) => [props.valueFormatter!(v), props.title] }
-    : {};
+  const tooltipFormatter: NonNullable<TooltipProps<TooltipValueType, string | number>["formatter"]> | undefined = props.valueFormatter
+    ? (value) => {
+      const numericValue = typeof value === "number"
+        ? value
+        : Array.isArray(value)
+          ? Number(value[0] ?? 0)
+          : Number(value ?? 0);
+      const formattedValue = props.valueFormatter!(Number.isFinite(numericValue) ? numericValue : 0);
+      const tooltipEntry: [ReactNode, string | number] = [formattedValue, props.title];
+      return tooltipEntry;
+    }
+    : undefined;
+
+  const tooltipOverrides = tooltipFormatter ? { formatter: tooltipFormatter } : {};
 
   return (
     <div className="bg-card border border-border rounded-xl p-5 mb-6">
