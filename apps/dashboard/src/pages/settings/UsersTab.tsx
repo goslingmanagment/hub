@@ -33,11 +33,11 @@ type ModalState =
   | null
   | { type: "addChatter" }
   | { type: "createUser" }
-  | { type: "assignPages"; user: AdminUser }
-  | { type: "confirmNewKey"; user: AdminUser }
-  | { type: "confirmRevoke"; user: AdminUser }
+  | { type: "assignPages"; username: string }
+  | { type: "confirmNewKey"; username: string }
+  | { type: "confirmRevoke"; username: string }
   | { type: "revealKey"; key: string; username: string }
-  | { type: "chatterDetail"; user: AdminUser };
+  | { type: "chatterDetail"; username: string };
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -45,6 +45,13 @@ type ModalState =
 
 function hasActiveKey(user: AdminUser): boolean {
   return !!user.apiKeyStatus?.activeKeyPrefix;
+}
+
+export function findAdminUserByUsername(
+  users: readonly AdminUser[],
+  username: string,
+): AdminUser | null {
+  return users.find((user) => user.username === username) ?? null;
 }
 
 const thClass =
@@ -70,6 +77,9 @@ export function UsersTab() {
   const items = users ?? [];
   const chatters = items.filter((u) => u.role === "chatter");
   const staff = items.filter((u) => u.role !== "chatter");
+  const modalUser = modal && "username" in modal
+    ? findAdminUserByUsername(items, modal.username)
+    : null;
 
   return (
     <>
@@ -164,7 +174,7 @@ export function UsersTab() {
                               <button
                                 type="button"
                                 onClick={() =>
-                                  setModal({ type: "confirmNewKey", user })
+                                  setModal({ type: "confirmNewKey", username: user.username })
                                 }
                                 className={btnSecondary}
                               >
@@ -173,7 +183,7 @@ export function UsersTab() {
                               <button
                                 type="button"
                                 onClick={() =>
-                                  setModal({ type: "confirmRevoke", user })
+                                  setModal({ type: "confirmRevoke", username: user.username })
                                 }
                                 className={`${btnSecondary} !text-danger`}
                               >
@@ -195,7 +205,7 @@ export function UsersTab() {
                           <button
                             type="button"
                             onClick={() =>
-                              setModal({ type: "chatterDetail", user })
+                              setModal({ type: "chatterDetail", username: user.username })
                             }
                             className={btnSecondary}
                           >
@@ -255,7 +265,7 @@ export function UsersTab() {
                       <td className={`${tdClass} text-right`}>
                         <button
                           type="button"
-                          onClick={() => setModal({ type: "assignPages", user })}
+                          onClick={() => setModal({ type: "assignPages", username: user.username })}
                           className={btnSecondary}
                         >
                           Manage Pages
@@ -282,24 +292,24 @@ export function UsersTab() {
       {modal?.type === "createUser" && (
         <CreateUserModal onClose={() => setModal(null)} />
       )}
-      {modal?.type === "assignPages" && (
+      {modal?.type === "assignPages" && modalUser && (
         <UserPageAssignmentModal
-          user={modal.user}
+          user={modalUser}
           onClose={() => setModal(null)}
         />
       )}
-      {modal?.type === "confirmNewKey" && (
+      {modal?.type === "confirmNewKey" && modalUser && (
         <NewKeyModal
-          user={modal.user}
+          user={modalUser}
           onClose={() => setModal(null)}
           onKeyIssued={(key) =>
-            setModal({ type: "revealKey", key, username: modal.user.username })
+            setModal({ type: "revealKey", key, username: modalUser.username })
           }
         />
       )}
-      {modal?.type === "confirmRevoke" && (
+      {modal?.type === "confirmRevoke" && modalUser && (
         <RevokeKeyModal
-          user={modal.user}
+          user={modalUser}
           onClose={() => setModal(null)}
         />
       )}
@@ -310,9 +320,9 @@ export function UsersTab() {
           onClose={() => setModal(null)}
         />
       )}
-      {modal?.type === "chatterDetail" && (
+      {modal?.type === "chatterDetail" && modalUser && (
         <ChatterDetailModal
-          user={modal.user}
+          user={modalUser}
           onClose={() => setModal(null)}
         />
       )}
