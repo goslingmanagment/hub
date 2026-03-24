@@ -1,8 +1,8 @@
 import { Fragment } from "react";
 import type { CrmSummaryResponse } from "@agency_hub_core/contracts";
 import type { RetentionRowVm } from "@/pages/crm/viewModel";
-import { TouchpointBadge } from "./TouchpointBadge";
-import { ChatPreviewPanel } from "./ChatPreviewPanel";
+import { TouchpointBadge } from "./TouchpointBadge.js";
+import { ChatPreviewPanel } from "./ChatPreviewPanel.js";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { Pagination } from "@/components/shared/Pagination";

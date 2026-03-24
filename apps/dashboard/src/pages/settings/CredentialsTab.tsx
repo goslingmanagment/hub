@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
-import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal";
+import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
 
 export function CredentialsTab() {
   const { data: connections, isLoading } = useAdminConnections();

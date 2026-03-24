@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import type { ReactivationRowVm } from "@/pages/crm/viewModel";
-import { ChatPreviewPanel } from "./ChatPreviewPanel";
+import { ChatPreviewPanel } from "./ChatPreviewPanel.js";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { Pagination } from "@/components/shared/Pagination";

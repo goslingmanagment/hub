@@ -1,7 +1,7 @@
 import { Navigate, Outlet } from "react-router";
 import { useAuthMe } from "@/api/queries";
-import { Sidebar } from "./Sidebar";
-import { Topbar } from "./Topbar";
+import { Sidebar } from "./Sidebar.js";
+import { Topbar } from "./Topbar.js";
 
 export function ProtectedLayout() {
   const { data, isLoading, isError } = useAuthMe();

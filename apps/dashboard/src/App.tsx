@@ -1,22 +1,22 @@
 import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate } from "react-router";
-import { OwnerRoute } from "./components/layout/OwnerRoute";
-import { ProtectedLayout } from "./components/layout/ProtectedLayout";
+import { OwnerRoute } from "./components/layout/OwnerRoute.js";
+import { ProtectedLayout } from "./components/layout/ProtectedLayout.js";
 
-const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })));
-const OverviewPage = lazy(() => import("./pages/OverviewPage").then((m) => ({ default: m.OverviewPage })));
-const PageDetailPage = lazy(() => import("./pages/PageDetailPage").then((m) => ({ default: m.PageDetailPage })));
-const SubscribersPage = lazy(() => import("./pages/SubscribersPage").then((m) => ({ default: m.SubscribersPage })));
-const FollowersPage = lazy(() => import("./pages/FollowersPage").then((m) => ({ default: m.FollowersPage })));
-const FanProfilePage = lazy(() => import("./pages/FanProfilePage").then((m) => ({ default: m.FanProfilePage })));
-const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage").then((m) => ({ default: m.TopSupportersPage })));
-const CrmPage = lazy(() => import("./pages/CrmPage").then((m) => ({ default: m.CrmPage })));
-const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
-const NotificationsPage = lazy(() => import("./pages/NotificationsPage").then((m) => ({ default: m.NotificationsPage })));
-const LogPage = lazy(() => import("./pages/dev/LogPage").then((m) => ({ default: m.LogPage })));
-const QueuePage = lazy(() => import("./pages/dev/QueuePage").then((m) => ({ default: m.QueuePage })));
-const DbStatsPage = lazy(() => import("./pages/dev/DbStatsPage").then((m) => ({ default: m.DbStatsPage })));
-const IncidentsPage = lazy(() => import("./pages/dev/IncidentsPage").then((m) => ({ default: m.IncidentsPage })));
+const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
+const OverviewPage = lazy(() => import("./pages/OverviewPage.js").then((m) => ({ default: m.OverviewPage })));
+const PageDetailPage = lazy(() => import("./pages/PageDetailPage.js").then((m) => ({ default: m.PageDetailPage })));
+const SubscribersPage = lazy(() => import("./pages/SubscribersPage.js").then((m) => ({ default: m.SubscribersPage })));
+const FollowersPage = lazy(() => import("./pages/FollowersPage.js").then((m) => ({ default: m.FollowersPage })));
+const FanProfilePage = lazy(() => import("./pages/FanProfilePage.js").then((m) => ({ default: m.FanProfilePage })));
+const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage.js").then((m) => ({ default: m.TopSupportersPage })));
+const CrmPage = lazy(() => import("./pages/CrmPage.js").then((m) => ({ default: m.CrmPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage.js").then((m) => ({ default: m.SettingsPage })));
+const NotificationsPage = lazy(() => import("./pages/NotificationsPage.js").then((m) => ({ default: m.NotificationsPage })));
+const LogPage = lazy(() => import("./pages/dev/LogPage.js").then((m) => ({ default: m.LogPage })));
+const QueuePage = lazy(() => import("./pages/dev/QueuePage.js").then((m) => ({ default: m.QueuePage })));
+const DbStatsPage = lazy(() => import("./pages/dev/DbStatsPage.js").then((m) => ({ default: m.DbStatsPage })));
+const IncidentsPage = lazy(() => import("./pages/dev/IncidentsPage.js").then((m) => ({ default: m.IncidentsPage })));
 
 function LazyFallback() {
   return <div className="flex items-center justify-center h-full py-20 text-zinc-500">Loading…</div>;

@@ -1,4 +1,4 @@
-import { ModalShell } from "./ModalShell";
+import { ModalShell } from "./ModalShell.js";
 
 export function ConfirmModal({
   title,

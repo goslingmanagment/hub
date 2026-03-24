@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { formatProxyPreview, buildProxyConfig } from "@agency_hub_core/shared";
 import { useAdminTestProxy } from "@/api/queries";
-import { Field } from "./Field";
+import { Field } from "./Field.js";
 
 export function ProxyInput({
   value,

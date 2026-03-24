@@ -1,10 +1,10 @@
 import { useSearchParams } from "react-router";
 import { resolveSettingsTab, type SettingsTab } from "@/lib/navigation";
-import { CredentialsTab } from "./settings/CredentialsTab";
-import { SyncTab } from "./settings/SyncTab";
-import { ModelsTab } from "./settings/ModelsTab";
-import { PagesTab } from "./settings/PagesTab";
-import { UsersTab } from "./settings/UsersTab";
+import { CredentialsTab } from "./settings/CredentialsTab.js";
+import { SyncTab } from "./settings/SyncTab.js";
+import { ModelsTab } from "./settings/ModelsTab.js";
+import { PagesTab } from "./settings/PagesTab.js";
+import { UsersTab } from "./settings/UsersTab.js";
 
 const tabs: { key: SettingsTab; label: string }[] = [
   { key: "credentials", label: "Credentials" },

@@ -11,9 +11,9 @@ import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { formatRelativeTime } from "@/lib/format";
 import { toast } from "sonner";
-import { CreatePageModal } from "./CreatePageModal";
-import { EditPageModal } from "./EditPageModal";
-import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal";
+import { CreatePageModal } from "./CreatePageModal.js";
+import { EditPageModal } from "./EditPageModal.js";
+import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
 
 export function PagesTab() {
   const { data: pages, isLoading: pagesLoading } = useAdminPages();

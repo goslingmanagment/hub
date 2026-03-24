@@ -5,7 +5,7 @@ import { CrmSummaryHeader } from "@/components/page/crm/CrmSummaryHeader";
 import { RetentionTable } from "@/components/page/crm/RetentionTable";
 import { ReactivationTable } from "@/components/page/crm/ReactivationTable";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { mapRetentionRowVm, mapReactivationRowVm } from "./crm/viewModel";
+import { mapRetentionRowVm, mapReactivationRowVm } from "./crm/viewModel.js";
 
 const LIMIT = 25;
 

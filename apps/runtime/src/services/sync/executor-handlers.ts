@@ -46,6 +46,7 @@ import {
   toMills,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+  type FanslyDmMessageSyncExcludedReason,
   type HttpRequestEvent,
   type HttpRequestObserver,
 } from "@agency_hub_core/shared";
@@ -1447,7 +1448,8 @@ export async function executeDmConversationsChunk(
         ? lastMessageAt
         : existing?.lastModelMessageAt ?? null;
       const existingExcludedReason = getFanslyDmMessageSyncExcludedReason(existing?.metadata);
-      let messageSyncExcludedReason = partnerMissingFromAggregationAccounts
+      let messageSyncExcludedReason: FanslyDmMessageSyncExcludedReason | null =
+        partnerMissingFromAggregationAccounts
         ? FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
         : null;
 

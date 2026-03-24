@@ -3,8 +3,8 @@ import type { ModelListItem } from "@agency_hub_core/contracts";
 import { useAdminModels, useAdminDeleteModel } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { toast } from "sonner";
-import { CreateModelModal } from "./CreateModelModal";
-import { EditModelModal } from "./EditModelModal";
+import { CreateModelModal } from "./CreateModelModal.js";
+import { EditModelModal } from "./EditModelModal.js";
 
 export function ModelsTab() {
   const { data: models, isLoading } = useAdminModels();

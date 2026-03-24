@@ -23,7 +23,7 @@ import { Field } from "@/components/shared/Field";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { formatRelativeTime, formatDateTime } from "@/lib/format";
 import { toast } from "sonner";
-import { UserPageAssignmentModal } from "./UserPageAssignmentModal";
+import { UserPageAssignmentModal } from "./UserPageAssignmentModal.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */

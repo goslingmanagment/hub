@@ -6,8 +6,8 @@ import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { formatRelativeTime } from "@/lib/format";
 import { toast } from "sonner";
-import { useSyncTabData } from "./useSyncTabData";
-import type { SyncTabPage, FreshnessItem, ErrorItem, ActivityEntry } from "./useSyncTabData";
+import { useSyncTabData } from "./useSyncTabData.js";
+import type { SyncTabPage, FreshnessItem, ErrorItem, ActivityEntry } from "./useSyncTabData.js";
 
 const STALENESS_CLASS: Record<string, string> = {
   fresh: "text-green",
@@ -314,7 +314,7 @@ function DiagnosticsSection() {
                             {run.platform ?? "\u2014"}
                           </td>
                           <td className="px-4 py-3 text-sm text-text-secondary">
-                            {run.stream ?? run.scope ?? "\u2014"}
+                            {run.stream ?? "\u2014"}
                           </td>
                           <td className="px-4 py-3">
                             <span
