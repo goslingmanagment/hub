@@ -7,6 +7,12 @@ import { Pagination } from "@/components/shared/Pagination";
 
 type SortField = "reactivationScore" | "lifetimeSpendUsd" | "silenceDays" | "lastContactAt";
 
+const SCORE_TIER_STYLES: Record<string, string> = {
+  high: "bg-green/15 text-green",
+  medium: "bg-warning/15 text-warning-dark",
+  low: "bg-zinc-500/10 text-text-muted",
+};
+
 interface ReactivationTableProps {
   items: ReactivationRowVm[];
   total: number;
@@ -17,6 +23,7 @@ interface ReactivationTableProps {
   minSpendUsd: string;
   noDmHistoryOnly: boolean;
   unreadOnly: boolean;
+  hideDeleted: boolean;
   subscriberState: string;
   searchQuery: string;
   sortBy: string;
@@ -26,6 +33,7 @@ interface ReactivationTableProps {
   onMinSpendChange: (value: string) => void;
   onNoDmHistoryChange: (value: boolean) => void;
   onUnreadOnlyChange: (value: boolean) => void;
+  onHideDeletedChange: (value: boolean) => void;
   onSubscriberStateChange: (value: string) => void;
   onSearchChange: (value: string) => void;
   onSortChange: (field: SortField) => void;
@@ -76,6 +84,7 @@ export function ReactivationTable({
   minSpendUsd,
   noDmHistoryOnly,
   unreadOnly,
+  hideDeleted,
   subscriberState,
   searchQuery,
   sortBy,
@@ -85,6 +94,7 @@ export function ReactivationTable({
   onMinSpendChange,
   onNoDmHistoryChange,
   onUnreadOnlyChange,
+  onHideDeletedChange,
   onSubscriberStateChange,
   onSearchChange,
   onSortChange,
@@ -134,6 +144,17 @@ export function ReactivationTable({
         >
           Unread Only
         </button>
+        <button
+          type="button"
+          onClick={() => onHideDeletedChange(!hideDeleted)}
+          className={`rounded-button px-3 py-1.5 text-[13px] font-medium transition-colors ${
+            !hideDeleted
+              ? "bg-[#1a1a1a] text-white"
+              : "border border-border bg-card text-text-secondary hover:bg-hover"
+          }`}
+        >
+          Show Deleted
+        </button>
         <select
           value={subscriberState}
           onChange={(e) => onSubscriberStateChange(e.target.value)}
@@ -165,7 +186,7 @@ export function ReactivationTable({
             {items.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No reactivation items found.
+                  {hideDeleted ? "No reactivation candidates found. Try enabling \"Show Deleted\" to see all entries." : "No reactivation items found."}
                 </td>
               </tr>
             )}
@@ -215,8 +236,13 @@ export function ReactivationTable({
                     <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">
                       {row.silenceDaysLabel}
                     </td>
-                    <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
-                      {row.scoreLabel}
+                    <td className="px-4 py-3 text-right text-sm font-medium">
+                      <span
+                        className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-bold ${SCORE_TIER_STYLES[row.scoreTier] ?? ""}`}
+                        title={`Score: ${row.scoreRaw.toFixed(1)}`}
+                      >
+                        {row.scoreLabel}
+                      </span>
                     </td>
                     <td className={`px-4 py-3 text-sm font-medium ${SUB_STATUS_STYLE[row.subscriptionStatusLabel] ?? ""}`}>
                       {row.subscriptionStatusLabel}

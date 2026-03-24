@@ -13,6 +13,7 @@ import {
 } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
 import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
+import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
@@ -63,11 +64,13 @@ export function PageDetailPage() {
 
   const [activeTab, setActiveTab] = useState<TabKey>("transactions");
   const [txOffset, setTxOffset] = useState(0);
+  const [txTypeFilter, setTxTypeFilter] = useState("");
   const [spendersOffset, setSpendersOffset] = useState(0);
 
   const { data: transactions } = usePageTransactions(pageLabel!, {
     limit: PAGE_SIZE,
     offset: txOffset,
+    type: txTypeFilter || undefined,
   });
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
   const { data: spenders } = useSpenders({
@@ -85,17 +88,17 @@ export function PageDetailPage() {
   }, [pageLabel, selectedPeriod]);
 
   useEffect(() => {
+    setTxOffset(0);
+  }, [txTypeFilter]);
+
+  useEffect(() => {
     if (!isFansly && activeTab === "followers") {
       setActiveTab("transactions");
     }
   }, [activeTab, isFansly]);
 
   if (overviewLoading || !overview) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
-    );
+    return <PageDetailSkeleton />;
   }
 
   if (!page) {
@@ -287,6 +290,7 @@ export function PageDetailPage() {
                 page.platform,
                 item.platformUserId,
                 buildPageRoute(pageLabel!),
+                fanLabel.label,
               );
 
               return (
@@ -371,7 +375,20 @@ export function PageDetailPage() {
       </div>
 
       {activeTab === "transactions" && (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
+        <div>
+          <div className="mb-3">
+            <FilterButtons
+              filters={[
+                { key: "", label: "All" },
+                { key: "subscription", label: "Subscriptions" },
+                { key: "tip", label: "Tips" },
+                { key: "message_purchase", label: "Messages" },
+              ]}
+              active={txTypeFilter}
+              onChange={setTxTypeFilter}
+            />
+          </div>
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
           <table className="w-full border-collapse">
             <thead>
               <tr>
@@ -445,6 +462,7 @@ export function PageDetailPage() {
             total={transactions?.total ?? 0}
             onPageChange={setTxOffset}
           />
+          </div>
         </div>
       )}
 
@@ -481,6 +499,7 @@ export function PageDetailPage() {
                   page.platform,
                   item.fan.platformUserId,
                   buildPageRoute(pageLabel!),
+                  fanLabel.label,
                 );
 
                 return (
@@ -531,6 +550,30 @@ export function PageDetailPage() {
           </Link>
         </div>
       )}
+    </div>
+  );
+}
+
+function PageDetailSkeleton() {
+  return (
+    <div>
+      <div className="mb-6">
+        <div className="h-7 w-48 rounded bg-hover-alt animate-pulse" />
+        <div className="mt-2 h-4 w-64 rounded bg-hover-alt animate-pulse" />
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-6">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="rounded-[10px] border border-border bg-card p-4">
+            <div className="h-3 w-16 rounded bg-hover-alt animate-pulse" />
+            <div className="mt-3 h-7 w-24 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 100}ms` }} />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-xl border border-border bg-card p-5 mb-6">
+        <div className="h-[300px] flex items-center justify-center">
+          <div className="h-4 w-32 rounded bg-hover-alt animate-pulse" />
+        </div>
+      </div>
     </div>
   );
 }

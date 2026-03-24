@@ -618,6 +618,7 @@ export function useCrmReactivation(
     minSilenceDays?: number;
     unreadOnly?: boolean;
     noDmHistoryOnly?: boolean;
+    hideDeleted?: boolean;
     subscriberState?: string;
     sortBy?: string;
     sortDir?: string;

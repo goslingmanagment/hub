@@ -2506,6 +2506,7 @@ export interface paths {
                     minSilenceDays?: number;
                     unreadOnly?: boolean;
                     noDmHistoryOnly?: boolean;
+                    hideDeleted?: boolean;
                     subscriberState?: "current" | "former" | "never";
                     sortBy?: "reactivationScore" | "lifetimeSpendUsd" | "silenceDays" | "lastContactAt";
                     sortDir?: "asc" | "desc";

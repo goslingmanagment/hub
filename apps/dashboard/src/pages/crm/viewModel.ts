@@ -21,9 +21,12 @@ export interface RetentionRowVm {
   isAutoRenewOn: boolean;
 }
 
+export type ScoreTier = "high" | "medium" | "low";
+
 export interface ReactivationRowVm {
   fanLabel: string;
   fanSubLabel: string | null;
+  isDeletedUser: boolean;
   spendLabel: string;
   lastMessageLabel: string | null;
   lastMessageDirection: "inbound" | "outbound" | null;
@@ -33,9 +36,23 @@ export interface ReactivationRowVm {
   profileHref: string;
   silenceDaysLabel: string;
   scoreLabel: string;
+  scoreRaw: number;
+  scoreTier: ScoreTier;
   subscriptionStatusLabel: "Active" | "Expired" | "Never";
   noDmHistory: boolean;
 }
+
+function resolveScoreTier(score: number): ScoreTier {
+  if (score >= 1000) return "high";
+  if (score >= 100) return "medium";
+  return "low";
+}
+
+const SCORE_TIER_LABELS: Record<ScoreTier, string> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
 
 function resolveDirection(role: string | null): "inbound" | "outbound" | null {
   if (role === "fan") return "inbound";
@@ -81,9 +98,12 @@ export function mapReactivationRowVm(
       : item.subscription.subscriptionExpiresAt
         ? "Expired"
         : "Never";
+  const isDeletedUser = item.fan.username === null && item.fan.displayName === null;
+  const tier = resolveScoreTier(item.reactivationScore);
   return {
     fanLabel: fan.label,
     fanSubLabel: fan.displayName && fan.username ? `@${fan.username}` : null,
+    isDeletedUser,
     spendLabel: formatMills(item.spend.creatorNetAmountMills),
     lastMessageLabel: item.conversation.lastMessageAt
       ? formatRelativeTime(item.conversation.lastMessageAt)
@@ -94,7 +114,9 @@ export function mapReactivationRowVm(
     platformConversationId: item.platformConversationId,
     profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
     silenceDaysLabel: `${item.silenceDays}d`,
-    scoreLabel: item.reactivationScore.toFixed(1),
+    scoreLabel: SCORE_TIER_LABELS[tier],
+    scoreRaw: item.reactivationScore,
+    scoreTier: tier,
     subscriptionStatusLabel: subStatus,
     noDmHistory: item.noDmHistory,
   };

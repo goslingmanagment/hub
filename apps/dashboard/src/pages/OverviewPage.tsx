@@ -1,5 +1,7 @@
+import { lazy, Suspense } from "react";
 import { Link, useNavigate } from "react-router";
-import { useAuthMe, useOverview, useOverviewRevenue, useOverviewGrowth } from "@/api/queries";
+import { useAuthMe, useOverview, useOverviewRevenue, useOverviewGrowth, useOverviewRevenueDaily } from "@/api/queries";
+import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
 import { buildSettingsRoute } from "@/lib/navigation";
@@ -7,6 +9,10 @@ import { PLATFORM_COLORS } from "@/lib/constants";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
 import type { OverviewResponse } from "@agency_hub_core/contracts";
+
+const PageActivityChart = lazy(() =>
+  import("@/components/page/PageActivityChart").then((m) => ({ default: m.PageActivityChart })),
+);
 
 type OverviewPageItem = OverviewResponse["pages"][number];
 
@@ -63,6 +69,7 @@ export function OverviewPage() {
 
   const { data, isLoading: isOverviewLoading } = useOverview();
   const { data: revenueData } = useOverviewRevenue(selectedPeriod);
+  const { data: revenueDailyData } = useOverviewRevenueDaily(selectedPeriod);
   const {
     data: growthData,
     isLoading: isGrowthLoading,
@@ -77,11 +84,7 @@ export function OverviewPage() {
   const growthReady = growthState === "ready";
 
   if (isOverviewLoading || !data) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
-    );
+    return <OverviewSkeleton />;
   }
 
   const pages = (data.pages ?? []) as OverviewPageItem[];
@@ -160,7 +163,12 @@ export function OverviewPage() {
           <tr className="border-t-2 border-border bg-hover-alt">
             <td className="px-4 py-3 text-[15px] font-bold text-text-primary">Agency Total</td>
             <td className="px-4 py-3 text-right tabular-nums text-lg font-bold text-text-primary">
-              {formatUsdFromMills(totalRevenue)}
+              <div className="flex items-center justify-end gap-2">
+                {formatUsdFromMills(totalRevenue)}
+                {selectedPeriod !== "all" && (
+                  <DeltaIndicator pct={revenueData?.comparison?.deltaPct ?? null} />
+                )}
+              </div>
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-text-primary">
               {totalSubs.toLocaleString()}
@@ -182,6 +190,33 @@ export function OverviewPage() {
           </tr>
         </tbody>
       </table>
+
+      <Suspense
+        fallback={
+          <div className="mt-5 rounded-xl border border-border bg-card p-5">
+            <div className="h-[300px] flex items-center justify-center text-sm text-text-muted">
+              Loading chart...
+            </div>
+          </div>
+        }
+      >
+        {(revenueDailyData?.series ?? []).length > 0 && (
+          <div className="mt-5">
+            <PageActivityChart
+              title="AGENCY REVENUE"
+              selectedPeriod={selectedPeriod}
+              selectedPeriodLabel={periodLabel}
+              points={(revenueDailyData?.series ?? []).map((d) => ({
+                businessDate: d.businessDate,
+                value: d.netAmountMills,
+              }))}
+              valueFormatter={(v) => formatUsdFromMills(v)}
+              yAxisWidth={72}
+              color="var(--color-accent)"
+            />
+          </div>
+        )}
+      </Suspense>
     </div>
   );
 }
@@ -262,6 +297,7 @@ function ModelGroupRows({
           >
             <td className="px-4 py-3">
               <div className="flex items-center gap-2">
+                <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${tone.dot}`} title={page.syncUx.state} />
                 <span className="text-[15px] font-semibold text-text-primary">{page.label}</span>
                 {platformCfg && (
                   <span
@@ -315,5 +351,28 @@ function ModelGroupRows({
         );
       })}
     </>
+  );
+}
+
+function OverviewSkeleton() {
+  return (
+    <div>
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="bg-hover-alt px-4 py-3 flex gap-4">
+          {[100, 80, 60, 80, 60].map((w, i) => (
+            <div key={i} className="h-3 rounded bg-border animate-pulse" style={{ width: `${w}px` }} />
+          ))}
+        </div>
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="flex gap-4 border-t border-border px-4 py-3.5">
+            <div className="h-4 w-28 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80}ms` }} />
+            <div className="h-4 w-16 rounded bg-hover-alt animate-pulse ml-auto" style={{ animationDelay: `${i * 80 + 40}ms` }} />
+            <div className="h-4 w-12 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80 + 80}ms` }} />
+            <div className="h-4 w-14 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80 + 120}ms` }} />
+            <div className="h-4 w-12 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 80 + 160}ms` }} />
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

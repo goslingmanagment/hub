@@ -7,6 +7,7 @@ import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigati
 import { usePeriodStore } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
 import { formatRelativeTime } from "@/lib/format";
+import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import type { SpenderBatchBody } from "@agency_hub_core/contracts";
 
 const LIMIT = 50;
@@ -43,10 +44,15 @@ export function TopSupportersPage() {
   const { pageLabel } = useParams();
   const navigate = useNavigate();
   const selectedPeriod = usePeriodStore((s) => s.period);
+  const setPeriod = usePeriodStore((s) => s.setPeriod);
   const customFrom = usePeriodStore((s) => s.customFrom);
   const customTo = usePeriodStore((s) => s.customTo);
   const [searchQuery, setSearchQuery] = useState("");
   const [offset, setOffset] = useState(0);
+
+  useEffect(() => {
+    setPeriod("all");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
@@ -107,11 +113,7 @@ export function TopSupportersPage() {
   }, [batchData]);
 
   if (isLoading || !spenders) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
-    );
+    return <TableSkeleton rows={6} columns={7} />;
   }
 
   const total = spenders.total;
@@ -186,6 +188,7 @@ export function TopSupportersPage() {
                 platform!,
                 item.fan.platformUserId,
                 buildPageSectionRoute(pageLabel!, "top-supporters"),
+                fanLabel.label,
               );
 
               return (

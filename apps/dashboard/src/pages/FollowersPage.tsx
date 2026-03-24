@@ -6,6 +6,7 @@ import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
+import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { resolveFanLabel } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime } from "@/lib/format";
 
@@ -37,11 +38,7 @@ export function FollowersPage() {
   const { data, isLoading } = usePageFollowers(pageLabel!, params);
 
   if (isLoading || !data) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
-    );
+    return <TableSkeleton rows={6} columns={5} />;
   }
 
   const platform = data.page.platform;
@@ -104,6 +101,7 @@ export function FollowersPage() {
                 platform,
                 follower.platformUserId,
                 buildPageSectionRoute(pageLabel!, "followers"),
+                fanLabel.label,
               );
 
               return (

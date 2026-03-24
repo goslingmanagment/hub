@@ -7550,6 +7550,14 @@
           },
           {
             "schema": {
+              "type": "boolean"
+            },
+            "in": "query",
+            "name": "hideDeleted",
+            "required": false
+          },
+          {
+            "schema": {
               "type": "string",
               "enum": [
                 "current",

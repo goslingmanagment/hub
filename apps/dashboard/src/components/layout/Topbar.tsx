@@ -4,6 +4,7 @@ import { LogOut, ChevronDown } from "lucide-react";
 import { useLogout, useOverview } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { clearDashboardSession } from "@/lib/queryClient";
+import { resolveFanLabelFromState } from "@/lib/navigation";
 
 interface TopbarProps {
   user: { username: string; role: string };
@@ -16,7 +17,8 @@ export function Topbar({ user }: TopbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const breadcrumbs = buildBreadcrumbs(location.pathname, overview);
+  const breadcrumbs = buildBreadcrumbs(location.pathname, overview, location.state);
+  const showPeriodSelector = shouldShowPeriodSelector(location.pathname);
 
   useEffect(() => {
     if (!menuOpen) {
@@ -62,7 +64,7 @@ export function Topbar({ user }: TopbarProps) {
       </div>
 
       <div className="flex items-center gap-2">
-        <PeriodSelector />
+        {showPeriodSelector && <PeriodSelector />}
 
         <div className="relative ml-2.5" ref={menuRef}>
           <button
@@ -98,15 +100,30 @@ export function Topbar({ user }: TopbarProps) {
   );
 }
 
+function shouldShowPeriodSelector(pathname: string): boolean {
+  const parts = pathname.split("/").filter(Boolean);
+  if (parts.length === 0) return true; // Overview
+  if (parts[0] === "pages" && parts[1]) {
+    if (!parts[2]) return true; // PageDetail
+    if (parts[2] === "top-supporters") return true;
+    if (parts[2] === "fans" && parts[3] && parts[4]) return true;
+    return false;
+  }
+  return false;
+}
+
 function buildBreadcrumbs(
   pathname: string,
   overview?: OverviewResponse | null,
+  locationState?: unknown,
 ): { label: string; href?: string }[] {
   const parts = pathname.split("/").filter(Boolean);
 
   if (parts.length === 0) return [{ label: "Overview" }];
 
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
+
+  if (parts[0] === "notifications") return [{ label: "Overview", href: "/" }, { label: "Notifications" }];
 
   if (parts[0] === "dev") {
     const devLabels: Record<string, string> = {
@@ -146,7 +163,8 @@ function buildBreadcrumbs(
     } else if (parts[2] === "crm") {
       crumbs.push({ label: "CRM" });
     } else if (parts[2] === "fans" && parts[3] && parts[4]) {
-      crumbs.push({ label: parts[4] });
+      const fanLabel = resolveFanLabelFromState(locationState) ?? parts[4];
+      crumbs.push({ label: fanLabel });
     }
 
     return crumbs;

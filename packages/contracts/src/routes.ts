@@ -445,6 +445,7 @@ export const crmReactivationQuerySchema = paginationQuerySchema.extend({
   minSilenceDays: z.coerce.number().int().min(0).max(365).optional(),
   unreadOnly: queryBooleanSchema.optional(),
   noDmHistoryOnly: queryBooleanSchema.optional(),
+  hideDeleted: queryBooleanSchema.optional(),
   subscriberState: crmSubscriberStateEnum.optional(),
   sortBy: crmReactivationSortByEnum.optional(),
   sortDir: sortDirEnum.optional(),

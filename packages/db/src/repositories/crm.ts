@@ -1117,6 +1117,7 @@ export interface CrmReactivationListInput {
   minSilenceDays?: number;
   unreadOnly?: boolean;
   noDmHistoryOnly?: boolean;
+  hideDeleted?: boolean;
   subscriberState?: "current" | "former" | "never";
   sortBy?: CrmReactivationSortBy;
   sortDir?: SortDir;
@@ -1174,6 +1175,9 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
     : sql``;
   const noDmHistoryOnlyFilter = input.noDmHistoryOnly
     ? sql`and no_dm_history = true`
+    : sql``;
+  const hideDeletedFilter = input.hideDeleted
+    ? sql`and not (username is null and display_name is null)`
     : sql``;
   const subscriberStateFilter = input.subscriberState === "current"
     ? sql`and is_subscriber = true`
@@ -1267,6 +1271,7 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
       where silence_anchor is not null
         ${unreadOnlyFilter}
         ${noDmHistoryOnlyFilter}
+        ${hideDeletedFilter}
         ${subscriberStateFilter}
         and least(
           90,

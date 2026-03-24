@@ -7,6 +7,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
+import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { resolveFanLabel } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, daysRemaining, formatUsdFromCents } from "@/lib/format";
 
@@ -39,22 +40,23 @@ export function SubscribersPage() {
 
   const { data, isLoading } = usePageSubscribers(pageLabel!, params);
 
+  // Filter count queries (lightweight, limit: 1)
+  const { data: expiringCount } = usePageSubscribers(pageLabel!, { limit: 1, expiringWithinDays: 7 });
+  const { data: newCount } = usePageSubscribers(pageLabel!, { limit: 1, startedWithinHours: 24 });
+  const { data: noRenewCount } = usePageSubscribers(pageLabel!, { limit: 1, autoRenew: false });
+
   if (isLoading || !data) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
-    );
+    return <TableSkeleton rows={6} columns={7} />;
   }
 
   const platform = data.page.platform;
   const items = data.items;
   const total = data.total;
   const filters = [
-    { key: "all", label: "All" },
-    { key: "expiring7d", label: "Expiring ≤7d" },
-    { key: "new24h", label: "New 24h" },
-    { key: "norenew", label: "Auto-renew Off" },
+    { key: "all", label: "All", count: total },
+    { key: "expiring7d", label: "Expiring ≤7d", count: expiringCount?.total },
+    { key: "new24h", label: "New 24h", count: newCount?.total },
+    { key: "norenew", label: "Auto-renew Off", count: noRenewCount?.total },
   ];
 
   return (
@@ -112,6 +114,7 @@ export function SubscribersPage() {
                 platform,
                 sub.platformUserId,
                 buildPageSectionRoute(pageLabel!, "subscribers"),
+                fanLabel.label,
               );
 
               return (

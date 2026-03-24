@@ -1,6 +1,6 @@
 import { useLocation, useNavigate, useParams } from "react-router";
 import { useState } from "react";
-import { ArrowLeft, ChevronDown } from "lucide-react";
+import { ArrowLeft, ChevronDown, CalendarDays, RefreshCw, Clock } from "lucide-react";
 import {
   usePageFanDetail,
   usePageFanProfile,
@@ -14,7 +14,8 @@ import { Badge } from "@/components/shared/Badge";
 import { Pagination } from "@/components/shared/Pagination";
 import { FanIntelligenceMarkdown } from "@/components/page/FanIntelligenceMarkdown";
 import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
-import { formatDate, formatDateTime, transactionTypeLabel } from "@/lib/format";
+import { RemainingBar } from "@/components/shared/RemainingBar";
+import { formatDate, formatDateTime, transactionTypeLabel, daysRemaining } from "@/lib/format";
 import { usePeriodStore } from "@/stores/periodStore";
 import { toast } from "sonner";
 import { TRANSACTION_STATE_COLORS } from "@/lib/constants";
@@ -29,6 +30,7 @@ export function FanProfilePage() {
   const [txOffset, setTxOffset] = useState(0);
   const [noteBody, setNoteBody] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
   const { period } = usePeriodStore();
   const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
@@ -59,11 +61,7 @@ export function FanProfilePage() {
   const createNote = useCreateFanNote(pageLabel!, platformUserId!);
 
   if (isLoading || !data) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
-    );
+    return <FanProfileSkeleton />;
   }
 
   const { fan, page } = data;
@@ -127,6 +125,9 @@ export function FanProfilePage() {
       accent: false,
     },
   ];
+  const subscriptionRemainingDays = page.subscriptionExpiresAt
+    ? daysRemaining(page.subscriptionExpiresAt)
+    : null;
 
   // Build timeline from transactions
   const timelineEvents = txItems.slice(0, 10).map((tx) => ({
@@ -203,111 +204,178 @@ export function FanProfilePage() {
         ))}
       </div>
 
-      <section className="mb-6 rounded-xl border border-border bg-card p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-bold text-text-primary">Fan Intelligence</h2>
-            <p className="mt-1 text-xs text-text-muted">
-              Latest ChatMuse profile for this fan on {page.pageLabel}.
-            </p>
+      {/* Subscription Status */}
+      {page.isSubscriber && (
+        <div className="mb-6 rounded-[10px] border border-border bg-card p-4">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-3">
+            Subscription Status
           </div>
-          {viewingHistoricalVersion && (
+          <div className="flex items-center gap-6 flex-wrap">
             <div className="flex items-center gap-2">
-              <span className="rounded-full border border-border bg-hover px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                Viewing version {selectedProfileVersion}
-              </span>
-              {selectedVersionIsCurrent && (
-                <span className="rounded-full border border-border bg-hover-alt px-2 py-1 text-[11px] text-text-muted">
-                  Current
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => setSelectedProfileVersion(null)}
-                className="text-xs font-medium text-accent transition-colors hover:opacity-80"
-              >
-                Back to latest
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div className="mt-4 rounded-xl border border-border bg-hover-alt/40 p-5">
-          {profileLoading ? (
-            <p className="text-sm text-text-muted">
-              {viewingHistoricalVersion ? "Loading selected version..." : "Loading intelligence profile..."}
-            </p>
-          ) : viewingHistoricalVersion && !displayedProfile ? (
-            <p className="text-sm text-text-muted">Unable to load the selected version.</p>
-          ) : displayedProfile ? (
-            <div>
-              <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
-                <span>Version {displayedProfile.version}</span>
-                <span>&middot;</span>
-                <span>{formatDateTime(displayedProfile.createdAt)}</span>
-              </div>
-              <FanIntelligenceMarkdown body={displayedProfile.body} />
-            </div>
-          ) : (
-            <p className="text-sm text-text-muted">No intelligence profile yet</p>
-          )}
-        </div>
-
-        <div className="mt-4">
-          <button
-            type="button"
-            onClick={() => setHistoryOpen((value) => !value)}
-            className="flex w-full items-center justify-between rounded-lg border border-border bg-hover-alt/30 px-4 py-2.5 text-left transition-colors hover:bg-hover-alt"
-            aria-expanded={historyOpen}
-          >
-            <span className="text-[13px] font-medium text-text-secondary">Version History</span>
-            <ChevronDown
-              size={16}
-              className={`text-text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
-            />
-          </button>
-
-          {historyOpen && (
-            <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
-              {profileVersionsLoading ? (
-                <div className="px-4 py-4 text-sm text-text-muted">Loading versions...</div>
-              ) : profileVersions.length === 0 ? (
-                <div className="px-4 py-4 text-sm text-text-muted">No saved versions yet.</div>
-              ) : (
-                <div>
-                  {profileVersions.map((item) => {
-                    const selected = selectedProfileVersion === item.version;
-                    return (
-                      <button
-                        key={item.version}
-                        type="button"
-                        onClick={() => handleSelectProfileVersion(item.version)}
-                        className={`flex w-full items-center justify-between border-t border-border px-4 py-3 text-left transition-colors first:border-t-0 ${
-                          selected ? "bg-hover" : "hover:bg-hover-alt"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-text-primary">
-                            Version {item.version}
-                          </span>
-                          {item.isCurrent && (
-                            <span className="rounded-full border border-border bg-hover px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                              Current
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-xs text-text-muted">
-                          {formatDateTime(item.createdAt)}
-                        </span>
-                      </button>
-                    );
-                  })}
+              <CalendarDays size={14} className="text-text-muted" />
+              <div>
+                <div className="text-xs text-text-muted">Expires</div>
+                <div className="text-sm font-medium text-text-primary">
+                  {page.subscriptionExpiresAt ? formatDate(page.subscriptionExpiresAt) : "—"}
                 </div>
-              )}
+              </div>
             </div>
-          )}
+            <div className="flex items-center gap-2">
+              <Clock size={14} className="text-text-muted" />
+              <div>
+                <div className="text-xs text-text-muted">Remaining</div>
+                {subscriptionRemainingDays !== null ? (
+                  <div className="w-24"><RemainingBar days={subscriptionRemainingDays} /></div>
+                ) : (
+                  <div className="text-sm font-medium text-text-muted">—</div>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <RefreshCw size={14} className="text-text-muted" />
+              <div>
+                <div className="text-xs text-text-muted">Auto-Renew</div>
+                <div className={`text-sm font-medium ${
+                  page.autoRenew === true
+                    ? "text-green"
+                    : page.autoRenew === false
+                      ? "text-danger"
+                      : "text-text-muted"
+                }`}>
+                  {page.autoRenew === true ? "On" : page.autoRenew === false ? "Off" : "Unknown"}
+                </div>
+              </div>
+            </div>
+            {page.subscriberSince && (
+              <div>
+                <div className="text-xs text-text-muted">Since</div>
+                <div className="text-sm font-medium text-text-primary">{formatDate(page.subscriberSince)}</div>
+              </div>
+            )}
+          </div>
         </div>
-      </section>
+      )}
+
+      {/* Fan Intelligence - collapsed when empty */}
+      {!latestProfile && !latestProfileLoading && !intelligenceOpen ? (
+        <button
+          type="button"
+          onClick={() => setIntelligenceOpen(true)}
+          className="mb-6 flex w-full items-center justify-between rounded-xl border border-border bg-card px-5 py-4 text-left transition-colors hover:bg-hover-alt"
+        >
+          <span className="text-sm font-bold text-text-primary">Fan Intelligence</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-muted">No profile available</span>
+            <ChevronDown size={16} className="text-text-muted" />
+          </div>
+        </button>
+      ) : (
+        <section className="mb-6 rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-bold text-text-primary">Fan Intelligence</h2>
+              <p className="mt-1 text-xs text-text-muted">
+                Latest ChatMuse profile for this fan on {page.pageLabel}.
+              </p>
+            </div>
+            {viewingHistoricalVersion && (
+              <div className="flex items-center gap-2">
+                <span className="rounded-full border border-border bg-hover px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                  Viewing version {selectedProfileVersion}
+                </span>
+                {selectedVersionIsCurrent && (
+                  <span className="rounded-full border border-border bg-hover-alt px-2 py-1 text-[11px] text-text-muted">
+                    Current
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedProfileVersion(null)}
+                  className="text-xs font-medium text-accent transition-colors hover:opacity-80"
+                >
+                  Back to latest
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 rounded-xl border border-border bg-hover-alt/40 p-5">
+            {profileLoading ? (
+              <p className="text-sm text-text-muted">
+                {viewingHistoricalVersion ? "Loading selected version..." : "Loading intelligence profile..."}
+              </p>
+            ) : viewingHistoricalVersion && !displayedProfile ? (
+              <p className="text-sm text-text-muted">Unable to load the selected version.</p>
+            ) : displayedProfile ? (
+              <div>
+                <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
+                  <span>Version {displayedProfile.version}</span>
+                  <span>&middot;</span>
+                  <span>{formatDateTime(displayedProfile.createdAt)}</span>
+                </div>
+                <FanIntelligenceMarkdown body={displayedProfile.body} />
+              </div>
+            ) : (
+              <p className="text-sm text-text-muted">No intelligence profile yet</p>
+            )}
+          </div>
+
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((value) => !value)}
+              className="flex w-full items-center justify-between rounded-lg border border-border bg-hover-alt/30 px-4 py-2.5 text-left transition-colors hover:bg-hover-alt"
+              aria-expanded={historyOpen}
+            >
+              <span className="text-[13px] font-medium text-text-secondary">Version History</span>
+              <ChevronDown
+                size={16}
+                className={`text-text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+
+            {historyOpen && (
+              <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
+                {profileVersionsLoading ? (
+                  <div className="px-4 py-4 text-sm text-text-muted">Loading versions...</div>
+                ) : profileVersions.length === 0 ? (
+                  <div className="px-4 py-4 text-sm text-text-muted">No saved versions yet.</div>
+                ) : (
+                  <div>
+                    {profileVersions.map((item) => {
+                      const selected = selectedProfileVersion === item.version;
+                      return (
+                        <button
+                          key={item.version}
+                          type="button"
+                          onClick={() => handleSelectProfileVersion(item.version)}
+                          className={`flex w-full items-center justify-between border-t border-border px-4 py-3 text-left transition-colors first:border-t-0 ${
+                            selected ? "bg-hover" : "hover:bg-hover-alt"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-text-primary">
+                              Version {item.version}
+                            </span>
+                            {item.isCurrent && (
+                              <span className="rounded-full border border-border bg-hover px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                                Current
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-xs text-text-muted">
+                            {formatDateTime(item.createdAt)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Two-column: Notes + Timeline */}
       <div className="mb-6 grid grid-cols-2 gap-4">
@@ -461,6 +529,28 @@ export function FanProfilePage() {
           onPageChange={setTxOffset}
         />
       </section>
+    </div>
+  );
+}
+
+function FanProfileSkeleton() {
+  return (
+    <div>
+      <div className="mb-6 flex items-center gap-4">
+        <div className="h-14 w-14 rounded-full bg-hover animate-pulse" />
+        <div>
+          <div className="h-6 w-40 rounded bg-hover-alt animate-pulse" />
+          <div className="mt-2 h-3 w-24 rounded bg-hover-alt animate-pulse" />
+        </div>
+      </div>
+      <div className="mb-6 grid grid-cols-4 gap-3.5">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="rounded-[10px] border border-border bg-card p-4">
+            <div className="h-3 w-16 rounded bg-hover-alt animate-pulse" />
+            <div className="mt-3 h-7 w-24 rounded bg-hover-alt animate-pulse" style={{ animationDelay: `${i * 100}ms` }} />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

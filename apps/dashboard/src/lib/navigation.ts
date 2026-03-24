@@ -1,5 +1,6 @@
 export interface FanProfileNavigationState {
   backTo: string;
+  fanLabel?: string;
 }
 
 export type SettingsTab = "credentials" | "sync" | "models" | "pages" | "users";
@@ -33,11 +34,24 @@ export function buildFanProfileNavigation(
   platform: string,
   platformUserId: string,
   backTo: string,
+  fanLabel?: string,
 ) {
   return {
     to: buildFanProfileRoute(pageLabel, platform, platformUserId),
-    state: { backTo } satisfies FanProfileNavigationState,
+    state: { backTo, fanLabel } satisfies FanProfileNavigationState,
   };
+}
+
+export function resolveFanLabelFromState(state: unknown): string | undefined {
+  if (
+    typeof state === "object"
+    && state !== null
+    && "fanLabel" in state
+    && typeof state.fanLabel === "string"
+  ) {
+    return state.fanLabel;
+  }
+  return undefined;
 }
 
 export function buildSettingsRoute(tab: SettingsTab) {

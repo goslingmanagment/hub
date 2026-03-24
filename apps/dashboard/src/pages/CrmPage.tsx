@@ -4,6 +4,7 @@ import { useOverview, useCrmSummary, useCrmRetention, useCrmReactivation } from 
 import { CrmSummaryHeader } from "@/components/page/crm/CrmSummaryHeader";
 import { RetentionTable } from "@/components/page/crm/RetentionTable";
 import { ReactivationTable } from "@/components/page/crm/ReactivationTable";
+import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { mapRetentionRowVm, mapReactivationRowVm } from "./crm/viewModel";
 
 const LIMIT = 25;
@@ -36,6 +37,7 @@ export function CrmPage() {
   const [reactMinSpend, setReactMinSpend] = useState("");
   const [reactNoDmHistory, setReactNoDmHistory] = useState(false);
   const [reactUnreadOnly, setReactUnreadOnly] = useState(false);
+  const [reactHideDeleted, setReactHideDeleted] = useState(true);
   const [reactSubState, setReactSubState] = useState("");
   const [reactSearch, setReactSearch] = useState("");
   const [reactSortBy, setReactSortBy] = useState("reactivationScore");
@@ -49,7 +51,7 @@ export function CrmPage() {
 
   useEffect(() => {
     setReactOffset(0);
-  }, [reactSilence, reactMinSpend, reactNoDmHistory, reactUnreadOnly, reactSubState, reactSearch, reactSortBy, reactSortDir]);
+  }, [reactSilence, reactMinSpend, reactNoDmHistory, reactUnreadOnly, reactHideDeleted, reactSubState, reactSearch, reactSortBy, reactSortDir]);
 
   // Reset expand on tab switch
   useEffect(() => {
@@ -76,10 +78,11 @@ export function CrmPage() {
     minSilenceDays: reactSilence !== "all" ? Number(reactSilence) : undefined,
     unreadOnly: reactUnreadOnly || undefined,
     noDmHistoryOnly: reactNoDmHistory || undefined,
+    hideDeleted: reactHideDeleted,
     subscriberState: reactSubState || undefined,
     sortBy: reactSortBy,
     sortDir: reactSortDir,
-  }), [reactOffset, reactSearch, reactMinSpend, reactSilence, reactUnreadOnly, reactNoDmHistory, reactSubState, reactSortBy, reactSortDir]);
+  }), [reactOffset, reactSearch, reactMinSpend, reactSilence, reactUnreadOnly, reactNoDmHistory, reactHideDeleted, reactSubState, reactSortBy, reactSortDir]);
 
   const { data: summary } = useCrmSummary(resolvedPageLabel, {
     enabled: canLoadCrm,
@@ -124,11 +127,7 @@ export function CrmPage() {
   }
 
   if (!overview) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
-    );
+    return <TableSkeleton rows={6} columns={6} />;
   }
 
   if (!page) {
@@ -193,9 +192,7 @@ export function CrmPage() {
 
       {tab === "retention" ? (
         retLoading && !retention ? (
-          <div className="flex items-center justify-center py-24">
-            <span className="text-text-muted text-sm">Loading...</span>
-          </div>
+          <TableSkeleton rows={6} columns={6} />
         ) : (
           <RetentionTable
             items={retentionVm}
@@ -224,9 +221,7 @@ export function CrmPage() {
         )
       ) : (
         reactLoading && !reactivation ? (
-          <div className="flex items-center justify-center py-24">
-            <span className="text-text-muted text-sm">Loading...</span>
-          </div>
+          <TableSkeleton rows={6} columns={6} />
         ) : (
           <ReactivationTable
             items={reactivationVm}
@@ -238,6 +233,7 @@ export function CrmPage() {
             minSpendUsd={reactMinSpend}
             noDmHistoryOnly={reactNoDmHistory}
             unreadOnly={reactUnreadOnly}
+            hideDeleted={reactHideDeleted}
             subscriberState={reactSubState}
             searchQuery={reactSearch}
             sortBy={reactSortBy}
@@ -247,6 +243,7 @@ export function CrmPage() {
             onMinSpendChange={setReactMinSpend}
             onNoDmHistoryChange={setReactNoDmHistory}
             onUnreadOnlyChange={setReactUnreadOnly}
+            onHideDeletedChange={setReactHideDeleted}
             onSubscriberStateChange={setReactSubState}
             onSearchChange={setReactSearch}
             onSortChange={handleReactSortChange}

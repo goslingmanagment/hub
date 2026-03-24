@@ -248,6 +248,7 @@ export async function getCrmReactivationReport(
       minSilenceDays: query.minSilenceDays,
       unreadOnly: query.unreadOnly,
       noDmHistoryOnly: query.noDmHistoryOnly,
+      hideDeleted: query.hideDeleted,
       subscriberState: query.subscriberState,
       sortBy: query.sortBy,
       sortDir: query.sortDir,

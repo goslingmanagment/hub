@@ -409,7 +409,10 @@ function IncidentsTab() {
       {isLoading ? (
         <div className="py-12 text-center text-sm text-text-muted">Loading...</div>
       ) : !data || data.items.length === 0 ? (
-        <div className="py-12 text-center text-sm text-text-muted">No incidents found.</div>
+        <div className="py-12 text-center">
+          <p className="text-sm font-medium text-text-secondary">No incidents recorded</p>
+          <p className="mt-1 text-xs text-text-muted">Incidents appear when sync encounters authentication or proxy errors.</p>
+        </div>
       ) : (
         <>
           <div className="overflow-hidden rounded-xl border border-border bg-card">
@@ -554,7 +557,10 @@ function ReportsTab() {
         {historyLoading ? (
           <div className="py-8 text-center text-sm text-text-muted">Loading...</div>
         ) : !history || history.items.length === 0 ? (
-          <div className="py-8 text-center text-sm text-text-muted">No reports sent yet.</div>
+          <div className="py-8 text-center">
+            <p className="text-sm font-medium text-text-secondary">No reports sent yet</p>
+            <p className="mt-1 text-xs text-text-muted">Enable daily reports in the Settings tab to start receiving revenue summaries.</p>
+          </div>
         ) : (
           <div className="overflow-hidden rounded-xl border border-border bg-card">
             <table className="w-full border-collapse">
