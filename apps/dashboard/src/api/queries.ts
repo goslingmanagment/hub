@@ -2,8 +2,12 @@ import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AdminCreateUserBody,
+  AdminIssueApiKeyBody,
+  AdminUser,
+  ApiKeyItem,
   AuthState,
   AuthUser,
+  IssuedApiKeyResponse,
   OverviewResponse,
   OverviewGrowthResponse,
   PageRevenueResponse,
@@ -429,7 +433,7 @@ export function useAdminConnections() {
 export function useAdminUsers() {
   return useQuery({
     queryKey: ["admin", "users"],
-    queryFn: () => api.get<AuthUser[]>("/api/v1/admin/users"),
+    queryFn: () => api.get<AdminUser[]>("/api/v1/admin/users"),
   });
 }
 
@@ -440,6 +444,40 @@ export function useAdminCreateUser() {
     mutationFn: (body: AdminCreateUserBody) =>
       api.post<AuthUser>("/api/v1/admin/users", body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
+  });
+}
+
+export function useAdminUserApiKeys(username: string, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ["admin", "users", username, "apiKeys"],
+    queryFn: () => api.get<ApiKeyItem[]>(`/api/v1/admin/users/${username}/api-keys`),
+    enabled: options.enabled ?? true,
+  });
+}
+
+export function useAdminIssueApiKey(username: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: AdminIssueApiKeyBody) =>
+      api.post<IssuedApiKeyResponse>(`/api/v1/admin/users/${username}/api-keys`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      qc.invalidateQueries({ queryKey: ["admin", "users", username, "apiKeys"] });
+    },
+  });
+}
+
+export function useAdminRevokeApiKeys(username: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () =>
+      api.del<{ revokedCount: number }>(`/api/v1/admin/users/${username}/api-keys`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      qc.invalidateQueries({ queryKey: ["admin", "users", username, "apiKeys"] });
+    },
   });
 }
 
