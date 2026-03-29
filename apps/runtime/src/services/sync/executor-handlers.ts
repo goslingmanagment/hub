@@ -86,6 +86,8 @@ type ExecutorRequestContext = {
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const TOP_SPENDERS_WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
+const TOP_SPENDERS_WINDOW_WEEK_MS = 7 * TOP_SPENDERS_WINDOW_DAY_MS;
 
 function createPageRateLimitWaiter(
   app: AppContext,
@@ -197,7 +199,7 @@ type DmMessagesCheckpointState = {
 };
 
 type TopSpendersCheckpointWindow = {
-  kind: "month" | "week";
+  kind: "month" | "week" | "day";
   monthKey: string;
   startedAt: string;
   endedAt: string;
@@ -478,7 +480,9 @@ function parseTopSpendersCheckpointState(value: unknown) {
       return [];
     }
 
-    const kind = record.kind === "month" || record.kind === "week" ? record.kind : null;
+    const kind = record.kind === "month" || record.kind === "week" || record.kind === "day"
+      ? record.kind
+      : null;
     const monthKey = asNullableString(record.monthKey);
     const startedAt = asNullableString(record.startedAt);
     const endedAt = asNullableString(record.endedAt);
@@ -657,15 +661,29 @@ function buildTopSpendersBootstrapWindows(
   return windows;
 }
 
-function splitTopSpendersMonthIntoWeeks(window: TopSpendersCheckpointWindow) {
+function splitTopSpendersWindow(window: TopSpendersCheckpointWindow) {
+  const nextWindowMs = window.kind === "month"
+    ? TOP_SPENDERS_WINDOW_WEEK_MS
+    : window.kind === "week"
+      ? TOP_SPENDERS_WINDOW_DAY_MS
+      : null;
+  const nextKind = window.kind === "month"
+    ? "week"
+    : window.kind === "week"
+      ? "day"
+      : null;
+  if (nextWindowMs === null || nextKind === null) {
+    return null;
+  }
+
   const windows: TopSpendersCheckpointWindow[] = [];
   let cursor = new Date(window.startedAt);
   const endedAt = new Date(window.endedAt);
 
   while (cursor.getTime() < endedAt.getTime()) {
-    const next = new Date(Math.min(cursor.getTime() + (7 * 24 * 60 * 60 * 1000), endedAt.getTime()));
+    const next = new Date(Math.min(cursor.getTime() + nextWindowMs, endedAt.getTime()));
     windows.push({
-      kind: "week",
+      kind: nextKind,
       monthKey: window.monthKey,
       startedAt: cursor.toISOString(),
       endedAt: next.toISOString(),
@@ -840,7 +858,7 @@ export async function executeTopSpendersChunk(
   let windowsSplit = 0;
   let upsertedRankings = 0;
 
-  if (state.mode === "bootstrap" && state.pendingWindows.length > 0) {
+  const processPendingWindows = async () => {
     while (state.pendingWindows.length > 0) {
       const currentWindow: TopSpendersCheckpointWindow = state.pendingWindows[0]!;
       const windowStartedAt = new Date(currentWindow.startedAt);
@@ -850,18 +868,18 @@ export async function executeTopSpendersChunk(
         before: windowEndedAt,
       });
 
-      if (currentWindow.kind === "month" && !response.done) {
-        const weeklyWindows = splitTopSpendersMonthIntoWeeks(currentWindow);
+      const finerWindows = response.done ? null : splitTopSpendersWindow(currentWindow);
+      if (finerWindows) {
         state = {
           ...state,
           pendingWindows: [
-            ...weeklyWindows,
+            ...finerWindows,
             ...state.pendingWindows.slice(1),
           ],
           completedMonths: computeCompletedTopSpenderMonths(
             state.totalMonths,
             [
-              ...weeklyWindows,
+              ...finerWindows,
               ...state.pendingWindows.slice(1),
             ],
           ),
@@ -870,6 +888,21 @@ export async function executeTopSpendersChunk(
         };
         windowsSplit += 1;
       } else {
+        if (!response.done) {
+          await input.telemetry.addAnomaly({
+            code: "top_spenders_window_truncated",
+            severity: "warn",
+            message: "Top spenders window hit the provider cap at day granularity; results may be truncated",
+            details: {
+              windowKind: currentWindow.kind,
+              monthKey: currentWindow.monthKey,
+              startedAt: currentWindow.startedAt,
+              endedAt: currentWindow.endedAt,
+              returnedItems: response.items.length,
+            },
+          });
+        }
+
         upsertedRankings += await upsertTopSpendersWindow(app, {
           platformAccountId: input.pageContext.page.id,
           windowStartedAt,
@@ -902,7 +935,7 @@ export async function executeTopSpendersChunk(
           satisfied: false,
           yieldReason: input.budget.resolveYieldReason(),
           stats: {
-            mode: "bootstrap",
+            mode: state.mode,
             totalMonths: state.totalMonths,
             completedMonths: state.completedMonths,
             pendingWindows: state.pendingWindows.length,
@@ -913,7 +946,18 @@ export async function executeTopSpendersChunk(
         } satisfies StreamChunkResult;
       }
     }
+    return null;
+  };
 
+  const resumedPendingWindows = state.pendingWindows.length > 0;
+  if (resumedPendingWindows) {
+    const yielded = await processPendingWindows();
+    if (yielded) {
+      return yielded;
+    }
+  }
+
+  if (state.mode === "bootstrap") {
     state = {
       ...state,
       mode: "steady_state",
@@ -947,18 +991,93 @@ export async function executeTopSpendersChunk(
     } satisfies StreamChunkResult;
   }
 
+  if (resumedPendingWindows) {
+    const completedCheckpoint = await upsertCheckpoint(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "top_spenders",
+      cursorTimestamp: state.lastWindowEndedAt ? new Date(state.lastWindowEndedAt) : now,
+      state,
+      lastSuccessfulRunId: input.syncRunId,
+    });
+    await input.telemetry.recordCheckpointAdvanced(
+      "top_spenders",
+      summarizeCheckpoint(completedCheckpoint),
+    );
+
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: {
+        mode: "steady_state",
+        totalMonths: state.totalMonths,
+        completedMonths: state.completedMonths,
+        pendingWindows: 0,
+        windowsProcessed,
+        windowsSplit,
+        upsertedRankings,
+      },
+    } satisfies StreamChunkResult;
+  }
+
   const steadyStateWindowEndedAt = now;
   const steadyStateWindowStartedAt = new Date(now.getTime() - TOP_SPENDERS_STEADY_STATE_WINDOW_MS);
+  const steadyStateWindow = {
+    kind: "week" as const,
+    monthKey: buildUtcMonthKey(steadyStateWindowStartedAt),
+    startedAt: steadyStateWindowStartedAt.toISOString(),
+    endedAt: steadyStateWindowEndedAt.toISOString(),
+  } satisfies TopSpendersCheckpointWindow;
   const response = await app.adapter.getEarningsAccountsPage(requestContext, {
     after: steadyStateWindowStartedAt,
     before: steadyStateWindowEndedAt,
   });
-  upsertedRankings = await upsertTopSpendersWindow(app, {
-    platformAccountId: input.pageContext.page.id,
-    windowStartedAt: steadyStateWindowStartedAt,
-    windowEndedAt: steadyStateWindowEndedAt,
-    items: response.items,
-  });
+  if (response.done) {
+    upsertedRankings = await upsertTopSpendersWindow(app, {
+      platformAccountId: input.pageContext.page.id,
+      windowStartedAt: steadyStateWindowStartedAt,
+      windowEndedAt: steadyStateWindowEndedAt,
+      items: response.items,
+    });
+    windowsProcessed += 1;
+  } else {
+    windowsSplit += 1;
+    state = {
+      ...state,
+      pendingWindows: splitTopSpendersWindow(steadyStateWindow) ?? [],
+      lastWindowStartedAt: steadyStateWindow.startedAt,
+      lastWindowEndedAt: steadyStateWindow.endedAt,
+    };
+    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "top_spenders",
+      state,
+    });
+    await input.telemetry.recordCheckpointAdvanced(
+      "top_spenders",
+      summarizeCheckpoint(progressCheckpoint),
+    );
+
+    if (input.budget.shouldYield()) {
+      return {
+        satisfied: false,
+        yieldReason: input.budget.resolveYieldReason(),
+        stats: {
+          mode: "steady_state",
+          totalMonths: state.totalMonths,
+          completedMonths: state.completedMonths,
+          pendingWindows: state.pendingWindows.length,
+          windowsProcessed,
+          windowsSplit,
+          upsertedRankings,
+        },
+      } satisfies StreamChunkResult;
+    }
+
+    const yielded = await processPendingWindows();
+    if (yielded) {
+      return yielded;
+    }
+  }
 
   const steadyState = {
     ...state,
@@ -988,8 +1107,8 @@ export async function executeTopSpendersChunk(
       totalMonths: steadyState.totalMonths,
       completedMonths: steadyState.completedMonths,
       pendingWindows: 0,
-      windowsProcessed: 1,
-      windowsSplit: 0,
+      windowsProcessed,
+      windowsSplit,
       upsertedRankings,
     },
   } satisfies StreamChunkResult;
