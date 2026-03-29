@@ -1418,17 +1418,13 @@ export async function listSyncMonitorStreamRows(
 
   const windowStart = input?.windowStart ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
   const requestedStreams = input?.streams ?? SYNC_CONTROL_STREAMS;
-  const requestedStreamsSql = sql.raw(
-    `ARRAY[${requestedStreams.map((stream) => `'${stream}'`).join(", ")}]::sync_stream[]`,
+  const requestedStreamsSql = syncStreamArraySql(requestedStreams);
+  const fanslyStreamsSql = syncStreamArraySql(
+    requestedStreams.filter((stream) => getSyncStreamsForPlatform("fansly").includes(stream)),
   );
-  const fanslyStreams = requestedStreams
-    .filter((stream) => getSyncStreamsForPlatform("fansly").includes(stream))
-    .map((stream) => `'${stream}'`)
-    .join(", ");
-  const onlyFansStreams = requestedStreams
-    .filter((stream) => getSyncStreamsForPlatform("onlyfans").includes(stream))
-    .map((stream) => `'${stream}'`)
-    .join(", ");
+  const onlyFansStreamsSql = syncStreamArraySql(
+    requestedStreams.filter((stream) => getSyncStreamsForPlatform("onlyfans").includes(stream)),
+  );
 
   const result = await db.execute<{
     pageId: NumericValue;
@@ -1521,8 +1517,8 @@ export async function listSyncMonitorStreamRows(
       cross join lateral unnest(
         case
           when vp."platform" = 'fansly'
-            then ARRAY[${sql.raw(fanslyStreams)}]::sync_stream[]
-          else ARRAY[${sql.raw(onlyFansStreams)}]::sync_stream[]
+            then ${fanslyStreamsSql}
+          else ${onlyFansStreamsSql}
         end
       ) as s(stream)
     ),
@@ -1929,6 +1925,17 @@ export type SyncPageWakeupRow = {
   desiredAt: Date | null;
   proxyUrl: string | null;
 };
+
+function syncStreamArraySql(streams: readonly SyncControlStream[]) {
+  if (streams.length === 0) {
+    return sql`ARRAY[]::sync_stream[]`;
+  }
+
+  return sql`ARRAY[${sql.join(
+    streams.map((stream) => sql`${stream}::sync_stream`),
+    sql`, `,
+  )}]::sync_stream[]`;
+}
 
 function streamOrderSql(columnName: string) {
   return sql.raw(`
@@ -2364,7 +2371,7 @@ export async function listSyncStreamStateRows(
   }
 
   if (input?.streams?.length) {
-    clauses.push(sql`stream = any(${sql.raw(`ARRAY[${input.streams.map((stream) => `'${stream}'`).join(", ")}]::sync_stream[]`)})`);
+    clauses.push(sql`stream = any(${syncStreamArraySql(input.streams)})`);
   }
 
   const result = await db.execute(sql`
@@ -2951,7 +2958,7 @@ export async function setSyncStreamStatuses(
                         end,
         updated_at = ${now}
     where platform_account_id = ${input.platformAccountId}
-      and stream = any(${sql.raw(`ARRAY[${input.streams.map((stream) => `'${stream}'`).join(", ")}]::sync_stream[]`)})
+      and stream = any(${syncStreamArraySql(input.streams)})
   `);
 }
 
@@ -2992,7 +2999,7 @@ export async function resetSyncStreamStateRows(
         next_due_at = ${now},
         updated_at = ${now}
     where platform_account_id = ${input.platformAccountId}
-      and stream = any(${sql.raw(`ARRAY[${input.streams.map((stream) => `'${stream}'`).join(", ")}]::sync_stream[]`)})
+      and stream = any(${syncStreamArraySql(input.streams)})
   `);
 }
 

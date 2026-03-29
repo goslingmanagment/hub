@@ -840,19 +840,23 @@ export async function executeTopSpendersChunk(
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
 
-  let state = parseTopSpendersCheckpointState(checkpoint?.state);
-  if (!state || state.accountCreatedAt !== accountCreatedAtIso) {
-    state = buildTopSpendersBootstrapState(accountCreatedAt, now);
+  let initialState = parseTopSpendersCheckpointState(checkpoint?.state);
+  if (!initialState || initialState.accountCreatedAt !== accountCreatedAtIso) {
+    initialState = buildTopSpendersBootstrapState(accountCreatedAt, now);
     const initializedCheckpoint = await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "top_spenders",
-      state,
+      state: initialState,
     });
     await input.telemetry.recordCheckpointAdvanced(
       "top_spenders",
       summarizeCheckpoint(initializedCheckpoint),
     );
   }
+  if (!initialState) {
+    throw new Error("Failed to initialize top spenders checkpoint state");
+  }
+  let state: TopSpendersCheckpointState = initialState;
 
   let windowsProcessed = 0;
   let windowsSplit = 0;

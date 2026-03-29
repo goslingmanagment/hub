@@ -387,6 +387,98 @@ describe("sync executor handlers", () => {
     vi.useRealTimers();
   });
 
+  it("splits capped steady-state weekly top spender windows into daily chunks before continuing", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    vi.setSystemTime(now);
+
+    const telemetry = createTelemetry();
+    const getEarningsAccountsPage = vi.fn(async () => ({
+      items: [],
+      done: false,
+      raw: [],
+    }));
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getEarningsAccountsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "steady_state",
+        accountCreatedAt: "2026-03-01T00:00:00.000Z",
+        totalMonths: 1,
+        completedMonths: 1,
+        pendingWindows: [],
+        lastWindowStartedAt: "2026-03-06T12:00:00.000Z",
+        lastWindowEndedAt: "2026-03-13T12:00:00.000Z",
+      },
+    });
+
+    const result = await executeTopSpendersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 10,
+          label: "fansly-page",
+          metadata: {
+            accountCreatedAt: "2026-03-01T00:00:00.000Z",
+          },
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      syncRunId: 123,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(0, 45_000),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: expect.objectContaining({
+        mode: "steady_state",
+        totalMonths: 1,
+        completedMonths: 1,
+        pendingWindows: 7,
+        windowsProcessed: 0,
+        windowsSplit: 1,
+      }),
+    });
+    expect(getEarningsAccountsPage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.upsertPageTopSpenders).not.toHaveBeenCalled();
+
+    const progressCall = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1];
+    expect(progressCall).toMatchObject({
+      platformAccountId: 10,
+      stream: "top_spenders",
+      state: expect.objectContaining({
+        mode: "steady_state",
+        totalMonths: 1,
+        completedMonths: 1,
+      }),
+    });
+    expect(progressCall?.state.pendingWindows).toHaveLength(7);
+    expect(progressCall?.state.pendingWindows[0]).toMatchObject({
+      kind: "day",
+      startedAt: "2026-03-13T12:00:00.000Z",
+      endedAt: "2026-03-14T12:00:00.000Z",
+    });
+    expect(progressCall?.state.pendingWindows[6]).toMatchObject({
+      kind: "day",
+      startedAt: "2026-03-19T12:00:00.000Z",
+      endedAt: "2026-03-20T12:00:00.000Z",
+    });
+
+    vi.useRealTimers();
+  });
+
   it("guards against destructive subscriber finalization on an empty first page", async () => {
     const telemetry = createTelemetry();
     const app = {

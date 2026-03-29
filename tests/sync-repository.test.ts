@@ -10,6 +10,7 @@ import {
   listRunnableSyncStreamStatesForPage,
   listRecentSyncRuns,
   listRunningSyncRuns,
+  listSyncStreamStateRows,
   listSyncRequestAttempts,
   listSyncRunEvents,
   rebalanceSyncStreamPriorities,
@@ -512,5 +513,23 @@ describe("sync repository timestamp normalization", () => {
       ["fansly", "global", "direct"],
       ["onlyfans", "global", "direct"],
     ]);
+  });
+
+  it("parameterizes runtime stream filters instead of interpolating them into SQL", async () => {
+    const execute = vi.fn().mockResolvedValue({ rows: [] });
+    const db = { execute } as never;
+    const injected = "light'::sync_stream[]); drop table sync_stream_state; --";
+
+    await listSyncStreamStateRows(db, {
+      platformAccountId: 55,
+      streams: [injected as never],
+    });
+
+    const query = execute.mock.calls[0]?.[0];
+    expect(extractSqlText(query)).not.toContain("drop table sync_stream_state");
+    expect(extractQueryParams(query)).toEqual(expect.arrayContaining([
+      55,
+      injected,
+    ]));
   });
 });
