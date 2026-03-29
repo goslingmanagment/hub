@@ -13,6 +13,7 @@ import {
   type ResolvedOnlyFansPageContext,
   type ResolvedPageContext,
 } from "../page-context.ts";
+import { buildFanslyMetadata } from "../fansly.ts";
 import { buildOnlyFansMetadata, getOnlyMonsterAccountId } from "../onlyfans.ts";
 import type { NormalizedSyncError } from "./errors.ts";
 import { SyncPayloadPersistenceError } from "./errors.ts";
@@ -286,10 +287,7 @@ export async function refreshPageMetadata(
       followerCount: accountMe.parsed.account.followCount,
       subscriberCount: accountMe.parsed.account.subscriberCount,
       earningsBalanceMills: toMills(accountMe.parsed.account.earningsWallet?.balance ?? 0),
-      metadata: {
-        walls: accountMe.parsed.account.walls ?? [],
-        subscriptionTiers: accountMe.parsed.account.subscriptionTiers ?? [],
-      },
+      metadata: buildFanslyMetadata(accountMe.parsed.account, pageContext.page.metadata),
       ...(syncType ? { syncType } : {}),
     });
 

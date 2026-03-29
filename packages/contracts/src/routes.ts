@@ -1584,6 +1584,150 @@ export const syncRequestItemSchema = z.object({
 
 export const syncRequestsResponseSchema = z.array(syncRequestItemSchema);
 
+const syncBlockKeyEnum = z.enum([
+  "connection",
+  "top_spenders",
+  "transactions",
+  "subscribers",
+  "followers",
+  "messages",
+]);
+
+const syncBlockStateEnum = z.enum([
+  "up_to_date",
+  "syncing",
+  "catching_up",
+  "retrying",
+  "error",
+  "paused",
+  "waiting",
+  "auth_failed",
+  "not_available",
+]);
+
+const extendedSyncControlStreamEnum = z.enum([
+  "light",
+  "followers",
+  "transactions",
+  "top_spenders",
+  "subscribers",
+  "dm_conversations",
+  "dm_messages",
+  "followers_reconcile",
+]);
+
+const simpleConnectionStatusEnum = z.enum(["connected", "not_connected", "error"]);
+
+export const syncBlockProgressSchema = z.object({
+  label: z.string(),
+  current: z.number().int(),
+  total: z.number().int().nullable(),
+  unit: z.string(),
+  percent: z.number().nullable(),
+  details: z.record(z.string(), z.unknown()),
+});
+
+export const syncBlockErrorSchema = z.object({
+  stream: z.string().nullable(),
+  code: z.string().nullable(),
+  summary: z.string().nullable(),
+  lastFailedAt: isoTimestamp.nullable(),
+  consecutiveFailures: z.number().int(),
+});
+
+export const syncBlockIntervalSchema = z.object({
+  stream: extendedSyncControlStreamEnum,
+  cadenceSeconds: z.number().int(),
+});
+
+export const syncBlockSubstreamSchema = z.object({
+  stream: extendedSyncControlStreamEnum,
+  state: syncBlockStateEnum.exclude(["not_available"]),
+  lastSuccessAt: isoTimestamp.nullable(),
+  nextDueAt: isoTimestamp.nullable(),
+  nextRetryAt: isoTimestamp.nullable(),
+  cadenceSeconds: z.number().int(),
+  needsAttention: z.boolean(),
+  error: syncBlockErrorSchema.nullable(),
+});
+
+export const syncBlockStatusSchema = z.object({
+  block: syncBlockKeyEnum,
+  state: syncBlockStateEnum,
+  lastSuccessAt: isoTimestamp.nullable(),
+  progress: syncBlockProgressSchema.nullable(),
+  error: syncBlockErrorSchema.nullable(),
+  needsAttention: z.boolean(),
+  nextDueAt: isoTimestamp.nullable(),
+  nextRetryAt: isoTimestamp.nullable(),
+  intervals: z.array(syncBlockIntervalSchema),
+  metrics: z.record(z.string(), z.unknown()),
+  connectionStatus: simpleConnectionStatusEnum.nullable(),
+  substreams: z.array(syncBlockSubstreamSchema),
+});
+
+export const syncBlocksPageSchema = z.object({
+  pageId: z.number().int(),
+  pageLabel: z.string(),
+  platform: platformEnum,
+  modelSlug: z.string(),
+  modelName: z.string(),
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+  blocks: z.object({
+    connection: syncBlockStatusSchema,
+    top_spenders: syncBlockStatusSchema,
+    transactions: syncBlockStatusSchema,
+    subscribers: syncBlockStatusSchema,
+    followers: syncBlockStatusSchema,
+    messages: syncBlockStatusSchema,
+  }),
+});
+
+export const syncOverviewResponseSchema = z.object({
+  generatedAt: isoTimestamp,
+  pages: z.array(syncBlocksPageSchema),
+});
+
+export const pageSyncBlocksParamsSchema = pageParamsSchema;
+
+export const pageSyncBlocksResponseSchema = z.object({
+  generatedAt: isoTimestamp,
+  page: syncBlocksPageSchema,
+});
+
+export const pageMessagesBlockResponseSchema = z.object({
+  generatedAt: isoTimestamp,
+  page: z.object({
+    pageId: z.number().int(),
+    pageLabel: z.string(),
+    platform: platformEnum,
+    modelSlug: z.string(),
+    modelName: z.string(),
+    username: z.string().nullable(),
+    displayName: z.string().nullable(),
+  }),
+  block: syncBlockStatusSchema,
+});
+
+export const adminSyncBlockBodySchema = z.object({
+  pageLabel: z.string().min(1),
+  block: syncBlockKeyEnum,
+});
+
+export const adminSyncBlockRevisionSchema = z.object({
+  stream: extendedSyncControlStreamEnum,
+  desiredRevision: z.number().int(),
+});
+
+export const adminSyncBlockResponseSchema = z.object({
+  accepted: z.literal(true),
+  action: z.enum(["trigger", "pause", "resume", "reset"]),
+  pageLabel: z.string(),
+  block: syncBlockKeyEnum,
+  revisions: z.array(adminSyncBlockRevisionSchema).optional(),
+});
+
 export const syncTriggerBodySchema = z.object({
   pageLabel: z.string().min(1),
   scope: syncTriggerScopeEnum,
@@ -2348,6 +2492,40 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  syncOverview: {
+    tags: ["dashboard"],
+    summary: "Get the 6-block sync overview for visible pages",
+    security: cookieOnlySecurity,
+    response: {
+      200: syncOverviewResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  pageSyncBlocks: {
+    tags: ["dashboard"],
+    summary: "Get all sync blocks for one visible page",
+    security: cookieOrBearerSecurity,
+    params: pageSyncBlocksParamsSchema,
+    response: {
+      200: pageSyncBlocksResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  pageMessagesBlock: {
+    tags: ["dashboard"],
+    summary: "Get the combined Messages sync block for one visible page",
+    security: cookieOrBearerSecurity,
+    params: pageSyncBlocksParamsSchema,
+    response: {
+      200: pageMessagesBlockResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   overviewRevenueDaily: {
     tags: ["dashboard"],
     summary: "Get agency-wide revenue daily series",
@@ -2584,6 +2762,60 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+    },
+  },
+  adminSyncBlockTrigger: {
+    tags: ["admin"],
+    summary: "Trigger sync for a specific page block",
+    security: cookieOnlySecurity,
+    body: adminSyncBlockBodySchema,
+    response: {
+      200: adminSyncBlockResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  adminSyncBlockPause: {
+    tags: ["admin"],
+    summary: "Pause sync for a specific page block",
+    security: cookieOnlySecurity,
+    body: adminSyncBlockBodySchema,
+    response: {
+      200: adminSyncBlockResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminSyncBlockResume: {
+    tags: ["admin"],
+    summary: "Resume sync for a specific page block",
+    security: cookieOnlySecurity,
+    body: adminSyncBlockBodySchema,
+    response: {
+      200: adminSyncBlockResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminSyncBlockReset: {
+    tags: ["admin"],
+    summary: "Reset sync state for a specific page block",
+    security: cookieOnlySecurity,
+    body: adminSyncBlockBodySchema,
+    response: {
+      200: adminSyncBlockResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      503: errorResponseSchema,
     },
   },
   adminSyncTriggerAll: {
@@ -2972,6 +3204,13 @@ export type SyncMonitorResponse = z.infer<typeof syncStatusResponseSchema>;
 export type SyncRequestsQuery = z.infer<typeof syncRequestsQuerySchema>;
 export type SyncRequestItem = z.infer<typeof syncRequestItemSchema>;
 export type SyncRequestsResponse = z.infer<typeof syncRequestsResponseSchema>;
+export type SyncBlockStatus = z.infer<typeof syncBlockStatusSchema>;
+export type SyncBlocksPage = z.infer<typeof syncBlocksPageSchema>;
+export type SyncOverviewResponse = z.infer<typeof syncOverviewResponseSchema>;
+export type PageSyncBlocksResponse = z.infer<typeof pageSyncBlocksResponseSchema>;
+export type PageMessagesBlockResponse = z.infer<typeof pageMessagesBlockResponseSchema>;
+export type AdminSyncBlockBody = z.infer<typeof adminSyncBlockBodySchema>;
+export type AdminSyncBlockResponse = z.infer<typeof adminSyncBlockResponseSchema>;
 export type SyncTriggerBody = z.infer<typeof syncTriggerBodySchema>;
 export type SyncTriggerResponse = z.infer<typeof syncTriggerResponseSchema>;
 export type SyncTriggerAllResponse = z.infer<typeof syncTriggerAllResponseSchema>;

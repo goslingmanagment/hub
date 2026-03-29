@@ -40,7 +40,7 @@ describe("sync rate limiter", () => {
   it("returns the reserved DB wait time for repeated dm_messages requests on the same egress", async () => {
     dbMocks.reserveSyncProviderRateLimit
       .mockResolvedValueOnce(new Date("2026-03-20T12:00:00.000Z"))
-      .mockResolvedValueOnce(new Date("2026-03-20T12:00:07.500Z"));
+      .mockResolvedValueOnce(new Date("2026-03-20T12:00:05.000Z"));
 
     const db = {} as never;
     const app = {
@@ -48,7 +48,7 @@ describe("sync rate limiter", () => {
         syncSharedRateLimitEnabled: true,
         fanslyDefaultDelayMs: 2_500,
         fanslyDmConversationsDelayMs: 5_000,
-        fanslyDmMessagesDelayMs: 7_500,
+        fanslyDmMessagesDelayMs: 5_000,
         followerPageDelayMs: 5_000,
         onlyFansDefaultDelayMs: 1_000,
       } as never,
@@ -70,9 +70,9 @@ describe("sync rate limiter", () => {
     const secondWaitMs = await waiter!(scopes);
 
     expect(firstWaitMs).toBe(0);
-    expect(secondWaitMs).toBe(7_500);
+    expect(secondWaitMs).toBe(5_000);
     expect(timerMocks.delay).toHaveBeenCalledTimes(1);
-    expect(timerMocks.delay).toHaveBeenCalledWith(7_500);
+    expect(timerMocks.delay).toHaveBeenCalledWith(5_000);
     expect(dbMocks.ensureSyncProviderRateLimitProfile).toHaveBeenCalledTimes(1);
     expect(dbMocks.ensureSyncProviderRateLimitProfile).toHaveBeenCalledWith(db, {
       provider: "fansly",
@@ -81,7 +81,7 @@ describe("sync rate limiter", () => {
         { scope: "global", minSpacingMs: 2_600 },
         { scope: "followers_page", minSpacingMs: 5_000 },
         { scope: "dm_conversations", minSpacingMs: 5_000 },
-        { scope: "dm_messages", minSpacingMs: 7_500 },
+        { scope: "dm_messages", minSpacingMs: 5_000 },
       ],
     });
     expect(dbMocks.reserveSyncProviderRateLimit).toHaveBeenNthCalledWith(1, db, {

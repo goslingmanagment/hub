@@ -60,7 +60,7 @@ const envSchema = z.object({
   FANSLY_ACCOUNT_LOOKUP_DELAY_MS: optionalPositiveIntSchema,
   FOLLOWER_PAGE_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_CONVERSATIONS_DELAY_MS: z.coerce.number().int().positive().default(5000),
-  FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(7500),
+  FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(5000),
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
   SYNC_SHARED_RATE_LIMIT_ENABLED: booleanSchema.default(false),
   SYNC_PAGE_EXECUTOR_CONCURRENCY: z.coerce.number().int().positive().default(4),

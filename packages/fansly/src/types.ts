@@ -59,6 +59,13 @@ export interface FanslyTransactionsPage {
   data: FanslyEarningsTransaction[];
 }
 
+export interface FanslyEarningsAccount {
+  totalGross: number;
+  totalNet: number;
+  accountId: string;
+  correlationAccountId: string;
+}
+
 export interface FanslySubscriber {
   id: string;
   historyId: string | null;
@@ -202,4 +209,12 @@ export interface FanslyMessagesPageResponse {
   before: string | null;
   done: boolean;
   raw: FanslyMessagesPage;
+}
+
+export interface FanslyEarningsAccountsPageResponse {
+  items: FanslyEarningsAccount[];
+  after: Date | null;
+  before: Date | null;
+  done: boolean;
+  raw: FanslyEarningsAccount[];
 }

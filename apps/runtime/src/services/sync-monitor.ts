@@ -22,6 +22,29 @@ const DEFAULT_REQUEST_LIMIT = 100;
 const MAX_REQUEST_LIMIT = 500;
 const STALLED_THRESHOLD_MS = 45_000;
 const RATE_LIMITED_LOOKBACK_MS = 15 * 60 * 1000;
+const LEGACY_SYNC_MONITOR_STREAMS = [
+  "light",
+  "followers",
+  "transactions",
+  "subscribers",
+  "dm_conversations",
+  "dm_messages",
+  "followers_reconcile",
+] as const satisfies readonly SyncControlStream[];
+const LEGACY_SYNC_REQUEST_STREAMS = [
+  ...LEGACY_SYNC_MONITOR_STREAMS,
+  "cleanup",
+] as const satisfies readonly SyncAuditStream[];
+type LegacySyncMonitorStream = typeof LEGACY_SYNC_MONITOR_STREAMS[number];
+type LegacySyncRequestStream = typeof LEGACY_SYNC_REQUEST_STREAMS[number];
+
+function isLegacySyncMonitorStream(stream: SyncControlStream): stream is LegacySyncMonitorStream {
+  return (LEGACY_SYNC_MONITOR_STREAMS as readonly string[]).includes(stream);
+}
+
+function isLegacySyncRequestStream(stream: SyncAuditStream): stream is LegacySyncRequestStream {
+  return (LEGACY_SYNC_REQUEST_STREAMS as readonly string[]).includes(stream);
+}
 
 export type SyncMonitorStatus =
   | "running"
@@ -939,6 +962,7 @@ export async function getSyncMonitorSnapshot(
       pageIds: input?.pageIds,
       pageLabel: input?.pageLabel,
       windowStart,
+      streams: [...LEGACY_SYNC_MONITOR_STREAMS],
     }),
     listSyncMonitorRecentEvents(app.db, {
       pageIds: input?.pageIds,
@@ -947,9 +971,16 @@ export async function getSyncMonitorSnapshot(
       limit: eventLimit,
     }),
   ]);
+  const legacyRows = rows.filter((row): row is SyncMonitorStreamRow & { stream: LegacySyncMonitorStream } =>
+    isLegacySyncMonitorStream(row.stream)
+  );
+  const legacyEvents = events.filter(
+    (event): event is SyncMonitorRecentEventRow & { stream: LegacySyncRequestStream } =>
+      isLegacySyncRequestStream(event.stream),
+  );
 
   const pageMap = new Map<number, SyncMonitorPageItem>();
-  for (const row of rows) {
+  for (const row of legacyRows) {
     const page = pageMap.get(row.pageId) ?? {
       pageId: row.pageId,
       pageLabel: row.pageLabel,
@@ -1086,7 +1117,7 @@ export async function getSyncMonitorSnapshot(
     last429At: Date | null;
     nextAvailableAt: Date | null;
   }>();
-  for (const row of rows) {
+  for (const row of legacyRows) {
     const provider = providerMap.get(row.platform) ?? {
       total429s: 0,
       total5xxs: 0,
@@ -1121,7 +1152,7 @@ export async function getSyncMonitorSnapshot(
     },
     overall,
     pages,
-    recentEvents: events.map((event) => eventItemFor(event)),
+    recentEvents: legacyEvents.map((event) => eventItemFor(event)),
   };
 }
 
@@ -1144,9 +1175,12 @@ export async function getSyncMonitorRecentRequests(
     since,
     limit,
   });
+  const legacyRows = rows.filter((row): row is typeof row & { stream: LegacySyncRequestStream } =>
+    isLegacySyncRequestStream(row.stream)
+  );
 
   const previousRequestAtByEgressKey = new Map<string, Date>();
-  return rows.map((row) => {
+  return legacyRows.map((row) => {
     const requestShape = asRecord(row.requestShape);
     const egressKey = asNullableString(requestShape?.egressKey);
     const previousRequestAt = egressKey ? previousRequestAtByEgressKey.get(egressKey) ?? null : null;

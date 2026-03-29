@@ -53,7 +53,7 @@ describe("sync rate limiter integration", () => {
     const firstApp = createTestAppContext(testDb, {
       syncSharedRateLimitEnabled: true,
       fanslyDmConversationsDelayMs: 5_000,
-      fanslyDmMessagesDelayMs: 7_500,
+      fanslyDmMessagesDelayMs: 5_000,
       followerPageDelayMs: 5_000,
     });
     const firstWaiter = createSyncRateLimitWaiter(firstApp, { egressKey });
@@ -64,7 +64,7 @@ describe("sync rate limiter integration", () => {
 
     expect(await listFanslyRateLimitRows(testDb, egressKey)).toEqual([
       { scope: "dm_conversations", minSpacingMs: 5_000 },
-      { scope: "dm_messages", minSpacingMs: 7_500 },
+      { scope: "dm_messages", minSpacingMs: 5_000 },
       { scope: "followers_page", minSpacingMs: 5_000 },
       { scope: "global", minSpacingMs: 2_600 },
     ]);

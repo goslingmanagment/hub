@@ -6,6 +6,8 @@ import {
   ensureSyncProviderRateLimitProfile,
   getSyncRun,
   hasRecentTerminalProxyFailure,
+  listRunnableSyncPages,
+  listRunnableSyncStreamStatesForPage,
   listRecentSyncRuns,
   listRunningSyncRuns,
   listSyncRequestAttempts,
@@ -301,6 +303,12 @@ describe("sync repository timestamp normalization", () => {
     expect(computeSyncStreamSlotOffsetSeconds(42, "light")).not.toBe(
       computeSyncStreamSlotOffsetSeconds(42, "followers"),
     );
+    expect(resolveSyncRequestPriority("transactions", "scheduled")).toBeGreaterThan(
+      resolveSyncRequestPriority("top_spenders", "scheduled"),
+    );
+    expect(resolveSyncRequestPriority("top_spenders", "manual")).toBeGreaterThan(
+      resolveSyncRequestPriority("subscribers", "manual"),
+    );
     expect(resolveSyncRequestPriority("followers", "scheduled")).toBeGreaterThan(
       resolveSyncRequestPriority("dm_conversations", "scheduled"),
     );
@@ -391,7 +399,7 @@ describe("sync repository timestamp normalization", () => {
           provider: "fansly",
           scope: "dm_messages",
           egressKey: "global",
-          minSpacingMs: 7_500,
+          minSpacingMs: 5_000,
           nextAvailableAt: "2026-03-14T12:00:03.000Z",
         }],
       })
@@ -425,7 +433,7 @@ describe("sync repository timestamp normalization", () => {
       scopes: [
         { scope: "global", minSpacingMs: 2_600 },
         { scope: "dm_conversations", minSpacingMs: 5_000 },
-        { scope: "dm_messages", minSpacingMs: 7_500 },
+        { scope: "dm_messages", minSpacingMs: 5_000 },
       ],
       now,
     });
@@ -444,9 +452,26 @@ describe("sync repository timestamp normalization", () => {
       "dm_conversations",
       5_000,
       "dm_messages",
-      7_500,
+      5_000,
       now,
     ]));
+  });
+
+  it("guards dm streams behind the required dependency streams in runnable-page selection", async () => {
+    const execute = vi.fn().mockResolvedValue({ rows: [] });
+    const db = { execute } as never;
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    await listRunnableSyncPages(db, now);
+    await listRunnableSyncStreamStatesForPage(db, 55, now);
+
+    const pageQuery = execute.mock.calls[0]?.[0];
+    const streamQuery = execute.mock.calls[1]?.[0];
+    const dependencyClause = "ARRAY['light', 'top_spenders', 'transactions', 'subscribers', 'followers']::sync_stream[]";
+
+    expect(extractSqlText(pageQuery)).toContain(dependencyClause);
+    expect(extractSqlText(streamQuery)).toContain(dependencyClause);
+    expect(extractQueryParams(streamQuery)).toEqual(expect.arrayContaining([55, now]));
   });
 
   it("sorts rate-limit locks deterministically before taking row locks", async () => {

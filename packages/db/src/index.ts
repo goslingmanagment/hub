@@ -12,4 +12,5 @@ export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";
 export * from "./repositories/spenders.ts";
 export * from "./repositories/sync.ts";
+export * from "./repositories/top-spenders.ts";
 export * from "./repositories/transactions.ts";

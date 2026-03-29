@@ -48,7 +48,7 @@ export function createTestAppContext(
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: overrides?.fanslyDefaultDelayMs ?? 2500,
       fanslyDmConversationsDelayMs: overrides?.fanslyDmConversationsDelayMs ?? 5000,
-      fanslyDmMessagesDelayMs: overrides?.fanslyDmMessagesDelayMs ?? 7500,
+      fanslyDmMessagesDelayMs: overrides?.fanslyDmMessagesDelayMs ?? 5000,
       followerPageDelayMs: overrides?.followerPageDelayMs ?? 0,
       onlyFansDefaultDelayMs: overrides?.onlyFansDefaultDelayMs ?? 1000,
       transactionLookbackDays: 7,

@@ -33,6 +33,15 @@ describe("Fansly adapter query serialization", () => {
       .mockResolvedValueOnce(toJsonResponse({
         success: true,
         response: {
+          totalGross: 0,
+          totalNet: 0,
+          accountId: "acct-1",
+          correlationAccountId: "fan-1",
+        },
+      }))
+      .mockResolvedValueOnce(toJsonResponse({
+        success: true,
+        response: {
           followers: [],
           aggregationData: {
             accounts: [],
@@ -76,6 +85,10 @@ describe("Fansly adapter query serialization", () => {
       offset: 0,
       limit: 0,
     });
+    await adapter.getEarningsAccountsPage(context, {
+      after: new Date("2026-03-01T00:00:00.000Z"),
+      before: new Date("2026-03-08T00:00:00.000Z"),
+    });
     await adapter.getFollowersPage(context, "acct-1", {
       offset: 0,
       limit: 0,
@@ -95,10 +108,13 @@ describe("Fansly adapter query serialization", () => {
     expect(urls[0]?.searchParams.get("limit")).toBe("0");
     expect(urls[1]?.searchParams.get("offset")).toBe("0");
     expect(urls[1]?.searchParams.get("limit")).toBe("0");
-    expect(urls[2]?.searchParams.get("offset")).toBe("0");
-    expect(urls[2]?.searchParams.get("limit")).toBe("0");
+    expect(urls[2]?.pathname).toBe("/account/wallets/earnings/accounts");
+    expect(urls[2]?.searchParams.get("after")).toBe(String(new Date("2026-03-01T00:00:00.000Z").getTime()));
+    expect(urls[2]?.searchParams.get("before")).toBe(String(new Date("2026-03-08T00:00:00.000Z").getTime()));
     expect(urls[3]?.searchParams.get("offset")).toBe("0");
     expect(urls[3]?.searchParams.get("limit")).toBe("0");
+    expect(urls[4]?.searchParams.get("offset")).toBe("0");
     expect(urls[4]?.searchParams.get("limit")).toBe("0");
+    expect(urls[5]?.searchParams.get("limit")).toBe("0");
   });
 });

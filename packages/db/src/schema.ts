@@ -30,6 +30,7 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "light",
   "followers",
   "transactions",
+  "top_spenders",
   "subscribers",
   "dm_conversations",
   "dm_messages",
@@ -669,7 +670,7 @@ export const pageDmConversations = pgTable(
     ),
     storedMessageCountCheck: check(
       "page_dm_conversations_stored_message_count_check",
-      sql`${table.storedMessageCount} between 0 and 75`,
+      sql`${table.storedMessageCount} between 0 and 25`,
     ),
   }),
 );
@@ -861,6 +862,39 @@ export const spenderLifetimePage = pgTable(
       columns: [table.platformAccountId, table.fanId],
     }),
     fanAccountIdx: index("spender_lifetime_page_fan_account_idx").on(
+      table.fanId,
+      table.platformAccountId,
+    ),
+  }),
+);
+
+export const pageTopSpenders = pgTable(
+  "page_top_spenders",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    correlationAccountId: text("correlation_account_id").notNull(),
+    accountId: text("account_id"),
+    fanId: bigint("fan_id", { mode: "number" }).references(() => fans.id, {
+      onDelete: "set null",
+    }),
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" })
+      .default(0n)
+      .notNull(),
+    sourceWindowStartedAt: timestamp("source_window_started_at", { withTimezone: true }).notNull(),
+    sourceWindowEndedAt: timestamp("source_window_ended_at", { withTimezone: true }).notNull(),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_top_spenders_pkey",
+      columns: [table.platformAccountId, table.correlationAccountId],
+    }),
+    fanAccountIdx: index("page_top_spenders_fan_account_idx").on(
       table.fanId,
       table.platformAccountId,
     ),
