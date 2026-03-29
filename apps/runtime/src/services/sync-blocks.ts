@@ -231,14 +231,14 @@ function deriveRowBlockState(
   if (row.backoffUntil && row.backoffUntil.getTime() > now.getTime() && row.consecutiveFailures > 0) {
     return "retrying";
   }
-  if ((row.desiredRevision ?? 0) > (row.satisfiedRevision ?? 0)) {
-    return row.lastSucceededAt ? "catching_up" : "waiting";
-  }
   if (
     row.lastFailedAt &&
     (!row.lastSucceededAt || row.lastFailedAt.getTime() >= row.lastSucceededAt.getTime())
   ) {
     return "error";
+  }
+  if ((row.desiredRevision ?? 0) > (row.satisfiedRevision ?? 0)) {
+    return row.lastSucceededAt ? "catching_up" : "waiting";
   }
   if (row.lastSucceededAt) {
     return "up_to_date";

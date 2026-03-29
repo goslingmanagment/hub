@@ -5,7 +5,8 @@ import { pageTopSpenders } from "../schema.ts";
 
 export interface UpsertPageTopSpenderInput {
   platformAccountId: number;
-  correlationAccountId: string;
+  sourceIdentityKey: string;
+  correlationAccountId?: string | null;
   accountId?: string | null;
   fanId?: number | null;
   grossAmountMills: bigint;
@@ -28,7 +29,8 @@ export async function upsertPageTopSpenders(
     .insert(pageTopSpenders)
     .values(inputs.map((input) => ({
       platformAccountId: input.platformAccountId,
-      correlationAccountId: input.correlationAccountId,
+      sourceIdentityKey: input.sourceIdentityKey,
+      correlationAccountId: input.correlationAccountId ?? null,
       accountId: input.accountId ?? null,
       fanId: input.fanId ?? null,
       grossAmountMills: input.grossAmountMills,
@@ -39,8 +41,9 @@ export async function upsertPageTopSpenders(
       updatedAt: now,
     })))
     .onConflictDoUpdate({
-      target: [pageTopSpenders.platformAccountId, pageTopSpenders.correlationAccountId],
+      target: [pageTopSpenders.platformAccountId, pageTopSpenders.sourceIdentityKey],
       set: {
+        correlationAccountId: sql`excluded.correlation_account_id`,
         accountId: sql`excluded.account_id`,
         fanId: sql`excluded.fan_id`,
         grossAmountMills: sql`excluded.gross_amount_mills`,

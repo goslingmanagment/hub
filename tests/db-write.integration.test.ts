@@ -20,6 +20,7 @@ import {
   upsertCheckpoint,
   upsertFanPage,
   upsertFans,
+  upsertPageTopSpenders,
   upsertPageFollow,
   upsertPageSubscription,
   upsertTransaction,
@@ -2212,5 +2213,67 @@ describe("db write safety", () => {
     expect(afterDeleteLifetime.rows[0]?.count).toBe(0);
     expect(afterDeleteDailyFacts.rows[0]?.count).toBe(0);
     expect(BigInt(afterDeleteFanPage.rows[0]?.total_creator_net_mills ?? 0)).toBe(0n);
+  });
+
+  it("upserts top spenders by source identity key when correlation identity is missing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "top-spender-fallback-model",
+      name: "Top Spender Fallback Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "top-spender-fallback-page",
+    });
+
+    await upsertPageTopSpenders(testDb.db, [{
+      platformAccountId: page.id,
+      sourceIdentityKey: "account:acct-1",
+      correlationAccountId: null,
+      accountId: "acct-1",
+      fanId: null,
+      grossAmountMills: 1000n,
+      creatorNetAmountMills: 750n,
+      sourceWindowStartedAt: new Date("2026-03-01T00:00:00.000Z"),
+      sourceWindowEndedAt: new Date("2026-03-08T00:00:00.000Z"),
+    }]);
+    await upsertPageTopSpenders(testDb.db, [{
+      platformAccountId: page.id,
+      sourceIdentityKey: "account:acct-1",
+      correlationAccountId: null,
+      accountId: "acct-1",
+      fanId: null,
+      grossAmountMills: 1250n,
+      creatorNetAmountMills: 900n,
+      sourceWindowStartedAt: new Date("2026-03-08T00:00:00.000Z"),
+      sourceWindowEndedAt: new Date("2026-03-15T00:00:00.000Z"),
+    }]);
+
+    const rows = await testDb.pool.query(`
+      select source_identity_key,
+             correlation_account_id,
+             account_id,
+             gross_amount_mills,
+             creator_net_amount_mills,
+             source_window_started_at,
+             source_window_ended_at
+      from page_top_spenders
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]).toMatchObject({
+      source_identity_key: "account:acct-1",
+      correlation_account_id: null,
+      account_id: "acct-1",
+      gross_amount_mills: 1250n,
+      creator_net_amount_mills: 900n,
+    });
+    expect(new Date(rows.rows[0].source_window_started_at).toISOString()).toBe("2026-03-08T00:00:00.000Z");
+    expect(new Date(rows.rows[0].source_window_ended_at).toISOString()).toBe("2026-03-15T00:00:00.000Z");
   });
 });

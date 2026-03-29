@@ -874,7 +874,8 @@ export const pageTopSpenders = pgTable(
     platformAccountId: bigint("platform_account_id", { mode: "number" })
       .references(() => platformAccounts.id, { onDelete: "cascade" })
       .notNull(),
-    correlationAccountId: text("correlation_account_id").notNull(),
+    sourceIdentityKey: text("source_identity_key").notNull(),
+    correlationAccountId: text("correlation_account_id"),
     accountId: text("account_id"),
     fanId: bigint("fan_id", { mode: "number" }).references(() => fans.id, {
       onDelete: "set null",
@@ -892,7 +893,7 @@ export const pageTopSpenders = pgTable(
   (table) => ({
     pk: primaryKey({
       name: "page_top_spenders_pkey",
-      columns: [table.platformAccountId, table.correlationAccountId],
+      columns: [table.platformAccountId, table.sourceIdentityKey],
     }),
     fanAccountIdx: index("page_top_spenders_fan_account_idx").on(
       table.fanId,

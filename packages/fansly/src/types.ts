@@ -63,7 +63,7 @@ export interface FanslyEarningsAccount {
   totalGross: number;
   totalNet: number;
   accountId: string;
-  correlationAccountId: string;
+  correlationAccountId: string | null;
 }
 
 export interface FanslySubscriber {

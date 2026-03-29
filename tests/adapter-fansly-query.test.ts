@@ -36,7 +36,7 @@ describe("Fansly adapter query serialization", () => {
           totalGross: 0,
           totalNet: 0,
           accountId: "acct-1",
-          correlationAccountId: "fan-1",
+          correlationAccountId: null,
         },
       }))
       .mockResolvedValueOnce(toJsonResponse({
@@ -117,4 +117,5 @@ describe("Fansly adapter query serialization", () => {
     expect(urls[4]?.searchParams.get("limit")).toBe("0");
     expect(urls[5]?.searchParams.get("limit")).toBe("0");
   });
+
 });

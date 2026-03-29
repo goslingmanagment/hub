@@ -736,17 +736,47 @@ async function resolveFanslyTopSpendersAccountCreatedAt(
   return new Date(refreshed.parsed.account.createdAt);
 }
 
+function normalizeTopSpenderIdentityValue(value: string | null | undefined) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function resolveTopSpenderSourceIdentity(input: {
+  accountId?: string | null;
+  correlationAccountId?: string | null;
+}) {
+  const correlationAccountId = normalizeTopSpenderIdentityValue(input.correlationAccountId);
+  if (correlationAccountId) {
+    return {
+      sourceIdentityKey: `fan:${correlationAccountId}`,
+      correlationAccountId,
+      accountId: normalizeTopSpenderIdentityValue(input.accountId),
+    };
+  }
+
+  const accountId = normalizeTopSpenderIdentityValue(input.accountId);
+  if (accountId) {
+    return {
+      sourceIdentityKey: `account:${accountId}`,
+      correlationAccountId: null,
+      accountId,
+    };
+  }
+
+  return null;
+}
+
 async function upsertTopSpendersWindow(
   app: AppContext,
   input: {
     platformAccountId: number;
     windowStartedAt: Date;
     windowEndedAt: Date;
+    telemetry: SyncRunTelemetry;
     items: Array<{
       totalGross: number;
       totalNet: number;
-      accountId: string;
-      correlationAccountId: string;
+      accountId?: string | null;
+      correlationAccountId?: string | null;
     }>;
   },
 ) {
@@ -754,29 +784,85 @@ async function upsertTopSpendersWindow(
     return 0;
   }
 
-  const fans = await upsertFans(
-    app.db,
-    input.items.map((item) => ({
-      platform: "fansly",
-      platformUserId: item.correlationAccountId,
-    })),
-  );
+  const validItems: Array<{
+    totalGross: number;
+    totalNet: number;
+    sourceIdentityKey: string;
+    accountId: string | null;
+    correlationAccountId: string | null;
+  }> = [];
+  const skippedIdentityExamples: Array<{
+    accountId: string | null;
+    correlationAccountId: string | null;
+  }> = [];
+
+  for (const item of input.items) {
+    const identity = resolveTopSpenderSourceIdentity(item);
+    if (!identity) {
+      if (skippedIdentityExamples.length < 5) {
+        skippedIdentityExamples.push({
+          accountId: normalizeTopSpenderIdentityValue(item.accountId),
+          correlationAccountId: normalizeTopSpenderIdentityValue(item.correlationAccountId),
+        });
+      }
+      continue;
+    }
+
+    validItems.push({
+      totalGross: item.totalGross,
+      totalNet: item.totalNet,
+      sourceIdentityKey: identity.sourceIdentityKey,
+      accountId: identity.accountId,
+      correlationAccountId: identity.correlationAccountId,
+    });
+  }
+
+  if (skippedIdentityExamples.length > 0) {
+    await input.telemetry.addAnomaly({
+      code: "top_spenders_missing_identity",
+      severity: "warn",
+      message: "Skipped top spender rows missing both correlationAccountId and accountId",
+      details: {
+        skippedCount: input.items.length - validItems.length,
+        examples: skippedIdentityExamples,
+      },
+    });
+  }
+
+  if (validItems.length === 0) {
+    return 0;
+  }
+
+  const fanInputs = validItems.flatMap((item) => (
+    item.correlationAccountId
+      ? [{
+        platform: "fansly" as const,
+        platformUserId: item.correlationAccountId,
+      }]
+      : []
+  ));
+  const fans = fanInputs.length > 0
+    ? await upsertFans(app.db, fanInputs)
+    : [];
   const fanIdByPlatformUserId = new Map(
     fans.map((fan) => [fan.platformUserId, fan.id] satisfies [string, number]),
   );
 
-  await upsertPageTopSpenders(app.db, input.items.map((item) => ({
+  await upsertPageTopSpenders(app.db, validItems.map((item) => ({
     platformAccountId: input.platformAccountId,
+    sourceIdentityKey: item.sourceIdentityKey,
     correlationAccountId: item.correlationAccountId,
     accountId: item.accountId,
-    fanId: fanIdByPlatformUserId.get(item.correlationAccountId) ?? null,
+    fanId: item.correlationAccountId
+      ? (fanIdByPlatformUserId.get(item.correlationAccountId) ?? null)
+      : null,
     grossAmountMills: BigInt(Math.trunc(item.totalGross)),
     creatorNetAmountMills: BigInt(Math.trunc(item.totalNet)),
     sourceWindowStartedAt: input.windowStartedAt,
     sourceWindowEndedAt: input.windowEndedAt,
   })));
 
-  return input.items.length;
+  return validItems.length;
 }
 
 export async function executeLightChunk(
@@ -911,6 +997,7 @@ export async function executeTopSpendersChunk(
           platformAccountId: input.pageContext.page.id,
           windowStartedAt,
           windowEndedAt,
+          telemetry: input.telemetry,
           items: response.items,
         });
         const pendingWindows = state.pendingWindows.slice(1);
@@ -1040,6 +1127,7 @@ export async function executeTopSpendersChunk(
       platformAccountId: input.pageContext.page.id,
       windowStartedAt: steadyStateWindowStartedAt,
       windowEndedAt: steadyStateWindowEndedAt,
+      telemetry: input.telemetry,
       items: response.items,
     });
     windowsProcessed += 1;

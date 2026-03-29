@@ -329,6 +329,186 @@ describe("sync blocks service", () => {
     expect(response.block.substreams).toHaveLength(2);
   });
 
+  it("prefers error over waiting while leaving clean pending streams as waiting and backed off streams as retrying", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    const buildPageRows = (
+      base: {
+        id: number;
+        label: string;
+        modelSlug: string;
+        modelName: string;
+        username: string;
+        displayName: string;
+      },
+      topSpendersOverrides: Record<string, unknown>,
+    ) => ([
+      buildMonitorRow({
+        pageId: base.id,
+        pageLabel: base.label,
+        modelSlug: base.modelSlug,
+        modelName: base.modelName,
+        username: base.username,
+        displayName: base.displayName,
+        stream: "light",
+      }),
+      buildMonitorRow({
+        pageId: base.id,
+        pageLabel: base.label,
+        modelSlug: base.modelSlug,
+        modelName: base.modelName,
+        username: base.username,
+        displayName: base.displayName,
+        stream: "top_spenders",
+        ...topSpendersOverrides,
+      }),
+      buildMonitorRow({
+        pageId: base.id,
+        pageLabel: base.label,
+        modelSlug: base.modelSlug,
+        modelName: base.modelName,
+        username: base.username,
+        displayName: base.displayName,
+        stream: "transactions",
+      }),
+      buildMonitorRow({
+        pageId: base.id,
+        pageLabel: base.label,
+        modelSlug: base.modelSlug,
+        modelName: base.modelName,
+        username: base.username,
+        displayName: base.displayName,
+        stream: "subscribers",
+      }),
+      buildMonitorRow({
+        pageId: base.id,
+        pageLabel: base.label,
+        modelSlug: base.modelSlug,
+        modelName: base.modelName,
+        username: base.username,
+        displayName: base.displayName,
+        stream: "followers",
+      }),
+      buildMonitorRow({
+        pageId: base.id,
+        pageLabel: base.label,
+        modelSlug: base.modelSlug,
+        modelName: base.modelName,
+        username: base.username,
+        displayName: base.displayName,
+        stream: "dm_conversations",
+      }),
+      buildMonitorRow({
+        pageId: base.id,
+        pageLabel: base.label,
+        modelSlug: base.modelSlug,
+        modelName: base.modelName,
+        username: base.username,
+        displayName: base.displayName,
+        stream: "dm_messages",
+      }),
+    ]);
+
+    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
+    dbMocks.listVisiblePages.mockResolvedValue([
+      {
+        id: 7,
+        label: "errored",
+        platform: "fansly",
+        modelSlug: "errored",
+        modelName: "Errored",
+        username: "errored_page",
+        displayName: "Errored",
+      },
+      {
+        id: 8,
+        label: "waiting",
+        platform: "fansly",
+        modelSlug: "waiting",
+        modelName: "Waiting",
+        username: "waiting_page",
+        displayName: "Waiting",
+      },
+      {
+        id: 9,
+        label: "retrying",
+        platform: "fansly",
+        modelSlug: "retrying",
+        modelName: "Retrying",
+        username: "retrying_page",
+        displayName: "Retrying",
+      },
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      ...buildPageRows({
+        id: 7,
+        label: "errored",
+        modelSlug: "errored",
+        modelName: "Errored",
+        username: "errored_page",
+        displayName: "Errored",
+      }, {
+        desiredRevision: 5,
+        satisfiedRevision: 0,
+        lastSucceededAt: null,
+        lastFailedAt: new Date("2026-03-24T11:30:00.000Z"),
+        consecutiveFailures: 1,
+        lastErrorCode: "23502",
+        lastErrorSummary: "Top spenders insert failed",
+      }),
+      ...buildPageRows({
+        id: 8,
+        label: "waiting",
+        modelSlug: "waiting",
+        modelName: "Waiting",
+        username: "waiting_page",
+        displayName: "Waiting",
+      }, {
+        desiredRevision: 5,
+        satisfiedRevision: 0,
+        lastSucceededAt: null,
+      }),
+      ...buildPageRows({
+        id: 9,
+        label: "retrying",
+        modelSlug: "retrying",
+        modelName: "Retrying",
+        username: "retrying_page",
+        displayName: "Retrying",
+      }, {
+        desiredRevision: 5,
+        satisfiedRevision: 0,
+        lastSucceededAt: null,
+        lastFailedAt: new Date("2026-03-24T11:45:00.000Z"),
+        consecutiveFailures: 1,
+        backoffUntil: new Date("2026-03-24T12:15:00.000Z"),
+        lastErrorCode: "23502",
+        lastErrorSummary: "Top spenders insert failed",
+      }),
+    ]);
+    connectionMocks.listConnectionStatuses.mockResolvedValue([
+      { id: 7, connectionStatus: "active" },
+      { id: 8, connectionStatus: "active" },
+      { id: 9, connectionStatus: "active" },
+    ]);
+
+    const overview = await getSyncBlocksOverview({
+      db: {},
+    } as never, { now });
+
+    const erroredPage = overview.pages.find((page) => page.pageLabel === "errored");
+    const waitingPage = overview.pages.find((page) => page.pageLabel === "waiting");
+    const retryingPage = overview.pages.find((page) => page.pageLabel === "retrying");
+
+    expect(erroredPage?.blocks.top_spenders).toMatchObject({
+      state: "error",
+      error: expect.objectContaining({
+        code: "23502",
+      }),
+    });
+    expect(waitingPage?.blocks.top_spenders.state).toBe("waiting");
+    expect(retryingPage?.blocks.top_spenders.state).toBe("retrying");
+  });
+
   it("triggers the mapped block stream immediately without reviving auth_failed rows", async () => {
     dbMocks.findPageByLabel.mockResolvedValue({
       page: {
