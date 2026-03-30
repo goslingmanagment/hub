@@ -8,6 +8,7 @@ interface ChatPreviewPanelProps {
   pageLabel: string;
   platformConversationId: string;
   profileHref: string;
+  limit?: number;
 }
 
 const PREVIEW_LOADING_STATES = new Set(["syncing", "catching_up", "retrying", "setup"]);
@@ -73,12 +74,12 @@ function getPreviewFooterText(data: CrmConversationPreviewResponse) {
   return null;
 }
 
-export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHref }: ChatPreviewPanelProps) {
+export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHref, limit = 10 }: ChatPreviewPanelProps) {
   const {
     data,
     isError,
     isLoading,
-  } = useCrmConversationPreview(pageLabel, platformConversationId, { limit: 10 });
+  } = useCrmConversationPreview(pageLabel, platformConversationId, { limit });
 
   if (isLoading) {
     return (

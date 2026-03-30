@@ -10,6 +10,9 @@ import type {
   PageConversationMessagesParams,
   PageConversationMessagesQuery,
   PageConversationMessagesResponse,
+  WorkboardResponse,
+  WorkboardSnoozeBody,
+  WorkboardSnoozeResponse,
 } from "@agency_hub_core/contracts";
 import {
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
@@ -20,6 +23,12 @@ import {
   getPageConversationMessages,
   listCrmReactivation,
   listCrmRetention,
+  listWorkboardSubscribers,
+  listWorkboardActiveSpenders,
+  listWorkboardInactiveSpenders,
+  listWorkboardSnoozed,
+  snoozeWorkboardFan,
+  unsnoozeWorkboardFan,
 } from "@agency_hub_core/db";
 import { millsToNumber } from "@agency_hub_core/shared";
 
@@ -384,4 +393,140 @@ export async function getPageConversationMessagesReport(
       tipAmountCents: message.tipAmountCents,
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Workboard
+// ---------------------------------------------------------------------------
+
+function serializeSpenderItem(row: Awaited<ReturnType<typeof listWorkboardActiveSpenders>>[number]) {
+  return {
+    fanId: row.fanId,
+    fan: {
+      platformUserId: row.platformUserId,
+      username: row.username,
+      displayName: row.displayName,
+    },
+    ltv: { creatorNetAmountMills: millsToNumber(row.creatorNetAmountMills) },
+    overdueDays: row.overdueDays,
+    silenceDays: row.silenceDays,
+    conversation: {
+      platformConversationId: row.platformConversationId,
+      lastFanMessageAt: serializeTimestamp(row.lastFanMessageAt),
+      lastModelMessageAt: serializeTimestamp(row.lastModelMessageAt),
+      lastMessagePreview: row.lastMessagePreview,
+      storedMessageCount: row.storedMessageCount,
+      messageBackfillComplete: row.messageBackfillComplete,
+    },
+    subscription: {
+      status: row.subscriptionStatus,
+      expiresAt: serializeTimestamp(row.subscriptionExpiresAt),
+    },
+    lastTransactionAt: serializeTimestamp(row.lastTransactionAt),
+  };
+}
+
+export async function getWorkboardReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+): Promise<WorkboardResponse> {
+  const page = await resolveCrmPage(app, principal, pageLabel);
+  const [subscribers, activeSpenders, inactiveSpenders, snoozed] = await Promise.all([
+    listWorkboardSubscribers(app.db, { platformAccountId: page.id }),
+    listWorkboardActiveSpenders(app.db, { platformAccountId: page.id }),
+    listWorkboardInactiveSpenders(app.db, { platformAccountId: page.id }),
+    listWorkboardSnoozed(app.db, { platformAccountId: page.id }),
+  ]);
+
+  return {
+    subscribers: {
+      total: subscribers.length,
+      items: subscribers.map((row) => ({
+        fanId: row.fanId,
+        fan: {
+          platformUserId: row.platformUserId,
+          username: row.username,
+          displayName: row.displayName,
+        },
+        ltv: { creatorNetAmountMills: millsToNumber(row.creatorNetAmountMills) },
+        touchpoint: {
+          code: row.touchpointCode,
+          label: touchpointLabel(row.touchpointCode),
+          isSoft: row.isSoftTouchpoint,
+          dueAt: new Date(row.touchpointDueAt).toISOString(),
+        },
+        overdueDays: row.overdueDays,
+        conversation: {
+          platformConversationId: row.platformConversationId,
+          lastFanMessageAt: serializeTimestamp(row.lastFanMessageAt),
+          lastModelMessageAt: serializeTimestamp(row.lastModelMessageAt),
+          lastMessagePreview: row.lastMessagePreview,
+          storedMessageCount: row.storedMessageCount,
+          messageBackfillComplete: row.messageBackfillComplete,
+        },
+        subscription: {
+          expiresAt: new Date(row.subscriptionExpiresAt).toISOString(),
+          autoRenew: row.autoRenew,
+          tierName: row.subscriptionTierName,
+        },
+        lastTransactionAt: serializeTimestamp(row.lastTransactionAt),
+      })),
+    },
+    activeSpenders: {
+      total: activeSpenders.length,
+      items: activeSpenders.map(serializeSpenderItem),
+    },
+    inactiveSpenders: {
+      total: inactiveSpenders.length,
+      items: inactiveSpenders.map(serializeSpenderItem),
+    },
+    snoozed: {
+      total: snoozed.length,
+      items: snoozed.map((row) => ({
+        fanId: row.fanId,
+        fan: {
+          platformUserId: row.platformUserId,
+          username: row.username,
+          displayName: row.displayName,
+        },
+        ltv: { creatorNetAmountMills: millsToNumber(row.creatorNetAmountMills) },
+        snoozedUntil: new Date(row.snoozedUntil).toISOString(),
+      })),
+    },
+  };
+}
+
+export async function snoozeWorkboardFanReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  body: WorkboardSnoozeBody,
+): Promise<WorkboardSnoozeResponse> {
+  const page = await resolveCrmPage(app, principal, pageLabel);
+  const result = await snoozeWorkboardFan(app.db, {
+    platformAccountId: page.id,
+    fanId: body.fanId,
+    days: body.days,
+  });
+
+  return {
+    fanId: result.fanId,
+    snoozedUntil: result.snoozedUntil.toISOString(),
+  };
+}
+
+export async function unsnoozeWorkboardFanReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  fanId: number,
+): Promise<{ ok: true }> {
+  const page = await resolveCrmPage(app, principal, pageLabel);
+  await unsnoozeWorkboardFan(app.db, {
+    platformAccountId: page.id,
+    fanId,
+  });
+
+  return { ok: true };
 }

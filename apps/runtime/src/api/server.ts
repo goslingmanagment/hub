@@ -134,6 +134,9 @@ import {
   getCrmReactivationReport,
   getCrmRetentionReport,
   getCrmSummaryReport,
+  getWorkboardReport,
+  snoozeWorkboardFanReport,
+  unsnoozeWorkboardFanReport,
 } from "../services/crm.ts";
 import { getPublicSyncHealth, getSystemHealth } from "../services/health.ts";
 import {
@@ -733,6 +736,29 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     return getPageConversationMessagesReport(appContext, principal, request.params, request.query);
+  });
+
+  // --- Workboard ---
+
+  server.get("/api/v1/pages/:pageLabel/workboard", {
+    schema: routeSchemas.workboard,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return getWorkboardReport(appContext, principal, request.params.pageLabel);
+  });
+
+  server.post("/api/v1/pages/:pageLabel/workboard/snooze", {
+    schema: routeSchemas.workboardSnooze,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return snoozeWorkboardFanReport(appContext, principal, request.params.pageLabel, request.body);
+  });
+
+  server.delete("/api/v1/pages/:pageLabel/workboard/snooze/:fanId", {
+    schema: routeSchemas.workboardUnsnooze,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return unsnoozeWorkboardFanReport(appContext, principal, request.params.pageLabel, request.params.fanId);
   });
 
   server.get("/api/v1/fans/:platform/:platformUserId", {
