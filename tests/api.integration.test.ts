@@ -446,7 +446,7 @@ async function seedCrmApiFixture(input: {
       senderRole: "fan",
       createdAt: new Date("2026-03-14T08:00:00.000Z"),
       content: "Need help with anything else?",
-      totalTipAmountCents: 125,
+      totalTipAmountCents: 2000,
       inReplyToMessageId: null,
       inReplyToRootMessageId: null,
     },
@@ -6367,6 +6367,10 @@ describe("api integration", () => {
       "crm-msg-003",
       "crm-msg-004",
     ]);
+    expect(preview.json().messages[2]).toMatchObject({
+      platformMessageId: "crm-msg-004",
+      totalTipAmountCents: 2000,
+    });
 
     const messages = await server.inject({
       method: "GET",
@@ -6390,7 +6394,7 @@ describe("api integration", () => {
     expect(messages.json().messages[0]).toMatchObject({
       messageId: "crm-msg-004",
       senderRole: "fan",
-      tipAmountCents: 125,
+      tipAmountCents: 2000,
       createdAt: "2026-03-14T08:00:00.000Z",
     });
 

@@ -43,6 +43,13 @@ const onlyFansTransactionMocks = vi.hoisted(() => ({
 
 const sharedMocks = vi.hoisted(() => ({
   dmRetentionDate: vi.fn(() => new Date("2026-09-17T00:00:00.000Z")),
+  normalizeDmTipAmountCents: vi.fn((platform: "fansly" | "onlyfans", totalTipAmount: number | null | undefined) => (
+    typeof totalTipAmount !== "number" || !Number.isFinite(totalTipAmount) || totalTipAmount <= 0
+      ? 0
+      : platform === "fansly"
+      ? Math.round(totalTipAmount / 10)
+      : Math.round(totalTipAmount)
+  )),
   normalizeFanslyTimestamp: vi.fn((value: number) => new Date(value >= 1_000_000_000_000 ? value : value * 1000)),
   persistRawPayload: vi.fn(),
   refreshPageMetadata: vi.fn(),
@@ -204,6 +211,16 @@ describe("sync executor handlers", () => {
     dbMocks.refreshFanPageSubscriberState.mockResolvedValue(undefined);
     sharedMocks.dmRetentionDate.mockReset();
     sharedMocks.dmRetentionDate.mockReturnValue(new Date("2026-09-17T00:00:00.000Z"));
+    sharedMocks.normalizeDmTipAmountCents.mockReset();
+    sharedMocks.normalizeDmTipAmountCents.mockImplementation(
+      (platform: "fansly" | "onlyfans", totalTipAmount: number | null | undefined) => (
+        typeof totalTipAmount !== "number" || !Number.isFinite(totalTipAmount) || totalTipAmount <= 0
+          ? 0
+          : platform === "fansly"
+          ? Math.round(totalTipAmount / 10)
+          : Math.round(totalTipAmount)
+      ),
+    );
     sharedMocks.normalizeFanslyTimestamp.mockReset();
     sharedMocks.normalizeFanslyTimestamp.mockImplementation((value: number) => new Date(value >= 1_000_000_000_000 ? value : value * 1000));
     sharedMocks.persistRawPayload.mockResolvedValue(undefined);
@@ -1136,7 +1153,7 @@ describe("sync executor handlers", () => {
         embeds: [],
         interactions: [],
         likes: [],
-        totalTipAmount: 25,
+        totalTipAmount: 20000,
       }],
       groupId: "group-1",
       before: "msg-65",
@@ -1246,6 +1263,7 @@ describe("sync executor handlers", () => {
         conversationId: 777,
         platformMessageId: "msg-79",
         senderRole: "fan",
+        totalTipAmountCents: 2000,
       }),
     ]));
     expect(dbMocks.finalizePageDmConversationMessageSync).toHaveBeenCalledWith({}, expect.objectContaining({

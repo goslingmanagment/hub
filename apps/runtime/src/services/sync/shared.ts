@@ -36,6 +36,22 @@ export function normalizeFanslyTimestamp(value: number) {
   return new Date(ms);
 }
 
+export function normalizeDmTipAmountCents(
+  platform: ResolvedPageContext["platform"],
+  totalTipAmount: number | null | undefined,
+) {
+  if (typeof totalTipAmount !== "number" || !Number.isFinite(totalTipAmount) || totalTipAmount <= 0) {
+    return 0;
+  }
+
+  // Fansly live DM payloads emit tip totals in mills; the stored field and API contract are cents.
+  const normalizedAmount = platform === "fansly"
+    ? totalTipAmount / 10
+    : totalTipAmount;
+
+  return Math.max(0, Math.round(normalizedAmount));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
