@@ -7,6 +7,7 @@ describe("resolveStreamsForScope", () => {
     expect(resolveStreamsForScope("fansly", "data")).toEqual([
       "light",
       "transactions",
+      "top_spenders",
       "subscribers",
       "followers",
       "followers_reconcile",

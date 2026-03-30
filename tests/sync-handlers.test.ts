@@ -28,6 +28,7 @@ const dbMocks = vi.hoisted(() => ({
   upsertCheckpointProgress: vi.fn(),
   upsertPageDmConversation: vi.fn(),
   upsertPageDmMessages: vi.fn(),
+  upsertPageTopSpenders: vi.fn(),
   upsertFanPages: vi.fn(),
   upsertFans: vi.fn(),
   upsertPageFollows: vi.fn(),
@@ -76,6 +77,7 @@ import {
   executeFollowersChunk,
   executeFollowersReconcileChunk,
   executeSubscribersChunk,
+  executeTopSpendersChunk,
   executeTransactionsChunk,
 } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
@@ -195,6 +197,7 @@ describe("sync executor handlers", () => {
     dbMocks.upsertFanPages.mockResolvedValue(undefined);
     dbMocks.upsertPageDmConversation.mockResolvedValue(undefined);
     dbMocks.upsertPageDmMessages.mockResolvedValue(undefined);
+    dbMocks.upsertPageTopSpenders.mockResolvedValue(undefined);
     dbMocks.upsertPageFollows.mockResolvedValue(undefined);
     dbMocks.upsertPageSubscriptions.mockResolvedValue(undefined);
     dbMocks.refreshFanPageFollowerState.mockResolvedValue(undefined);
@@ -206,6 +209,451 @@ describe("sync executor handlers", () => {
     sharedMocks.persistRawPayload.mockResolvedValue(undefined);
     sharedMocks.trimFanslyMessagingGroupsPayload.mockReset();
     sharedMocks.trimFanslyMessagingGroupsPayload.mockImplementation((value: unknown) => value);
+  });
+
+  it("syncs Fansly top spenders in steady state using the trailing 7 day window", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    vi.setSystemTime(now);
+
+    const telemetry = createTelemetry();
+    const getEarningsAccountsPage = vi.fn(async () => ({
+      items: [{
+        totalGross: 12_345,
+        totalNet: 9_876,
+        accountId: "acct-1",
+        correlationAccountId: "fan-1",
+      }],
+      done: true,
+      raw: [],
+    }));
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getEarningsAccountsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "steady_state",
+        accountCreatedAt: "2026-01-01T00:00:00.000Z",
+        totalMonths: 3,
+        completedMonths: 3,
+        pendingWindows: [],
+        lastWindowStartedAt: "2026-03-01T00:00:00.000Z",
+        lastWindowEndedAt: "2026-03-08T00:00:00.000Z",
+      },
+    });
+    dbMocks.upsertFans.mockResolvedValue([{
+      id: 101,
+      platformUserId: "fan-1",
+    }]);
+
+    const result = await executeTopSpendersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 10,
+          label: "fansly-page",
+          metadata: {
+            accountCreatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      syncRunId: 123,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: true,
+      yieldReason: null,
+      stats: expect.objectContaining({
+        mode: "steady_state",
+        windowsProcessed: 1,
+        windowsSplit: 0,
+        upsertedRankings: 1,
+      }),
+    });
+    expect(getEarningsAccountsPage).toHaveBeenCalledWith(expect.anything(), {
+      after: new Date("2026-03-13T12:00:00.000Z"),
+      before: now,
+    });
+    expect(sharedMocks.refreshPageMetadata).not.toHaveBeenCalled();
+    expect(dbMocks.upsertPageTopSpenders).toHaveBeenCalledWith(expect.anything(), [
+      expect.objectContaining({
+        platformAccountId: 10,
+        sourceIdentityKey: "fan:fan-1",
+        correlationAccountId: "fan-1",
+        accountId: "acct-1",
+        fanId: 101,
+        grossAmountMills: 12_345n,
+        creatorNetAmountMills: 9_876n,
+        sourceWindowStartedAt: new Date("2026-03-13T12:00:00.000Z"),
+        sourceWindowEndedAt: now,
+      }),
+    ]);
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 10,
+      stream: "top_spenders",
+      lastSuccessfulRunId: 123,
+      cursorTimestamp: now,
+      state: expect.objectContaining({
+        mode: "steady_state",
+        pendingWindows: [],
+        completedMonths: 3,
+      }),
+    }));
+
+    vi.useRealTimers();
+  });
+
+  it("preserves top spender rows that only have account identity", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    vi.setSystemTime(now);
+
+    const telemetry = createTelemetry();
+    const getEarningsAccountsPage = vi.fn(async () => ({
+      items: [{
+        totalGross: 4_200,
+        totalNet: 3_500,
+        accountId: "acct-2",
+        correlationAccountId: null,
+      }],
+      done: true,
+      raw: [],
+    }));
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getEarningsAccountsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "steady_state",
+        accountCreatedAt: "2026-01-01T00:00:00.000Z",
+        totalMonths: 3,
+        completedMonths: 3,
+        pendingWindows: [],
+        lastWindowStartedAt: "2026-03-01T00:00:00.000Z",
+        lastWindowEndedAt: "2026-03-08T00:00:00.000Z",
+      },
+    });
+
+    const result = await executeTopSpendersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 10,
+          label: "fansly-page",
+          metadata: {
+            accountCreatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      syncRunId: 123,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: true,
+      yieldReason: null,
+      stats: expect.objectContaining({
+        windowsProcessed: 1,
+        upsertedRankings: 1,
+      }),
+    });
+    expect(dbMocks.upsertFans).not.toHaveBeenCalled();
+    expect(dbMocks.upsertPageTopSpenders).toHaveBeenCalledWith(expect.anything(), [
+      expect.objectContaining({
+        platformAccountId: 10,
+        sourceIdentityKey: "account:acct-2",
+        correlationAccountId: null,
+        accountId: "acct-2",
+        fanId: null,
+        grossAmountMills: 4_200n,
+        creatorNetAmountMills: 3_500n,
+      }),
+    ]);
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("skips top spender rows without any usable identity and records an anomaly", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    vi.setSystemTime(now);
+
+    const telemetry = createTelemetry();
+    const getEarningsAccountsPage = vi.fn(async () => ({
+      items: [
+        {
+          totalGross: 12_345,
+          totalNet: 9_876,
+          accountId: "acct-1",
+          correlationAccountId: "fan-1",
+        },
+        {
+          totalGross: 2_000,
+          totalNet: 1_500,
+          accountId: null,
+          correlationAccountId: null,
+        },
+      ],
+      done: true,
+      raw: [],
+    }));
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getEarningsAccountsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "steady_state",
+        accountCreatedAt: "2026-01-01T00:00:00.000Z",
+        totalMonths: 3,
+        completedMonths: 3,
+        pendingWindows: [],
+        lastWindowStartedAt: "2026-03-01T00:00:00.000Z",
+        lastWindowEndedAt: "2026-03-08T00:00:00.000Z",
+      },
+    });
+    dbMocks.upsertFans.mockResolvedValue([{
+      id: 101,
+      platformUserId: "fan-1",
+    }]);
+
+    const result = await executeTopSpendersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 10,
+          label: "fansly-page",
+          metadata: {
+            accountCreatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      syncRunId: 123,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: true,
+      yieldReason: null,
+      stats: expect.objectContaining({
+        windowsProcessed: 1,
+        upsertedRankings: 1,
+      }),
+    });
+    expect(dbMocks.upsertPageTopSpenders).toHaveBeenCalledWith(expect.anything(), [
+      expect.objectContaining({
+        sourceIdentityKey: "fan:fan-1",
+        correlationAccountId: "fan-1",
+      }),
+    ]);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "top_spenders_missing_identity",
+      severity: "warn",
+      details: expect.objectContaining({
+        skippedCount: 1,
+      }),
+    }));
+
+    vi.useRealTimers();
+  });
+
+  it("splits capped monthly top spender windows into weekly chunks before continuing", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    vi.setSystemTime(now);
+
+    const telemetry = createTelemetry();
+    const getEarningsAccountsPage = vi.fn(async () => ({
+      items: [],
+      done: false,
+      raw: [],
+    }));
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getEarningsAccountsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+
+    const result = await executeTopSpendersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 10,
+          label: "fansly-page",
+          metadata: {
+            accountCreatedAt: "2026-03-01T00:00:00.000Z",
+          },
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      syncRunId: 123,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(0, 45_000),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: expect.objectContaining({
+        mode: "bootstrap",
+        totalMonths: 1,
+        completedMonths: 0,
+        pendingWindows: 3,
+        windowsProcessed: 0,
+        windowsSplit: 1,
+      }),
+    });
+    expect(getEarningsAccountsPage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.upsertPageTopSpenders).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 10,
+      stream: "top_spenders",
+      state: expect.objectContaining({
+        mode: "bootstrap",
+        totalMonths: 1,
+        completedMonths: 0,
+        pendingWindows: [
+          expect.objectContaining({ kind: "week", startedAt: "2026-03-01T00:00:00.000Z", endedAt: "2026-03-08T00:00:00.000Z" }),
+          expect.objectContaining({ kind: "week", startedAt: "2026-03-08T00:00:00.000Z", endedAt: "2026-03-15T00:00:00.000Z" }),
+          expect.objectContaining({ kind: "week", startedAt: "2026-03-15T00:00:00.000Z", endedAt: "2026-03-20T12:00:00.000Z" }),
+        ],
+      }),
+    }));
+
+    vi.useRealTimers();
+  });
+
+  it("splits capped steady-state weekly top spender windows into daily chunks before continuing", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    vi.setSystemTime(now);
+
+    const telemetry = createTelemetry();
+    const getEarningsAccountsPage = vi.fn(async () => ({
+      items: [],
+      done: false,
+      raw: [],
+    }));
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getEarningsAccountsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "steady_state",
+        accountCreatedAt: "2026-03-01T00:00:00.000Z",
+        totalMonths: 1,
+        completedMonths: 1,
+        pendingWindows: [],
+        lastWindowStartedAt: "2026-03-06T12:00:00.000Z",
+        lastWindowEndedAt: "2026-03-13T12:00:00.000Z",
+      },
+    });
+
+    const result = await executeTopSpendersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 10,
+          label: "fansly-page",
+          metadata: {
+            accountCreatedAt: "2026-03-01T00:00:00.000Z",
+          },
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      syncRunId: 123,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(0, 45_000),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: expect.objectContaining({
+        mode: "steady_state",
+        totalMonths: 1,
+        completedMonths: 1,
+        pendingWindows: 7,
+        windowsProcessed: 0,
+        windowsSplit: 1,
+      }),
+    });
+    expect(getEarningsAccountsPage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.upsertPageTopSpenders).not.toHaveBeenCalled();
+
+    const progressCall = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1];
+    expect(progressCall).toMatchObject({
+      platformAccountId: 10,
+      stream: "top_spenders",
+      state: expect.objectContaining({
+        mode: "steady_state",
+        totalMonths: 1,
+        completedMonths: 1,
+      }),
+    });
+    expect(progressCall?.state.pendingWindows).toHaveLength(7);
+    expect(progressCall?.state.pendingWindows[0]).toMatchObject({
+      kind: "day",
+      startedAt: "2026-03-13T12:00:00.000Z",
+      endedAt: "2026-03-14T12:00:00.000Z",
+    });
+    expect(progressCall?.state.pendingWindows[6]).toMatchObject({
+      kind: "day",
+      startedAt: "2026-03-19T12:00:00.000Z",
+      endedAt: "2026-03-20T12:00:00.000Z",
+    });
+
+    vi.useRealTimers();
   });
 
   it("guards against destructive subscriber finalization on an empty first page", async () => {

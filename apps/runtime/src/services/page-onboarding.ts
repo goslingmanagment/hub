@@ -21,6 +21,7 @@ import type { OnlyMonsterAccount } from "@agency_hub_core/onlyfans";
 
 import type { AppContext } from "../bootstrap.ts";
 import { ConflictError, NotFoundError } from "./errors.ts";
+import { buildFanslyMetadata } from "./fansly.ts";
 import { buildOnlyFansMetadata, findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
 
@@ -117,10 +118,7 @@ export async function onboardFanslyPage(
         followerCount: verified.account.followCount,
         subscriberCount: verified.account.subscriberCount,
         earningsBalanceMills: toMills(verified.account.earningsWallet?.balance ?? 0),
-        metadata: {
-          walls: verified.account.walls ?? [],
-          subscriptionTiers: verified.account.subscriptionTiers ?? [],
-        },
+        metadata: buildFanslyMetadata(verified.account),
         syncType: "light",
       });
 

@@ -4377,6 +4377,964 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sync/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the 6-block sync overview for visible pages */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            generatedAt: string;
+                            pages: {
+                                pageId: number;
+                                pageLabel: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                                blocks: {
+                                    connection: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    top_spenders: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    transactions: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    subscribers: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    followers: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    messages: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                };
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/sync/blocks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get all sync blocks for one visible page */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            generatedAt: string;
+                            page: {
+                                pageId: number;
+                                pageLabel: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                                blocks: {
+                                    connection: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    top_spenders: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    transactions: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    subscribers: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    followers: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                    messages: {
+                                        /** @enum {string} */
+                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        /** @enum {string} */
+                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        lastSuccessAt: string | null;
+                                        progress: {
+                                            label: string;
+                                            current: number;
+                                            total: number | null;
+                                            unit: string;
+                                            percent: number | null;
+                                            details: {
+                                                [key: string]: unknown;
+                                            };
+                                        } | null;
+                                        error: {
+                                            stream: string | null;
+                                            code: string | null;
+                                            summary: string | null;
+                                            lastFailedAt: string | null;
+                                            consecutiveFailures: number;
+                                        } | null;
+                                        needsAttention: boolean;
+                                        nextDueAt: string | null;
+                                        nextRetryAt: string | null;
+                                        intervals: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            cadenceSeconds: number;
+                                        }[];
+                                        metrics: {
+                                            [key: string]: unknown;
+                                        };
+                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                        substreams: {
+                                            /** @enum {string} */
+                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            /** @enum {string} */
+                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            lastSuccessAt: string | null;
+                                            nextDueAt: string | null;
+                                            nextRetryAt: string | null;
+                                            cadenceSeconds: number;
+                                            needsAttention: boolean;
+                                            error: {
+                                                stream: string | null;
+                                                code: string | null;
+                                                summary: string | null;
+                                                lastFailedAt: string | null;
+                                                consecutiveFailures: number;
+                                            } | null;
+                                        }[];
+                                    };
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/sync/blocks/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the combined Messages sync block for one visible page */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            generatedAt: string;
+                            page: {
+                                pageId: number;
+                                pageLabel: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                            };
+                            block: {
+                                /** @enum {string} */
+                                block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                /** @enum {string} */
+                                state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                lastSuccessAt: string | null;
+                                progress: {
+                                    label: string;
+                                    current: number;
+                                    total: number | null;
+                                    unit: string;
+                                    percent: number | null;
+                                    details: {
+                                        [key: string]: unknown;
+                                    };
+                                } | null;
+                                error: {
+                                    stream: string | null;
+                                    code: string | null;
+                                    summary: string | null;
+                                    lastFailedAt: string | null;
+                                    consecutiveFailures: number;
+                                } | null;
+                                needsAttention: boolean;
+                                nextDueAt: string | null;
+                                nextRetryAt: string | null;
+                                intervals: {
+                                    /** @enum {string} */
+                                    stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                    cadenceSeconds: number;
+                                }[];
+                                metrics: {
+                                    [key: string]: unknown;
+                                };
+                                connectionStatus: ("connected" | "not_connected" | "error") | null;
+                                substreams: {
+                                    /** @enum {string} */
+                                    stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                    /** @enum {string} */
+                                    state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                    lastSuccessAt: string | null;
+                                    nextDueAt: string | null;
+                                    nextRetryAt: string | null;
+                                    cadenceSeconds: number;
+                                    needsAttention: boolean;
+                                    error: {
+                                        stream: string | null;
+                                        code: string | null;
+                                        summary: string | null;
+                                        lastFailedAt: string | null;
+                                        consecutiveFailures: number;
+                                    } | null;
+                                }[];
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/overview/revenue/daily": {
         parameters: {
             query?: never;
@@ -6123,6 +7081,468 @@ export interface paths {
                 };
                 /** @description Default Response */
                 403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/sync/blocks/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trigger sync for a specific page block */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        pageLabel: string;
+                        /** @enum {string} */
+                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            accepted: true;
+                            /** @enum {string} */
+                            action: "trigger" | "pause" | "resume" | "reset";
+                            pageLabel: string;
+                            /** @enum {string} */
+                            block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                            revisions?: {
+                                /** @enum {string} */
+                                stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                desiredRevision: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/sync/blocks/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pause sync for a specific page block */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        pageLabel: string;
+                        /** @enum {string} */
+                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            accepted: true;
+                            /** @enum {string} */
+                            action: "trigger" | "pause" | "resume" | "reset";
+                            pageLabel: string;
+                            /** @enum {string} */
+                            block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                            revisions?: {
+                                /** @enum {string} */
+                                stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                desiredRevision: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/sync/blocks/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume sync for a specific page block */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        pageLabel: string;
+                        /** @enum {string} */
+                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            accepted: true;
+                            /** @enum {string} */
+                            action: "trigger" | "pause" | "resume" | "reset";
+                            pageLabel: string;
+                            /** @enum {string} */
+                            block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                            revisions?: {
+                                /** @enum {string} */
+                                stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                desiredRevision: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/sync/blocks/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset sync state for a specific page block */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        pageLabel: string;
+                        /** @enum {string} */
+                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            accepted: true;
+                            /** @enum {string} */
+                            action: "trigger" | "pause" | "resume" | "reset";
+                            pageLabel: string;
+                            /** @enum {string} */
+                            block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                            revisions?: {
+                                /** @enum {string} */
+                                stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                desiredRevision: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };

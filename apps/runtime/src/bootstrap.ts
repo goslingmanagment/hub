@@ -4,6 +4,7 @@ import { OnlyFansAdapter } from "@agency_hub_core/onlyfans";
 import type {
   FanslyAccount,
   FanslyAccountMeResponse,
+  FanslyEarningsAccountsPageResponse,
   FanslyEarningsTransaction,
   FanslyFollower,
   FanslyGroupDetail,
@@ -52,6 +53,13 @@ export type AdapterLike = ProviderAdapter<
       before?: string | null;
     },
   ): Promise<FanslyMessagesPageResponse>;
+  getEarningsAccountsPage(
+    context: FanslyRequestContext,
+    params: {
+      after?: Date | null;
+      before?: Date | null;
+    },
+  ): Promise<FanslyEarningsAccountsPageResponse>;
   close?(): Promise<void>;
 };
 

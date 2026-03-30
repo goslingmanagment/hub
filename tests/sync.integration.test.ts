@@ -94,6 +94,15 @@ function createFanslySyncAdapter() {
         },
       };
     },
+    async getEarningsAccountsPage(_context: unknown, params: { after?: Date | null; before?: Date | null }) {
+      return {
+        items: [],
+        after: params.after ?? null,
+        before: params.before ?? null,
+        done: true,
+        raw: [],
+      };
+    },
     async getSubscribersPage() {
       return {
         total: 1,
@@ -441,7 +450,7 @@ describe("sync integration", () => {
       });
 
       expect(request.page.id).toBe(page.id);
-      expect(request.revisions).toHaveLength(4);
+      expect(request.revisions).toHaveLength(1);
     } finally {
       await app.close();
     }
@@ -555,6 +564,7 @@ describe("sync integration", () => {
       expect(stateRows.map((row) => row.stream)).toEqual([
         "light",
         "transactions",
+        "top_spenders",
         "subscribers",
         "followers",
         "followers_reconcile",
@@ -573,11 +583,12 @@ describe("sync integration", () => {
         status: syncRuns.status,
         startedAt: syncRuns.startedAt,
       }).from(syncRuns).orderBy(syncRuns.startedAt);
-      expect(runRows).toHaveLength(7);
+      expect(runRows).toHaveLength(8);
       expect(runRows.every((row) => row.status === "success")).toBe(true);
       expect(runRows.map((row) => row.stream)).toEqual([
         "light",
         "transactions",
+        "top_spenders",
         "subscribers",
         "followers",
         "followers_reconcile",

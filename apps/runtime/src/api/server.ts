@@ -145,6 +145,15 @@ import {
 } from "../services/fan-profiles.ts";
 import { getSyncMonitorRecentRequests, getSyncMonitorSnapshot } from "../services/sync-monitor.ts";
 import {
+  getPageMessagesSyncBlock,
+  getPageSyncBlocks,
+  getSyncBlocksOverview,
+  pauseSyncBlock,
+  resetSyncBlock,
+  resumeSyncBlock,
+  triggerSyncBlock,
+} from "../services/sync-blocks.ts";
+import {
   getSpenderBatch,
   getSpenderDetail,
   getSpenderList,
@@ -987,12 +996,12 @@ export async function buildApiServer(appContext: AppContext) {
       }
     }
 
-    return getSyncMonitorSnapshot(appContext, {
+    return await getSyncMonitorSnapshot(appContext, {
       pageIds: pageScopeFor(principal),
       pageLabel: query.pageLabel,
       windowHours: query.windowHours,
       eventLimit: query.eventLimit,
-    });
+    }) as never;
   });
 
   server.get("/api/v1/sync/requests", {
@@ -1001,10 +1010,51 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
 
-    return getSyncMonitorRecentRequests(appContext, {
+    return await getSyncMonitorRecentRequests(appContext, {
       pageIds: pageScopeFor(principal),
       since: request.query.since,
       limit: request.query.limit,
+    }) as never;
+  });
+
+  server.get("/api/v1/sync/overview", {
+    schema: routeSchemas.syncOverview,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+
+    return getSyncBlocksOverview(appContext, {
+      pageIds: pageScopeFor(principal),
+    });
+  });
+
+  server.get("/api/v1/pages/:pageLabel/sync/blocks", {
+    schema: routeSchemas.pageSyncBlocks,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+
+    return getPageSyncBlocks(appContext, {
+      pageLabel: request.params.pageLabel,
+      pageIds: pageScopeFor(principal),
+    });
+  });
+
+  server.get("/api/v1/pages/:pageLabel/sync/blocks/messages", {
+    schema: routeSchemas.pageMessagesBlock,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+
+    return getPageMessagesSyncBlock(appContext, {
+      pageLabel: request.params.pageLabel,
+      pageIds: pageScopeFor(principal),
     });
   });
 
@@ -1534,6 +1584,44 @@ export async function buildApiServer(appContext: AppContext) {
     });
     reply.code(202);
     return { accepted: true as const, pagesQueued: results.length };
+  });
+
+  server.post("/api/v1/admin/sync/blocks/trigger", {
+    schema: routeSchemas.adminSyncBlockTrigger,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    if (!boss) {
+      throw new ServiceUnavailableError("Job queue not available");
+    }
+    return triggerSyncBlock(appContext, boss, request.body);
+  });
+
+  server.post("/api/v1/admin/sync/blocks/pause", {
+    schema: routeSchemas.adminSyncBlockPause,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return pauseSyncBlock(appContext, request.body);
+  });
+
+  server.post("/api/v1/admin/sync/blocks/resume", {
+    schema: routeSchemas.adminSyncBlockResume,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return resumeSyncBlock(appContext, request.body);
+  });
+
+  server.post("/api/v1/admin/sync/blocks/reset", {
+    schema: routeSchemas.adminSyncBlockReset,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    if (!boss) {
+      throw new ServiceUnavailableError("Job queue not available");
+    }
+    return resetSyncBlock(appContext, boss, request.body);
   });
 
   // Connection management

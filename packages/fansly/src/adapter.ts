@@ -20,6 +20,8 @@ import { FanslyApiError } from "./errors.ts";
 import type {
   FanslyAccount,
   FanslyAccountMeResponse,
+  FanslyEarningsAccount,
+  FanslyEarningsAccountsPageResponse,
   FanslyFollowersPage,
   FanslyGroupDetail,
   FanslyMessagesPage,
@@ -53,6 +55,7 @@ type RequestResult<T> = {
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const GLOBAL_DELAY_SAFETY_MARGIN_MS = 100;
+const EARNINGS_ACCOUNTS_PAGE_LIMIT = 100;
 
 export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
@@ -155,6 +158,44 @@ export class FanslyAdapter {
       items: response.parsed.data,
       offset: params.offset ?? 0,
       done: response.parsed.data.length < limit,
+      raw: response.raw,
+    };
+  }
+
+  async getEarningsAccountsPage(
+    context: FanslyRequestContext,
+    params: {
+      after?: Date | null;
+      before?: Date | null;
+    },
+  ): Promise<FanslyEarningsAccountsPageResponse> {
+    const response = await this.request<FanslyEarningsAccount[]>(
+      context,
+      "/account/wallets/earnings/accounts",
+      {
+        operation: "earnings_accounts",
+        endpointTemplate: "/account/wallets/earnings/accounts",
+        query: {
+          after: params.after ? String(params.after.getTime()) : undefined,
+          before: params.before ? String(params.before.getTime()) : undefined,
+        },
+        category: "top_spenders",
+        requestShape: {
+          after: params.after ? params.after.toISOString() : null,
+          before: params.before ? params.before.toISOString() : null,
+        },
+        summarizeResponse: (parsed) => ({
+          returnedItems: parsed.length,
+          done: parsed.length < EARNINGS_ACCOUNTS_PAGE_LIMIT,
+        }),
+      },
+    );
+
+    return {
+      items: response.parsed,
+      after: params.after ?? null,
+      before: params.before ?? null,
+      done: response.parsed.length < EARNINGS_ACCOUNTS_PAGE_LIMIT,
       raw: response.raw,
     };
   }

@@ -27,6 +27,7 @@ type SyncStream =
   | "followers"
   | "followers_reconcile"
   | "transactions"
+  | "top_spenders"
   | "subscribers"
   | "dm_conversations"
   | "dm_messages"

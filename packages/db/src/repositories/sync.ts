@@ -25,11 +25,12 @@ import {
 export const SYNC_CONTROL_STREAMS = [
   "light",
   "transactions",
+  "top_spenders",
   "subscribers",
-  "dm_conversations",
-  "dm_messages",
   "followers",
   "followers_reconcile",
+  "dm_conversations",
+  "dm_messages",
 ] as const;
 
 export type SyncControlStream = typeof SYNC_CONTROL_STREAMS[number];
@@ -47,31 +48,33 @@ export interface SyncStreamConfig {
 export const SYNC_STREAM_CONFIG: Record<SyncControlStream, SyncStreamConfig> = {
   light: { stream: "light", cadenceSeconds: 3600, basePriority: 60, streamIndex: 1 },
   transactions: { stream: "transactions", cadenceSeconds: 3600, basePriority: 50, streamIndex: 2 },
-  subscribers: { stream: "subscribers", cadenceSeconds: 3600, basePriority: 40, streamIndex: 3 },
-  followers: { stream: "followers", cadenceSeconds: 43200, basePriority: 35, streamIndex: 4 },
+  top_spenders: { stream: "top_spenders", cadenceSeconds: 3600, basePriority: 45, streamIndex: 3 },
+  subscribers: { stream: "subscribers", cadenceSeconds: 3600, basePriority: 40, streamIndex: 4 },
+  followers: { stream: "followers", cadenceSeconds: 3600, basePriority: 35, streamIndex: 5 },
   followers_reconcile: {
     stream: "followers_reconcile",
     cadenceSeconds: 172800,
     basePriority: 34,
-    streamIndex: 5,
+    streamIndex: 6,
   },
   dm_conversations: {
     stream: "dm_conversations",
     cadenceSeconds: 1800,
     basePriority: 30,
-    streamIndex: 6,
+    streamIndex: 7,
   },
-  dm_messages: { stream: "dm_messages", cadenceSeconds: 7200, basePriority: 25, streamIndex: 7 },
+  dm_messages: { stream: "dm_messages", cadenceSeconds: 86400, basePriority: 25, streamIndex: 8 },
 };
 
 const SYNC_STREAM_TIE_BREAK_ORDER: Record<SyncControlStream, number> = {
   light: 1,
   transactions: 2,
-  subscribers: 3,
-  followers: 4,
-  followers_reconcile: 5,
-  dm_conversations: 6,
-  dm_messages: 7,
+  top_spenders: 3,
+  subscribers: 4,
+  followers: 5,
+  followers_reconcile: 6,
+  dm_conversations: 7,
+  dm_messages: 8,
 };
 
 const SYNC_REQUEST_PRIORITY_BY_REASON: Record<
@@ -81,6 +84,7 @@ const SYNC_REQUEST_PRIORITY_BY_REASON: Record<
   scheduled: {
     light: 60,
     transactions: 50,
+    top_spenders: 45,
     subscribers: 40,
     followers: 35,
     followers_reconcile: 34,
@@ -90,6 +94,7 @@ const SYNC_REQUEST_PRIORITY_BY_REASON: Record<
   recovery: {
     light: 70,
     transactions: 60,
+    top_spenders: 55,
     subscribers: 50,
     followers: 45,
     followers_reconcile: 44,
@@ -99,6 +104,7 @@ const SYNC_REQUEST_PRIORITY_BY_REASON: Record<
   anomaly: {
     light: 70,
     transactions: 60,
+    top_spenders: 55,
     subscribers: 50,
     followers: 45,
     followers_reconcile: 44,
@@ -108,6 +114,7 @@ const SYNC_REQUEST_PRIORITY_BY_REASON: Record<
   manual: {
     light: 100,
     transactions: 90,
+    top_spenders: 85,
     subscribers: 80,
     followers: 75,
     followers_reconcile: 74,
@@ -117,6 +124,7 @@ const SYNC_REQUEST_PRIORITY_BY_REASON: Record<
   onboarding: {
     light: 100,
     transactions: 90,
+    top_spenders: 85,
     subscribers: 80,
     followers: 75,
     followers_reconcile: 74,
@@ -124,6 +132,14 @@ const SYNC_REQUEST_PRIORITY_BY_REASON: Record<
     dm_messages: 65,
   },
 };
+
+export const DM_SYNC_DEPENDENCY_STREAMS = [
+  "light",
+  "top_spenders",
+  "transactions",
+  "subscribers",
+  "followers",
+] as const satisfies readonly SyncControlStream[];
 
 function asSyncAuditStream(stream: string): SyncAuditStream {
   if (stream === "cleanup") {
@@ -412,6 +428,7 @@ function syncBasePriorityCaseSql(streamColumnName: string) {
     case ${streamColumnName}
       when 'light' then ${SYNC_STREAM_CONFIG.light.basePriority}
       when 'transactions' then ${SYNC_STREAM_CONFIG.transactions.basePriority}
+      when 'top_spenders' then ${SYNC_STREAM_CONFIG.top_spenders.basePriority}
       when 'subscribers' then ${SYNC_STREAM_CONFIG.subscribers.basePriority}
       when 'followers' then ${SYNC_STREAM_CONFIG.followers.basePriority}
       when 'followers_reconcile' then ${SYNC_STREAM_CONFIG.followers_reconcile.basePriority}
@@ -430,6 +447,7 @@ function syncRequestedPriorityCaseSql(
     case ${streamColumnName}
       when 'light' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].light}
       when 'transactions' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].transactions}
+      when 'top_spenders' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].top_spenders}
       when 'subscribers' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].subscribers}
       when 'followers' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].followers}
       when 'followers_reconcile' then ${SYNC_REQUEST_PRIORITY_BY_REASON[reason].followers_reconcile}
@@ -718,6 +736,23 @@ export async function upsertCheckpointProgress(
     .returning();
 
   return checkpoint;
+}
+
+export async function deleteCheckpoints(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    streams: SyncAuditStream[];
+  },
+) {
+  if (input.streams.length === 0) {
+    return;
+  }
+
+  await db.delete(syncCheckpoints).where(and(
+    eq(syncCheckpoints.platformAccountId, input.platformAccountId),
+    inArray(syncCheckpoints.stream, input.streams),
+  ));
 }
 
 export async function insertRawPayload(
@@ -1383,17 +1418,13 @@ export async function listSyncMonitorStreamRows(
 
   const windowStart = input?.windowStart ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
   const requestedStreams = input?.streams ?? SYNC_CONTROL_STREAMS;
-  const requestedStreamsSql = sql.raw(
-    `ARRAY[${requestedStreams.map((stream) => `'${stream}'`).join(", ")}]::sync_stream[]`,
+  const requestedStreamsSql = syncStreamArraySql(requestedStreams);
+  const fanslyStreamsSql = syncStreamArraySql(
+    requestedStreams.filter((stream) => getSyncStreamsForPlatform("fansly").includes(stream)),
   );
-  const fanslyStreams = requestedStreams
-    .filter((stream) => getSyncStreamsForPlatform("fansly").includes(stream))
-    .map((stream) => `'${stream}'`)
-    .join(", ");
-  const onlyFansStreams = requestedStreams
-    .filter((stream) => getSyncStreamsForPlatform("onlyfans").includes(stream))
-    .map((stream) => `'${stream}'`)
-    .join(", ");
+  const onlyFansStreamsSql = syncStreamArraySql(
+    requestedStreams.filter((stream) => getSyncStreamsForPlatform("onlyfans").includes(stream)),
+  );
 
   const result = await db.execute<{
     pageId: NumericValue;
@@ -1486,8 +1517,8 @@ export async function listSyncMonitorStreamRows(
       cross join lateral unnest(
         case
           when vp."platform" = 'fansly'
-            then ARRAY[${sql.raw(fanslyStreams)}]::sync_stream[]
-          else ARRAY[${sql.raw(onlyFansStreams)}]::sync_stream[]
+            then ${fanslyStreamsSql}
+          else ${onlyFansStreamsSql}
         end
       ) as s(stream)
     ),
@@ -1895,18 +1926,48 @@ export type SyncPageWakeupRow = {
   proxyUrl: string | null;
 };
 
+function syncStreamArraySql(streams: readonly SyncControlStream[]) {
+  if (streams.length === 0) {
+    return sql`ARRAY[]::sync_stream[]`;
+  }
+
+  return sql`ARRAY[${sql.join(
+    streams.map((stream) => sql`${stream}::sync_stream`),
+    sql`, `,
+  )}]::sync_stream[]`;
+}
+
 function streamOrderSql(columnName: string) {
   return sql.raw(`
     case ${columnName}
       when 'light' then ${SYNC_STREAM_TIE_BREAK_ORDER.light}
       when 'transactions' then ${SYNC_STREAM_TIE_BREAK_ORDER.transactions}
+      when 'top_spenders' then ${SYNC_STREAM_TIE_BREAK_ORDER.top_spenders}
       when 'subscribers' then ${SYNC_STREAM_TIE_BREAK_ORDER.subscribers}
-      when 'dm_conversations' then ${SYNC_STREAM_TIE_BREAK_ORDER.dm_conversations}
-      when 'dm_messages' then ${SYNC_STREAM_TIE_BREAK_ORDER.dm_messages}
       when 'followers' then ${SYNC_STREAM_TIE_BREAK_ORDER.followers}
       when 'followers_reconcile' then ${SYNC_STREAM_TIE_BREAK_ORDER.followers_reconcile}
+      when 'dm_conversations' then ${SYNC_STREAM_TIE_BREAK_ORDER.dm_conversations}
+      when 'dm_messages' then ${SYNC_STREAM_TIE_BREAK_ORDER.dm_messages}
       else 999
     end
+  `);
+}
+
+function dmSyncDependenciesSatisfiedSql(
+  streamColumnName: string,
+  platformAccountIdColumnName: string,
+) {
+  return sql.raw(`
+    (
+      ${streamColumnName} not in ('dm_conversations', 'dm_messages')
+      or not exists (
+        select 1
+        from sync_stream_state dm_dep
+        where dm_dep.platform_account_id = ${platformAccountIdColumnName}
+          and dm_dep.stream = any(ARRAY['light', 'top_spenders', 'transactions', 'subscribers', 'followers']::sync_stream[])
+          and dm_dep.last_succeeded_at is null
+      )
+    )
   `);
 }
 
@@ -2243,7 +2304,9 @@ function buildSeedSyncStreamStateValue(
   const nextDueAt = computeSyncStreamNextDueAt(now, config.cadenceSeconds, slotOffsetSeconds);
   const trustedLightAt = page.lastLightSyncAt;
   const trustedFollowerAt = page.lastFollowerSyncAt;
-  const trustedAt = stream === "light" || stream === "transactions" || stream === "subscribers"
+  const trustedAt = stream === "light" ||
+      stream === "transactions" ||
+      stream === "subscribers"
     ? trustedLightAt
     : stream === "followers" || stream === "followers_reconcile"
       ? trustedFollowerAt
@@ -2308,7 +2371,7 @@ export async function listSyncStreamStateRows(
   }
 
   if (input?.streams?.length) {
-    clauses.push(sql`stream = any(${sql.raw(`ARRAY[${input.streams.map((stream) => `'${stream}'`).join(", ")}]::sync_stream[]`)})`);
+    clauses.push(sql`stream = any(${syncStreamArraySql(input.streams)})`);
   }
 
   const result = await db.execute(sql`
@@ -2356,6 +2419,68 @@ export async function getSyncStreamStateRow(
   return rows[0] ?? null;
 }
 
+async function reconcileSyncStreamStateConfig(
+  db: Database,
+  input: {
+    pages: NormalizedSeedSyncStreamPageRow[];
+    rows: SyncStreamStateRow[];
+    now: Date;
+  },
+) {
+  if (input.rows.length === 0) {
+    return;
+  }
+
+  const pageById = new Map(input.pages.map((page) => [page.platformAccountId, page]));
+  const updates = input.rows.flatMap((row) => {
+    const page = pageById.get(row.platformAccountId);
+    if (!page) {
+      return [];
+    }
+
+    const config = SYNC_STREAM_CONFIG[row.stream];
+    const slotOffsetSeconds = computeSyncStreamSlotOffsetSeconds(row.platformAccountId, row.stream);
+    const nextDueAt = computeSyncStreamNextDueAt(input.now, config.cadenceSeconds, slotOffsetSeconds);
+    if (
+      row.cadenceSeconds === config.cadenceSeconds &&
+      row.slotOffsetSeconds === slotOffsetSeconds &&
+      row.basePriority === config.basePriority &&
+      row.nextDueAt.getTime() === nextDueAt.getTime()
+    ) {
+      return [];
+    }
+
+    return [{
+      platformAccountId: row.platformAccountId,
+      stream: row.stream,
+      cadenceSeconds: config.cadenceSeconds,
+      slotOffsetSeconds,
+      nextDueAt,
+      basePriority: config.basePriority,
+    }];
+  });
+
+  if (updates.length === 0) {
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    for (const update of updates) {
+      await database.execute(sql`
+        update sync_stream_state
+        set cadence_seconds = ${update.cadenceSeconds},
+            slot_offset_seconds = ${update.slotOffsetSeconds},
+            next_due_at = ${update.nextDueAt},
+            base_priority = ${update.basePriority},
+            updated_at = ${input.now}
+        where platform_account_id = ${update.platformAccountId}
+          and stream = ${update.stream}
+      `);
+    }
+  });
+}
+
 export async function ensureSyncStreamStateRows(
   db: Database,
   input?: {
@@ -2391,12 +2516,12 @@ export async function ensureSyncStreamStateRows(
     return [];
   }
 
+  const normalizedPages = pageRows.rows.map((row) => normalizeSeedSyncStreamPageRow(row));
   const existingRows = await listSyncStreamStateRows(db, input?.platformAccountId !== undefined
     ? { platformAccountId: input.platformAccountId }
     : undefined);
   const existingKeys = new Set(existingRows.map((row) => `${row.platformAccountId}:${row.stream}`));
-  const values = pageRows.rows
-    .map((row) => normalizeSeedSyncStreamPageRow(row))
+  const values = normalizedPages
     .flatMap((page) =>
     getSyncStreamsForPlatform(page.platform).flatMap((stream) => {
       const key = `${page.platformAccountId}:${stream}`;
@@ -2408,15 +2533,15 @@ export async function ensureSyncStreamStateRows(
     })
     );
 
-  if (values.length === 0) {
-    await rebalanceSyncStreamPriorities(db, {
-      platformAccountId: input?.platformAccountId,
-      now,
-    });
-    return existingRows;
+  if (values.length > 0) {
+    await db.insert(syncStreamState).values(values).onConflictDoNothing();
   }
 
-  await db.insert(syncStreamState).values(values).onConflictDoNothing();
+  await reconcileSyncStreamStateConfig(db, {
+    pages: normalizedPages,
+    rows: existingRows,
+    now,
+  });
   await rebalanceSyncStreamPriorities(db, {
     platformAccountId: input?.platformAccountId,
     now,
@@ -2527,6 +2652,7 @@ export async function listRunnableSyncPages(
     where sss.status = 'active'
       and sss.desired_revision > sss.satisfied_revision
       and sss.backoff_until <= ${now}
+      and ${dmSyncDependenciesSatisfiedSql("sss.stream", "sss.platform_account_id")}
     group by sss.platform_account_id, pa.platform, pap.url
     order by max(sss.effective_priority) desc,
              min(sss.desired_at) asc nulls last,
@@ -2577,6 +2703,7 @@ export async function listRunnableSyncStreamStatesForPage(
       and status = 'active'
       and desired_revision > satisfied_revision
       and backoff_until <= ${now}
+      and ${dmSyncDependenciesSatisfiedSql("stream", "platform_account_id")}
     order by effective_priority desc,
              desired_at asc nulls last,
              ${streamOrderSql("stream")} asc
@@ -2608,6 +2735,7 @@ export async function requestSyncStreamRevisions(
     streams: SyncControlStream[];
     reason: SyncRequestReason;
     requestPayloadByStream?: Partial<Record<SyncControlStream, Record<string, unknown> | null>>;
+    preserveAuthFailed?: boolean;
     now?: Date;
   },
 ) {
@@ -2629,6 +2757,7 @@ export async function requestSyncStreamRevisions(
         update sync_stream_state
         set status = case
                        when status in ('paused', 'disabled') then status
+                       when ${input.preserveAuthFailed ?? false} and status = 'auth_failed' then 'auth_failed'
                        else 'active'
                      end,
             desired_revision = desired_revision + 1,
@@ -2798,6 +2927,79 @@ export async function clearSyncPageAuthFailed(
         updated_at = ${now}
     where platform_account_id = ${platformAccountId}
       and status = 'auth_failed'
+  `);
+}
+
+export async function setSyncStreamStatuses(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    streams: SyncControlStream[];
+    status: Exclude<SyncTargetStatus, "auth_failed" | "disabled">;
+    now?: Date;
+  },
+) {
+  if (input.streams.length === 0) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const nextStatus = input.status;
+  await db.execute(sql`
+    update sync_stream_state
+    set status = case
+                   when status = 'disabled' then 'disabled'
+                   when status = 'auth_failed' and ${nextStatus} = 'active' then 'auth_failed'
+                   else ${nextStatus}::sync_target_status
+                 end,
+        backoff_until = case
+                          when ${nextStatus} = 'active' then '-infinity'::timestamptz
+                          else backoff_until
+                        end,
+        updated_at = ${now}
+    where platform_account_id = ${input.platformAccountId}
+      and stream = any(${syncStreamArraySql(input.streams)})
+  `);
+}
+
+export async function resetSyncStreamStateRows(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    streams: SyncControlStream[];
+    now?: Date;
+  },
+) {
+  if (input.streams.length === 0) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  await db.execute(sql`
+    update sync_stream_state
+    set status = case
+                   when status = 'disabled' then 'disabled'
+                   when status = 'auth_failed' then 'auth_failed'
+                   else 'active'
+                 end,
+        pending_reason = 'scheduled',
+        desired_revision = 0,
+        satisfied_revision = 0,
+        desired_at = null,
+        request_payload = null,
+        backoff_until = '-infinity'::timestamptz,
+        last_enqueued_at = null,
+        last_started_at = null,
+        last_finished_at = null,
+        last_succeeded_at = null,
+        last_failed_at = null,
+        consecutive_failures = 0,
+        last_error_code = null,
+        last_error_summary = null,
+        next_due_at = ${now},
+        updated_at = ${now}
+    where platform_account_id = ${input.platformAccountId}
+      and stream = any(${syncStreamArraySql(input.streams)})
   `);
 }
 

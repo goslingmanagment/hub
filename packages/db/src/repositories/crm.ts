@@ -500,6 +500,29 @@ export async function finalizePageDmConversationMessageSync(
   });
 }
 
+export async function resetPageDmSyncState(
+  db: Database,
+  platformAccountId: number,
+) {
+  await db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    await database.delete(pageDmMessages).where(eq(pageDmMessages.platformAccountId, platformAccountId));
+    await database
+      .update(pageDmConversations)
+      .set({
+        storedMessageCount: 0,
+        newestStoredMessageId: null,
+        oldestStoredMessageId: null,
+        messageBackfillComplete: false,
+        lastMessageSyncAt: null,
+        lastFanMessageAt: null,
+        lastModelMessageAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(pageDmConversations.platformAccountId, platformAccountId));
+  });
+}
+
 export async function getExistingPageDmMessageIds(
   db: Database,
   input: {

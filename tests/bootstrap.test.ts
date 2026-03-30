@@ -44,7 +44,7 @@ const bootstrapMocks = vi.hoisted(() => {
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: 2500,
       fanslyDmConversationsDelayMs: 5000,
-      fanslyDmMessagesDelayMs: 7500,
+      fanslyDmMessagesDelayMs: 5000,
       followerPageDelayMs: 0,
       onlyFansDefaultDelayMs: 1000,
       transactionLookbackDays: 7,

@@ -34,6 +34,11 @@ import type {
   SyncRunItem,
   SyncRunDetailResponse,
   SyncMonitorResponse,
+  SyncOverviewResponse,
+  PageSyncBlocksResponse,
+  PageMessagesBlockResponse,
+  AdminSyncBlockBody,
+  AdminSyncBlockResponse,
   FanNoteResponse,
   FanFlagsResponse,
   FanListResponse,
@@ -519,6 +524,86 @@ export function useSyncMonitor(params: { pageLabel?: string; windowHours?: numbe
   });
 }
 
+// Sync Blocks (new 6-block API)
+export function useSyncOverview() {
+  return useQuery({
+    queryKey: ["syncBlocks", "overview"],
+    queryFn: () => api.get<SyncOverviewResponse>("/api/v1/sync/overview"),
+    refetchInterval: 10_000,
+  });
+}
+
+export function usePageSyncBlocks(pageLabel: string) {
+  return useQuery({
+    queryKey: ["syncBlocks", "page", pageLabel],
+    queryFn: () =>
+      api.get<PageSyncBlocksResponse>(
+        `/api/v1/pages/${encodeURIComponent(pageLabel)}/sync/blocks`,
+      ),
+    refetchInterval: 10_000,
+    enabled: !!pageLabel,
+  });
+}
+
+export function usePageMessagesBlock(pageLabel: string) {
+  return useQuery({
+    queryKey: ["syncBlocks", "page", pageLabel, "messages"],
+    queryFn: () =>
+      api.get<PageMessagesBlockResponse>(
+        `/api/v1/pages/${encodeURIComponent(pageLabel)}/sync/blocks/messages`,
+      ),
+    refetchInterval: 10_000,
+    enabled: !!pageLabel,
+  });
+}
+
+export function useAdminSyncBlockTrigger() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: AdminSyncBlockBody) =>
+      api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/trigger", body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+    },
+  });
+}
+
+export function useAdminSyncBlockPause() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: AdminSyncBlockBody) =>
+      api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/pause", body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+    },
+  });
+}
+
+export function useAdminSyncBlockResume() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: AdminSyncBlockBody) =>
+      api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/resume", body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+    },
+  });
+}
+
+export function useAdminSyncBlockReset() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: AdminSyncBlockBody) =>
+      api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/reset", body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+    },
+  });
+}
 
 export function useAdminUpdateCredentials(pageLabel: string) {
   const qc = useQueryClient();

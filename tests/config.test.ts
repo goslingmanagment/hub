@@ -38,7 +38,7 @@ describe("config", () => {
 
     expect(config.fanslyDefaultDelayMs).toBe(2500);
     expect(config.fanslyDmConversationsDelayMs).toBe(5000);
-    expect(config.fanslyDmMessagesDelayMs).toBe(7500);
+    expect(config.fanslyDmMessagesDelayMs).toBe(5000);
     expect(config.onlyFansDefaultDelayMs).toBe(1000);
     expect(config.syncPageExecutorConcurrency).toBe(4);
     expect(config.trustProxy).toBe(false);

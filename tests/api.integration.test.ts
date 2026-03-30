@@ -346,6 +346,15 @@ function createAutoSyncFanslyAdapter(input: {
         },
       };
     },
+    async getEarningsAccountsPage(_context: unknown, params: { after?: Date | null; before?: Date | null }) {
+      return {
+        items: [],
+        after: params.after ?? null,
+        before: params.before ?? null,
+        done: true,
+        raw: [],
+      };
+    },
     async close() {},
   } as AppContext["adapter"];
 }
@@ -488,7 +497,7 @@ async function seedCrmApiFixture(input: {
     {
       platformAccountId: input.pageId,
       stream: "dm_messages",
-      cadenceSeconds: 7200,
+      cadenceSeconds: 86400,
       slotOffsetSeconds: 0,
       nextDueAt: new Date("2026-03-17T14:00:00.000Z"),
       basePriority: 25,
@@ -904,7 +913,7 @@ async function seedSyncMonitorScenario(
       platformAccountId: pageId,
       stream: "dm_messages",
       status: "active",
-      cadenceSeconds: 7200,
+      cadenceSeconds: 86400,
       slotOffsetSeconds: 0,
       nextDueAt: hoursAgo(-2),
       basePriority: 25,
@@ -917,7 +926,7 @@ async function seedSyncMonitorScenario(
       platformAccountId: pageId,
       stream: "followers",
       status: "active",
-      cadenceSeconds: 43200,
+      cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
       nextDueAt: hoursAgo(-12),
       basePriority: 20,
@@ -6772,6 +6781,197 @@ describe("api integration", () => {
     });
     expect(filtered.statusCode).toBe(200);
     expect(filtered.json().pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
+  }, 15_000);
+
+  it("returns sync block overview rows and marks unsupported OnlyFans blocks as not_available", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, now);
+
+    const onlyFansPage = await createOnlyFansPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-of-sync",
+    });
+    await updatePageMetadata(testDb.db, onlyFansPage.id, {
+      platformAccountIdValue: "of-sync-1",
+      username: "lana_of_sync",
+      displayName: "Lana OF",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+    await ensureSyncStreamStateRows(testDb.db, {
+      platformAccountId: onlyFansPage.id,
+      now,
+    });
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/overview",
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const fanslyPage = body.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana");
+    const onlyFansOverview = body.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana-of-sync");
+
+    expect(fanslyPage.blocks.messages.intervals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+      expect.objectContaining({ stream: "dm_messages", cadenceSeconds: 86400 }),
+    ]));
+    expect(fanslyPage.blocks.connection.connectionStatus).toBeDefined();
+    expect(onlyFansOverview.blocks.connection.connectionStatus).toBe("not_connected");
+    expect(onlyFansOverview.blocks.top_spenders.state).toBe("not_available");
+    expect(onlyFansOverview.blocks.subscribers.state).toBe("not_available");
+    expect(onlyFansOverview.blocks.followers.state).toBe("not_available");
+    expect(onlyFansOverview.blocks.messages.state).toBe("not_available");
+  }, 15_000);
+
+  it("returns page block detail and the combined Messages block response", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, new Date("2026-03-24T12:00:00.000Z"));
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const blocksResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/sync/blocks",
+      headers: { cookie: ownerCookie },
+    });
+    expect(blocksResponse.statusCode).toBe(200);
+    expect(blocksResponse.json().page.blocks.messages.intervals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+      expect.objectContaining({ stream: "dm_messages", cadenceSeconds: 86400 }),
+    ]));
+
+    const messagesResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/sync/blocks/messages",
+      headers: { cookie: ownerCookie },
+    });
+    expect(messagesResponse.statusCode).toBe(200);
+    expect(messagesResponse.json()).toMatchObject({
+      page: {
+        pageLabel: "lana",
+        platform: "fansly",
+      },
+      block: {
+        block: "messages",
+        intervals: [
+          { stream: "dm_conversations", cadenceSeconds: 1800 },
+          { stream: "dm_messages", cadenceSeconds: 86400 },
+        ],
+      },
+    });
+  }, 15_000);
+
+  it("supports owner-only manual block controls for trigger, pause, resume, and reset", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    await ensureSyncStreamStateRows(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      now,
+    });
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const trigger = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/sync/blocks/trigger",
+      headers: { cookie: ownerCookie },
+      payload: {
+        pageLabel: "lana",
+        block: "top_spenders",
+      },
+    });
+    expect(trigger.statusCode).toBe(200);
+    expect(trigger.json()).toMatchObject({
+      accepted: true,
+      action: "trigger",
+      pageLabel: "lana",
+      block: "top_spenders",
+    });
+
+    const pause = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/sync/blocks/pause",
+      headers: { cookie: ownerCookie },
+      payload: {
+        pageLabel: "lana",
+        block: "followers",
+      },
+    });
+    expect(pause.statusCode).toBe(200);
+    expect(pause.json()).toMatchObject({
+      accepted: true,
+      action: "pause",
+      block: "followers",
+    });
+
+    const resume = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/sync/blocks/resume",
+      headers: { cookie: ownerCookie },
+      payload: {
+        pageLabel: "lana",
+        block: "followers",
+      },
+    });
+    expect(resume.statusCode).toBe(200);
+    expect(resume.json()).toMatchObject({
+      accepted: true,
+      action: "resume",
+      block: "followers",
+    });
+
+    const reset = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/sync/blocks/reset",
+      headers: { cookie: ownerCookie },
+      payload: {
+        pageLabel: "lana",
+        block: "messages",
+      },
+    });
+    expect(reset.statusCode).toBe(200);
+    expect(reset.json()).toMatchObject({
+      accepted: true,
+      action: "reset",
+      pageLabel: "lana",
+      block: "messages",
+    });
   }, 15_000);
 
   it("lists recent sync requests with field mapping, scope-aware proxy gaps, and since filtering", async (context) => {

@@ -1,0 +1,292 @@
+import type { SyncBlockStatus, SyncBlocksPage } from "@agency_hub_core/contracts";
+import { usePageSyncBlocks } from "@/api/queries";
+import { PlatformBadge } from "@/components/shared/PlatformBadge";
+import { formatRelativeTime } from "@/lib/format";
+import { SyncBlockBadge } from "./SyncBlockRow.js";
+import { SyncBlockActions } from "./SyncBlockActions.js";
+import {
+  getBlockOrder,
+  getBlockLabel,
+  formatBlockSummary,
+  formatCadence,
+  formatNextTime,
+  getBlockTone,
+  getBlockStateLabel,
+} from "./syncBlockDisplay.js";
+
+function BlockDetailCard({
+  block,
+  pageLabel,
+}: {
+  block: SyncBlockStatus;
+  pageLabel: string;
+}) {
+  const label = getBlockLabel(block.block);
+  const isNA = block.state === "not_available";
+
+  if (isNA) {
+    return (
+      <div className="rounded-xl border border-border bg-card px-5 py-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-text-muted">{label}</span>
+          <SyncBlockBadge state={block.state} />
+        </div>
+        <p className="mt-1 text-xs text-text-muted">
+          Not available on this platform
+        </p>
+      </div>
+    );
+  }
+
+  const summary = formatBlockSummary(block);
+  const hasError = block.error && block.error.summary;
+  const hasSubstreams = block.substreams.length > 1;
+
+  return (
+    <div className="rounded-xl border border-border bg-card px-5 py-4">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm font-semibold text-text-primary">{label}</span>
+        <SyncBlockBadge state={block.state} />
+      </div>
+
+      {/* Summary */}
+      <p className={`mt-2 text-xs ${getBlockTone(block.state).text}`}>
+        {summary}
+      </p>
+
+      {/* Progress bar */}
+      {block.progress && block.progress.total != null && block.progress.total > 0 && (
+        <div className="mt-2 flex items-center gap-2">
+          <div className="h-1.5 flex-1 max-w-[240px] rounded-full bg-hover-alt overflow-hidden">
+            <div
+              className="h-full rounded-full bg-accent transition-all"
+              style={{
+                width: `${Math.min(100, block.progress.percent ?? (block.progress.current / block.progress.total) * 100)}%`,
+              }}
+            />
+          </div>
+          <span className="text-[11px] text-text-muted">
+            {block.progress.current.toLocaleString()} / {block.progress.total.toLocaleString()} {block.progress.unit}
+          </span>
+        </div>
+      )}
+
+      {/* Error details */}
+      {hasError && (
+        <div className="mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5 space-y-1">
+          <p className="text-xs text-danger font-medium">{block.error!.summary}</p>
+          {block.error!.code && (
+            <p className="text-[11px] text-text-muted">Code: {block.error!.code}</p>
+          )}
+          {block.error!.lastFailedAt && (
+            <p className="text-[11px] text-text-muted">
+              Last failed: {formatRelativeTime(block.error!.lastFailedAt)}
+            </p>
+          )}
+          {block.error!.consecutiveFailures > 0 && (
+            <p className="text-[11px] text-text-muted">
+              Consecutive failures: {block.error!.consecutiveFailures}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Timing */}
+      <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
+        {block.lastSuccessAt && (
+          <>
+            <span className="text-text-muted">Last success</span>
+            <span className="text-text-secondary">
+              {formatRelativeTime(block.lastSuccessAt)}
+            </span>
+          </>
+        )}
+        {block.nextDueAt && (
+          <>
+            <span className="text-text-muted">Next due</span>
+            <span className="text-text-secondary">{formatNextTime(block.nextDueAt)}</span>
+          </>
+        )}
+        {block.nextRetryAt && (
+          <>
+            <span className="text-text-muted">Next retry</span>
+            <span className="text-text-secondary">
+              {formatNextTime(block.nextRetryAt)}
+            </span>
+          </>
+        )}
+        {block.intervals.length > 0 && (
+          <>
+            <span className="text-text-muted">Intervals</span>
+            <span className="text-text-secondary">
+              {block.intervals
+                .map((i) => `${i.stream} (${formatCadence(i.cadenceSeconds)})`)
+                .join(", ")}
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Substreams (Messages) */}
+      {hasSubstreams && (
+        <div className="mt-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-1.5">
+            Substreams
+          </p>
+          <div className="rounded-lg border border-border overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-hover-alt">
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    Stream
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    State
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    Last success
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    Next due
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    Interval
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {block.substreams.map((sub) => {
+                  const subTone = getBlockTone(sub.state);
+                  return (
+                    <tr key={sub.stream} className="border-t border-border">
+                      <td className="px-3 py-1.5 text-text-primary font-medium">
+                        {sub.stream}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            className={`inline-block h-1.5 w-1.5 rounded-full ${subTone.dot}`}
+                          />
+                          <span className={subTone.text}>
+                            {getBlockStateLabel(sub.state)}
+                          </span>
+                        </span>
+                      </td>
+                      <td className="px-3 py-1.5 text-text-secondary">
+                        {sub.lastSuccessAt
+                          ? formatRelativeTime(sub.lastSuccessAt)
+                          : "\u2014"}
+                      </td>
+                      <td className="px-3 py-1.5 text-text-secondary">
+                        {formatNextTime(sub.nextDueAt) ?? "\u2014"}
+                      </td>
+                      <td className="px-3 py-1.5 text-text-secondary">
+                        {formatCadence(sub.cadenceSeconds)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="mt-4 flex justify-end">
+        <SyncBlockActions pageLabel={pageLabel} block={block} />
+      </div>
+    </div>
+  );
+}
+
+function PageHeader({
+  page,
+  onBack,
+}: {
+  page: SyncBlocksPage;
+  onBack: () => void;
+}) {
+  return (
+    <div className="mb-5">
+      <button
+        type="button"
+        onClick={onBack}
+        className="text-xs text-text-muted hover:text-text-secondary transition-colors mb-3"
+      >
+        &larr; Back to overview
+      </button>
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-bold text-text-primary">
+          {page.pageLabel}
+        </span>
+        <PlatformBadge platform={page.platform} />
+        {page.username && (
+          <span className="text-xs text-text-muted">@{page.username}</span>
+        )}
+        {page.displayName && page.displayName !== page.username && (
+          <span className="text-xs text-text-muted">{page.displayName}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function SyncPageDetail({
+  pageLabel,
+  onBack,
+}: {
+  pageLabel: string;
+  onBack: () => void;
+}) {
+  const { data, isLoading } = usePageSyncBlocks(pageLabel);
+
+  if (isLoading && !data) {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-xs text-text-muted hover:text-text-secondary transition-colors mb-3"
+        >
+          &larr; Back to overview
+        </button>
+        <p className="text-sm text-text-muted">Loading page details...</p>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-xs text-text-muted hover:text-text-secondary transition-colors mb-3"
+        >
+          &larr; Back to overview
+        </button>
+        <p className="text-sm text-text-muted">Page not found.</p>
+      </div>
+    );
+  }
+
+  const page = data.page;
+  const blockKeys = getBlockOrder();
+
+  return (
+    <div>
+      <PageHeader page={page} onBack={onBack} />
+      <div className="space-y-3">
+        {blockKeys.map((key) => (
+          <BlockDetailCard
+            key={key}
+            block={page.blocks[key]}
+            pageLabel={pageLabel}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
