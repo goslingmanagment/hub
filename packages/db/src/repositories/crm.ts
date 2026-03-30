@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
@@ -873,11 +873,15 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
              f.display_name as display_name,
              fp.subscription_expires_at as subscription_expires_at,
              fp.auto_renew as auto_renew,
+             fp.subscriber_since as subscriber_since,
              cs.subscription_tier_name as subscription_tier_name,
              coalesce(slp.creator_net_amount_mills, 0)::bigint as creator_net_amount_mills,
+             slp.last_transaction_at as last_transaction_at,
              pc.platform_conversation_id as platform_conversation_id,
              coalesce(pc.unread_count, 0)::int as unread_count,
              pc.last_message_at as last_message_at,
+             pc.last_fan_message_at as last_fan_message_at,
+             pc.last_model_message_at as last_model_message_at,
              pc.last_message_preview as last_message_preview,
              coalesce(pc.message_backfill_complete, false) as message_backfill_complete,
              coalesce(pc.stored_message_count, 0)::int as stored_message_count,
@@ -1602,4 +1606,495 @@ export async function getCrmConversationPreview(
       totalTipAmountCents: normalizeNumber(row.totalTipAmountCents, "totalTipAmountCents"),
     })),
   } satisfies CrmConversationPreview;
+}
+
+// ---------------------------------------------------------------------------
+// Workboard
+// ---------------------------------------------------------------------------
+
+type TouchpointCode = "21d" | "14d" | "7d" | "5d" | "3d" | "1d";
+
+function workboardSnoozeExclusionSql(platformAccountId: number, fanIdSql: SQL) {
+  return sql`
+    and not exists (
+      select 1 from workboard_snoozes ws
+      where ws.fan_id = ${fanIdSql}
+        and ws.platform_account_id = ${platformAccountId}
+        and ws.snoozed_until > now()
+    )
+  `;
+}
+
+// -- Subscribers (tab 1) ---------------------------------------------------
+
+export interface WorkboardSubscribersInput {
+  platformAccountId: number;
+  now?: Date;
+}
+
+export interface WorkboardSubscriberRow {
+  fanId: number;
+  platformUserId: string;
+  username: string | null;
+  displayName: string | null;
+  creatorNetAmountMills: bigint;
+  touchpointCode: TouchpointCode;
+  touchpointDueAt: Date;
+  isSoftTouchpoint: boolean;
+  overdueDays: number;
+  platformConversationId: string | null;
+  lastFanMessageAt: Date | null;
+  lastModelMessageAt: Date | null;
+  lastMessagePreview: string | null;
+  storedMessageCount: number;
+  messageBackfillComplete: boolean;
+  subscriptionExpiresAt: Date;
+  autoRenew: boolean | null;
+  subscriberSince: Date | null;
+  subscriptionTierName: string | null;
+  lastTransactionAt: Date | null;
+}
+
+export async function listWorkboardSubscribers(
+  db: Database,
+  input: WorkboardSubscribersInput,
+): Promise<WorkboardSubscriberRow[]> {
+  const now = input.now ?? new Date();
+  const nowSql = sql`${now}::timestamptz`;
+
+  const base = retentionBaseQuery({
+    platformAccountId: input.platformAccountId,
+    limit: 10000,
+    offset: 0,
+    showHandled: false,
+    now,
+  });
+
+  const result = await db.execute<{
+    fanId: NumericValue;
+    platformUserId: string;
+    username: string | null;
+    displayName: string | null;
+    creatorNetAmountMills: NumericValue;
+    touchpointCode: TouchpointCode;
+    touchpointDueAt: TimestampValue;
+    isSoftTouchpoint: boolean;
+    overdueDays: NumericValue;
+    platformConversationId: string | null;
+    lastFanMessageAt: TimestampValue;
+    lastModelMessageAt: TimestampValue;
+    lastMessagePreview: string | null;
+    storedMessageCount: NumericValue;
+    messageBackfillComplete: boolean;
+    subscriptionExpiresAt: TimestampValue;
+    autoRenew: boolean | null;
+    subscriberSince: TimestampValue;
+    subscriptionTierName: string | null;
+    lastTransactionAt: TimestampValue;
+  }>(sql`
+    ${base},
+    workboard_subscribers as (
+      select *,
+             greatest(0,
+               floor(extract(epoch from (${nowSql} - touchpoint_due_at)) / 86400)
+             )::int as overdue_days
+      from filtered
+      where is_handled = false
+        ${workboardSnoozeExclusionSql(input.platformAccountId, sql.raw("filtered.fan_id"))}
+    )
+    select fan_id as "fanId",
+           platform_user_id as "platformUserId",
+           username as "username",
+           display_name as "displayName",
+           creator_net_amount_mills as "creatorNetAmountMills",
+           touchpoint_code as "touchpointCode",
+           touchpoint_due_at as "touchpointDueAt",
+           is_soft_touchpoint as "isSoftTouchpoint",
+           overdue_days as "overdueDays",
+           platform_conversation_id as "platformConversationId",
+           last_fan_message_at as "lastFanMessageAt",
+           last_model_message_at as "lastModelMessageAt",
+           last_message_preview as "lastMessagePreview",
+           stored_message_count as "storedMessageCount",
+           message_backfill_complete as "messageBackfillComplete",
+           subscription_expires_at as "subscriptionExpiresAt",
+           auto_renew as "autoRenew",
+           subscriber_since as "subscriberSince",
+           subscription_tier_name as "subscriptionTierName",
+           last_transaction_at as "lastTransactionAt"
+    from workboard_subscribers
+    order by
+      case touchpoint_code
+        when '1d' then 1 when '3d' then 2 when '5d' then 3
+        when '7d' then 4 when '14d' then 5 when '21d' then 6
+        else 99
+      end asc,
+      case when auto_renew = false then 0 when auto_renew is null then 1 else 2 end asc,
+      creator_net_amount_mills desc,
+      fan_id asc
+  `);
+
+  return result.rows.map((row) => ({
+    fanId: normalizeNumber(row.fanId, "fanId"),
+    platformUserId: row.platformUserId,
+    username: row.username,
+    displayName: row.displayName,
+    creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),
+    touchpointCode: row.touchpointCode,
+    touchpointDueAt: requireTimestamp(row.touchpointDueAt, "touchpointDueAt"),
+    isSoftTouchpoint: row.isSoftTouchpoint,
+    overdueDays: normalizeNumber(row.overdueDays, "overdueDays"),
+    platformConversationId: row.platformConversationId,
+    lastFanMessageAt: parseTimestamp(row.lastFanMessageAt),
+    lastModelMessageAt: parseTimestamp(row.lastModelMessageAt),
+    lastMessagePreview: row.lastMessagePreview,
+    storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
+    messageBackfillComplete: row.messageBackfillComplete,
+    subscriptionExpiresAt: requireTimestamp(row.subscriptionExpiresAt, "subscriptionExpiresAt"),
+    autoRenew: row.autoRenew,
+    subscriberSince: parseTimestamp(row.subscriberSince),
+    subscriptionTierName: row.subscriptionTierName,
+    lastTransactionAt: parseTimestamp(row.lastTransactionAt),
+  }));
+}
+
+// -- Spenders (tabs 2 & 3) -------------------------------------------------
+
+export interface WorkboardSpenderRow {
+  fanId: number;
+  platformUserId: string;
+  username: string | null;
+  displayName: string | null;
+  creatorNetAmountMills: bigint;
+  silenceDays: number;
+  overdueDays: number;
+  platformConversationId: string | null;
+  lastFanMessageAt: Date | null;
+  lastModelMessageAt: Date | null;
+  lastMessagePreview: string | null;
+  storedMessageCount: number;
+  messageBackfillComplete: boolean;
+  subscriptionStatus: "expired" | "never";
+  subscriptionExpiresAt: Date | null;
+  lastTransactionAt: Date | null;
+}
+
+function spenderBaseQuery(
+  input: { platformAccountId: number; now?: Date },
+  opts: {
+    recentSpend: boolean;
+    rhythmDays: number;
+  },
+) {
+  const now = input.now ?? new Date();
+  const nowSql = sql`${now}::timestamptz`;
+  const nowPlus21Days = sql`${now}::timestamptz + interval '21 days'`;
+  const contactThreshold = sql`${now}::timestamptz - (${opts.rhythmDays} || ' days')::interval`;
+
+  const spendWindow = opts.recentSpend
+    ? sql`and slp.last_transaction_at > ${nowSql} - interval '30 days'`
+    : sql`and (slp.last_transaction_at is null or slp.last_transaction_at <= ${nowSql} - interval '30 days')`;
+
+  return sql`
+    with primary_conversation as (
+      select *
+      from (
+        select c.*,
+               row_number() over (
+                 partition by c.platform_account_id, c.fan_id
+                 order by c.last_message_at desc nulls last,
+                          c.platform_conversation_id desc
+               ) as rn
+        from page_dm_conversations c
+        where c.platform_account_id = ${input.platformAccountId}
+          and c.is_visible = true
+          and c.fan_id is not null
+      ) ranked
+      where rn = 1
+    ),
+    retention_due as (
+      select fp.fan_id
+      from fan_pages fp
+      where fp.platform_account_id = ${input.platformAccountId}
+        and fp.is_subscriber = true
+        and fp.subscription_expires_at > ${nowSql}
+        and fp.subscription_expires_at <= ${nowPlus21Days}
+    ),
+    candidate_rows as (
+      select slp.fan_id as fan_id,
+             f.platform_user_id as platform_user_id,
+             f.username as username,
+             f.display_name as display_name,
+             slp.creator_net_amount_mills as creator_net_amount_mills,
+             slp.last_transaction_at as last_transaction_at,
+             fp.subscription_expires_at as subscription_expires_at,
+             pc.platform_conversation_id as platform_conversation_id,
+             pc.last_fan_message_at as last_fan_message_at,
+             pc.last_model_message_at as last_model_message_at,
+             pc.last_message_preview as last_message_preview,
+             coalesce(pc.stored_message_count, 0)::int as stored_message_count,
+             coalesce(pc.message_backfill_complete, false) as message_backfill_complete,
+             coalesce(
+               case
+                 when pc.last_fan_message_at is null and pc.last_model_message_at is null then null
+                 else greatest(
+                   coalesce(pc.last_fan_message_at, '-infinity'::timestamptz),
+                   coalesce(pc.last_model_message_at, '-infinity'::timestamptz)
+                 )
+               end,
+               pc.last_message_at
+             ) as last_contact_at
+      from spender_lifetime_page slp
+      inner join fans f on f.id = slp.fan_id
+      left join fan_pages fp
+        on fp.platform_account_id = slp.platform_account_id
+       and fp.fan_id = slp.fan_id
+      left join primary_conversation pc
+        on pc.platform_account_id = slp.platform_account_id
+       and pc.fan_id = slp.fan_id
+      where slp.platform_account_id = ${input.platformAccountId}
+        and slp.creator_net_amount_mills >= 100000
+        and not coalesce(fp.is_subscriber, false)
+        and not exists (
+          select 1 from retention_due rd where rd.fan_id = slp.fan_id
+        )
+        ${spendWindow}
+        ${workboardSnoozeExclusionSql(input.platformAccountId, sql.raw("slp.fan_id"))}
+    ),
+    filtered as (
+      select *,
+             case
+               when last_contact_at is null then 90
+               else least(90,
+                 floor(extract(epoch from (${nowSql} - last_contact_at)) / 86400)
+               )::int
+             end as silence_days,
+             case
+               when subscription_expires_at is not null then 'expired'
+               else 'never'
+             end as subscription_status
+      from candidate_rows
+      where last_contact_at is null
+         or last_contact_at < ${contactThreshold}
+    )
+  `;
+}
+
+function normalizeSpenderRows(rows: Array<{
+  fanId: NumericValue;
+  platformUserId: string;
+  username: string | null;
+  displayName: string | null;
+  creatorNetAmountMills: NumericValue;
+  silenceDays: NumericValue;
+  overdueDays: NumericValue;
+  platformConversationId: string | null;
+  lastFanMessageAt: TimestampValue;
+  lastModelMessageAt: TimestampValue;
+  lastMessagePreview: string | null;
+  storedMessageCount: NumericValue;
+  messageBackfillComplete: boolean;
+  subscriptionStatus: string;
+  subscriptionExpiresAt: TimestampValue;
+  lastTransactionAt: TimestampValue;
+}>): WorkboardSpenderRow[] {
+  return rows.map((row) => ({
+    fanId: normalizeNumber(row.fanId, "fanId"),
+    platformUserId: row.platformUserId,
+    username: row.username,
+    displayName: row.displayName,
+    creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),
+    silenceDays: normalizeNumber(row.silenceDays, "silenceDays"),
+    overdueDays: normalizeNumber(row.overdueDays, "overdueDays"),
+    platformConversationId: row.platformConversationId,
+    lastFanMessageAt: parseTimestamp(row.lastFanMessageAt),
+    lastModelMessageAt: parseTimestamp(row.lastModelMessageAt),
+    lastMessagePreview: row.lastMessagePreview,
+    storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
+    messageBackfillComplete: row.messageBackfillComplete,
+    subscriptionStatus: row.subscriptionStatus as "expired" | "never",
+    subscriptionExpiresAt: parseTimestamp(row.subscriptionExpiresAt),
+    lastTransactionAt: parseTimestamp(row.lastTransactionAt),
+  }));
+}
+
+export async function listWorkboardActiveSpenders(
+  db: Database,
+  input: { platformAccountId: number; now?: Date },
+): Promise<WorkboardSpenderRow[]> {
+  const base = spenderBaseQuery(input, { recentSpend: true, rhythmDays: 7 });
+
+  const result = await db.execute<{
+    fanId: NumericValue;
+    platformUserId: string;
+    username: string | null;
+    displayName: string | null;
+    creatorNetAmountMills: NumericValue;
+    silenceDays: NumericValue;
+    overdueDays: NumericValue;
+    platformConversationId: string | null;
+    lastFanMessageAt: TimestampValue;
+    lastModelMessageAt: TimestampValue;
+    lastMessagePreview: string | null;
+    storedMessageCount: NumericValue;
+    messageBackfillComplete: boolean;
+    subscriptionStatus: string;
+    subscriptionExpiresAt: TimestampValue;
+    lastTransactionAt: TimestampValue;
+  }>(sql`
+    ${base}
+    select fan_id as "fanId",
+           platform_user_id as "platformUserId",
+           username as "username",
+           display_name as "displayName",
+           creator_net_amount_mills as "creatorNetAmountMills",
+           silence_days as "silenceDays",
+           greatest(0, silence_days - 7) as "overdueDays",
+           platform_conversation_id as "platformConversationId",
+           last_fan_message_at as "lastFanMessageAt",
+           last_model_message_at as "lastModelMessageAt",
+           last_message_preview as "lastMessagePreview",
+           stored_message_count as "storedMessageCount",
+           message_backfill_complete as "messageBackfillComplete",
+           subscription_status as "subscriptionStatus",
+           subscription_expires_at as "subscriptionExpiresAt",
+           last_transaction_at as "lastTransactionAt"
+    from filtered
+    order by creator_net_amount_mills desc, fan_id asc
+  `);
+
+  return normalizeSpenderRows(result.rows);
+}
+
+export async function listWorkboardInactiveSpenders(
+  db: Database,
+  input: { platformAccountId: number; now?: Date },
+): Promise<WorkboardSpenderRow[]> {
+  const base = spenderBaseQuery(input, { recentSpend: false, rhythmDays: 14 });
+
+  const result = await db.execute<{
+    fanId: NumericValue;
+    platformUserId: string;
+    username: string | null;
+    displayName: string | null;
+    creatorNetAmountMills: NumericValue;
+    silenceDays: NumericValue;
+    overdueDays: NumericValue;
+    platformConversationId: string | null;
+    lastFanMessageAt: TimestampValue;
+    lastModelMessageAt: TimestampValue;
+    lastMessagePreview: string | null;
+    storedMessageCount: NumericValue;
+    messageBackfillComplete: boolean;
+    subscriptionStatus: string;
+    subscriptionExpiresAt: TimestampValue;
+    lastTransactionAt: TimestampValue;
+  }>(sql`
+    ${base}
+    select fan_id as "fanId",
+           platform_user_id as "platformUserId",
+           username as "username",
+           display_name as "displayName",
+           creator_net_amount_mills as "creatorNetAmountMills",
+           silence_days as "silenceDays",
+           greatest(0, silence_days - 14) as "overdueDays",
+           platform_conversation_id as "platformConversationId",
+           last_fan_message_at as "lastFanMessageAt",
+           last_model_message_at as "lastModelMessageAt",
+           last_message_preview as "lastMessagePreview",
+           stored_message_count as "storedMessageCount",
+           message_backfill_complete as "messageBackfillComplete",
+           subscription_status as "subscriptionStatus",
+           subscription_expires_at as "subscriptionExpiresAt",
+           last_transaction_at as "lastTransactionAt"
+    from filtered
+    order by creator_net_amount_mills desc, fan_id asc
+  `);
+
+  return normalizeSpenderRows(result.rows);
+}
+
+// -- Snooze / Unsnooze ------------------------------------------------------
+
+export async function snoozeWorkboardFan(
+  db: Database,
+  input: { platformAccountId: number; fanId: number; days: 7 | 14 | 30 },
+): Promise<{ fanId: number; snoozedUntil: Date }> {
+  const result = await db.execute<{
+    fanId: NumericValue;
+    snoozedUntil: TimestampValue;
+  }>(sql`
+    insert into workboard_snoozes (platform_account_id, fan_id, snoozed_until)
+    values (${input.platformAccountId}, ${input.fanId}, now() + (${input.days} || ' days')::interval)
+    on conflict (platform_account_id, fan_id)
+    do update set snoozed_until = excluded.snoozed_until,
+                  created_at = now()
+    returning fan_id as "fanId", snoozed_until as "snoozedUntil"
+  `);
+
+  const row = result.rows[0]!;
+  return {
+    fanId: normalizeNumber(row.fanId, "fanId"),
+    snoozedUntil: requireTimestamp(row.snoozedUntil, "snoozedUntil"),
+  };
+}
+
+export async function unsnoozeWorkboardFan(
+  db: Database,
+  input: { platformAccountId: number; fanId: number },
+): Promise<void> {
+  await db.execute(sql`
+    delete from workboard_snoozes
+    where platform_account_id = ${input.platformAccountId}
+      and fan_id = ${input.fanId}
+  `);
+}
+
+// -- Snoozed list -----------------------------------------------------------
+
+export interface WorkboardSnoozedRow {
+  fanId: number;
+  platformUserId: string;
+  username: string | null;
+  displayName: string | null;
+  creatorNetAmountMills: bigint;
+  snoozedUntil: Date;
+}
+
+export async function listWorkboardSnoozed(
+  db: Database,
+  input: { platformAccountId: number },
+): Promise<WorkboardSnoozedRow[]> {
+  const result = await db.execute<{
+    fanId: NumericValue;
+    platformUserId: string;
+    username: string | null;
+    displayName: string | null;
+    creatorNetAmountMills: NumericValue;
+    snoozedUntil: TimestampValue;
+  }>(sql`
+    select ws.fan_id as "fanId",
+           f.platform_user_id as "platformUserId",
+           f.username as "username",
+           f.display_name as "displayName",
+           coalesce(slp.creator_net_amount_mills, 0)::bigint as "creatorNetAmountMills",
+           ws.snoozed_until as "snoozedUntil"
+    from workboard_snoozes ws
+    inner join fans f on f.id = ws.fan_id
+    left join spender_lifetime_page slp
+      on slp.platform_account_id = ws.platform_account_id
+     and slp.fan_id = ws.fan_id
+    where ws.platform_account_id = ${input.platformAccountId}
+      and ws.snoozed_until > now()
+    order by ws.snoozed_until asc
+  `);
+
+  return result.rows.map((row) => ({
+    fanId: normalizeNumber(row.fanId, "fanId"),
+    platformUserId: row.platformUserId,
+    username: row.username,
+    displayName: row.displayName,
+    creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),
+    snoozedUntil: requireTimestamp(row.snoozedUntil, "snoozedUntil"),
+  }));
 }

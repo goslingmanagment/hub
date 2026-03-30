@@ -68,6 +68,7 @@ import { composeRequestObservers, type SyncChunkYieldReason, type SyncChunkBudge
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
   dmRetentionDate,
+  normalizeDmTipAmountCents,
   normalizeFanslyTimestamp,
   persistRawPayload,
   refreshPageMetadata,
@@ -2478,7 +2479,10 @@ export async function executeDmMessagesChunk(
             ),
             createdAt,
             content: message.content ?? "",
-            totalTipAmountCents: message.totalTipAmount ?? 0,
+            totalTipAmountCents: normalizeDmTipAmountCents(
+              input.pageContext.platform,
+              message.totalTipAmount,
+            ),
             inReplyToMessageId: message.inReplyTo ?? null,
             inReplyToRootMessageId: message.inReplyToRoot ?? null,
           });

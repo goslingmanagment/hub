@@ -9,6 +9,7 @@ import { assertRuntimeSchemaReady } from "@agency_hub_core/db";
 import { resolveMigrationFiles } from "../packages/db/src/migrations-dir.ts";
 import { startTestDatabase } from "./helpers/db.ts";
 import { acquireTestPrerequisite } from "./helpers/prerequisites.ts";
+import { resolveMigrationFiles } from "../packages/db/src/migrations-dir.ts";
 
 describe("runtime schema guard", () => {
   afterEach(() => {
@@ -79,6 +80,12 @@ describe("runtime schema guard", () => {
   }, 30_000);
 
   it("fails when the latest migration is missing from schema_migrations", async () => {
+    const { files } = await resolveMigrationFiles();
+    const latestMigration = files.at(-1);
+    if (!latestMigration) {
+      throw new Error("Expected at least one migration file");
+    }
+
     const testDb = await acquireTestPrerequisite(
       () => startTestDatabase({
         through: "0012_fansly_utc_business_dates.sql",

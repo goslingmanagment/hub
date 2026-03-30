@@ -49,6 +49,8 @@ import type {
   CrmRetentionResponse,
   CrmReactivationResponse,
   CrmConversationPreviewResponse,
+  WorkboardResponse,
+  WorkboardSnoozeResponse,
   NotificationsSettingsResponse,
   NotificationsSettingsUpdateBody,
   NotificationsTestMessageResponse,
@@ -725,7 +727,7 @@ export function useCrmConversationPreview(
   params: { limit?: number } = {},
 ) {
   return useQuery({
-    queryKey: ["crmPreview", pageLabel, platformConversationId],
+    queryKey: ["crmPreview", pageLabel, platformConversationId, params],
     queryFn: () =>
       api.get<CrmConversationPreviewResponse>(
         `/api/v1/pages/${pageLabel}/crm/conversations/${platformConversationId}/preview${qs(params)}`,
@@ -734,6 +736,40 @@ export function useCrmConversationPreview(
   });
 }
 
+// Workboard
+
+export function useWorkboard(
+  pageLabel: string,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["workboard", pageLabel],
+    queryFn: () => api.get<WorkboardResponse>(`/api/v1/pages/${pageLabel}/workboard`),
+    enabled: options.enabled ?? true,
+  });
+}
+
+export function useWorkboardSnooze(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { fanId: number; days: number }) =>
+      api.post<WorkboardSnoozeResponse>(`/api/v1/pages/${pageLabel}/workboard/snooze`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workboard", pageLabel] });
+    },
+  });
+}
+
+export function useWorkboardUnsnooze(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (fanId: number) =>
+      api.del<{ ok: true }>(`/api/v1/pages/${pageLabel}/workboard/snooze/${fanId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workboard", pageLabel] });
+    },
+  });
+}
 
 // Notifications
 export function useNotificationsSettings() {

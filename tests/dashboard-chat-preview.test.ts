@@ -111,6 +111,30 @@ describe("ChatPreviewPanel", () => {
     expect(html).not.toContain("Preview may be incomplete while conversation history loads.");
   });
 
+  it("formats stored tip amounts as cents in the preview bubble", () => {
+    queryMocks.useCrmConversationPreview.mockReturnValue({
+      data: {
+        messageSyncUx: buildSyncUx(),
+        conversation: {
+          messageBackfillComplete: true,
+        },
+        messages: [{
+          platformMessageId: "msg-tip",
+          senderRole: "fan",
+          createdAt: "2026-03-24T11:55:00.000Z",
+          content: "thank you",
+          totalTipAmountCents: 2000,
+        }],
+      },
+      isError: false,
+      isLoading: false,
+    });
+
+    const html = renderPanel();
+
+    expect(html).toContain("Tip $20.00");
+  });
+
   it("uses data-loading language for transient empty previews", () => {
     queryMocks.useCrmConversationPreview.mockReturnValue({
       data: {

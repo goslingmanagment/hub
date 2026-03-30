@@ -456,7 +456,7 @@ export const crmConversationPreviewParamsSchema = pageParamsSchema.extend({
 });
 
 export const crmConversationPreviewQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(20).default(10),
+  limit: z.coerce.number().int().min(1).max(25).default(10),
 });
 
 export const pageConversationMessagesParamsSchema = pageParamsSchema.extend({
@@ -1045,6 +1045,104 @@ export const crmConversationPreviewResponseSchema = z.object({
   conversation: crmPreviewConversationSchema,
   messageSyncUx: syncUxSummarySchema,
   messages: z.array(crmPreviewMessageSchema),
+});
+
+// --- Workboard schemas ---
+
+const workboardConversationSchema = z.object({
+  platformConversationId: z.string().nullable(),
+  lastFanMessageAt: isoTimestamp.nullable(),
+  lastModelMessageAt: isoTimestamp.nullable(),
+  lastMessagePreview: z.string().nullable(),
+  storedMessageCount: z.number().int(),
+  messageBackfillComplete: z.boolean(),
+});
+
+const workboardSubscriberItemSchema = z.object({
+  fanId: intId,
+  fan: z.object({
+    platformUserId: z.string(),
+    username: z.string().nullable(),
+    displayName: z.string().nullable(),
+  }),
+  ltv: z.object({ creatorNetAmountMills: mills }),
+  touchpoint: z.object({
+    code: crmTouchpointEnum,
+    label: z.string(),
+    isSoft: z.boolean(),
+    dueAt: isoTimestamp,
+  }),
+  overdueDays: z.number().int(),
+  conversation: workboardConversationSchema,
+  subscription: z.object({
+    expiresAt: isoTimestamp,
+    autoRenew: z.boolean().nullable(),
+    tierName: z.string().nullable(),
+    subscriberSince: isoTimestamp.nullable(),
+  }),
+  lastTransactionAt: isoTimestamp.nullable(),
+});
+
+const workboardSpenderItemSchema = z.object({
+  fanId: intId,
+  fan: z.object({
+    platformUserId: z.string(),
+    username: z.string().nullable(),
+    displayName: z.string().nullable(),
+  }),
+  ltv: z.object({ creatorNetAmountMills: mills }),
+  overdueDays: z.number().int(),
+  silenceDays: z.number().int(),
+  conversation: workboardConversationSchema,
+  subscription: z.object({
+    status: z.enum(["expired", "never"]),
+    expiresAt: isoTimestamp.nullable(),
+  }),
+  lastTransactionAt: isoTimestamp.nullable(),
+});
+
+const workboardSnoozedItemSchema = z.object({
+  fanId: intId,
+  fan: z.object({
+    platformUserId: z.string(),
+    username: z.string().nullable(),
+    displayName: z.string().nullable(),
+  }),
+  ltv: z.object({ creatorNetAmountMills: mills }),
+  snoozedUntil: isoTimestamp,
+});
+
+export const workboardResponseSchema = z.object({
+  subscribers: z.object({
+    total: z.number().int(),
+    items: z.array(workboardSubscriberItemSchema),
+  }),
+  activeSpenders: z.object({
+    total: z.number().int(),
+    items: z.array(workboardSpenderItemSchema),
+  }),
+  inactiveSpenders: z.object({
+    total: z.number().int(),
+    items: z.array(workboardSpenderItemSchema),
+  }),
+  snoozed: z.object({
+    total: z.number().int(),
+    items: z.array(workboardSnoozedItemSchema),
+  }),
+});
+
+export const workboardSnoozeBodySchema = z.object({
+  fanId: intId,
+  days: z.union([z.literal(7), z.literal(14), z.literal(30)]),
+});
+
+export const workboardSnoozeResponseSchema = z.object({
+  fanId: intId,
+  snoozedUntil: isoTimestamp,
+});
+
+export const workboardUnsnoozeParamsSchema = pageParamsSchema.extend({
+  fanId: z.coerce.number().int().positive(),
 });
 
 export const pageConversationMessageItemSchema = z.object({
@@ -2457,6 +2555,47 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  // --- Workboard ---
+  workboard: {
+    tags: ["workboard"],
+    summary: "Get workboard queue for one Fansly page",
+    security: cookieOrBearerSecurity,
+    params: pageParamsSchema,
+    response: {
+      200: workboardResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardSnooze: {
+    tags: ["workboard"],
+    summary: "Snooze a fan on the workboard",
+    security: cookieOrBearerSecurity,
+    params: pageParamsSchema,
+    body: workboardSnoozeBodySchema,
+    response: {
+      200: workboardSnoozeResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardUnsnooze: {
+    tags: ["workboard"],
+    summary: "Unsnooze a fan on the workboard",
+    security: cookieOrBearerSecurity,
+    params: workboardUnsnoozeParamsSchema,
+    response: {
+      200: z.object({ ok: z.literal(true) }),
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   // --- Phase 4: Dashboard routes ---
   overview: {
     tags: ["dashboard"],
@@ -3241,3 +3380,7 @@ export type NotificationsReportPreviewResponse = z.infer<typeof notificationsRep
 export type NotificationsReportSendResponse = z.infer<typeof notificationsReportSendResponseSchema>;
 export type NotificationsDeliveryAttemptItem = z.infer<typeof notificationsDeliveryAttemptItemSchema>;
 export type NotificationsReportHistoryResponse = z.infer<typeof notificationsReportHistoryResponseSchema>;
+export type WorkboardResponse = z.infer<typeof workboardResponseSchema>;
+export type WorkboardSnoozeBody = z.infer<typeof workboardSnoozeBodySchema>;
+export type WorkboardSnoozeResponse = z.infer<typeof workboardSnoozeResponseSchema>;
+export type WorkboardUnsnoozeParams = z.infer<typeof workboardUnsnoozeParamsSchema>;

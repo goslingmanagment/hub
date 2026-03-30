@@ -446,7 +446,7 @@ async function seedCrmApiFixture(input: {
       senderRole: "fan",
       createdAt: new Date("2026-03-14T08:00:00.000Z"),
       content: "Need help with anything else?",
-      totalTipAmountCents: 125,
+      totalTipAmountCents: 2000,
       inReplyToMessageId: null,
       inReplyToRootMessageId: null,
     },
@@ -522,6 +522,98 @@ async function seedCrmApiFixture(input: {
     subscriberFan,
     reactivationFan,
     conversation,
+  };
+}
+
+async function seedWorkboardApiFixture(input: {
+  testDb: StartedTestDatabase;
+  pageId: number;
+}) {
+  const [visibleSubscriber, snoozedSubscriber, activeSpender, inactiveSpender] = await upsertFans(input.testDb.db, [
+    {
+      platform: "fansly",
+      platformUserId: "wb-api-subscriber-visible",
+      username: "wb_api_subscriber_visible",
+      displayName: "WB API Subscriber Visible",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-api-subscriber-snoozed",
+      username: "wb_api_subscriber_snoozed",
+      displayName: "WB API Subscriber Snoozed",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-api-active-spender",
+      username: "wb_api_active_spender",
+      displayName: "WB API Active Spender",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-api-inactive-spender",
+      username: "wb_api_inactive_spender",
+      displayName: "WB API Inactive Spender",
+    },
+  ]);
+
+  for (const [index, fan] of [visibleSubscriber, snoozedSubscriber].entries()) {
+    await upsertFanPage(input.testDb.db, {
+      fanId: fan.id,
+      platformAccountId: input.pageId,
+      isSubscriber: true,
+      subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
+      subscriptionExpiresAt: new Date(`2026-03-31T1${index}:00:00.000Z`),
+      autoRenew: index === 0,
+    });
+    await upsertPageSubscription(input.testDb.db, {
+      platformSubscriptionId: `wb-api-sub-${index + 1}`,
+      platformAccountId: input.pageId,
+      fanId: fan.id,
+      rawStatus: 3,
+      canonicalStatus: "active",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: index === 0,
+      sourceCreatedAt: new Date("2026-03-01T12:00:00.000Z"),
+      endsAt: new Date(`2026-03-31T1${index}:00:00.000Z`),
+      subscriptionTierName: "VIP",
+    });
+  }
+
+  await upsertTransaction(input.testDb.db, {
+    platformAccountId: input.pageId,
+    fanId: activeSpender.id,
+    transactionId: "wb-api-active-tip",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 125000n,
+    sourceDestinationAmountMills: 125000n,
+    creatorNetAmountMills: 125000n,
+    occurredAt: new Date("2026-03-25T12:00:00.000Z"),
+  });
+  await upsertTransaction(input.testDb.db, {
+    platformAccountId: input.pageId,
+    fanId: inactiveSpender.id,
+    transactionId: "wb-api-inactive-tip",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 140000n,
+    sourceDestinationAmountMills: 140000n,
+    creatorNetAmountMills: 140000n,
+    occurredAt: new Date("2026-02-10T12:00:00.000Z"),
+  });
+
+  await recalculateFanPageSpend(input.testDb.db, input.pageId);
+
+  return {
+    visibleSubscriber,
+    snoozedSubscriber,
+    activeSpender,
+    inactiveSpender,
   };
 }
 
@@ -6368,6 +6460,10 @@ describe("api integration", () => {
       "crm-msg-003",
       "crm-msg-004",
     ]);
+    expect(preview.json().messages[2]).toMatchObject({
+      platformMessageId: "crm-msg-004",
+      totalTipAmountCents: 2000,
+    });
 
     const messages = await server.inject({
       method: "GET",
@@ -6391,7 +6487,7 @@ describe("api integration", () => {
     expect(messages.json().messages[0]).toMatchObject({
       messageId: "crm-msg-004",
       senderRole: "fan",
-      tipAmountCents: 125,
+      tipAmountCents: 2000,
       createdAt: "2026-03-14T08:00:00.000Z",
     });
 
@@ -6416,6 +6512,121 @@ describe("api integration", () => {
       headers: { cookie },
     });
     expect(missingMessages.statusCode).toBe(404);
+  });
+
+  it("snoozes and unsnoozes workboard fans without hiding the rest of the queue", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-30T12:00:00.000Z"));
+
+    const workboardPage = await createFanslyPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-workboard",
+    });
+    await updatePageMetadata(testDb.db, workboardPage.id, {
+      platformAccountIdValue: "acct-lana-workboard",
+      username: "lana_workboard",
+      displayName: "Lana Workboard",
+      followerCount: 0,
+      subscriberCount: 2,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    const seeded = await seedWorkboardApiFixture({
+      testDb,
+      pageId: workboardPage.id,
+    });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const beforeSnooze = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-workboard/workboard",
+      headers: { cookie },
+    });
+    expect(beforeSnooze.statusCode).toBe(200);
+    expect(beforeSnooze.json()).toMatchObject({
+      subscribers: { total: 2 },
+      activeSpenders: { total: 1 },
+      inactiveSpenders: { total: 1 },
+      snoozed: { total: 0 },
+    });
+    const beforeSnoozeSubscriber = beforeSnooze.json().subscribers.items.find(
+      (item: { fanId: number }) => item.fanId === seeded.visibleSubscriber.id,
+    );
+    expect(beforeSnoozeSubscriber?.subscription.subscriberSince).toBe("2026-03-01T12:00:00.000Z");
+
+    const snooze = await server.inject({
+      method: "POST",
+      url: "/api/v1/pages/lana-workboard/workboard/snooze",
+      headers: { cookie },
+      payload: {
+        fanId: seeded.snoozedSubscriber.id,
+        days: 7,
+      },
+    });
+    expect(snooze.statusCode).toBe(200);
+    expect(snooze.json()).toMatchObject({
+      fanId: seeded.snoozedSubscriber.id,
+      snoozedUntil: expect.any(String),
+    });
+
+    const afterSnooze = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-workboard/workboard",
+      headers: { cookie },
+    });
+    expect(afterSnooze.statusCode).toBe(200);
+    expect(afterSnooze.json()).toMatchObject({
+      subscribers: {
+        total: 1,
+        items: [expect.objectContaining({ fanId: seeded.visibleSubscriber.id })],
+      },
+      activeSpenders: {
+        total: 1,
+        items: [expect.objectContaining({ fanId: seeded.activeSpender.id })],
+      },
+      inactiveSpenders: {
+        total: 1,
+        items: [expect.objectContaining({ fanId: seeded.inactiveSpender.id })],
+      },
+      snoozed: {
+        total: 1,
+        items: [expect.objectContaining({ fanId: seeded.snoozedSubscriber.id })],
+      },
+    });
+
+    const unsnooze = await server.inject({
+      method: "DELETE",
+      url: `/api/v1/pages/lana-workboard/workboard/snooze/${seeded.snoozedSubscriber.id}`,
+      headers: { cookie },
+    });
+    expect(unsnooze.statusCode).toBe(200);
+    expect(unsnooze.json()).toEqual({ ok: true });
+
+    const afterUnsnooze = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-workboard/workboard",
+      headers: { cookie },
+    });
+    expect(afterUnsnooze.statusCode).toBe(200);
+    expect(afterUnsnooze.json()).toMatchObject({
+      subscribers: { total: 2 },
+      activeSpenders: { total: 1 },
+      inactiveSpenders: { total: 1 },
+      snoozed: { total: 0 },
+    });
   });
 
   it("enforces CRM page access and rejects non-Fansly pages", async (context) => {
