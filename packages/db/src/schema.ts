@@ -714,6 +714,32 @@ export const pageDmMessages = pgTable(
   }),
 );
 
+export const workboardSnoozes = pgTable(
+  "workboard_snoozes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    snoozedUntil: timestamp("snoozed_until", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    platformAccountFanUniq: unique("workboard_snoozes_platform_account_id_fan_id_key").on(
+      table.platformAccountId,
+      table.fanId,
+    ),
+    lookupIdx: index("workboard_snoozes_lookup_idx").on(
+      table.platformAccountId,
+      table.fanId,
+      table.snoozedUntil,
+    ),
+  }),
+);
+
 export const transactions = pgTable(
   "transactions",
   {

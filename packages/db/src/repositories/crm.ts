@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
@@ -1613,11 +1613,11 @@ export async function getCrmConversationPreview(
 
 type TouchpointCode = "21d" | "14d" | "7d" | "5d" | "3d" | "1d";
 
-function workboardSnoozeExclusionSql(platformAccountId: number) {
+function workboardSnoozeExclusionSql(platformAccountId: number, fanIdSql: SQL) {
   return sql`
     and not exists (
       select 1 from workboard_snoozes ws
-      where ws.fan_id = fan_id
+      where ws.fan_id = ${fanIdSql}
         and ws.platform_account_id = ${platformAccountId}
         and ws.snoozed_until > now()
     )
@@ -1697,7 +1697,7 @@ export async function listWorkboardSubscribers(
              )::int as overdue_days
       from filtered
       where is_handled = false
-        ${workboardSnoozeExclusionSql(input.platformAccountId)}
+        ${workboardSnoozeExclusionSql(input.platformAccountId, sql.raw("filtered.fan_id"))}
     )
     select fan_id as "fanId",
            platform_user_id as "platformUserId",
@@ -1854,7 +1854,7 @@ function spenderBaseQuery(
           select 1 from retention_due rd where rd.fan_id = slp.fan_id
         )
         ${spendWindow}
-        ${workboardSnoozeExclusionSql(input.platformAccountId)}
+        ${workboardSnoozeExclusionSql(input.platformAccountId, sql.raw("slp.fan_id"))}
     ),
     filtered as (
       select *,

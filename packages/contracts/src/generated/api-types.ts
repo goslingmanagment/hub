@@ -2914,6 +2914,402 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pages/{pageLabel}/workboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get workboard queue for one Fansly page */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            subscribers: {
+                                total: number;
+                                items: {
+                                    fanId: number;
+                                    fan: {
+                                        platformUserId: string;
+                                        username: string | null;
+                                        displayName: string | null;
+                                    };
+                                    ltv: {
+                                        creatorNetAmountMills: number;
+                                    };
+                                    touchpoint: {
+                                        /** @enum {string} */
+                                        code: "21d" | "14d" | "7d" | "5d" | "3d" | "1d";
+                                        label: string;
+                                        isSoft: boolean;
+                                        dueAt: string;
+                                    };
+                                    overdueDays: number;
+                                    conversation: {
+                                        platformConversationId: string | null;
+                                        lastFanMessageAt: string | null;
+                                        lastModelMessageAt: string | null;
+                                        lastMessagePreview: string | null;
+                                        storedMessageCount: number;
+                                        messageBackfillComplete: boolean;
+                                    };
+                                    subscription: {
+                                        expiresAt: string;
+                                        autoRenew: boolean | null;
+                                        tierName: string | null;
+                                    };
+                                    lastTransactionAt: string | null;
+                                }[];
+                            };
+                            activeSpenders: {
+                                total: number;
+                                items: {
+                                    fanId: number;
+                                    fan: {
+                                        platformUserId: string;
+                                        username: string | null;
+                                        displayName: string | null;
+                                    };
+                                    ltv: {
+                                        creatorNetAmountMills: number;
+                                    };
+                                    overdueDays: number;
+                                    silenceDays: number;
+                                    conversation: {
+                                        platformConversationId: string | null;
+                                        lastFanMessageAt: string | null;
+                                        lastModelMessageAt: string | null;
+                                        lastMessagePreview: string | null;
+                                        storedMessageCount: number;
+                                        messageBackfillComplete: boolean;
+                                    };
+                                    subscription: {
+                                        /** @enum {string} */
+                                        status: "expired" | "never";
+                                        expiresAt: string | null;
+                                    };
+                                    lastTransactionAt: string | null;
+                                }[];
+                            };
+                            inactiveSpenders: {
+                                total: number;
+                                items: {
+                                    fanId: number;
+                                    fan: {
+                                        platformUserId: string;
+                                        username: string | null;
+                                        displayName: string | null;
+                                    };
+                                    ltv: {
+                                        creatorNetAmountMills: number;
+                                    };
+                                    overdueDays: number;
+                                    silenceDays: number;
+                                    conversation: {
+                                        platformConversationId: string | null;
+                                        lastFanMessageAt: string | null;
+                                        lastModelMessageAt: string | null;
+                                        lastMessagePreview: string | null;
+                                        storedMessageCount: number;
+                                        messageBackfillComplete: boolean;
+                                    };
+                                    subscription: {
+                                        /** @enum {string} */
+                                        status: "expired" | "never";
+                                        expiresAt: string | null;
+                                    };
+                                    lastTransactionAt: string | null;
+                                }[];
+                            };
+                            snoozed: {
+                                total: number;
+                                items: {
+                                    fanId: number;
+                                    fan: {
+                                        platformUserId: string;
+                                        username: string | null;
+                                        displayName: string | null;
+                                    };
+                                    ltv: {
+                                        creatorNetAmountMills: number;
+                                    };
+                                    snoozedUntil: string;
+                                }[];
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/workboard/snooze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Snooze a fan on the workboard */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        fanId: number;
+                        days: 7 | 14 | 30;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            fanId: number;
+                            snoozedUntil: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/workboard/snooze/{fanId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unsnooze a fan on the workboard */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                    fanId: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/fans/{platform}/{platformUserId}": {
         parameters: {
             query?: never;

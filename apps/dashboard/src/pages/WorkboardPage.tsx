@@ -3,6 +3,7 @@ import { useParams, Navigate } from "react-router";
 import { useOverview, useWorkboard, useWorkboardSnooze, useWorkboardUnsnooze } from "@/api/queries";
 import { SubscriberCard, SpenderCard } from "@/components/page/workboard/WorkboardCard";
 import { SnoozedSection } from "@/components/page/workboard/SnoozedSection";
+import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import {
   mapSubscriberVm,
   mapSpenderVm,
@@ -21,7 +22,7 @@ const TABS: Tab[] = ["subscribers", "activeSpenders", "inactiveSpenders"];
 
 export function WorkboardPage() {
   const { pageLabel } = useParams();
-  const { data: overview } = useOverview();
+  const { data: overview, isLoading: overviewLoading } = useOverview();
   const page = overview?.pages.find((p) => p.label === pageLabel);
   const resolvedPageLabel = page?.label ?? pageLabel ?? "";
   const isFanslyPage = page?.platform === "fansly";
@@ -72,6 +73,10 @@ export function WorkboardPage() {
 
   function toggleExpand(fanId: number) {
     setExpandedFanId((prev) => (prev === fanId ? null : fanId));
+  }
+
+  if (overviewLoading || !overview) {
+    return <TableSkeleton rows={6} columns={6} />;
   }
 
   if (!page) {
