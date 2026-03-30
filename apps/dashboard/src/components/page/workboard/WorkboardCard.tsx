@@ -32,7 +32,9 @@ const AVATAR_BG = [
 ];
 
 function FanAvatar({ name }: { name: string }) {
-  const letter = name.charAt(0).toUpperCase();
+  const chars = [...name];
+  const firstAlpha = chars.find((c) => /\p{L}/u.test(c));
+  const letter = firstAlpha ? firstAlpha.toUpperCase() : chars[0] ?? "?";
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = (hash + name.charCodeAt(i)) | 0;
   const bg = AVATAR_BG[Math.abs(hash) % AVATAR_BG.length];
