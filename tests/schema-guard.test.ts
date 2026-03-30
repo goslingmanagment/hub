@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { assertRuntimeSchemaReady } from "@agency_hub_core/db";
 
+import { resolveMigrationFiles } from "../packages/db/src/migrations-dir.ts";
 import { startTestDatabase } from "./helpers/db.ts";
 import { acquireTestPrerequisite } from "./helpers/prerequisites.ts";
 
@@ -92,8 +93,15 @@ describe("runtime schema guard", () => {
     }
 
     try {
+      const { files } = await resolveMigrationFiles();
+      const latestMigration = files.at(-1);
+
+      if (!latestMigration) {
+        throw new Error("Expected at least one migration file");
+      }
+
       await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
-        "missing latest migration 0024_telegram_credentials_in_db.sql",
+        `missing latest migration ${latestMigration}`,
       );
     } finally {
       await testDb.stop();

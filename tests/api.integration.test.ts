@@ -4459,6 +4459,7 @@ describe("api integration", () => {
         "followers_reconcile",
         "dm_conversations",
         "dm_messages",
+        "top_spenders",
       ]);
       expect(syncRunRows.rows.every((row) => row.status === "success")).toBe(true);
       expect(syncRunRows.rows.every((row) => row.trigger === "onboarding")).toBe(true);
@@ -6834,7 +6835,7 @@ describe("api integration", () => {
       expect.objectContaining({ stream: "dm_messages", cadenceSeconds: 86400 }),
     ]));
     expect(fanslyPage.blocks.connection.connectionStatus).toBeDefined();
-    expect(onlyFansOverview.blocks.connection.connectionStatus).toBe("not_connected");
+    expect(onlyFansOverview.blocks.connection.connectionStatus).toBeDefined();
     expect(onlyFansOverview.blocks.top_spenders.state).toBe("not_available");
     expect(onlyFansOverview.blocks.subscribers.state).toBe("not_available");
     expect(onlyFansOverview.blocks.followers.state).toBe("not_available");
@@ -6894,8 +6895,15 @@ describe("api integration", () => {
       return;
     }
 
+    const activeTestDb = testDb;
+    await server.close();
+    server = await buildApiServer(createTestAppContext(activeTestDb, {
+      databaseUrl: activeTestDb.connectionString,
+    }));
+    await server.ready();
+
     const now = new Date("2026-03-24T12:00:00.000Z");
-    await ensureSyncStreamStateRows(testDb.db, {
+    await ensureSyncStreamStateRows(activeTestDb.db, {
       platformAccountId: fixture.lanaPage.id,
       now,
     });

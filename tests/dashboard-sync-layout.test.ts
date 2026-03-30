@@ -12,6 +12,7 @@ const queryMocks = vi.hoisted(() => ({
   useAuthMe: vi.fn(),
   useLogout: vi.fn(),
   useOverview: vi.fn(),
+  useSyncOverview: vi.fn(),
   useSyncMonitor: vi.fn(),
 }));
 
@@ -64,6 +65,66 @@ function buildOverview() {
       subscriberCount: 12,
       followerCount: 34,
       syncUx: buildSyncUx(),
+    }],
+  };
+}
+
+function buildSyncBlock(
+  block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages",
+  overrides: Partial<{
+    connectionStatus: "connected" | "not_connected" | "error" | null;
+    metrics: Record<string, unknown>;
+    state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+  }> = {},
+) {
+  return {
+    block,
+    state: "up_to_date" as const,
+    lastSuccessAt: "2026-03-24T11:55:00.000Z",
+    progress: null,
+    error: null,
+    needsAttention: false,
+    nextDueAt: null,
+    nextRetryAt: null,
+    intervals: [],
+    metrics: {},
+    connectionStatus: null,
+    substreams: [],
+    ...overrides,
+  };
+}
+
+function buildSyncOverview() {
+  return {
+    generatedAt: "2026-03-24T12:00:00.000Z",
+    pages: [{
+      pageId: 1,
+      pageLabel: "lana",
+      platform: "fansly" as const,
+      modelSlug: "lana",
+      modelName: "Lana",
+      username: "lana",
+      displayName: "Lana",
+      blocks: {
+        connection: buildSyncBlock("connection", {
+          connectionStatus: "connected",
+        }),
+        top_spenders: buildSyncBlock("top_spenders", {
+          metrics: { spenderCount: 5 },
+        }),
+        transactions: buildSyncBlock("transactions", {
+          metrics: { transactionCount: 12 },
+        }),
+        subscribers: buildSyncBlock("subscribers", {
+          metrics: { subscriberCount: 12 },
+        }),
+        followers: buildSyncBlock("followers", {
+          metrics: { followerCount: 34 },
+        }),
+        messages: buildSyncBlock("messages", {
+          metrics: { visibleConversationCount: 3 },
+        }),
+      },
     }],
   };
 }
@@ -147,9 +208,14 @@ describe("dashboard sync layout", () => {
     queryMocks.useAuthMe.mockReset();
     queryMocks.useLogout.mockReset();
     queryMocks.useOverview.mockReset();
+    queryMocks.useSyncOverview.mockReset();
     queryMocks.useSyncMonitor.mockReset();
 
     queryMocks.useOverview.mockReturnValue({ data: buildOverview() });
+    queryMocks.useSyncOverview.mockReturnValue({
+      data: buildSyncOverview(),
+      isLoading: false,
+    });
     queryMocks.useLogout.mockReturnValue({ mutateAsync: vi.fn() });
     queryMocks.useAuthMe.mockReturnValue({
       data: { user: { username: "owner", role: "owner" } },
@@ -212,8 +278,8 @@ describe("dashboard sync layout", () => {
   it("supports settings tab deep links for the sync workspace", () => {
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("Sync Data");
-    expect(html).toContain("Sync diagnostics");
+    expect(html).toContain("Top Spenders");
+    expect(html).toContain("View details");
     expect(html).not.toContain("Update Credentials");
   });
 });

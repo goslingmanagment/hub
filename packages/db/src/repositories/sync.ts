@@ -2978,9 +2978,9 @@ export async function resetSyncStreamStateRows(
   await db.execute(sql`
     update sync_stream_state
     set status = case
-                   when status = 'disabled' then 'disabled'
-                   when status = 'auth_failed' then 'auth_failed'
-                   else 'active'
+                   when status = 'disabled' then 'disabled'::sync_target_status
+                   when status = 'auth_failed' then 'auth_failed'::sync_target_status
+                   else 'active'::sync_target_status
                  end,
         pending_reason = 'scheduled',
         desired_revision = 0,
