@@ -2972,6 +2972,7 @@ export interface paths {
                                         expiresAt: string;
                                         autoRenew: boolean | null;
                                         tierName: string | null;
+                                        subscriberSince: string | null;
                                     };
                                     lastTransactionAt: string | null;
                                 }[];

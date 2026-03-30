@@ -6561,6 +6561,10 @@ describe("api integration", () => {
       inactiveSpenders: { total: 1 },
       snoozed: { total: 0 },
     });
+    const beforeSnoozeSubscriber = beforeSnooze.json().subscribers.items.find(
+      (item: { fanId: number }) => item.fanId === seeded.visibleSubscriber.id,
+    );
+    expect(beforeSnoozeSubscriber?.subscription.subscriberSince).toBe("2026-03-01T12:00:00.000Z");
 
     const snooze = await server.inject({
       method: "POST",

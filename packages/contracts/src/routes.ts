@@ -1078,6 +1078,7 @@ const workboardSubscriberItemSchema = z.object({
     expiresAt: isoTimestamp,
     autoRenew: z.boolean().nullable(),
     tierName: z.string().nullable(),
+    subscriberSince: isoTimestamp.nullable(),
   }),
   lastTransactionAt: isoTimestamp.nullable(),
 });

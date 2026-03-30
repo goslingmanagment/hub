@@ -873,6 +873,7 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
              f.display_name as display_name,
              fp.subscription_expires_at as subscription_expires_at,
              fp.auto_renew as auto_renew,
+             fp.subscriber_since as subscriber_since,
              cs.subscription_tier_name as subscription_tier_name,
              coalesce(slp.creator_net_amount_mills, 0)::bigint as creator_net_amount_mills,
              slp.last_transaction_at as last_transaction_at,
@@ -1649,6 +1650,7 @@ export interface WorkboardSubscriberRow {
   messageBackfillComplete: boolean;
   subscriptionExpiresAt: Date;
   autoRenew: boolean | null;
+  subscriberSince: Date | null;
   subscriptionTierName: string | null;
   lastTransactionAt: Date | null;
 }
@@ -1686,6 +1688,7 @@ export async function listWorkboardSubscribers(
     messageBackfillComplete: boolean;
     subscriptionExpiresAt: TimestampValue;
     autoRenew: boolean | null;
+    subscriberSince: TimestampValue;
     subscriptionTierName: string | null;
     lastTransactionAt: TimestampValue;
   }>(sql`
@@ -1716,6 +1719,7 @@ export async function listWorkboardSubscribers(
            message_backfill_complete as "messageBackfillComplete",
            subscription_expires_at as "subscriptionExpiresAt",
            auto_renew as "autoRenew",
+           subscriber_since as "subscriberSince",
            subscription_tier_name as "subscriptionTierName",
            last_transaction_at as "lastTransactionAt"
     from workboard_subscribers
@@ -1748,6 +1752,7 @@ export async function listWorkboardSubscribers(
     messageBackfillComplete: row.messageBackfillComplete,
     subscriptionExpiresAt: requireTimestamp(row.subscriptionExpiresAt, "subscriptionExpiresAt"),
     autoRenew: row.autoRenew,
+    subscriberSince: parseTimestamp(row.subscriberSince),
     subscriptionTierName: row.subscriptionTierName,
     lastTransactionAt: parseTimestamp(row.lastTransactionAt),
   }));

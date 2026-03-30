@@ -469,6 +469,7 @@ export async function getWorkboardReport(
           expiresAt: new Date(row.subscriptionExpiresAt).toISOString(),
           autoRenew: row.autoRenew,
           tierName: row.subscriptionTierName,
+          subscriberSince: serializeTimestamp(row.subscriberSince),
         },
         lastTransactionAt: serializeTimestamp(row.lastTransactionAt),
       })),

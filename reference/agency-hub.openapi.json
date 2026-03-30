@@ -9205,12 +9205,23 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "subscriberSince": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
                                   "expiresAt",
                                   "autoRenew",
-                                  "tierName"
+                                  "tierName",
+                                  "subscriberSince"
                                 ],
                                 "additionalProperties": false
                               },

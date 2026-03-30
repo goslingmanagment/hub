@@ -168,6 +168,7 @@ describe("workboard repository integration", () => {
     ]);
 
     expect(subscribers.map((row) => row.fanId)).toEqual([seeded.visibleSubscriber.id]);
+    expect(subscribers[0]?.subscriberSince?.toISOString()).toBe("2026-03-01T12:00:00.000Z");
     expect(activeSpenders.map((row) => row.fanId)).toEqual([seeded.activeSpender.id]);
     expect(inactiveSpenders.map((row) => row.fanId)).toEqual([seeded.inactiveSpender.id]);
     expect(snoozed.map((row) => row.fanId)).toEqual([seeded.snoozedSubscriber.id]);
