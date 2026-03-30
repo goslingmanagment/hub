@@ -1,192 +1,300 @@
 # Agency Hub — Product Roadmap
 
+> Last updated: 2026-03-26
+
+## Status Overview
+
+| Phase | Name | Status | Notes |
+|-------|------|--------|-------|
+| 1 | Agency Hub Core | **Done** | Fansly + OF adapters, sync pipeline, CLI |
+| 2 | API + Auth | **Done** | REST API, RBAC, API keys, session auth |
+| 3 | OnlyFans Connect | **Done** | OnlyMonster adapter, transactions, chatter metrics |
+| 4 | Dashboard | **On Track** | ~90% features built. Polish and bug fixes remaining |
+| 4a | CRM Module | **Done** | Retention, reactivation, touchpoints — shipped ahead of plan |
+| 4b | DM Sync | **Done** | Conversation + message sync from Fansly |
+| 4c | Fan Intelligence | **Done** | AI summaries, version history, cross-page spender analytics |
+| 5 | Telegram Notifications | **Done** | Daily reports, incident alerts, test messages |
+| 6 | Backups + Ops | **At Risk** | Job queue + monitoring done. Automated off-server backups missing |
+| 7 | ChatMuse Backend | **Not Started** | AI proxy, fan context injection, cost tracking |
+| 8 | Team Management | **Not Started** | Staff profiles, schedules, chatter performance display |
+| 9 | Chatter Payroll | **Not Started** | Payout calculation, shift reports |
+| 10 | Internal TODO | **Not Started** | Task manager for agency ops |
+| 11 | Advanced Analytics | **Not Started** | PnL, traffic ROI, fan LTV, segmentation |
+
+**Summary:** 7 of 11 phases done or near-done. Phase 4 polish + Phase 6 backups are the remaining blockers before production readiness. Phases 7–11 are untouched.
+
+---
+
 ## Dependency Graph
 
 ```
 Phase 1: Agency Hub Core
   └─► Phase 2: API + Auth
        ├─► Phase 3: OnlyFans Connect
-       │    └─► Phase 4: Dashboard ──────────────┐
-       │         └─► Phase 8: Team Management ───►│─► Phase 9: Chatter Payroll ─► Phase 11: Advanced Analytics
-       │                                          │
-       └─► Phase 5: Telegram Notifications        │
-                                                   │
-Phase 8: Team Management ─────────────────────────► Phase 10: Internal TODO
+       │    ├─► Phase 4: Dashboard (+ 4a CRM, 4b DM Sync, 4c Fan Intel) ─┐
+       │    │    └─► Phase 8: Team Management ──────────────────────────►│─► Phase 9: Chatter Payroll ─► Phase 11: Advanced Analytics
+       │    │                                                            │
+       │    └─────────────────────────────────────────────────────────────┘
+       └─► Phase 5: Telegram Notifications
 
 Phase 6: Backups + Ops  (must complete before production deploy)
-Phase 7: ChatMuse Backend  (depends on Phases 2 + 4; intentionally scheduled after Phases 3-6 by owner decision)
-
-Phase 3 (OF Connect) precedes Phase 4 (Dashboard) so the dashboard ships with both platforms from day one.
-Phase 5 runs after Phase 2 and can ship independently of Phases 3, 6, and 7.
+Phase 7: ChatMuse Backend  (depends on Phases 2 + 4; scheduled after Phases 3-6 by owner decision)
+Phase 8: Team Management ─► Phase 10: Internal TODO
 ```
 
 ---
 
-## Phase 1: Agency Hub Core
+## Phase 1: Agency Hub Core — **Done**
 
 The agency can add models and Fansly pages, sync all financial and audience data, and verify correctness from the command line.
 
 **Features:**
 - Add models and attach Fansly pages to them
-- Per-page proxy configuration to avoid single-IP detection
-- Encrypt platform tokens and proxy credentials at rest
+- Per-page proxy configuration (SOCKS5) with exit IP verification
+- Encrypt platform tokens and proxy credentials at rest (AES-256, key versioning)
 - Hourly transaction sync: tips, subscriptions, message purchases, post purchases, stream tips, chargebacks, refunds
 - Checkpointed, idempotent sync pipeline: upsert raw events first, then rebuild derived projections safely on reruns
-- Classify every transaction into a unified type taxonomy (same categories used across all platforms later)
+- Classify every transaction into a unified type taxonomy (same categories used across all platforms)
 - Revenue stored as net (after platform commission); chargebacks deducted but tracked separately; pending transactions tracked with status
-- Sync active subscribers: usernames, expiry dates, auto-renew status (where the platform provides it)
-- Sync free followers every 12 hours: ID, username, follow date — full parse on first run, then delta-only updates every 12 hours with rate-limited requests (~5 sec pauses, handling 5–15k per page)
-- Fan identity is a core schema rule: canonical fan key is `(platform, platform_user_id)` with no cross-platform linking
-- Create fan records from transactions, subscriptions, and follows using the canonical platform fan identity
+- Sync active subscribers: usernames, expiry dates, auto-renew status (Fansly)
+- Sync free followers every 12 hours: ID, username, follow date — full parse on first run, then delta-only with rate-limited requests
+- Follower deactivation tracking with generation-based rollup accuracy
+- Fan identity: canonical key is `(platform, platform_user_id)` with no cross-platform linking
+- Create fan records from transactions, subscriptions, and follows
 - Compute per-page fan spending from synced transactions
 - Build daily rollups for revenue, subscriber counts, and follower counts
 - Store all timestamps in UTC
-- Retain raw platform responses for debugging and future re-mapping
-- CLI tools: add model/page, trigger sync, view today's revenue, verify subscriber counts, inspect fan spending
+- Retain raw platform responses with configurable retention + automated cleanup
+- CLI tools: add model/page, trigger sync, view revenue, verify subscribers, inspect fan spending, sync status watch mode
 
 **Depends on:** None
 
-**Milestone:** Run a CLI command and see today's Fansly revenue per page matching the platform. Run another command and see the active subscriber list with expiry dates.
+**Milestone:** ✅ Run a CLI command and see today's Fansly revenue per page matching the platform.
 
 ---
 
-## Phase 2: API + Auth
+## Phase 2: API + Auth — **Done**
 
 The hub exposes a secure API that the dashboard and ChatMuse extension can consume, with role-based access control.
 
 **Features:**
-- Authenticated API serving all collected data: revenue, transactions, subscribers, followers, fans
-- Dashboard login with password-based accounts for owner and team leads
-- Minimal staff/account skeleton via CLI: users, roles, and page assignments for `owner`, `team_lead`, `chatter`, and `content_manager`
-- ChatMuse authentication: scoped API keys (one per chatter), issued via CLI, revocable
-- Page-scoped access control: chatters see only their assigned page; team leads see their assigned pages; owner sees everything
-- Fan data endpoints respecting visibility rules — chatters get their page's fan data plus total platform spending; team leads get cross-page view; owner gets full agency view
-- Revenue endpoints: by model, by page, by period (today / 7d / 30d / custom / all-time), by transaction type, with period-over-period comparison
-- Subscriber and follower endpoints with filtering
-- Fan profile endpoints: spending, subscription status, notes, summaries, flags, and the list of pages that fan follows/subscribes to on that platform
+- Fastify REST API with Zod validation and auto-generated OpenAPI schema
+- Session-based login (JWT cookies) for dashboard users
+- API key authentication for ChatMuse chatters (scoped, revocable, prefix-tracked)
+- Role-based access: `owner`, `team_lead`, `chatter`, `content_manager`
+- Page-scoped visibility: chatters see only assigned pages; team leads see their pages; owner sees everything
+- Revenue endpoints: by model, by page, by period (today/7d/30d/all-time/custom), by transaction type, with period-over-period comparison
+- Subscriber, follower, fan profile endpoints with filtering
+- Fan data endpoints respecting visibility rules
 - All business periods computed on UTC business dates
-- Generate OpenAPI from Zod route schemas and publish typed API clients for dashboard and extension consumers
 - Audit trail for sensitive actions: logins, key issuance/revocation, page assignment changes
+- Rate limiting per endpoint (Fastify rate-limit plugin)
+- Password hashing with Argon2
 
 **Depends on:** Phase 1
 
-**Milestone:** Make an authenticated API call and receive revenue data matching the CLI. Make a call with a chatter's API key and confirm it returns data only for the assigned page.
+**Milestone:** ✅ Make an authenticated API call and receive revenue data. Make a call with a chatter's API key and confirm page-scoped access.
 
 ---
 
-## Phase 3: OnlyFans Connect
+## Phase 3: OnlyFans Connect — **Done**
 
 The agency connects OnlyFans pages via OnlyMonster and sees unified data across both platforms.
 
 **Features:**
-- OnlyMonster platform adapter for OnlyFans pages
-- CLI onboarding for OnlyFans pages mirrors Phase 1: attach an OF page to an existing model, configure adapter credentials, and trigger sync manually when needed
+- OnlyMonster platform adapter for OnlyFans pages (token-based auth)
+- CLI onboarding for OnlyFans pages: attach OF page to existing model, configure adapter credentials, trigger sync
 - Hourly transaction sync: tips, subscriptions, message payments, post purchases, live stream revenue
 - Hourly chargeback sync
-- Map OnlyMonster transaction types into the same unified taxonomy defined in Phase 1
+- Map OnlyMonster transaction types into the unified taxonomy
 - Sync chatter performance metrics from OnlyMonster every 6 hours: messages sent, chat sales, reply time averages, work time, break time
 - Sync OnlyMonster tracking-link data daily
-- No subscriber/follower sync in v1: OnlyMonster does not expose subscriber/follower endpoints, so subscriber/follower features remain Fansly-only until that changes
-- Create fan records from OnlyFans transactions; compute fan spending from synced data
-- CLI verification: see combined revenue across Fansly + OnlyFans for a single model
+- Window-based backfill with synthetic bounds for OnlyFans historical transactions
+- No subscriber/follower sync in v1: OnlyMonster does not expose these endpoints
+- Create fan records from OnlyFans transactions; compute fan spending
+- CLI verification: combined revenue across Fansly + OnlyFans for a single model
+
+**Known issue:** OnlyMonster API timeouts on deep backfill (pages 5+). Not our bug — OM API performance. Workaround: longer timeouts, smaller page sizes, checkpoint-based resume.
 
 **Depends on:** Phase 2
 
-**Milestone:** Run a CLI command and see total revenue for a model across both Fansly and OnlyFans pages, with transactions classified under the same types.
+**Milestone:** ✅ See total revenue for a model across both Fansly and OnlyFans, with transactions under the same types.
 
 ---
 
-## Phase 4: Dashboard
+## Phase 4: Dashboard — **On Track** (~90% complete)
 
-The agency opens a browser and sees live revenue, subscribers, fans, and trends across all pages and models — Fansly and OnlyFans combined from launch.
+The agency opens a browser and sees live revenue, subscribers, fans, and trends across all pages and models.
 
-**Features:**
-- Agency-wide overview on the main screen: total revenue, page-by-page breakdown, model-by-model summary (both platforms)
-- Revenue display: today, 7 days, 30 days, all-time, custom date range
-- Revenue breakdown by transaction type (subscriptions, tips, messages, posts, streams, chargebacks, refunds)
-- Period comparison: growth or decline vs. the previous equivalent period
-- Drill-down flow: agency overview → model → page → individual transactions
-- Transaction list with type filters; pending and chargeback status indicators
-- Active subscriber count, list with usernames, expiry dates, and renew on/off status — Fansly-only; not available for OnlyFans until OnlyMonster adds subscriber/follower endpoints
-- New subscribers in the last 24 hours highlighted — Fansly-only
-- Expiring subscriptions list: subs expiring in 1, 3, or 7 days — retention priority view for team leads, Fansly-only
-- Free follower count per page — Fansly-only
-- Daily inflow: new followers and subscribers by day; growth and decline trends — Fansly-only
-- Follower and subscriber growth chart over time — Fansly-only
-- Full fan profiles: per-page spending, total platform spending, subscription status, follower status, notes, AI summaries with version history, flags (whale, VIP, risky), and platform page memberships
-- Fan search, whale list, top spenders across the agency
-- Cross-page fan view for team leads; cross-model view for owner
-- View and create fan notes from the dashboard
-- Manual fan flags in v1: owner and team leads can set whale, VIP, and risky flags; automatic rules are deferred to Phase 11
-- Last sync time and sync status per page
-- Dashboard alert view for DB-backed incidents: sync failures, dead tokens, and proxy issues
-- API key management for ChatMuse (create, view, revoke keys for chatters)
-- Login screen
-- Desktop-only layout
+**Implemented features:**
+- ✅ Agency-wide overview: total revenue, page-by-page breakdown, model-by-model summary (both platforms)
+- ✅ Revenue display: today, 7d, 30d, all-time with period selector
+- ✅ Revenue breakdown by transaction type (subscriptions, tips, messages, posts, streams, chargebacks, refunds)
+- ✅ Period comparison: growth or decline vs. the previous equivalent period
+- ✅ Drill-down flow: agency overview → model → page → transactions
+- ✅ Transaction list with type filters; pending and chargeback status indicators
+- ✅ Active subscriber count & list with usernames, expiry dates, renew status (Fansly-only)
+- ✅ New subscribers in last 24h highlighted (Fansly-only)
+- ✅ Expiring subscriptions list: retention priority view (Fansly-only)
+- ✅ Free follower count per page (Fansly-only)
+- ✅ Daily inflow chart: new followers/subscribers by day (Fansly-only)
+- ✅ Follower/subscriber growth chart over time (Fansly-only)
+- ✅ Full fan profiles: spending, subscription/follower status, notes, AI summaries with version history, flags
+- ✅ Fan search, whale list, top spenders across the agency
+- ✅ Cross-page fan view for team leads; cross-model view for owner
+- ✅ Fan notes from the dashboard
+- ✅ Last sync time and sync status per page
+- ✅ Dashboard alert/incident view: sync failures, dead tokens, proxy issues
+- ✅ API key management for ChatMuse (create, view, revoke)
+- ✅ Settings page with 5 tabs: Credentials, Sync, Models, Pages, Users
+- ✅ Login screen
+- ✅ Desktop-only layout
+- ✅ Dev pages: Logs, Queue, DB Stats, Incidents (owner-only)
+
+**Remaining work (from TODO.md):**
+- 🔴 Unknown User aggregation: deleted Fansly accounts group into one bucket instead of separate entries. Fix: use `platform_user_id` as grouping key.
+- 🟡 mikeyt10101 alltime mismatch ($264 vs $256): investigate how Fansly calculates "top supporters"
+- 🟡 Default period should be "Today" not "30D"
+- 🟡 Followers chart useless on "Today" — needs wider default range
+- 🟡 Log/Incident detail view: clickable rows → modal with full message, actionable recommendations per incident type, severity color coding
+
+**Missing from original Phase 4 spec:**
+- Custom date range picker (only preset periods exist)
 
 **Depends on:** Phase 2 + Phase 3
 
-**Milestone:** Open the dashboard, see today's revenue by page matching the platform — Fansly and OnlyFans combined. Drill into a model, see transactions from both platforms. Open a fan profile, see spending and notes.
+**Milestone:** Open the dashboard, see today's revenue by page — Fansly and OnlyFans combined. Drill into a model, see transactions from both platforms. Open a fan profile, see spending and notes. **Partially met — core flows work, polish remaining.**
 
 ---
 
-## Phase 5: Telegram Notifications
+## Phase 4a: CRM Module — **Done** (shipped ahead of plan)
 
-The owner receives a daily revenue summary and immediate alerts for sync and connection problems.
+> Not in the original roadmap. Built during Phase 4 development as a natural extension of fan data.
+
+The agency's team leads can prioritize fan retention and reactivation from the dashboard.
 
 **Features:**
-- Daily revenue report by page, sent to a configurable Telegram chat
-- Revenue anomaly alerts: significant drops compared to recent trends
-- Sync failure alerts: expired platform tokens, proxy failures, partial sync errors
-- Token and proxy health checks: periodic verification that all page connections are alive; failures become alerts
-- Incident pattern: recurring failures produce one open alert (not repeated spam), resolved when the issue clears
-- Telegram is the delivery layer for DB-backed incidents; dashboard alert viewing already exists in Phase 4
-- Owner-only; configurable chat ID
+- CRM summary dashboard: retention rate, churn indicators, engagement touchpoints
+- Retention tab: cohort analysis with touchpoint windows (21d/14d/7d/5d/3d/1d before expiry)
+- Filters: auto-renew on/off, unread messages, handled status
+- Reactivation tab: scoring for inactive fans ready for re-engagement
+- Filters: silence threshold, min spend, no DM history, hide deleted, subscriber state
+- Chat preview panel: see recent DM conversation inline
+- Sortable columns, search, pagination
+- Fansly-only (requires subscriber/DM data not available from OnlyMonster)
+
+**Depends on:** Phase 4 + Phase 4b (DM Sync)
+
+**Milestone:** ✅ Team lead opens CRM, sees subscribers expiring in 3 days sorted by lifetime spend. Opens chat preview, decides who to message.
+
+---
+
+## Phase 4b: DM Sync — **Done** (shipped ahead of plan)
+
+> Not in the original roadmap. Required for CRM retention/reactivation features.
+
+The system syncs direct message conversations from Fansly to power CRM and fan intelligence.
+
+**Features:**
+- Sync DM conversations per page (conversation list with metadata)
+- Sync message content with configurable retention limits
+- Incremental sync with checkpointing
+- Rate-limited to respect platform API limits
+- Fansly-only (OnlyMonster does not expose DM endpoints)
+
+**Depends on:** Phase 1 (sync pipeline)
+
+**Milestone:** ✅ DM conversations appear in CRM chat preview panel. Fan profiles show last contact date.
+
+---
+
+## Phase 4c: Fan Intelligence — **Done** (shipped ahead of plan)
+
+> Partially described in original Phase 4 but significantly expanded during implementation.
+
+Advanced fan analytics and AI-powered insights across the agency.
+
+**Features:**
+- Cross-page spender rankings (v2 API): agency-wide top spenders with period-over-period comparison
+- Batch spender lookup for bulk operations
+- Per-fan time-series metrics (spend trajectory)
+- AI-generated fan summaries with version history (new summaries append, never overwrite)
+- Fan flags: whale, VIP, risky (manual in v1)
+- Global fan search across all pages
+- Type breakdown per fan: subscriptions, tips, messages, posts, streams
+
+**Depends on:** Phase 4
+
+**Milestone:** ✅ Owner opens agency-wide spender view, sees top fans ranked by total spend across all pages with trend indicators.
+
+---
+
+## Phase 5: Telegram Notifications — **Done**
+
+The owner receives daily revenue summaries and immediate alerts for sync and connection problems.
+
+**Features:**
+- ✅ Daily revenue report by page, sent to configurable Telegram chat
+- ✅ Revenue anomaly alerts: significant drops vs recent trends
+- ✅ Sync failure alerts: expired tokens, proxy failures, partial sync errors
+- ✅ Token and proxy health checks: periodic verification of all page connections
+- ✅ Incident pattern: recurring failures produce one open alert (not spam); resolved when issue clears
+- ✅ Test message functionality
+- ✅ Report preview and manual send from dashboard
+- ✅ Report delivery history
+- ✅ Configuration via dashboard UI (Notifications page) — not just CLI
+- ✅ Owner-only; configurable chat ID and bot token
 
 **Depends on:** Phase 2
 
-**Milestone:** Invalidate a Fansly token. Within minutes, receive a Telegram alert about the dead connection. Keep the token invalid and confirm repeated checks do not spam; restore it and confirm one resolved notification is sent.
+**Milestone:** ✅ Invalidate a Fansly token → receive Telegram alert within minutes. Keep invalid → no spam. Restore → resolved notification sent.
 
 ---
 
-## Phase 6: Backups + Ops
+## Phase 6: Backups + Ops — **At Risk** (partially complete)
 
 The system is production-ready with automated backups, restore verification, and operational monitoring.
 
-**Features:**
-- Nightly full database backup stored off-server
-- Periodic restore drills to verify backup integrity
-- Health check endpoint for uptime monitoring
-- Sync job monitoring: visibility into job status, failures, and retry state
+**Implemented:**
+- ✅ Health check endpoints (`/health`, `/health/sync`) for uptime monitoring
+- ✅ Sync job monitoring: PgBoss queue with job status, failures, retry state, dead letter queues
+- ✅ Automated data retention: raw payload cleanup (daily 2 AM UTC), observability log trimming (30-day default)
+- ✅ Orphaned run recovery on worker restart
+- ✅ Connection status verification (active/stale/error/expired/never_synced/unverified)
+- ✅ DB stats endpoint for table sizes and row counts
+
+**Missing — blocks production deploy:**
+- ❌ Nightly full database backup stored off-server
+- ❌ Periodic restore drills to verify backup integrity
+- ❌ Backup monitoring/alerting (backup failed → Telegram notification)
 
 **Depends on:** None technically, but must be completed before production deploy
 
-**Milestone:** Restore a backup to a clean environment and verify that all revenue and fan data is intact and queryable.
+**Milestone:** Restore a backup to a clean environment and verify all revenue and fan data is intact. **Not met — backups not automated.**
 
 ---
 
-## Phase 7: ChatMuse Backend
+## Phase 7: ChatMuse Backend — **Not Started**
 
 Chatters using the ChatMuse extension get live fan context, AI-assisted replies with streaming output, and all usage is tracked and rate-limited through the hub.
-This phase is intentionally scheduled after Phases 3-6 by owner decision, even though its hard dependencies are only the API and dashboard.
 
 **Features:**
-- AI proxy with streaming responses — the extension sends requests through the hub, not directly to the AI provider
-- Fan context injection: when a chatter opens a DM, the extension receives spending (page + total), notes, AI summary, subscription status, and flags in one panel
-- Fan notes via the extension: chatters create and read notes; notes from one chatter are visible to others on the same page
-- AI-generated fan summaries from chat history; version history preserved (new summaries append, never overwrite)
-- Rate limiting: each chatter has a configurable request quota
-- Cost tracking: every AI request logged with chatter, page, token count, and dollar cost
-- Prompt caching: identical prompts return cached responses to reduce cost
-- Model personality management: update a model's voice/persona in one place, applied to all chatters on that page
+- AI proxy with streaming responses — extension sends requests through the hub, not directly to AI provider
+- Fan context injection: spending (page + total), notes, AI summary, subscription status, flags in one panel
+- Fan notes via the extension: chatters create and read notes visible to others on the same page
+- AI-generated fan summaries from chat history; version history preserved
+- Rate limiting: per-chatter configurable request quota
+- Cost tracking: every AI request logged with chatter, page, token count, dollar cost
+- Prompt caching: identical prompts return cached responses
+- Model personality management: update voice/persona in one place, applied to all chatters on that page
 
 **Depends on:** Phase 2 + Phase 4
 
-**Milestone:** A chatter opens a Fansly DM in the extension, sees the fan's spending and notes. Uses AI-assisted reply with streamed output. The owner sees the chatter's request count and cost in the dashboard.
+**Milestone:** A chatter opens a Fansly DM in the extension, sees fan spending and notes. Uses AI-assisted reply with streamed output. Owner sees request count and cost in the dashboard.
 
 ---
 
-## Phase 8: Team Management
+## Phase 8: Team Management — **Not Started**
 
 The agency manages staff, page assignments, and work schedules in one place.
 
@@ -194,8 +302,10 @@ The agency manages staff, page assignments, and work schedules in one place.
 - Staff profiles: chatters, content managers, team leads
 - Assign staff to specific pages
 - Schedule table: who works when, which days, what hours, days off
-- Chatter performance metrics display (OnlyMonster data collected in Phase 3)
+- Chatter performance metrics display (OnlyMonster data already collected in Phase 3)
 - Dashboard access management for team leads
+
+**Note:** Basic user management (create users, assign pages, manage API keys) already exists in Phase 4 Settings → Users tab. Phase 8 adds scheduling, profiles, and performance display on top.
 
 **Depends on:** Phase 4 + Phase 3
 
@@ -203,14 +313,14 @@ The agency manages staff, page assignments, and work schedules in one place.
 
 ---
 
-## Phase 9: Chatter Payroll
+## Phase 9: Chatter Payroll — **Not Started**
 
 The agency tracks chatter earnings, calculates payouts as a percentage of chat sales, and sees who is owed what.
 
 **Features:**
 - OnlyFans payroll uses OnlyMonster chat sales data; Fansly payroll uses manual shift reports
 - Chatter shift reports: chatters submit what they sold for Fansly periods
-- Owner configures one payout percentage per chatter; percentage changes apply to future periods only and do not recalculate closed periods
+- Owner configures one payout percentage per chatter; changes apply to future periods only
 - Revenue calculated as percentage of chat sales
 - Payout calculation: how much is owed to each chatter and for what
 - Payout overview table for optimizing payments
@@ -218,11 +328,11 @@ The agency tracks chatter earnings, calculates payouts as a percentage of chat s
 
 **Depends on:** Phase 3 + Phase 8
 
-**Milestone:** A Fansly chatter submits a shift report and an OnlyFans chatter has sales imported automatically. The owner opens the payout table and sees both payout amounts calculated from the configured per-chatter percentages.
+**Milestone:** A Fansly chatter submits a shift report and an OnlyFans chatter has sales imported automatically. Owner opens the payout table and sees both amounts calculated.
 
 ---
 
-## Phase 10: Internal TODO
+## Phase 10: Internal TODO — **Not Started**
 
 A simple task manager for agency operations — not code tasks, but business and team tasks.
 
@@ -237,7 +347,7 @@ A simple task manager for agency operations — not code tasks, but business and
 
 ---
 
-## Phase 11: Advanced Analytics
+## Phase 11: Advanced Analytics — **Not Started**
 
 The agency sees profitability, traffic ROI, and deeper fan insights to optimize business decisions.
 
@@ -245,7 +355,7 @@ The agency sees profitability, traffic ROI, and deeper fan insights to optimize 
 - PnL per model: revenue minus all expenses (traffic, chatter payouts, content management)
 - Traffic spend tracking: add channels (Reddit, Twitter, YouTube, etc.), track acquisition and ad spend, calculate ROI
 - Fan LTV calculation
-- Fan segmentation: whale, regular, tipper, lurker, new fan
+- Fan segmentation: whale, regular, tipper, lurker, new fan (automated rules, not just manual flags)
 - Expense tracking across all cost categories
 - Enhanced trend charts and dashboards
 - Content operations for content managers: posting calendar, content status per page
@@ -253,3 +363,45 @@ The agency sees profitability, traffic ROI, and deeper fan insights to optimize 
 **Depends on:** Phase 9
 
 **Milestone:** Open a model's analytics view and see net profit after all tracked expenses. See which traffic channel delivered the highest ROI.
+
+---
+
+## Known Issues & Tech Debt
+
+Items from TODO.md that affect shipped phases:
+
+| Priority | Issue | Phase | Status |
+|----------|-------|-------|--------|
+| 🔴 | Unknown User aggregation: deleted accounts merged into one bucket | 1/4 | Open |
+| 🟡 | mikeyt10101 alltime total mismatch ($264 vs $256) | 1 | Investigating |
+| 🟡 | CLI missing `page remove` command — requires manual SQL cleanup | 1 | Open |
+| 🟡 | Dashboard default period should be "Today" not "30D" | 4 | Open |
+| 🟡 | Followers chart useless on "Today" period — needs wider default range | 4 | Open |
+| 🟡 | Log/Incident detail: no clickable rows, no actionable recommendations | 4 | Open |
+| 🟡 | CLI missing interactive prompts when required args not provided | 1/2 | Open |
+| 🟡 | OnlyMonster API timeouts on deep backfill (pages 5+) | 3 | External dependency |
+
+---
+
+## Changes This Update (2026-03-26)
+
+**Statuses updated:**
+- Phase 1: → **Done**
+- Phase 2: → **Done**
+- Phase 3: → **Done** (was untracked)
+- Phase 4: → **On Track** (~90%)
+- Phase 5: → **Done** (was not started per previous roadmap)
+- Phase 6: → **At Risk** (partial)
+
+**Items added:**
+- Phase 4a: CRM Module (retention/reactivation) — built but was not in roadmap
+- Phase 4b: DM Sync — built but was not in roadmap
+- Phase 4c: Fan Intelligence — expanded beyond original Phase 4 scope
+- Known Issues & Tech Debt section — consolidates TODO.md items
+- Status overview table at top
+- Per-feature completion checkmarks in done phases
+
+**Structural changes:**
+- Added note to Phase 8 that basic user management already exists in Phase 4 Settings
+- Added known issue to Phase 3 (OnlyMonster timeouts)
+- Phase 6 split into implemented vs missing items
