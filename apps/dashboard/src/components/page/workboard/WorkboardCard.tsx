@@ -117,9 +117,6 @@ export function WorkboardCard({
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-[12px] text-text-muted">LTV</span>
             <span className="text-sm font-semibold text-text-primary tabular-nums">{vm.ltvLabel}</span>
-            {vm.kind === "subscriber" && vm.subscribedMonths !== null && (
-              <span className="text-[11px] text-text-muted">({vm.subscribedMonths}mo)</span>
-            )}
           </div>
         </div>
 
