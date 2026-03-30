@@ -1,5 +1,5 @@
 import type { CrmRetentionResponse, CrmReactivationResponse } from "@agency_hub_core/contracts";
-import { resolveFanLabel } from "@agency_hub_core/shared";
+import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { formatMills, formatRelativeTime, formatDate, daysRemaining } from "@/lib/format";
 
 export interface RetentionRowVm {
@@ -64,10 +64,10 @@ export function mapRetentionRowVm(
   pageLabel: string,
   item: CrmRetentionResponse["items"][number],
 ): RetentionRowVm {
-  const fan = resolveFanLabel(item.fan);
+  const fan = resolveFanLabelForScope(item.fan, "page");
   return {
     fanLabel: fan.label,
-    fanSubLabel: fan.displayName && fan.username ? `@${fan.username}` : null,
+    fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
     spendLabel: formatMills(item.spend.creatorNetAmountMills),
     lastMessageLabel: item.conversation.lastMessageAt
       ? formatRelativeTime(item.conversation.lastMessageAt)
@@ -91,18 +91,21 @@ export function mapReactivationRowVm(
   pageLabel: string,
   item: CrmReactivationResponse["items"][number],
 ): ReactivationRowVm {
-  const fan = resolveFanLabel(item.fan);
+  const fan = resolveFanLabelForScope(item.fan, "page");
   const subStatus: ReactivationRowVm["subscriptionStatusLabel"] =
     item.subscription.isSubscriber
       ? "Active"
       : item.subscription.subscriptionExpiresAt
         ? "Expired"
         : "Never";
-  const isDeletedUser = item.fan.username === null && item.fan.displayName === null;
+  const isDeletedUser =
+    item.fan.pageAlias === null &&
+    item.fan.username === null &&
+    item.fan.displayName === null;
   const tier = resolveScoreTier(item.reactivationScore);
   return {
     fanLabel: fan.label,
-    fanSubLabel: fan.displayName && fan.username ? `@${fan.username}` : null,
+    fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
     isDeletedUser,
     spendLabel: formatMills(item.spend.creatorNetAmountMills),
     lastMessageLabel: item.conversation.lastMessageAt

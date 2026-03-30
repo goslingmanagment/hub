@@ -1,7 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { fanProfiles, fans } from "../schema.ts";
+import { fanPages, fanProfiles, fans } from "../schema.ts";
 import { findVisiblePageDmConversationByPlatformConversationId } from "./crm.ts";
 
 export interface AppendFanProfileInput {
@@ -120,13 +120,25 @@ export async function getLatestFanProfileForConversation(
     return null;
   }
 
+  const [fanPage] = await db.select({
+    pageAlias: fanPages.pageAlias,
+  }).from(fanPages)
+    .where(and(
+      eq(fanPages.platformAccountId, input.platformAccountId),
+      eq(fanPages.fanId, fan.id),
+    ))
+    .limit(1);
+
   const profile = await getLatestFanProfile(db, {
     fanId: fan.id,
     platformAccountId: input.platformAccountId,
   });
 
   return {
-    fan,
+    fan: {
+      ...fan,
+      pageAlias: fanPage?.pageAlias ?? null,
+    },
     profile: profile ?? null,
   };
 }

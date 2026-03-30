@@ -1,5 +1,5 @@
 import type { WorkboardResponse } from "@agency_hub_core/contracts";
-import { resolveFanLabel } from "@agency_hub_core/shared";
+import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { formatMills, formatRelativeTime, formatDate, daysRemaining } from "@/lib/format";
 
 type SubscriberItem = WorkboardResponse["subscribers"]["items"][number];
@@ -46,17 +46,18 @@ export interface WorkboardSubscriberVm {
 }
 
 export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): WorkboardSubscriberVm {
-  const fan = resolveFanLabel({
+  const fan = resolveFanLabelForScope({
     platformUserId: item.fan.platformUserId,
+    pageAlias: item.fan.pageAlias,
     username: item.fan.username,
     displayName: item.fan.displayName,
-  });
+  }, "page");
 
   return {
     kind: "subscriber" as const,
     fanId: item.fanId,
     fanLabel: fan.label,
-    fanSubLabel: fan.displayName && fan.username ? `@${fan.username}` : null,
+    fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
     platformConversationId: item.conversation.platformConversationId,
     profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
@@ -110,17 +111,18 @@ export interface WorkboardSpenderVm {
 export type WorkboardCardVm = WorkboardSubscriberVm | WorkboardSpenderVm;
 
 export function mapSpenderVm(pageLabel: string, item: SpenderItem): WorkboardSpenderVm {
-  const fan = resolveFanLabel({
+  const fan = resolveFanLabelForScope({
     platformUserId: item.fan.platformUserId,
+    pageAlias: item.fan.pageAlias,
     username: item.fan.username,
     displayName: item.fan.displayName,
-  });
+  }, "page");
 
   return {
     kind: "spender" as const,
     fanId: item.fanId,
     fanLabel: fan.label,
-    fanSubLabel: fan.displayName && fan.username ? `@${fan.username}` : null,
+    fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
     platformConversationId: item.conversation.platformConversationId,
     profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
@@ -152,11 +154,12 @@ export interface WorkboardSnoozedVm {
 }
 
 export function mapSnoozedVm(item: SnoozedItem): WorkboardSnoozedVm {
-  const fan = resolveFanLabel({
+  const fan = resolveFanLabelForScope({
     platformUserId: item.fan.platformUserId,
+    pageAlias: item.fan.pageAlias,
     username: item.fan.username,
     displayName: item.fan.displayName,
-  });
+  }, "page");
 
   return {
     fanId: item.fanId,

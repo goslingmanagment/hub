@@ -1,10 +1,45 @@
-import { upsertFans } from "@agency_hub_core/db";
-import type { UpsertFanInput } from "@agency_hub_core/db";
+import {
+  reconcileFanslyFanPageIdentity,
+  upsertFanPages,
+  upsertFans,
+  type Database,
+  type UpsertFanInput,
+} from "@agency_hub_core/db";
+import type { FanslyAccount, FanslyAccountNote } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
 
-export async function prepareHydratedFans(
+type HydratedLookupResult = {
+  accounts: FanslyAccount[];
+  fallbackIds: string[];
+};
+
+function normalizeHydratedFan(account: FanslyAccount): UpsertFanInput {
+  return {
+    platform: "fansly",
+    platformUserId: account.id,
+    username: account.username,
+    displayName: account.displayName,
+    createdAtExternal: account.createdAt ? new Date(account.createdAt) : null,
+    metadata: {},
+  };
+}
+
+function normalizeFanslyNote(note: FanslyAccountNote) {
+  return {
+    externalNoteId: note.id,
+    contentType: note.contentType ?? null,
+    contentId: note.contentId ?? null,
+    title: note.title ?? null,
+    body: note.note ?? null,
+    createdAtExternal: note.createdAt ? new Date(note.createdAt) : null,
+    updatedAtExternal: note.updatedAt ? new Date(note.updatedAt) : null,
+    raw: note as unknown as Record<string, unknown>,
+  };
+}
+
+export async function lookupHydratedFans(
   app: AppContext,
   input: {
     requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
@@ -13,11 +48,14 @@ export async function prepareHydratedFans(
   },
 ) {
   if (input.platformUserIds.length === 0) {
-    return [] as UpsertFanInput[];
+    return {
+      accounts: [],
+      fallbackIds: [],
+    } satisfies HydratedLookupResult;
   }
 
   const uniqueIds = Array.from(new Set(input.platformUserIds.filter(Boolean)));
-  const accounts: Awaited<ReturnType<AppContext["adapter"]["getAccountsByIdsPage"]>>["parsed"] = [];
+  const accounts: FanslyAccount[] = [];
 
   for (let index = 0; index < uniqueIds.length; index += 100) {
     const chunk = uniqueIds.slice(index, index + 100);
@@ -35,15 +73,24 @@ export async function prepareHydratedFans(
     requestCount: Math.ceil(uniqueIds.length / 100),
   });
 
+  return {
+    accounts,
+    fallbackIds,
+  } satisfies HydratedLookupResult;
+}
+
+export async function prepareHydratedFans(
+  app: AppContext,
+  input: {
+    requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
+    platformUserIds: string[];
+    telemetry?: SyncRunTelemetry;
+  },
+) {
+  const { accounts, fallbackIds } = await lookupHydratedFans(app, input);
+
   return [
-    ...accounts.map((account) => ({
-      platform: "fansly" as const,
-      platformUserId: account.id,
-      username: account.username,
-      displayName: account.displayName,
-      createdAtExternal: account.createdAt ? new Date(account.createdAt) : null,
-      metadata: {},
-    })),
+    ...accounts.map(normalizeHydratedFan),
     ...fallbackIds.map((id) => ({
       platform: "fansly" as const,
       platformUserId: id,
@@ -52,14 +99,110 @@ export async function prepareHydratedFans(
   ] satisfies UpsertFanInput[];
 }
 
+export async function upsertHydratedFansForPage(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    accounts: FanslyAccount[];
+    fallbackIds?: string[];
+  },
+) {
+  const result = await upsertHydratedFansForPageDetailed(db, input);
+  return result.fanMap;
+}
+
+export async function upsertHydratedFansForPageDetailed(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    accounts: FanslyAccount[];
+    fallbackIds?: string[];
+  },
+) {
+  const fans = await upsertFans(db, [
+    ...input.accounts.map(normalizeHydratedFan),
+    ...(input.fallbackIds ?? []).map((platformUserId) => ({
+      platform: "fansly" as const,
+      platformUserId,
+      metadata: {},
+    })),
+  ]);
+  const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id] as const));
+
+  if (fans.length > 0) {
+    await upsertFanPages(db, fans.map((fan) => ({
+      fanId: fan.id,
+      platformAccountId: input.platformAccountId,
+    })));
+  }
+
+  let reconciledAccountCount = 0;
+  let noteCount = 0;
+  let upsertedNoteCount = 0;
+  let deactivatedNoteCount = 0;
+  let aliasesSet = 0;
+  let aliasesCleared = 0;
+
+  for (const account of input.accounts) {
+    const fanId = fanMap.get(account.id);
+    if (!fanId || !Array.isArray(account.notes)) {
+      continue;
+    }
+
+    const reconciliation = await reconcileFanslyFanPageIdentity(db, {
+      platformAccountId: input.platformAccountId,
+      fanId,
+      notes: account.notes.map(normalizeFanslyNote),
+    });
+    reconciledAccountCount += 1;
+    noteCount += reconciliation.noteCount;
+    upsertedNoteCount += reconciliation.upsertedNoteCount;
+    deactivatedNoteCount += reconciliation.deactivatedNoteCount;
+    aliasesSet += reconciliation.aliasSet ? 1 : 0;
+    aliasesCleared += reconciliation.aliasCleared ? 1 : 0;
+  }
+
+  return {
+    fanMap,
+    accountCount: input.accounts.length,
+    fallbackCount: (input.fallbackIds ?? []).length,
+    reconciledAccountCount,
+    noteCount,
+    upsertedNoteCount,
+    deactivatedNoteCount,
+    aliasesSet,
+    aliasesCleared,
+  };
+}
+
 export async function hydrateFans(
   app: AppContext,
   input: {
+    db?: Database;
+    platformAccountId?: number;
     requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
     platformUserIds: string[];
     telemetry?: SyncRunTelemetry;
   },
 ) {
-  const fans = await upsertFans(app.db, await prepareHydratedFans(app, input));
+  const { accounts, fallbackIds } = await lookupHydratedFans(app, input);
+  const db = input.db ?? app.db;
+
+  if (input.platformAccountId !== undefined) {
+    return upsertHydratedFansForPage(db, {
+      platformAccountId: input.platformAccountId,
+      accounts,
+      fallbackIds,
+    });
+  }
+
+  const fans = await upsertFans(db, [
+    ...accounts.map(normalizeHydratedFan),
+    ...fallbackIds.map((platformUserId) => ({
+      platform: "fansly" as const,
+      platformUserId,
+      metadata: {},
+    })),
+  ]);
   return new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
 }

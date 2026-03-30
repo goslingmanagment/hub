@@ -15,6 +15,17 @@ export interface FanslyAccount {
   username: string | null;
   displayName: string | null;
   createdAt?: number;
+  notes?: FanslyAccountNote[];
+}
+
+export interface FanslyAccountNote {
+  id: string;
+  contentType?: number;
+  contentId?: string | null;
+  title?: string | null;
+  note?: string | null;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface FanslyAccountMeResponse {

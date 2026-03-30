@@ -94,6 +94,7 @@ type SerializedSpenderTypeBreakdown =
 type FanLike = {
   platform: Platform;
   platformUserId: string;
+  pageAlias?: string | null;
   username: string | null;
   displayName: string | null;
   createdAtExternal: Date | null;
@@ -115,6 +116,7 @@ function serializeFan(input: FanLike) {
   return {
     platform: input.platform,
     platformUserId: input.platformUserId,
+    pageAlias: input.pageAlias ?? null,
     username: input.username,
     displayName: input.displayName,
     createdAtExternal: serializeTimestamp(input.createdAtExternal),

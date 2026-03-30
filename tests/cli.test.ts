@@ -36,6 +36,7 @@ const cliMocks = vi.hoisted(() => {
 
   return {
     PgBossMock,
+    backfillFanslyPageAliases: vi.fn(),
     bossBehavior,
     bossInstances,
     createAppContext: vi.fn(),
@@ -84,6 +85,10 @@ vi.mock("../apps/runtime/src/services/page-onboarding.ts", () => ({
 vi.mock("../apps/runtime/src/services/page-proxies.ts", () => ({
   setPageProxy: cliMocks.setPageProxy,
   removePageProxy: cliMocks.removePageProxy,
+}));
+
+vi.mock("../apps/runtime/src/services/fansly-page-alias-backfill.ts", () => ({
+  backfillFanslyPageAliases: cliMocks.backfillFanslyPageAliases,
 }));
 
 vi.mock("../apps/runtime/src/services/notification-incidents.ts", () => ({
@@ -157,6 +162,7 @@ describe("CLI parsing", () => {
     cliMocks.bossBehavior.sendError = null;
     cliMocks.bossBehavior.sendResult = "job-1";
     cliMocks.bossInstances.length = 0;
+    cliMocks.backfillFanslyPageAliases.mockReset();
     cliMocks.createAppContext.mockReset();
     cliMocks.findPageByLabel.mockReset();
     cliMocks.listPages.mockReset();
@@ -203,6 +209,33 @@ describe("CLI parsing", () => {
       page: { id: 1, label: "page" },
       revisions: [],
       wakeupId: "job-1",
+    });
+    cliMocks.backfillFanslyPageAliases.mockResolvedValue({
+      totalPages: 1,
+      totalMembershipsScanned: 10,
+      totalUniqueFanIds: 10,
+      totalAccountsReturned: 8,
+      totalFallbackMisses: 2,
+      totalReconciledAccounts: 8,
+      totalNotesSeen: 5,
+      totalNotesUpserted: 5,
+      totalNotesDeactivated: 1,
+      totalAliasesSet: 3,
+      totalAliasesCleared: 1,
+      pages: [{
+        pageId: 44,
+        pageLabel: "lora-main",
+        membershipsScanned: 10,
+        uniqueFanIds: 10,
+        accountsReturned: 8,
+        fallbackMisses: 2,
+        reconciledAccounts: 8,
+        notesSeen: 5,
+        notesUpserted: 5,
+        notesDeactivated: 1,
+        aliasesSet: 3,
+        aliasesCleared: 1,
+      }],
     });
     cliMocks.waitForRequestedSyncRevisions.mockResolvedValue(undefined);
     cliMocks.removePageProxy.mockResolvedValue(undefined);
@@ -508,6 +541,31 @@ describe("CLI parsing", () => {
 
     expect(cliMocks.waitForRequestedSyncRevisions).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith("Queued followers sync for lora-main");
+  });
+
+  it("runs the Fansly page alias backfill with repeated page filters", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "fansly-page-alias-backfill",
+      "--page",
+      "lora-main",
+      "--page",
+      "lora-vip",
+      "--chunk-size",
+      "50",
+    ], { from: "user" });
+
+    expect(cliMocks.backfillFanslyPageAliases).toHaveBeenCalledWith(expect.anything(), {
+      pageLabels: ["lora-main", "lora-vip"],
+      chunkSize: 50,
+    });
+    expect(logSpy).toHaveBeenCalledWith(
+      "page_label\tmemberships_scanned\tunique_fan_ids\taccounts_returned\tfallback_misses\treconciled_accounts\tnotes_seen\tnotes_upserted\tnotes_deactivated\taliases_set\taliases_cleared",
+    );
+    expect(logSpy).toHaveBeenCalledWith("pages=1");
+    expect(logSpy).toHaveBeenCalledWith("aliases_cleared=1");
   });
 
   it("queues a fresh sync.planner recovery job", async () => {

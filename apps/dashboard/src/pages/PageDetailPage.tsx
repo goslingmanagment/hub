@@ -21,7 +21,7 @@ import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
 import { buildFanProfileNavigation, buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
 import { usePeriodStore } from "@/stores/periodStore";
-import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
+import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import {
   formatDate,
   formatDateTime,
@@ -283,7 +283,7 @@ export function PageDetailPage() {
           <tbody>
             {(subscribers?.items ?? []).map((item) => {
               const days = item.endsAt ? daysRemaining(item.endsAt) : null;
-              const fanLabel = resolveFanLabel(item);
+              const fanLabel = resolveFanLabelForScope(item, "page");
               const isNew = isRecent(item.startedAt);
               const fanNavigation = buildFanProfileNavigation(
                 pageLabel!,
@@ -305,9 +305,9 @@ export function PageDetailPage() {
                         <span className="text-text-primary font-medium">
                           {fanLabel.label}
                         </span>
-                        {fanLabel.username && fanLabel.displayName && (
+                        {fanLabel.secondaryPlatformHandle && (
                           <span className="text-[12px] text-text-muted">
-                            @{fanLabel.username}
+                            @{fanLabel.secondaryPlatformHandle}
                           </span>
                         )}
                       </div>
@@ -411,7 +411,7 @@ export function PageDetailPage() {
             </thead>
             <tbody>
               {(transactions?.items ?? []).map((item, idx) => {
-                const fanLabel = item.fan ? resolveFanLabel(item.fan) : null;
+                const fanLabel = item.fan ? resolveFanLabelForScope(item.fan, "page") : null;
                 const fanDisplay = fanLabel?.label ?? null;
                 const fanIsMuted = fanLabel?.isDeletedFallback ?? false;
 
@@ -493,7 +493,7 @@ export function PageDetailPage() {
               )}
               {(spenders?.items ?? []).map((item, index) => {
                 const windowMetrics = item.metrics.window;
-                const fanLabel = resolveFanLabel(item.fan);
+                const fanLabel = resolveFanLabelForScope(item.fan, "page");
                 const fanNavigation = buildFanProfileNavigation(
                   pageLabel!,
                   page.platform,
@@ -515,8 +515,8 @@ export function PageDetailPage() {
                       <div className="text-[15px] font-semibold text-text-primary">
                         {fanLabel.label}
                       </div>
-                      {fanLabel.displayName && fanLabel.username && (
-                        <div className="text-xs text-text-muted">@{fanLabel.username}</div>
+                      {fanLabel.secondaryPlatformHandle && (
+                        <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">

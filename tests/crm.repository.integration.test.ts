@@ -85,6 +85,7 @@ describe("crm repository integration", () => {
       subscriberSince: new Date("2026-02-01T00:00:00.000Z"),
       subscriptionExpiresAt: new Date("2026-03-22T12:00:00.000Z"),
       autoRenew: false,
+      pageAlias: "Primary VIP",
     });
     await upsertPageSubscription(testDb.db, {
       platformSubscriptionId: "sub-primary",
@@ -191,6 +192,7 @@ describe("crm repository integration", () => {
 
     expect(retention.items).toHaveLength(1);
     expect(retention.items[0]).toMatchObject({
+      pageAlias: "Primary VIP",
       platformConversationId: "visible-2",
       unreadCount: 3,
       touchpointCode: "5d",

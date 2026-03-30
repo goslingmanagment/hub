@@ -70,6 +70,7 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
       subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
       subscriptionExpiresAt: new Date(`2026-03-31T1${index}:00:00.000Z`),
       autoRenew: index === 0,
+      pageAlias: index === 0 ? "Subscriber Visible Alias" : "Subscriber Snoozed Alias",
     });
     await upsertPageSubscription(testDb.db, {
       platformSubscriptionId: `wb-sub-${index + 1}`,
@@ -85,6 +86,17 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
       subscriptionTierName: "VIP",
     });
   }
+
+  await upsertFanPage(testDb.db, {
+    fanId: activeSpender.id,
+    platformAccountId: pageId,
+    pageAlias: "Active Spender Alias",
+  });
+  await upsertFanPage(testDb.db, {
+    fanId: inactiveSpender.id,
+    platformAccountId: pageId,
+    pageAlias: "Inactive Spender Alias",
+  });
 
   await upsertTransaction(testDb.db, {
     platformAccountId: pageId,
@@ -169,9 +181,13 @@ describe("workboard repository integration", () => {
 
     expect(subscribers.map((row) => row.fanId)).toEqual([seeded.visibleSubscriber.id]);
     expect(subscribers[0]?.subscriberSince?.toISOString()).toBe("2026-03-01T12:00:00.000Z");
+    expect(subscribers[0]?.pageAlias).toBe("Subscriber Visible Alias");
     expect(activeSpenders.map((row) => row.fanId)).toEqual([seeded.activeSpender.id]);
+    expect(activeSpenders[0]?.pageAlias).toBe("Active Spender Alias");
     expect(inactiveSpenders.map((row) => row.fanId)).toEqual([seeded.inactiveSpender.id]);
+    expect(inactiveSpenders[0]?.pageAlias).toBe("Inactive Spender Alias");
     expect(snoozed.map((row) => row.fanId)).toEqual([seeded.snoozedSubscriber.id]);
+    expect(snoozed[0]?.pageAlias).toBe("Subscriber Snoozed Alias");
   });
 
   it("restores the queue after unsnoozing a fan", async (context) => {

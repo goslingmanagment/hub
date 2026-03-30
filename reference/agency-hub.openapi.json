@@ -2974,6 +2974,16 @@
                                   "platformUserId": {
                                     "type": "string"
                                   },
+                                  "pageAlias": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "username": {
                                     "anyOf": [
                                       {
@@ -2997,6 +3007,7 @@
                                 },
                                 "required": [
                                   "platformUserId",
+                                  "pageAlias",
                                   "username",
                                   "displayName"
                                 ],
@@ -3337,6 +3348,16 @@
                           "platformUserId": {
                             "type": "string"
                           },
+                          "pageAlias": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "username": {
                             "anyOf": [
                               {
@@ -3416,6 +3437,7 @@
                         "required": [
                           "platformSubscriptionId",
                           "platformUserId",
+                          "pageAlias",
                           "username",
                           "displayName",
                           "endsAt",
@@ -3998,6 +4020,16 @@
                           "platformUserId": {
                             "type": "string"
                           },
+                          "pageAlias": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "username": {
                             "anyOf": [
                               {
@@ -4024,6 +4056,7 @@
                         },
                         "required": [
                           "platformUserId",
+                          "pageAlias",
                           "username",
                           "displayName",
                           "followedAt"
@@ -4598,6 +4631,16 @@
                           "platformUserId": {
                             "type": "string"
                           },
+                          "pageAlias": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "username": {
                             "anyOf": [
                               {
@@ -4688,6 +4731,7 @@
                         },
                         "required": [
                           "platformUserId",
+                          "pageAlias",
                           "username",
                           "displayName",
                           "totalCreatorNetMills",
@@ -4905,6 +4949,16 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "pageAlias": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -4912,7 +4966,8 @@
                         "platformUserId",
                         "username",
                         "displayName",
-                        "createdAtExternal"
+                        "createdAtExternal",
+                        "pageAlias"
                       ],
                       "additionalProperties": false
                     },
@@ -5324,6 +5379,16 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "pageAlias": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -5331,7 +5396,8 @@
                         "platformUserId",
                         "username",
                         "displayName",
-                        "createdAtExternal"
+                        "createdAtExternal",
+                        "pageAlias"
                       ],
                       "additionalProperties": false
                     },
@@ -6101,6 +6167,16 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "pageAlias": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -6108,7 +6184,8 @@
                         "platformUserId",
                         "username",
                         "displayName",
-                        "createdAtExternal"
+                        "createdAtExternal",
+                        "pageAlias"
                       ],
                       "additionalProperties": false
                     },
@@ -6974,6 +7051,16 @@
                               "platformUserId": {
                                 "type": "string"
                               },
+                              "pageAlias": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "username": {
                                 "anyOf": [
                                   {
@@ -6999,6 +7086,7 @@
                               "fanId",
                               "platform",
                               "platformUserId",
+                              "pageAlias",
                               "username",
                               "displayName"
                             ],
@@ -7733,6 +7821,16 @@
                               "platformUserId": {
                                 "type": "string"
                               },
+                              "pageAlias": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "username": {
                                 "anyOf": [
                                   {
@@ -7758,6 +7856,7 @@
                               "fanId",
                               "platform",
                               "platformUserId",
+                              "pageAlias",
                               "username",
                               "displayName"
                             ],
@@ -8326,6 +8425,16 @@
                             "platformUserId": {
                               "type": "string"
                             },
+                            "pageAlias": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "username": {
                               "anyOf": [
                                 {
@@ -8351,6 +8460,7 @@
                             "fanId",
                             "platform",
                             "platformUserId",
+                            "pageAlias",
                             "username",
                             "displayName"
                           ],
@@ -9039,6 +9149,16 @@
                                   "platformUserId": {
                                     "type": "string"
                                   },
+                                  "pageAlias": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "username": {
                                     "anyOf": [
                                       {
@@ -9062,6 +9182,7 @@
                                 },
                                 "required": [
                                   "platformUserId",
+                                  "pageAlias",
                                   "username",
                                   "displayName"
                                 ],
@@ -9280,6 +9401,16 @@
                                   "platformUserId": {
                                     "type": "string"
                                   },
+                                  "pageAlias": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "username": {
                                     "anyOf": [
                                       {
@@ -9303,6 +9434,7 @@
                                 },
                                 "required": [
                                   "platformUserId",
+                                  "pageAlias",
                                   "username",
                                   "displayName"
                                 ],
@@ -9476,6 +9608,16 @@
                                   "platformUserId": {
                                     "type": "string"
                                   },
+                                  "pageAlias": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "username": {
                                     "anyOf": [
                                       {
@@ -9499,6 +9641,7 @@
                                 },
                                 "required": [
                                   "platformUserId",
+                                  "pageAlias",
                                   "username",
                                   "displayName"
                                 ],
@@ -9672,6 +9815,16 @@
                                   "platformUserId": {
                                     "type": "string"
                                   },
+                                  "pageAlias": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "username": {
                                     "anyOf": [
                                       {
@@ -9695,6 +9848,7 @@
                                 },
                                 "required": [
                                   "platformUserId",
+                                  "pageAlias",
                                   "username",
                                   "displayName"
                                 ],
@@ -11076,6 +11230,16 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "pageAlias": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -11083,7 +11247,8 @@
                               "platformUserId",
                               "username",
                               "displayName",
-                              "createdAtExternal"
+                              "createdAtExternal",
+                              "pageAlias"
                             ],
                             "additionalProperties": false
                           },
@@ -11679,6 +11844,16 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "pageAlias": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -11686,7 +11861,8 @@
                         "platformUserId",
                         "username",
                         "displayName",
-                        "createdAtExternal"
+                        "createdAtExternal",
+                        "pageAlias"
                       ],
                       "additionalProperties": false
                     },
@@ -12469,6 +12645,16 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "pageAlias": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -12476,7 +12662,8 @@
                         "platformUserId",
                         "username",
                         "displayName",
-                        "createdAtExternal"
+                        "createdAtExternal",
+                        "pageAlias"
                       ],
                       "additionalProperties": false
                     },
@@ -13095,6 +13282,16 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "pageAlias": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -13102,7 +13299,8 @@
                                   "platformUserId",
                                   "username",
                                   "displayName",
-                                  "createdAtExternal"
+                                  "createdAtExternal",
+                                  "pageAlias"
                                 ],
                                 "additionalProperties": false
                               },
@@ -13745,6 +13943,16 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "pageAlias": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -13752,7 +13960,8 @@
                               "platformUserId",
                               "username",
                               "displayName",
-                              "createdAtExternal"
+                              "createdAtExternal",
+                              "pageAlias"
                             ],
                             "additionalProperties": false
                           },

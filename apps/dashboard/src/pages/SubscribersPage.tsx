@@ -8,7 +8,7 @@ import { RemainingBar } from "@/components/shared/RemainingBar";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { resolveFanLabel } from "@agency_hub_core/shared";
+import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime, daysRemaining, formatUsdFromCents } from "@/lib/format";
 
 type Filter = "all" | "expiring7d" | "new24h" | "norenew";
@@ -108,7 +108,7 @@ export function SubscribersPage() {
             {items.map((sub) => {
               const days = sub.endsAt ? daysRemaining(sub.endsAt) : null;
               const isNew = isNewWithin24Hours(sub.startedAt);
-              const fanLabel = resolveFanLabel(sub);
+              const fanLabel = resolveFanLabelForScope(sub, "page");
               const fanNavigation = buildFanProfileNavigation(
                 pageLabel!,
                 platform,
@@ -131,8 +131,8 @@ export function SubscribersPage() {
                       >
                         {fanLabel.label}
                       </Link>
-                      {fanLabel.displayName && fanLabel.username && (
-                        <span className="text-xs text-text-muted">@{fanLabel.username}</span>
+                      {fanLabel.secondaryPlatformHandle && (
+                        <span className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</span>
                       )}
                       {isNew && <Badge variant="new">NEW</Badge>}
                     </div>

@@ -591,6 +591,7 @@ export async function getPageTransactionsReport(
       fan: row.fanPlatformUserId
         ? {
           platformUserId: row.fanPlatformUserId,
+          pageAlias: row.fanPageAlias,
           username: row.fanUsername,
           displayName: row.fanDisplayName,
         }
@@ -623,6 +624,7 @@ export async function getPageSubscribersReport(
     items: rows.items.map((row) => ({
       platformSubscriptionId: row.platformSubscriptionId,
       platformUserId: row.platformUserId,
+      pageAlias: row.pageAlias,
       username: row.username,
       displayName: row.displayName,
       endsAt: serializeTimestamp(row.endsAt),
@@ -680,6 +682,7 @@ export async function getPageFollowersReport(
     page: serializePage(page),
     items: rows.items.map((row) => ({
       platformUserId: row.platformUserId,
+      pageAlias: row.pageAlias,
       username: row.username,
       displayName: row.displayName,
       followedAt: serializeTimestamp(row.followedAt)!,
@@ -731,6 +734,7 @@ export async function getPageFansReport(
     page: serializePage(page),
     items: rows.items.map((row) => ({
       platformUserId: row.platformUserId,
+      pageAlias: row.pageAlias,
       username: row.username,
       displayName: row.displayName,
       totalCreatorNetMills: millsToNumber(row.totalCreatorNetMills),
@@ -786,6 +790,7 @@ export async function getPageFanDetailReport(
     fan: {
       platform: fan.platform,
       platformUserId: fan.platformUserId,
+      pageAlias: fan.pageAlias,
       username: fan.username,
       displayName: fan.displayName,
       createdAtExternal: serializeTimestamp(fan.createdAtExternal),

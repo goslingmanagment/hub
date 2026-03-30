@@ -192,6 +192,7 @@ export async function getCrmRetentionReport(
         fanId: item.fanId,
         platform: "fansly",
         platformUserId: item.platformUserId,
+        pageAlias: item.pageAlias,
         username: item.username,
         displayName: item.displayName,
       },
@@ -273,6 +274,7 @@ export async function getCrmReactivationReport(
         fanId: item.fanId,
         platform: "fansly",
         platformUserId: item.platformUserId,
+        pageAlias: item.pageAlias,
         username: item.username,
         displayName: item.displayName,
       },
@@ -340,6 +342,7 @@ export async function getCrmConversationPreviewReport(
         fanId: preview.fan.id,
         platform: "fansly",
         platformUserId: preview.fan.platformUserId,
+        pageAlias: preview.fan.pageAlias,
         username: preview.fan.username,
         displayName: preview.fan.displayName,
       }
@@ -404,6 +407,7 @@ function serializeSpenderItem(row: Awaited<ReturnType<typeof listWorkboardActive
     fanId: row.fanId,
     fan: {
       platformUserId: row.platformUserId,
+      pageAlias: row.pageAlias,
       username: row.username,
       displayName: row.displayName,
     },
@@ -446,6 +450,7 @@ export async function getWorkboardReport(
         fanId: row.fanId,
         fan: {
           platformUserId: row.platformUserId,
+          pageAlias: row.pageAlias,
           username: row.username,
           displayName: row.displayName,
         },
@@ -488,6 +493,7 @@ export async function getWorkboardReport(
         fanId: row.fanId,
         fan: {
           platformUserId: row.platformUserId,
+          pageAlias: row.pageAlias,
           username: row.username,
           displayName: row.displayName,
         },

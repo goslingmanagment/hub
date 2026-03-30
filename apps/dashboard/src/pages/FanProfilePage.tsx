@@ -13,7 +13,7 @@ import {
 import { Badge } from "@/components/shared/Badge";
 import { Pagination } from "@/components/shared/Pagination";
 import { FanIntelligenceMarkdown } from "@/components/page/FanIntelligenceMarkdown";
-import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
+import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { formatDate, formatDateTime, transactionTypeLabel, daysRemaining } from "@/lib/format";
 import { usePeriodStore } from "@/stores/periodStore";
@@ -65,7 +65,7 @@ export function FanProfilePage() {
   }
 
   const { fan, page } = data;
-  const fanLabel = resolveFanLabel(fan);
+  const fanLabel = resolveFanLabelForScope(fan, "page");
   const backTo = resolveFanProfileBackTarget(location.state, pageLabel);
 
   // Type breakdown from spender detail
@@ -170,6 +170,9 @@ export function FanProfilePage() {
           <h1 className="text-2xl font-extrabold text-text-primary">
             {fanLabel.label}
           </h1>
+          {fanLabel.secondaryPlatformHandle && (
+            <div className="mt-1 text-sm text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
+          )}
           <div className="mt-1 flex items-center gap-2 flex-wrap">
             {page?.isSubscriber && <Badge variant="subscriber">Subscriber</Badge>}
             {page?.isFollower && <Badge variant="follower">Follower</Badge>}

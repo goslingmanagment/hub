@@ -76,7 +76,7 @@ import {
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
 } from "./shared.ts";
-import { hydrateFans } from "./fan-hydration.ts";
+import { hydrateFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
 
 type ExecutorRequestContext = {
@@ -1347,6 +1347,7 @@ export async function executeSubscribersChunk(
     }
 
     const fanMap = await hydrateFans(app, {
+      platformAccountId: input.pageContext.page.id,
       requestContext,
       platformUserIds: page.items.map((item) => item.subscriberId),
       telemetry: input.telemetry,
@@ -1541,15 +1542,10 @@ export async function executeFollowersChunk(
       action: "inserting followers raw payload",
     });
 
-    const fanRows = await upsertFans(app.db, page.accounts.map((account) => ({
-      platform: "fansly" as const,
-      platformUserId: account.id,
-      username: account.username,
-      displayName: account.displayName,
-      createdAtExternal: account.createdAt ? new Date(account.createdAt) : null,
-      metadata: {},
-    })));
-    const fanMap = new Map(fanRows.map((fan) => [fan.platformUserId, fan.id]));
+    const fanMap = await upsertHydratedFansForPage(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      accounts: page.accounts,
+    });
 
     let reachedBoundary = false;
     const followInputs: UpsertPageFollowInput[] = [];
@@ -1738,15 +1734,10 @@ export async function executeFollowersReconcileChunk(
       action: "inserting followers raw payload",
     });
 
-    const fanRows = await upsertFans(app.db, page.accounts.map((account) => ({
-      platform: "fansly" as const,
-      platformUserId: account.id,
-      username: account.username,
-      displayName: account.displayName,
-      createdAtExternal: account.createdAt ? new Date(account.createdAt) : null,
-      metadata: {},
-    })));
-    const fanMap = new Map(fanRows.map((fan) => [fan.platformUserId, fan.id]));
+    const fanMap = await upsertHydratedFansForPage(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      accounts: page.accounts,
+    });
 
     const followInputs: UpsertPageFollowInput[] = [];
     const fanPageInputs: UpsertFanPageInput[] = [];
@@ -2003,23 +1994,17 @@ export async function executeDmConversationsChunk(
         ? existing?.fanId ?? null
         : null;
       if (partnerPlatformUserId && !partnerMissingFromAggregationAccounts) {
-        const [fan] = await upsertFans(app.db, [{
-          platform: "fansly",
-          platformUserId: partnerPlatformUserId,
-          username: partnerUsername,
-          displayName: partnerDisplayName,
-          createdAtExternal: partnerSnapshot?.createdAt
-            ? normalizeFanslyTimestamp(partnerSnapshot.createdAt)
-            : null,
-          metadata: {},
-        }]);
-        fanId = fan?.id ?? null;
-        if (fanId) {
-          await upsertFanPages(app.db, [{
-            fanId,
-            platformAccountId: input.pageContext.page.id,
-          }]);
-        }
+        const fanMap = await upsertHydratedFansForPage(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          accounts: [{
+            id: partnerPlatformUserId,
+            username: partnerUsername,
+            displayName: partnerDisplayName,
+            createdAt: partnerSnapshot?.createdAt,
+            notes: partnerSnapshot?.notes,
+          }],
+        });
+        fanId = fanMap.get(partnerPlatformUserId) ?? null;
       }
 
       let headMessage = group?.lastMessage ?? detail?.parsed.lastMessage ?? null;

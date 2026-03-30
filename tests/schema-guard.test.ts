@@ -9,7 +9,6 @@ import { assertRuntimeSchemaReady } from "@agency_hub_core/db";
 import { resolveMigrationFiles } from "../packages/db/src/migrations-dir.ts";
 import { startTestDatabase } from "./helpers/db.ts";
 import { acquireTestPrerequisite } from "./helpers/prerequisites.ts";
-import { resolveMigrationFiles } from "../packages/db/src/migrations-dir.ts";
 
 describe("runtime schema guard", () => {
   afterEach(() => {

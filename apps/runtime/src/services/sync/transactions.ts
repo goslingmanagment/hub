@@ -5,8 +5,6 @@ import {
   rebuildRevenueRollups,
   upsertCheckpoint,
   upsertCheckpointProgress,
-  upsertFanPages,
-  upsertFans,
   upsertTransaction,
 } from "@agency_hub_core/db";
 import {
@@ -18,7 +16,7 @@ import {
 import { calculateGrossMillsFromNet, toMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { prepareHydratedFans } from "./fan-hydration.ts";
+import { hydrateFans } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
 import {
@@ -249,26 +247,19 @@ async function syncTransactionsIncremental(
   }
 
   let checkpointAfter = null;
-  const hydratedFans = await prepareHydratedFans(app, {
-    requestContext: input.requestContext,
-    platformUserIds: collectedItems
-      .map((item) => item.correlationAccountId)
-      .filter((value): value is string => Boolean(value)),
-    telemetry: input.telemetry,
-  });
   for (const item of collectedItems) {
     await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
   }
   await app.db.transaction(async (tx) => {
-    const fans = await upsertFans(tx as typeof app.db, hydratedFans);
-    const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
-    await upsertFanPages(
-      tx as typeof app.db,
-      fans.map((fan) => ({
-        fanId: fan.id,
-        platformAccountId: input.platformAccountId,
-      })),
-    );
+    const fanMap = await hydrateFans(app, {
+      db: tx as typeof app.db,
+      platformAccountId: input.platformAccountId,
+      requestContext: input.requestContext,
+      platformUserIds: collectedItems
+        .map((item) => item.correlationAccountId)
+        .filter((value): value is string => Boolean(value)),
+      telemetry: input.telemetry,
+    });
 
     for (const item of collectedItems) {
       const fanId = item.correlationAccountId
@@ -562,25 +553,21 @@ async function syncTransactionsBackfill(
         )),
       };
 
-      const hydratedFans = await prepareHydratedFans(app, {
-        requestContext: input.requestContext,
-        platformUserIds: page.items
-          .map((item) => item.correlationAccountId)
-          .filter((value): value is string => Boolean(value)),
-        telemetry: input.telemetry,
-      });
       for (const item of page.items) {
         await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
       }
 
       await app.db.transaction(async (tx) => {
         const dbTx = tx as typeof app.db;
-        const fans = await upsertFans(dbTx, hydratedFans);
-        const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
-        await upsertFanPages(dbTx, fans.map((fan) => ({
-          fanId: fan.id,
+        const fanMap = await hydrateFans(app, {
+          db: dbTx,
           platformAccountId: input.platformAccountId,
-        })));
+          requestContext: input.requestContext,
+          platformUserIds: page.items
+            .map((item) => item.correlationAccountId)
+            .filter((value): value is string => Boolean(value)),
+          telemetry: input.telemetry,
+        });
 
         for (const item of page.items) {
           const fanId = item.correlationAccountId

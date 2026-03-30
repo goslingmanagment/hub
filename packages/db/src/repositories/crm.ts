@@ -2,7 +2,11 @@ import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
-import { buildContainsSearchPattern } from "./search.ts";
+import {
+  buildContainsSearchPattern,
+  pageAliasHistoryMatchSql,
+  pageAliasMatchSql,
+} from "./search.ts";
 import {
   fanPages,
   fans,
@@ -778,6 +782,7 @@ export interface CrmRetentionListInput {
 export interface CrmRetentionRow {
   fanId: number;
   platformUserId: string;
+  pageAlias: string | null;
   username: string | null;
   displayName: string | null;
   creatorNetAmountMills: bigint;
@@ -813,6 +818,16 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
     ? sql`
       and (
         f.platform_user_id ilike ${query} escape '\\'
+        or ${pageAliasMatchSql({
+          fanId: sql.raw("fp.fan_id"),
+          platformAccountId: sql.raw("fp.platform_account_id"),
+          pattern: query,
+        })}
+        or ${pageAliasHistoryMatchSql({
+          fanId: sql.raw("fp.fan_id"),
+          platformAccountId: sql.raw("fp.platform_account_id"),
+          pattern: query,
+        })}
         or f.username ilike ${query} escape '\\'
         or f.display_name ilike ${query} escape '\\'
         or exists (
@@ -869,6 +884,7 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
     retention_candidates as (
       select fp.fan_id as fan_id,
              f.platform_user_id as platform_user_id,
+             fp.page_alias as page_alias,
              f.username as username,
              f.display_name as display_name,
              fp.subscription_expires_at as subscription_expires_at,
@@ -958,6 +974,7 @@ export async function listCrmRetention(
     touchpointCounts: unknown;
     fanId: NumericValue | null;
     platformUserId: string | null;
+    pageAlias: string | null;
     username: string | null;
     displayName: string | null;
     creatorNetAmountMills: NumericValue | null;
@@ -996,6 +1013,7 @@ export async function listCrmRetention(
     paged as (
       select fan_id as "fanId",
              platform_user_id as "platformUserId",
+             page_alias as "pageAlias",
              username as "username",
              display_name as "displayName",
              creator_net_amount_mills as "creatorNetAmountMills",
@@ -1029,6 +1047,7 @@ export async function listCrmRetention(
            ), '[]'::jsonb) as "touchpointCounts",
            p."fanId",
            p."platformUserId",
+           p."pageAlias",
            p."username",
            p."displayName",
            p."creatorNetAmountMills",
@@ -1085,6 +1104,7 @@ export async function listCrmRetention(
       .map((row) => ({
       fanId: normalizeNumber(row.fanId, "fanId"),
       platformUserId: row.platformUserId,
+      pageAlias: row.pageAlias,
       username: row.username,
       displayName: row.displayName,
       creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),
@@ -1154,6 +1174,7 @@ export interface CrmReactivationListInput {
 export interface CrmReactivationRow {
   fanId: number;
   platformUserId: string;
+  pageAlias: string | null;
   username: string | null;
   displayName: string | null;
   creatorNetAmountMills: bigint;
@@ -1186,6 +1207,16 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
     ? sql`
       and (
         f.platform_user_id ilike ${query} escape '\\'
+        or ${pageAliasMatchSql({
+          fanId: sql.raw("slp.fan_id"),
+          platformAccountId: sql.raw("slp.platform_account_id"),
+          pattern: query,
+        })}
+        or ${pageAliasHistoryMatchSql({
+          fanId: sql.raw("slp.fan_id"),
+          platformAccountId: sql.raw("slp.platform_account_id"),
+          pattern: query,
+        })}
         or f.username ilike ${query} escape '\\'
         or f.display_name ilike ${query} escape '\\'
         or exists (
@@ -1204,7 +1235,7 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
     ? sql`and no_dm_history = true`
     : sql``;
   const hideDeletedFilter = input.hideDeleted
-    ? sql`and not (username is null and display_name is null)`
+    ? sql`and not (page_alias is null and username is null and display_name is null)`
     : sql``;
   const subscriberStateFilter = input.subscriberState === "current"
     ? sql`and is_subscriber = true`
@@ -1242,6 +1273,7 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
     candidate_rows as (
       select slp.fan_id as fan_id,
              f.platform_user_id as platform_user_id,
+             fp.page_alias as page_alias,
              f.username as username,
              f.display_name as display_name,
              slp.creator_net_amount_mills as creator_net_amount_mills,
@@ -1321,6 +1353,7 @@ export async function listCrmReactivation(
   const rowsResult = await db.execute<{
     fanId: NumericValue;
     platformUserId: string;
+    pageAlias: string | null;
     username: string | null;
     displayName: string | null;
     creatorNetAmountMills: NumericValue;
@@ -1343,6 +1376,7 @@ export async function listCrmReactivation(
     ${base}
     select fan_id as "fanId",
            platform_user_id as "platformUserId",
+           page_alias as "pageAlias",
            username as "username",
            display_name as "displayName",
            creator_net_amount_mills as "creatorNetAmountMills",
@@ -1372,6 +1406,7 @@ export async function listCrmReactivation(
     items: rowsResult.rows.map((row) => ({
       fanId: normalizeNumber(row.fanId, "fanId"),
       platformUserId: row.platformUserId,
+      pageAlias: row.pageAlias,
       username: row.username,
       displayName: row.displayName,
       creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),
@@ -1453,6 +1488,7 @@ export interface CrmConversationPreview {
   fan: {
     id: number;
     platformUserId: string;
+    pageAlias: string | null;
     username: string | null;
     displayName: string | null;
   } | null;
@@ -1550,10 +1586,20 @@ export async function getCrmConversationPreview(
 
   const [fanRow, messagesResult] = await Promise.all([
     conversation.fanId
-      ? db.query.fans.findFirst({
-        where: eq(fans.id, conversation.fanId),
-      })
-      : Promise.resolve(null),
+      ? db.select({
+        id: fans.id,
+        platformUserId: fans.platformUserId,
+        pageAlias: fanPages.pageAlias,
+        username: fans.username,
+        displayName: fans.displayName,
+      }).from(fans)
+        .leftJoin(fanPages, and(
+          eq(fanPages.platformAccountId, input.platformAccountId),
+          eq(fanPages.fanId, fans.id),
+        ))
+        .where(eq(fans.id, conversation.fanId))
+        .limit(1)
+      : Promise.resolve([]),
     db.execute<{
       platformMessageId: string;
       senderPlatformUserId: string | null;
@@ -1580,12 +1626,13 @@ export async function getCrmConversationPreview(
   ]);
 
   return {
-    fan: fanRow
+    fan: fanRow[0]
       ? {
-        id: fanRow.id,
-        platformUserId: fanRow.platformUserId,
-        username: fanRow.username,
-        displayName: fanRow.displayName,
+        id: fanRow[0].id,
+        platformUserId: fanRow[0].platformUserId,
+        pageAlias: fanRow[0].pageAlias,
+        username: fanRow[0].username,
+        displayName: fanRow[0].displayName,
       }
       : null,
     conversation: {
@@ -1635,6 +1682,7 @@ export interface WorkboardSubscribersInput {
 export interface WorkboardSubscriberRow {
   fanId: number;
   platformUserId: string;
+  pageAlias: string | null;
   username: string | null;
   displayName: string | null;
   creatorNetAmountMills: bigint;
@@ -1673,6 +1721,7 @@ export async function listWorkboardSubscribers(
   const result = await db.execute<{
     fanId: NumericValue;
     platformUserId: string;
+    pageAlias: string | null;
     username: string | null;
     displayName: string | null;
     creatorNetAmountMills: NumericValue;
@@ -1704,6 +1753,7 @@ export async function listWorkboardSubscribers(
     )
     select fan_id as "fanId",
            platform_user_id as "platformUserId",
+           page_alias as "pageAlias",
            username as "username",
            display_name as "displayName",
            creator_net_amount_mills as "creatorNetAmountMills",
@@ -1737,6 +1787,7 @@ export async function listWorkboardSubscribers(
   return result.rows.map((row) => ({
     fanId: normalizeNumber(row.fanId, "fanId"),
     platformUserId: row.platformUserId,
+    pageAlias: row.pageAlias,
     username: row.username,
     displayName: row.displayName,
     creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),
@@ -1763,6 +1814,7 @@ export async function listWorkboardSubscribers(
 export interface WorkboardSpenderRow {
   fanId: number;
   platformUserId: string;
+  pageAlias: string | null;
   username: string | null;
   displayName: string | null;
   creatorNetAmountMills: bigint;
@@ -1823,6 +1875,7 @@ function spenderBaseQuery(
     candidate_rows as (
       select slp.fan_id as fan_id,
              f.platform_user_id as platform_user_id,
+             fp.page_alias as page_alias,
              f.username as username,
              f.display_name as display_name,
              slp.creator_net_amount_mills as creator_net_amount_mills,
@@ -1883,6 +1936,7 @@ function spenderBaseQuery(
 function normalizeSpenderRows(rows: Array<{
   fanId: NumericValue;
   platformUserId: string;
+  pageAlias: string | null;
   username: string | null;
   displayName: string | null;
   creatorNetAmountMills: NumericValue;
@@ -1901,6 +1955,7 @@ function normalizeSpenderRows(rows: Array<{
   return rows.map((row) => ({
     fanId: normalizeNumber(row.fanId, "fanId"),
     platformUserId: row.platformUserId,
+    pageAlias: row.pageAlias,
     username: row.username,
     displayName: row.displayName,
     creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),
@@ -1927,6 +1982,7 @@ export async function listWorkboardActiveSpenders(
   const result = await db.execute<{
     fanId: NumericValue;
     platformUserId: string;
+    pageAlias: string | null;
     username: string | null;
     displayName: string | null;
     creatorNetAmountMills: NumericValue;
@@ -1945,6 +2001,7 @@ export async function listWorkboardActiveSpenders(
     ${base}
     select fan_id as "fanId",
            platform_user_id as "platformUserId",
+           page_alias as "pageAlias",
            username as "username",
            display_name as "displayName",
            creator_net_amount_mills as "creatorNetAmountMills",
@@ -1975,6 +2032,7 @@ export async function listWorkboardInactiveSpenders(
   const result = await db.execute<{
     fanId: NumericValue;
     platformUserId: string;
+    pageAlias: string | null;
     username: string | null;
     displayName: string | null;
     creatorNetAmountMills: NumericValue;
@@ -1993,6 +2051,7 @@ export async function listWorkboardInactiveSpenders(
     ${base}
     select fan_id as "fanId",
            platform_user_id as "platformUserId",
+           page_alias as "pageAlias",
            username as "username",
            display_name as "displayName",
            creator_net_amount_mills as "creatorNetAmountMills",
@@ -2055,6 +2114,7 @@ export async function unsnoozeWorkboardFan(
 export interface WorkboardSnoozedRow {
   fanId: number;
   platformUserId: string;
+  pageAlias: string | null;
   username: string | null;
   displayName: string | null;
   creatorNetAmountMills: bigint;
@@ -2068,6 +2128,7 @@ export async function listWorkboardSnoozed(
   const result = await db.execute<{
     fanId: NumericValue;
     platformUserId: string;
+    pageAlias: string | null;
     username: string | null;
     displayName: string | null;
     creatorNetAmountMills: NumericValue;
@@ -2075,12 +2136,16 @@ export async function listWorkboardSnoozed(
   }>(sql`
     select ws.fan_id as "fanId",
            f.platform_user_id as "platformUserId",
+           fp.page_alias as "pageAlias",
            f.username as "username",
            f.display_name as "displayName",
            coalesce(slp.creator_net_amount_mills, 0)::bigint as "creatorNetAmountMills",
            ws.snoozed_until as "snoozedUntil"
     from workboard_snoozes ws
     inner join fans f on f.id = ws.fan_id
+    left join fan_pages fp
+      on fp.platform_account_id = ws.platform_account_id
+     and fp.fan_id = ws.fan_id
     left join spender_lifetime_page slp
       on slp.platform_account_id = ws.platform_account_id
      and slp.fan_id = ws.fan_id
@@ -2092,6 +2157,7 @@ export async function listWorkboardSnoozed(
   return result.rows.map((row) => ({
     fanId: normalizeNumber(row.fanId, "fanId"),
     platformUserId: row.platformUserId,
+    pageAlias: row.pageAlias,
     username: row.username,
     displayName: row.displayName,
     creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),

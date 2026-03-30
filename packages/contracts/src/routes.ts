@@ -569,6 +569,13 @@ export const transactionFanSchema = z.object({
   displayName: z.string().nullable(),
 }).nullable();
 
+const pageTransactionFanSchema = z.object({
+  platformUserId: z.string(),
+  pageAlias: z.string().nullable(),
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+}).nullable();
+
 export const transactionItemSchema = z.object({
   transactionId: z.string(),
   rawType: z.union([z.number().int(), z.string()]),
@@ -582,7 +589,7 @@ export const transactionItemSchema = z.object({
   correlationAccountId: z.string().nullable(),
   occurredAt: isoTimestamp,
   sourceUpdatedAt: isoTimestamp.nullable(),
-  fan: transactionFanSchema,
+  fan: pageTransactionFanSchema,
 });
 
 export const transactionListResponseSchema = z.object({
@@ -596,6 +603,7 @@ export const transactionListResponseSchema = z.object({
 export const subscriberItemSchema = z.object({
   platformSubscriptionId: z.string(),
   platformUserId: z.string(),
+  pageAlias: z.string().nullable(),
   username: z.string().nullable(),
   displayName: z.string().nullable(),
   endsAt: isoTimestamp.nullable(),
@@ -627,6 +635,7 @@ export const subscriberDailyResponseSchema = z.object({
 
 export const followerItemSchema = z.object({
   platformUserId: z.string(),
+  pageAlias: z.string().nullable(),
   username: z.string().nullable(),
   displayName: z.string().nullable(),
   followedAt: isoTimestamp,
@@ -653,6 +662,7 @@ export const followerDailyResponseSchema = z.object({
 
 export const fanListItemSchema = z.object({
   platformUserId: z.string(),
+  pageAlias: z.string().nullable(),
   username: z.string().nullable(),
   displayName: z.string().nullable(),
   totalCreatorNetMills: mills,
@@ -680,6 +690,10 @@ const fanBaseSchema = z.object({
   username: z.string().nullable(),
   displayName: z.string().nullable(),
   createdAtExternal: isoTimestamp.nullable(),
+});
+
+const pageScopedFanBaseSchema = fanBaseSchema.extend({
+  pageAlias: z.string().nullable(),
 });
 
 const fanNoteSchema = z.object({
@@ -721,7 +735,7 @@ const fanPageContextSchema = z.object({
 });
 
 export const pageFanDetailResponseSchema = z.object({
-  fan: fanBaseSchema,
+  fan: pageScopedFanBaseSchema,
   platformTotalSpendMills: mills,
   page: fanPageContextSchema,
   flags: z.array(fanFlagSchema),
@@ -734,7 +748,9 @@ export const crossPageFanDetailResponseSchema = z.object({
   flags: z.array(fanFlagSchema),
 });
 
-const spenderFanSchema = fanBaseSchema;
+const spenderFanSchema = fanBaseSchema.extend({
+  pageAlias: z.string().nullable(),
+});
 
 const spenderPeriodMetadataSchema = z.object({
   timeZone: z.string(),
@@ -919,6 +935,7 @@ const crmFanIdentitySchema = z.object({
   fanId: intId,
   platform: z.literal("fansly"),
   platformUserId: z.string(),
+  pageAlias: z.string().nullable(),
   username: z.string().nullable(),
   displayName: z.string().nullable(),
 });
@@ -1062,6 +1079,7 @@ const workboardSubscriberItemSchema = z.object({
   fanId: intId,
   fan: z.object({
     platformUserId: z.string(),
+    pageAlias: z.string().nullable(),
     username: z.string().nullable(),
     displayName: z.string().nullable(),
   }),
@@ -1087,6 +1105,7 @@ const workboardSpenderItemSchema = z.object({
   fanId: intId,
   fan: z.object({
     platformUserId: z.string(),
+    pageAlias: z.string().nullable(),
     username: z.string().nullable(),
     displayName: z.string().nullable(),
   }),
@@ -1105,6 +1124,7 @@ const workboardSnoozedItemSchema = z.object({
   fanId: intId,
   fan: z.object({
     platformUserId: z.string(),
+    pageAlias: z.string().nullable(),
     username: z.string().nullable(),
     displayName: z.string().nullable(),
   }),
@@ -1170,7 +1190,7 @@ export const fanProfileDocumentSchema = z.object({
 });
 
 export const fanProfileResponseSchema = z.object({
-  fan: fanBaseSchema,
+  fan: pageScopedFanBaseSchema,
   profile: fanProfileDocumentSchema.nullable(),
 });
 

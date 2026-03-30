@@ -505,12 +505,89 @@ export const fanPages = pgTable(
     subscriberSince: timestamp("subscriber_since", { withTimezone: true }),
     subscriptionExpiresAt: timestamp("subscription_expires_at", { withTimezone: true }),
     autoRenew: boolean("auto_renew"),
+    pageAlias: text("page_alias"),
+    pageAliasSource: text("page_alias_source"),
+    pageAliasSourceNoteId: text("page_alias_source_note_id"),
+    pageAliasSyncedAt: timestamp("page_alias_synced_at", { withTimezone: true }),
     lastTransactionAt: timestamp("last_transaction_at", { withTimezone: true }),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     uniq: unique("fan_pages_fan_account_uniq").on(table.fanId, table.platformAccountId),
     platformAccountIdx: index("fan_pages_platform_account_idx").on(table.platformAccountId),
+    pageAliasIdx: index("fan_pages_platform_account_alias_idx").on(
+      table.platformAccountId,
+      table.pageAlias,
+    ),
+  }),
+);
+
+export const fanPageExternalNotes = pgTable(
+  "fan_page_external_notes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    provider: platformEnum("provider").notNull(),
+    externalNoteId: text("external_note_id").notNull(),
+    contentType: integer("content_type"),
+    title: text("title"),
+    body: text("body"),
+    createdAtExternal: timestamp("created_at_external", { withTimezone: true }),
+    updatedAtExternal: timestamp("updated_at_external", { withTimezone: true }),
+    isActive: boolean("is_active").default(true).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    raw: jsonb("raw").$type<Record<string, unknown>>().default({}).notNull(),
+  },
+  (table) => ({
+    uniq: unique("fan_page_external_notes_account_provider_external_note_uniq").on(
+      table.platformAccountId,
+      table.provider,
+      table.externalNoteId,
+    ),
+    pageFanProviderIdx: index("fan_page_external_notes_page_fan_provider_idx").on(
+      table.platformAccountId,
+      table.fanId,
+      table.provider,
+    ),
+    pageFanProviderActiveIdx: index("fan_page_external_notes_page_fan_provider_active_idx").on(
+      table.platformAccountId,
+      table.fanId,
+      table.provider,
+      table.isActive,
+    ),
+  }),
+);
+
+export const fanPageAliases = pgTable(
+  "fan_page_aliases",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    alias: text("alias").notNull(),
+    sourceNoteId: text("source_note_id"),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "fan_page_aliases_pkey",
+      columns: [table.platformAccountId, table.fanId, table.alias],
+    }),
+    aliasIdx: index("fan_page_aliases_platform_account_alias_idx").on(
+      table.platformAccountId,
+      table.alias,
+    ),
+    fanIdx: index("fan_page_aliases_fan_idx").on(table.fanId),
   }),
 );
 

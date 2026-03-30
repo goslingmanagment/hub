@@ -7,7 +7,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { resolveFanLabel } from "@agency_hub_core/shared";
+import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { formatDate, formatDateTime } from "@/lib/format";
 
 type Filter = "all" | "new24h";
@@ -95,7 +95,7 @@ export function FollowersPage() {
             )}
             {items.map((follower) => {
               const recentFollow = isNew24h(follower.followedAt);
-              const fanLabel = resolveFanLabel(follower);
+              const fanLabel = resolveFanLabelForScope(follower, "page");
               const fanNavigation = buildFanProfileNavigation(
                 pageLabel!,
                 platform,
@@ -118,8 +118,8 @@ export function FollowersPage() {
                       >
                         {fanLabel.label}
                       </Link>
-                      {fanLabel.displayName && fanLabel.username && (
-                        <span className="text-xs text-text-muted">@{fanLabel.username}</span>
+                      {fanLabel.secondaryPlatformHandle && (
+                        <span className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</span>
                       )}
                       {recentFollow && <Badge variant="new">NEW</Badge>}
                     </div>

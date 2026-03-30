@@ -1,13 +1,17 @@
 export interface FanLabelInput {
   platformUserId: string;
+  pageAlias?: string | null;
   username?: string | null;
   displayName?: string | null;
 }
 
 export interface ResolvedFanLabel {
   label: string;
+  pageAlias: string | null;
   username: string | null;
   displayName: string | null;
+  primarySource: "pageAlias" | "displayName" | "username" | "deleted";
+  secondaryPlatformHandle: string | null;
   isDeletedFallback: boolean;
 }
 
@@ -38,14 +42,39 @@ function deletedUserLabel(platformUserId: string) {
 }
 
 export function resolveFanLabel(input: FanLabelInput): ResolvedFanLabel {
+  return resolveFanLabelForScope(input, "global");
+}
+
+export function resolveFanLabelForScope(
+  input: FanLabelInput,
+  scope: "page" | "global",
+): ResolvedFanLabel {
+  const pageAlias = scope === "page"
+    ? normalizeFanNamePart(input.pageAlias)
+    : null;
   const displayName = normalizeFanNamePart(input.displayName);
   const username = normalizeFanNamePart(input.username);
+
+  if (pageAlias) {
+    return {
+      label: pageAlias,
+      pageAlias,
+      username,
+      displayName,
+      primarySource: "pageAlias",
+      secondaryPlatformHandle: username,
+      isDeletedFallback: false,
+    };
+  }
 
   if (displayName) {
     return {
       label: displayName,
+      pageAlias,
       username,
       displayName,
+      primarySource: "displayName",
+      secondaryPlatformHandle: username,
       isDeletedFallback: false,
     };
   }
@@ -53,16 +82,22 @@ export function resolveFanLabel(input: FanLabelInput): ResolvedFanLabel {
   if (username) {
     return {
       label: username,
+      pageAlias,
       username,
       displayName,
+      primarySource: "username",
+      secondaryPlatformHandle: null,
       isDeletedFallback: false,
     };
   }
 
   return {
     label: deletedUserLabel(input.platformUserId),
+    pageAlias,
     username,
     displayName,
+    primarySource: "deleted",
+    secondaryPlatformHandle: null,
     isDeletedFallback: true,
   };
 }

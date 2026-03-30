@@ -5,7 +5,7 @@ import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
 import { usePeriodStore } from "@/stores/periodStore";
-import { formatUsdFromMills, resolveFanLabel } from "@agency_hub_core/shared";
+import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { formatRelativeTime } from "@/lib/format";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import type { SpenderBatchBody } from "@agency_hub_core/contracts";
@@ -161,7 +161,7 @@ export function TopSupportersPage() {
               </tr>
             )}
             {items.map((item, index) => {
-              const fanLabel = resolveFanLabel(item.fan);
+              const fanLabel = resolveFanLabelForScope(item.fan, "page");
               const lifetimeNet = item.metrics.lifetime.scopeCreatorNetAmountMills;
               const windowMetrics = item.metrics.window;
               const spent = spenderPeriod === "lifetime"
@@ -202,8 +202,8 @@ export function TopSupportersPage() {
                       </span>
                       {whaleBadge(lifetimeNet)}
                     </div>
-                    {fanLabel.displayName && fanLabel.username && (
-                      <div className="text-xs text-text-muted">@{fanLabel.username}</div>
+                    {fanLabel.secondaryPlatformHandle && (
+                      <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
                     )}
                   </td>
                   <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">

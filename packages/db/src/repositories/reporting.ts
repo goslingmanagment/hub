@@ -24,7 +24,12 @@ import {
   spenderLifetimePage,
   transactions,
 } from "../schema.ts";
-import { buildContainsSearchPattern, ilikeEscaped } from "./search.ts";
+import {
+  buildContainsSearchPattern,
+  ilikeEscaped,
+  pageAliasHistoryMatchSql,
+  pageAliasMatchSql,
+} from "./search.ts";
 
 function applyPageScope<T>(clauses: T[], pageIds?: number[]) {
   if (pageIds !== undefined) {
@@ -320,8 +325,13 @@ export async function listTransactionsForPage(
     fanPlatformUserId: fans.platformUserId,
     fanUsername: fans.username,
     fanDisplayName: fans.displayName,
+    fanPageAlias: fanPages.pageAlias,
   }).from(transactions)
     .leftJoin(fans, eq(fans.id, transactions.fanId))
+    .leftJoin(fanPages, and(
+      eq(fanPages.platformAccountId, input.pageId),
+      eq(fanPages.fanId, transactions.fanId),
+    ))
     .where(and(...clauses))
     .orderBy(desc(transactions.occurredAt), desc(transactions.id))
     .limit(input.limit)
@@ -355,6 +365,16 @@ export async function listSubscribersForPage(
     if (pattern) {
       conditions.push(or(
         ilikeEscaped(fans.platformUserId, pattern),
+        pageAliasMatchSql({
+          fanId: fans.id,
+          platformAccountId: pageSubscriptions.platformAccountId,
+          pattern,
+        }),
+        pageAliasHistoryMatchSql({
+          fanId: fans.id,
+          platformAccountId: pageSubscriptions.platformAccountId,
+          pattern,
+        }),
         ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
         ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
         sql`exists (
@@ -392,12 +412,17 @@ export async function listSubscribersForPage(
     subscriptionTierName: pageSubscriptions.subscriptionTierName,
     sourceCreatedAt: pageSubscriptions.sourceCreatedAt,
     platformUserId: fans.platformUserId,
+    pageAlias: fanPages.pageAlias,
     username: fans.username,
     displayName: fans.displayName,
     totalCreatorNetAmountMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(pageSubscriptions)
     .innerJoin(fans, eq(fans.id, pageSubscriptions.fanId))
+    .innerJoin(fanPages, and(
+      eq(fanPages.platformAccountId, pageSubscriptions.platformAccountId),
+      eq(fanPages.fanId, pageSubscriptions.fanId),
+    ))
     .leftJoin(spenderLifetimePage, and(
       eq(spenderLifetimePage.platformAccountId, pageSubscriptions.platformAccountId),
       eq(spenderLifetimePage.fanId, pageSubscriptions.fanId),
@@ -506,6 +531,16 @@ export async function listFollowersForPage(
     if (pattern) {
       clauses.push(or(
         ilikeEscaped(fans.platformUserId, pattern),
+        pageAliasMatchSql({
+          fanId: fans.id,
+          platformAccountId: pageFollows.platformAccountId,
+          pattern,
+        }),
+        pageAliasHistoryMatchSql({
+          fanId: fans.id,
+          platformAccountId: pageFollows.platformAccountId,
+          pattern,
+        }),
         ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
         ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
         sql`exists (
@@ -527,11 +562,16 @@ export async function listFollowersForPage(
   const rows = await db.select({
     total: sql<number>`count(*) over()::int`,
     platformUserId: fans.platformUserId,
+    pageAlias: fanPages.pageAlias,
     username: fans.username,
     displayName: fans.displayName,
     followedAt: pageFollows.followedAt,
   }).from(pageFollows)
     .innerJoin(fans, eq(fans.id, pageFollows.fanId))
+    .innerJoin(fanPages, and(
+      eq(fanPages.platformAccountId, pageFollows.platformAccountId),
+      eq(fanPages.fanId, pageFollows.fanId),
+    ))
     .where(whereClause)
     .orderBy(desc(pageFollows.followedAt), desc(pageFollows.id))
     .limit(input.limit)
@@ -583,6 +623,16 @@ export async function listFansForPage(
     if (pattern) {
       clauses.push(or(
         ilikeEscaped(fans.platformUserId, pattern),
+        pageAliasMatchSql({
+          fanId: fans.id,
+          platformAccountId: fanPages.platformAccountId,
+          pattern,
+        }),
+        pageAliasHistoryMatchSql({
+          fanId: fans.id,
+          platformAccountId: fanPages.platformAccountId,
+          pattern,
+        }),
         ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
         ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
         sql`exists (
@@ -597,6 +647,7 @@ export async function listFansForPage(
   const rows = await db.select({
     total: sql<number>`count(*) over()::int`,
     platformUserId: fans.platformUserId,
+    pageAlias: fanPages.pageAlias,
     username: fans.username,
     displayName: fans.displayName,
     totalCreatorNetMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
@@ -647,6 +698,7 @@ export async function findFanOnPage(db: Database, pageId: number, platformUserId
     fanId: fans.id,
     platform: fans.platform,
     platformUserId: fans.platformUserId,
+    pageAlias: fanPages.pageAlias,
     username: fans.username,
     displayName: fans.displayName,
     createdAtExternal: fans.createdAtExternal,
@@ -705,6 +757,7 @@ export async function listFanPageContexts(
     modelName: models.name,
     totalCreatorNetMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
     currency: fanPages.currency,
+    pageAlias: fanPages.pageAlias,
     isFollower: fanPages.isFollower,
     followerSince: fanPages.followerSince,
     isSubscriber: fanPages.isSubscriber,

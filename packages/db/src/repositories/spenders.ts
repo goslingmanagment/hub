@@ -21,7 +21,14 @@ import {
   spenderProjectionWatermarks,
   transactions,
 } from "../schema.ts";
-import { buildContainsSearchPattern, ilikeEscaped } from "./search.ts";
+import {
+  buildContainsSearchPattern,
+  ilikeEscaped,
+  pageAliasHistoryMatchSql,
+  pageAliasHistoryMatchedValueSql,
+  pageAliasMatchSql,
+  pageAliasMatchedValueSql,
+} from "./search.ts";
 
 function transactionTypeListSql(transactionTypes: TransactionType[]) {
   return sql.join(
@@ -370,10 +377,15 @@ export async function findVisibleFanByIdentity(
     return null;
   }
 
+  const pageAliasSelect = input.pageIds.length === 1
+    ? fanPages.pageAlias
+    : sql<string | null>`null`;
+
   const [row] = await db.select({
     fanId: fans.id,
     platform: fans.platform,
     platformUserId: fans.platformUserId,
+    pageAlias: pageAliasSelect,
     username: fans.username,
     displayName: fans.displayName,
     createdAtExternal: fans.createdAtExternal,
@@ -421,6 +433,7 @@ export interface RankedSpenderRow {
   fanId: number;
   platform: Platform;
   platformUserId: string;
+  pageAlias: string | null;
   username: string | null;
   displayName: string | null;
   createdAtExternal: Date | null;
@@ -587,12 +600,15 @@ function buildSpenderQueryClause(
   query: string | undefined,
   input: {
     platform: Platform;
+    pageIds: number[];
   },
 ) {
   const pattern = buildContainsSearchPattern(query);
   if (!pattern) {
     return eq(fans.platform, input.platform);
   }
+
+  const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
 
   const aliasMatchSql = sql`exists (
     select 1
@@ -601,14 +617,31 @@ function buildSpenderQueryClause(
       and fua.username ilike ${pattern} escape '\\'
   )`;
 
+  const matchConditions = [
+    ilikeEscaped(fans.platformUserId, pattern),
+    ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
+    ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
+    aliasMatchSql,
+  ];
+
+  if (singlePageId !== null) {
+    matchConditions.splice(1, 0,
+      pageAliasMatchSql({
+        fanId: fans.id,
+        platformAccountId: sql`${singlePageId}`,
+        pattern,
+      }),
+      pageAliasHistoryMatchSql({
+        fanId: fans.id,
+        platformAccountId: sql`${singlePageId}`,
+        pattern,
+      }),
+    );
+  }
+
   return and(
     eq(fans.platform, input.platform),
-    or(
-      ilikeEscaped(fans.platformUserId, pattern),
-      ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
-      ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
-      aliasMatchSql,
-    )!,
+    or(...matchConditions)!,
   )!;
 }
 
@@ -664,6 +697,7 @@ export async function listRankedSpenders(
 
   if (input.period === "lifetime") {
     const whereClause = buildSpenderQueryClause(input.query, input);
+    const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
 
     const sortFieldMap = {
       grossAmountMills: lifetimeMetrics.grossAmountMills,
@@ -687,6 +721,7 @@ export async function listRankedSpenders(
       fanId: fans.id,
       platform: fans.platform,
       platformUserId: fans.platformUserId,
+      pageAlias: singlePageId === null ? sql<string | null>`null` : fanPages.pageAlias,
       username: fans.username,
       displayName: fans.displayName,
       createdAtExternal: fans.createdAtExternal,
@@ -704,6 +739,12 @@ export async function listRankedSpenders(
       lifetimeCreatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
     }).from(lifetimeMetrics)
       .innerJoin(fans, eq(fans.id, lifetimeMetrics.fanId))
+      .leftJoin(fanPages, singlePageId === null
+        ? sql`false`
+        : and(
+          eq(fanPages.platformAccountId, singlePageId),
+          eq(fanPages.fanId, lifetimeMetrics.fanId),
+        ))
       .where(whereClause)
       .orderBy(orderBy, asc(fans.platformUserId), asc(fans.id))
       .limit(input.limit)
@@ -751,6 +792,7 @@ export async function listRankedSpenders(
     .as("current_metrics");
 
   const whereClause = buildSpenderQueryClause(input.query, input);
+  const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
   const sortFieldMap = {
     grossAmountMills: currentMetrics.grossAmountMills,
     creatorNetAmountMills: currentMetrics.creatorNetAmountMills,
@@ -773,6 +815,7 @@ export async function listRankedSpenders(
     fanId: fans.id,
     platform: fans.platform,
     platformUserId: fans.platformUserId,
+    pageAlias: singlePageId === null ? sql<string | null>`null` : fanPages.pageAlias,
     username: fans.username,
     displayName: fans.displayName,
     createdAtExternal: fans.createdAtExternal,
@@ -791,6 +834,12 @@ export async function listRankedSpenders(
   }).from(currentMetrics)
     .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
     .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
+    .leftJoin(fanPages, singlePageId === null
+      ? sql`false`
+      : and(
+        eq(fanPages.platformAccountId, singlePageId),
+        eq(fanPages.fanId, currentMetrics.fanId),
+      ))
     .where(whereClause)
     .orderBy(orderBy, asc(fans.platformUserId), asc(fans.id))
     .limit(input.limit)
@@ -857,6 +906,9 @@ export async function findVisibleFansByPlatformUserIds(
     fanId: fans.id,
     platform: fans.platform,
     platformUserId: fans.platformUserId,
+    pageAlias: input.pageIds.length === 1
+      ? sql<string | null>`max(${fanPages.pageAlias})`
+      : sql<string | null>`null`,
     username: fans.username,
     displayName: fans.displayName,
     createdAtExternal: fans.createdAtExternal,
@@ -1006,6 +1058,7 @@ export async function searchFansInScope(
         fanId: number;
         platform: Platform;
         platformUserId: string;
+        pageAlias: string | null;
         username: string | null;
         displayName: string | null;
         createdAtExternal: Date | null;
@@ -1023,6 +1076,7 @@ export async function searchFansInScope(
         fanId: number;
         platform: Platform;
         platformUserId: string;
+        pageAlias: string | null;
         username: string | null;
         displayName: string | null;
         createdAtExternal: Date | null;
@@ -1031,6 +1085,7 @@ export async function searchFansInScope(
       }>,
     };
   }
+  const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
   const aliasMatchSql = sql`(
     select fua.username
     from fan_username_aliases fua
@@ -1039,13 +1094,53 @@ export async function searchFansInScope(
     order by fua.last_seen_at desc, fua.username asc
     limit 1
   )`;
+  const currentPageAliasMatchedValueSql = singlePageId === null
+    ? null
+    : pageAliasMatchedValueSql({
+      fanId: fans.id,
+      platformAccountId: sql`${singlePageId}`,
+      pattern,
+    });
+  const pageAliasHistoryMatchedValue = singlePageId === null
+    ? null
+    : pageAliasHistoryMatchedValueSql({
+      fanId: fans.id,
+      platformAccountId: sql`${singlePageId}`,
+      pattern,
+    });
 
-  const matchClauses = or(
+  const matchConditions = [
     ilikeEscaped(fans.platformUserId, pattern),
     ilikeEscaped(sql`coalesce(${fans.username}, '')`, pattern),
-    ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
     sql`${aliasMatchSql} is not null`,
-  )!;
+    ilikeEscaped(sql`coalesce(${fans.displayName}, '')`, pattern),
+  ];
+  if (currentPageAliasMatchedValueSql && pageAliasHistoryMatchedValue) {
+    matchConditions.splice(1, 0,
+      sql`${currentPageAliasMatchedValueSql} is not null`,
+      sql`${pageAliasHistoryMatchedValue} is not null`,
+    );
+  }
+  const matchClauses = or(...matchConditions)!;
+  const matchRankSql = singlePageId === null
+    ? sql<number>`
+      case
+        when ${fans.platformUserId} ilike ${pattern} escape '\\' then 0
+        when coalesce(${fans.username}, '') ilike ${pattern} escape '\\' then 1
+        when ${aliasMatchSql} is not null then 2
+        else 3
+      end
+    `
+    : sql<number>`
+      case
+        when ${fans.platformUserId} ilike ${pattern} escape '\\' then 0
+        when ${currentPageAliasMatchedValueSql} is not null then 1
+        when ${pageAliasHistoryMatchedValue} is not null then 2
+        when coalesce(${fans.username}, '') ilike ${pattern} escape '\\' then 3
+        when ${aliasMatchSql} is not null then 4
+        else 5
+      end
+    `;
 
   const [countRow] = await db.select({
     total: sql<number>`count(distinct ${fans.id})::int`,
@@ -1061,12 +1156,15 @@ export async function searchFansInScope(
     fanId: fans.id,
     platform: fans.platform,
     platformUserId: fans.platformUserId,
+    pageAlias: singlePageId === null ? sql<string | null>`null` : sql<string | null>`max(${fanPages.pageAlias})`,
     username: fans.username,
     displayName: fans.displayName,
     createdAtExternal: fans.createdAtExternal,
     matchKind: sql<"platformUserId" | "username" | "alias" | "displayName">`
       case
         when ${fans.platformUserId} ilike ${pattern} escape '\\' then 'platformUserId'
+        when ${currentPageAliasMatchedValueSql ?? sql`null`} is not null then 'alias'
+        when ${pageAliasHistoryMatchedValue ?? sql`null`} is not null then 'alias'
         when coalesce(${fans.username}, '') ilike ${pattern} escape '\\' then 'username'
         when ${aliasMatchSql} is not null then 'alias'
         else 'displayName'
@@ -1075,6 +1173,8 @@ export async function searchFansInScope(
     matchedValue: sql<string | null>`
       case
         when ${fans.platformUserId} ilike ${pattern} escape '\\' then ${fans.platformUserId}
+        when ${currentPageAliasMatchedValueSql ?? sql`null`} is not null then ${currentPageAliasMatchedValueSql ?? sql`null`}
+        when ${pageAliasHistoryMatchedValue ?? sql`null`} is not null then ${pageAliasHistoryMatchedValue ?? sql`null`}
         when coalesce(${fans.username}, '') ilike ${pattern} escape '\\' then ${fans.username}
         when ${aliasMatchSql} is not null then ${aliasMatchSql}
         else ${fans.displayName}
@@ -1095,7 +1195,7 @@ export async function searchFansInScope(
       fans.displayName,
       fans.createdAtExternal,
     )
-    .orderBy(asc(fans.platformUserId), asc(fans.id))
+    .orderBy(matchRankSql, asc(fans.platformUserId), asc(fans.id))
     .limit(input.limit)
     .offset(input.offset);
 

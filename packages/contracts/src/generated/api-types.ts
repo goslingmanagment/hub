@@ -1022,6 +1022,7 @@ export interface paths {
                                 sourceUpdatedAt: string | null;
                                 fan: {
                                     platformUserId: string;
+                                    pageAlias: string | null;
                                     username: string | null;
                                     displayName: string | null;
                                 } | null;
@@ -1131,6 +1132,7 @@ export interface paths {
                             items: {
                                 platformSubscriptionId: string;
                                 platformUserId: string;
+                                pageAlias: string | null;
                                 username: string | null;
                                 displayName: string | null;
                                 endsAt: string | null;
@@ -1343,6 +1345,7 @@ export interface paths {
                             };
                             items: {
                                 platformUserId: string;
+                                pageAlias: string | null;
                                 username: string | null;
                                 displayName: string | null;
                                 followedAt: string;
@@ -1549,6 +1552,7 @@ export interface paths {
                             };
                             items: {
                                 platformUserId: string;
+                                pageAlias: string | null;
                                 username: string | null;
                                 displayName: string | null;
                                 totalCreatorNetMills: number;
@@ -1651,6 +1655,7 @@ export interface paths {
                                 username: string | null;
                                 displayName: string | null;
                                 createdAtExternal: string | null;
+                                pageAlias: string | null;
                             };
                             platformTotalSpendMills: number;
                             page: {
@@ -1773,6 +1778,7 @@ export interface paths {
                                 username: string | null;
                                 displayName: string | null;
                                 createdAtExternal: string | null;
+                                pageAlias: string | null;
                             };
                             profile: {
                                 version: number;
@@ -2113,6 +2119,7 @@ export interface paths {
                                 username: string | null;
                                 displayName: string | null;
                                 createdAtExternal: string | null;
+                                pageAlias: string | null;
                             };
                             profile: {
                                 version: number;
@@ -2369,6 +2376,7 @@ export interface paths {
                                     /** @enum {string} */
                                     platform: "fansly";
                                     platformUserId: string;
+                                    pageAlias: string | null;
                                     username: string | null;
                                     displayName: string | null;
                                 };
@@ -2546,6 +2554,7 @@ export interface paths {
                                     /** @enum {string} */
                                     platform: "fansly";
                                     platformUserId: string;
+                                    pageAlias: string | null;
                                     username: string | null;
                                     displayName: string | null;
                                 };
@@ -2701,6 +2710,7 @@ export interface paths {
                                 /** @enum {string} */
                                 platform: "fansly";
                                 platformUserId: string;
+                                pageAlias: string | null;
                                 username: string | null;
                                 displayName: string | null;
                             } | null;
@@ -2946,6 +2956,7 @@ export interface paths {
                                     fanId: number;
                                     fan: {
                                         platformUserId: string;
+                                        pageAlias: string | null;
                                         username: string | null;
                                         displayName: string | null;
                                     };
@@ -2983,6 +2994,7 @@ export interface paths {
                                     fanId: number;
                                     fan: {
                                         platformUserId: string;
+                                        pageAlias: string | null;
                                         username: string | null;
                                         displayName: string | null;
                                     };
@@ -3013,6 +3025,7 @@ export interface paths {
                                     fanId: number;
                                     fan: {
                                         platformUserId: string;
+                                        pageAlias: string | null;
                                         username: string | null;
                                         displayName: string | null;
                                     };
@@ -3043,6 +3056,7 @@ export interface paths {
                                     fanId: number;
                                     fan: {
                                         platformUserId: string;
+                                        pageAlias: string | null;
                                         username: string | null;
                                         displayName: string | null;
                                     };
@@ -3511,6 +3525,7 @@ export interface paths {
                                     username: string | null;
                                     displayName: string | null;
                                     createdAtExternal: string | null;
+                                    pageAlias: string | null;
                                 };
                                 metrics: {
                                     window: {
@@ -3669,6 +3684,7 @@ export interface paths {
                                 username: string | null;
                                 displayName: string | null;
                                 createdAtExternal: string | null;
+                                pageAlias: string | null;
                             };
                             period: {
                                 timeZone: string;
@@ -3853,6 +3869,7 @@ export interface paths {
                                 username: string | null;
                                 displayName: string | null;
                                 createdAtExternal: string | null;
+                                pageAlias: string | null;
                             };
                             period: {
                                 timeZone: string;
@@ -4030,6 +4047,7 @@ export interface paths {
                                     username: string | null;
                                     displayName: string | null;
                                     createdAtExternal: string | null;
+                                    pageAlias: string | null;
                                 } | null;
                                 metrics: {
                                     window: {
@@ -4190,6 +4208,7 @@ export interface paths {
                                     username: string | null;
                                     displayName: string | null;
                                     createdAtExternal: string | null;
+                                    pageAlias: string | null;
                                 };
                                 /** @enum {string} */
                                 matchKind: "platformUserId" | "username" | "alias" | "displayName";

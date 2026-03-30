@@ -153,6 +153,10 @@ export interface UpsertFanPageInput {
   subscriberSince?: Date | null;
   subscriptionExpiresAt?: Date | null;
   autoRenew?: boolean | null;
+  pageAlias?: string | null;
+  pageAliasSource?: string | null;
+  pageAliasSourceNoteId?: string | null;
+  pageAliasSyncedAt?: Date | null;
 }
 
 function mergeUpsertFanPageInput(
@@ -170,6 +174,16 @@ function mergeUpsertFanPageInput(
       ? next.subscriptionExpiresAt
       : current.subscriptionExpiresAt,
     autoRenew: next.autoRenew !== undefined ? next.autoRenew : current.autoRenew,
+    pageAlias: next.pageAlias !== undefined ? next.pageAlias : current.pageAlias,
+    pageAliasSource: next.pageAliasSource !== undefined
+      ? next.pageAliasSource
+      : current.pageAliasSource,
+    pageAliasSourceNoteId: next.pageAliasSourceNoteId !== undefined
+      ? next.pageAliasSourceNoteId
+      : current.pageAliasSourceNoteId,
+    pageAliasSyncedAt: next.pageAliasSyncedAt !== undefined
+      ? next.pageAliasSyncedAt
+      : current.pageAliasSyncedAt,
   };
 }
 
@@ -181,6 +195,10 @@ function fanPagePresenceKey(input: UpsertFanPageInput) {
     input.subscriberSince !== undefined ? "subscriberSince" : "",
     input.subscriptionExpiresAt !== undefined ? "subscriptionExpiresAt" : "",
     input.autoRenew !== undefined ? "autoRenew" : "",
+    input.pageAlias !== undefined ? "pageAlias" : "",
+    input.pageAliasSource !== undefined ? "pageAliasSource" : "",
+    input.pageAliasSourceNoteId !== undefined ? "pageAliasSourceNoteId" : "",
+    input.pageAliasSyncedAt !== undefined ? "pageAliasSyncedAt" : "",
   ].join("|");
 }
 
@@ -221,6 +239,18 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
     if (template.autoRenew !== undefined) {
       updateSet.autoRenew = sql`excluded.auto_renew`;
     }
+    if (template.pageAlias !== undefined) {
+      updateSet.pageAlias = sql`excluded.page_alias`;
+    }
+    if (template.pageAliasSource !== undefined) {
+      updateSet.pageAliasSource = sql`excluded.page_alias_source`;
+    }
+    if (template.pageAliasSourceNoteId !== undefined) {
+      updateSet.pageAliasSourceNoteId = sql`excluded.page_alias_source_note_id`;
+    }
+    if (template.pageAliasSyncedAt !== undefined) {
+      updateSet.pageAliasSyncedAt = sql`excluded.page_alias_synced_at`;
+    }
 
     await db
       .insert(fanPages)
@@ -233,6 +263,10 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
         subscriberSince: input.subscriberSince ?? null,
         subscriptionExpiresAt: input.subscriptionExpiresAt ?? null,
         autoRenew: input.autoRenew ?? null,
+        pageAlias: input.pageAlias ?? null,
+        pageAliasSource: input.pageAliasSource ?? null,
+        pageAliasSourceNoteId: input.pageAliasSourceNoteId ?? null,
+        pageAliasSyncedAt: input.pageAliasSyncedAt ?? null,
         lastSeenAt,
       })))
       .onConflictDoUpdate({
@@ -253,6 +287,10 @@ export async function upsertFanPage(
     subscriberSince: input.subscriberSince ?? null,
     subscriptionExpiresAt: input.subscriptionExpiresAt ?? null,
     autoRenew: input.autoRenew ?? null,
+    pageAlias: input.pageAlias ?? null,
+    pageAliasSource: input.pageAliasSource ?? null,
+    pageAliasSourceNoteId: input.pageAliasSourceNoteId ?? null,
+    pageAliasSyncedAt: input.pageAliasSyncedAt ?? null,
     lastSeenAt: new Date(),
   };
 
@@ -277,6 +315,18 @@ export async function upsertFanPage(
   }
   if (input.autoRenew !== undefined) {
     updateSet.autoRenew = input.autoRenew;
+  }
+  if (input.pageAlias !== undefined) {
+    updateSet.pageAlias = input.pageAlias;
+  }
+  if (input.pageAliasSource !== undefined) {
+    updateSet.pageAliasSource = input.pageAliasSource;
+  }
+  if (input.pageAliasSourceNoteId !== undefined) {
+    updateSet.pageAliasSourceNoteId = input.pageAliasSourceNoteId;
+  }
+  if (input.pageAliasSyncedAt !== undefined) {
+    updateSet.pageAliasSyncedAt = input.pageAliasSyncedAt;
   }
 
   const [fanPage] = await db

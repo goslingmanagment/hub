@@ -6,6 +6,7 @@ import {
   getFanslyDmMessageSyncExcludedReason,
   isFanslyDmMessageSyncExcluded,
   resolveFanLabel,
+  resolveFanLabelForScope,
 } from "@agency_hub_core/shared";
 
 describe("resolveFanLabel", () => {
@@ -16,8 +17,11 @@ describe("resolveFanLabel", () => {
       displayName: "Display Name",
     })).toMatchObject({
       label: "Display Name",
+      pageAlias: null,
       username: "username",
       displayName: "Display Name",
+      primarySource: "displayName",
+      secondaryPlatformHandle: "username",
       isDeletedFallback: false,
     });
   });
@@ -29,8 +33,11 @@ describe("resolveFanLabel", () => {
       displayName: "   ",
     })).toMatchObject({
       label: "user_name",
+      pageAlias: null,
       username: "user_name",
       displayName: null,
+      primarySource: "username",
+      secondaryPlatformHandle: null,
       isDeletedFallback: false,
     });
   });
@@ -42,8 +49,11 @@ describe("resolveFanLabel", () => {
       displayName: "",
     })).toMatchObject({
       label: "Deleted user · 12345678",
+      pageAlias: null,
       username: null,
       displayName: null,
+      primarySource: "deleted",
+      secondaryPlatformHandle: null,
       isDeletedFallback: true,
     });
   });
@@ -55,8 +65,11 @@ describe("resolveFanLabel", () => {
       displayName: "\n\t ",
     })).toMatchObject({
       label: "Deleted user · 1234",
+      pageAlias: null,
       username: null,
       displayName: null,
+      primarySource: "deleted",
+      secondaryPlatformHandle: null,
       isDeletedFallback: true,
     });
   });
@@ -76,6 +89,31 @@ describe("resolveFanLabel", () => {
     expect(first.label).toBe("Deleted user · 11111111");
     expect(second.label).toBe("Deleted user · 22222222");
     expect(first.label).not.toBe(second.label);
+  });
+
+  it("prefers pageAlias only in page scope", () => {
+    expect(resolveFanLabel({
+      platformUserId: "123456789",
+      pageAlias: "VIP Mike",
+      username: "vip_mike",
+      displayName: "Michael",
+    })).toMatchObject({
+      label: "Michael",
+      primarySource: "displayName",
+      secondaryPlatformHandle: "vip_mike",
+    });
+
+    expect(resolveFanLabelForScope({
+      platformUserId: "123456789",
+      pageAlias: "VIP Mike",
+      username: "vip_mike",
+      displayName: "Michael",
+    }, "page")).toMatchObject({
+      label: "VIP Mike",
+      pageAlias: "VIP Mike",
+      primarySource: "pageAlias",
+      secondaryPlatformHandle: "vip_mike",
+    });
   });
 });
 

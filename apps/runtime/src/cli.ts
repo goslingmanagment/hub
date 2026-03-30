@@ -23,6 +23,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
+import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
@@ -146,6 +147,10 @@ function buildProxyInput(options: {
       password: options.proxyPassword ?? null,
     }
     : null;
+}
+
+function collectStringOption(value: string, previous: string[] = []) {
+  return [...previous, value];
 }
 
 async function lookupExitIpViaDispatcher(input: { url: string } | null) {
@@ -700,6 +705,64 @@ export function buildProgram() {
         console.log(`Proxy exit IP: ${proxyIp}`);
         console.log(`Direct exit IP: ${directIp}`);
         console.log(`Differs from direct: ${proxyIp !== directIp ? "yes" : "no"}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("fansly-page-alias-backfill")
+    .option("--page <label>", "restrict to one page label", collectStringOption, [])
+    .option("--chunk-size <n>", "max account ids per Fansly request", parsePositiveInt, 100)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await backfillFanslyPageAliases(app, {
+          pageLabels: options.page,
+          chunkSize: options.chunkSize,
+        });
+
+        printRows(
+          [
+            "page_label",
+            "memberships_scanned",
+            "unique_fan_ids",
+            "accounts_returned",
+            "fallback_misses",
+            "reconciled_accounts",
+            "notes_seen",
+            "notes_upserted",
+            "notes_deactivated",
+            "aliases_set",
+            "aliases_cleared",
+          ],
+          result.pages.map((page) => [
+            page.pageLabel,
+            page.membershipsScanned,
+            page.uniqueFanIds,
+            page.accountsReturned,
+            page.fallbackMisses,
+            page.reconciledAccounts,
+            page.notesSeen,
+            page.notesUpserted,
+            page.notesDeactivated,
+            page.aliasesSet,
+            page.aliasesCleared,
+          ]),
+        );
+
+        console.log("");
+        console.log(`pages=${result.totalPages}`);
+        console.log(`memberships_scanned=${result.totalMembershipsScanned}`);
+        console.log(`unique_fan_ids=${result.totalUniqueFanIds}`);
+        console.log(`accounts_returned=${result.totalAccountsReturned}`);
+        console.log(`fallback_misses=${result.totalFallbackMisses}`);
+        console.log(`reconciled_accounts=${result.totalReconciledAccounts}`);
+        console.log(`notes_seen=${result.totalNotesSeen}`);
+        console.log(`notes_upserted=${result.totalNotesUpserted}`);
+        console.log(`notes_deactivated=${result.totalNotesDeactivated}`);
+        console.log(`aliases_set=${result.totalAliasesSet}`);
+        console.log(`aliases_cleared=${result.totalAliasesCleared}`);
       } finally {
         await app.close();
       }
