@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useParams, Navigate } from "react-router";
 import { useOverview, useWorkboard, useWorkboardSnooze, useWorkboardUnsnooze } from "@/api/queries";
-import { SubscriberCard, SpenderCard } from "@/components/page/workboard/WorkboardCard";
+import { WorkboardCard } from "@/components/page/workboard/WorkboardCard";
 import { SnoozedSection } from "@/components/page/workboard/SnoozedSection";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import {
@@ -141,7 +141,7 @@ export function WorkboardPage() {
         ) : (
           <div className="space-y-2">
             {subscriberVms.map((vm) => (
-              <SubscriberCard
+              <WorkboardCard
                 key={vm.fanId}
                 vm={vm}
                 pageLabel={resolvedPageLabel}
@@ -161,7 +161,7 @@ export function WorkboardPage() {
         ) : (
           <div className="space-y-2">
             {activeSpenderVms.map((vm) => (
-              <SpenderCard
+              <WorkboardCard
                 key={vm.fanId}
                 vm={vm}
                 pageLabel={resolvedPageLabel}
@@ -181,7 +181,7 @@ export function WorkboardPage() {
         ) : (
           <div className="space-y-2">
             {inactiveSpenderVms.map((vm) => (
-              <SpenderCard
+              <WorkboardCard
                 key={vm.fanId}
                 vm={vm}
                 pageLabel={resolvedPageLabel}

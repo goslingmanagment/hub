@@ -21,6 +21,7 @@ export const OVERDUE_BG: Record<OverdueSeverity, string> = {
 };
 
 export interface WorkboardSubscriberVm {
+  kind: "subscriber";
   fanId: number;
   fanLabel: string;
   fanSubLabel: string | null;
@@ -39,6 +40,8 @@ export interface WorkboardSubscriberVm {
   expiryRelativeLabel: string;
   autoRenew: boolean | null;
   tierName: string | null;
+  tierShortName: string | null;
+  subscribedMonths: number | null;
   canPreview: boolean;
 }
 
@@ -50,6 +53,7 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
   });
 
   return {
+    kind: "subscriber" as const,
     fanId: item.fanId,
     fanLabel: fan.label,
     fanSubLabel: fan.displayName && fan.username ? `@${fan.username}` : null,
@@ -74,11 +78,18 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
     expiryRelativeLabel: `in ${daysRemaining(item.subscription.expiresAt)}d`,
     autoRenew: item.subscription.autoRenew,
     tierName: item.subscription.tierName,
+    tierShortName: item.subscription.tierName
+      ? item.subscription.tierName.replace(/\s*\([^)]*\)\s*/g, " ").trim()
+      : null,
+    subscribedMonths: item.subscription.subscriberSince
+      ? Math.max(1, Math.round((Date.now() - new Date(item.subscription.subscriberSince).getTime()) / (30.44 * 24 * 60 * 60 * 1000)))
+      : null,
     canPreview: item.conversation.platformConversationId !== null,
   };
 }
 
 export interface WorkboardSpenderVm {
+  kind: "spender";
   fanId: number;
   fanLabel: string;
   fanSubLabel: string | null;
@@ -96,6 +107,8 @@ export interface WorkboardSpenderVm {
   canPreview: boolean;
 }
 
+export type WorkboardCardVm = WorkboardSubscriberVm | WorkboardSpenderVm;
+
 export function mapSpenderVm(pageLabel: string, item: SpenderItem): WorkboardSpenderVm {
   const fan = resolveFanLabel({
     platformUserId: item.fan.platformUserId,
@@ -104,6 +117,7 @@ export function mapSpenderVm(pageLabel: string, item: SpenderItem): WorkboardSpe
   });
 
   return {
+    kind: "spender" as const,
     fanId: item.fanId,
     fanLabel: fan.label,
     fanSubLabel: fan.displayName && fan.username ? `@${fan.username}` : null,
