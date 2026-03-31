@@ -164,4 +164,58 @@ describe("sync block display", () => {
     expect(formatBlockSummary(block)).toBe("Refreshing followers…");
     expect(shouldShowBlockProgressBar(block)).toBe(false);
   });
+
+  it("replaces 100% messages live progress with finalizing copy", () => {
+    const block = {
+      block: "messages_live",
+      state: "syncing",
+      lastSuccessAt: "2026-03-24T11:50:00.000Z",
+      progress: {
+        label: "27 / 27 conversations",
+        current: 27,
+        total: 27,
+        unit: "conversations",
+        percent: 100,
+        details: {},
+      },
+      error: null,
+      needsAttention: false,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: { visibleConversationCount: 27 },
+      connectionStatus: null,
+      substreams: [],
+    } as never;
+
+    expect(formatBlockSummary(block)).toBe("Finalizing conversation refresh…");
+    expect(shouldShowBlockProgressBar(block)).toBe(false);
+  });
+
+  it("shows numeric progress for messages live when current is below total", () => {
+    const block = {
+      block: "messages_live",
+      state: "syncing",
+      lastSuccessAt: "2026-03-24T11:50:00.000Z",
+      progress: {
+        label: "200 / 5,000 conversations",
+        current: 200,
+        total: 5000,
+        unit: "conversations",
+        percent: 4,
+        details: {},
+      },
+      error: null,
+      needsAttention: false,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: { visibleConversationCount: 5000 },
+      connectionStatus: null,
+      substreams: [],
+    } as never;
+
+    expect(formatBlockSummary(block)).toBe("Syncing… 200/5,000 conversations");
+    expect(shouldShowBlockProgressBar(block)).toBe(true);
+  });
 });

@@ -137,6 +137,16 @@ function hasOpaqueAudienceFollowerProgress(block: SyncBlockStatus): boolean {
   return block.block === "audience" && block.progress?.unit === "followers";
 }
 
+function hasCompletedMessagesLiveProgress(block: SyncBlockStatus): boolean {
+  return (
+    block.block === "messages_live" &&
+    block.progress != null &&
+    block.progress.total != null &&
+    block.progress.total > 0 &&
+    block.progress.current >= block.progress.total
+  );
+}
+
 export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
   if (!block.progress || block.progress.total == null || block.progress.total <= 0) {
     return false;
@@ -147,6 +157,10 @@ export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
   }
 
   if (hasOpaqueAudienceFollowerProgress(block)) {
+    return false;
+  }
+
+  if (hasCompletedMessagesLiveProgress(block)) {
     return false;
   }
 
@@ -229,6 +243,22 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
     if (block.state === "retrying") {
       const nextRetry = block.nextRetryAt ? formatRelativeFuture(block.nextRetryAt) : null;
       return nextRetry ? `Retrying follower sync ${nextRetry}` : "Retrying follower sync\u2026";
+    }
+  }
+
+  if (hasCompletedMessagesLiveProgress(block)) {
+    if (block.state === "syncing") {
+      return "Finalizing conversation refresh\u2026";
+    }
+    if (block.state === "backfilling") {
+      return "Scanning conversations\u2026";
+    }
+    if (block.state === "scheduled") {
+      return "Conversation sync queued";
+    }
+    if (block.state === "retrying") {
+      const nextRetry = block.nextRetryAt ? formatRelativeFuture(block.nextRetryAt) : null;
+      return nextRetry ? `Retrying conversation sync ${nextRetry}` : "Retrying conversation sync\u2026";
     }
   }
 
