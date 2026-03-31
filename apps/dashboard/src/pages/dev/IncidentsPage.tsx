@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import { useAdminIncidents } from "@/api/queries";
 import { EventDetailPanel, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatRelativeTime } from "@/lib/format";
 
 export function IncidentsPage() {
@@ -12,13 +13,19 @@ export function IncidentsPage() {
     limit: 100,
   };
 
-  const { data, isLoading } = useAdminIncidents(params);
+  const { data, isLoading, isError } = useAdminIncidents(params);
+
+  function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
+    return typeof details?.code === "string" ? details.code : fallback;
+  }
 
   if (isLoading || !data) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
+    return isLoading ? (
+      <StatusPanel title="Loading incidents" description="Fetching recent sync anomaly groups." />
+    ) : isError ? (
+      <StatusPanel title="Incidents failed to load" description="The incidents feed could not be fetched." tone="error" />
+    ) : (
+      <StatusPanel title="Incidents unavailable" description="The incidents feed did not return data." tone="error" />
     );
   }
 
@@ -35,7 +42,7 @@ export function IncidentsPage() {
       {/* Summary cards */}
       {summary.length > 0 && (
         <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-3 lg:grid-cols-4">
-          {summary.map((s: any) => {
+          {summary.map((s) => {
             const isActive = codeFilter === s.code;
             return (
               <button
@@ -106,8 +113,8 @@ export function IncidentsPage() {
                 </td>
               </tr>
             )}
-            {items.map((item: any, idx: number) => {
-              const rowId = item.id ?? `${idx}`;
+            {items.map((item, idx) => {
+              const rowId = item.id != null ? String(item.id) : `${idx}`;
               const isExpanded = expandedId === rowId;
 
               return (
@@ -126,7 +133,7 @@ export function IncidentsPage() {
                       {item.stream ?? "\u2014"}
                     </td>
                     <td className="px-4 py-3 text-sm text-text-primary font-mono">
-                      {item.details?.code ?? item.eventType ?? "\u2014"}
+                      {resolveEventCode(item.details, item.eventType) ?? "\u2014"}
                     </td>
                     <td className="px-4 py-3">
                       <span
@@ -145,7 +152,7 @@ export function IncidentsPage() {
                         <EventDetailPanel
                           message={item.message}
                           syncRunId={item.syncRunId}
-                          eventCode={item.details?.code ?? item.eventType}
+                          eventCode={resolveEventCode(item.details, item.eventType)}
                           severity={item.severity}
                           details={item.details}
                         />

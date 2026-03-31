@@ -1,10 +1,10 @@
 import { useState, type MouseEvent } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
-import { TouchpointBadge } from "@/components/page/crm/TouchpointBadge";
-import { ChatPreviewPanel } from "@/components/page/crm/ChatPreviewPanel";
+import { ChatPreviewPanel } from "@/components/shared/ChatPreviewPanel";
+import { TouchpointBadge } from "@/components/shared/TouchpointBadge";
 import type { WorkboardCardVm } from "@/pages/workboard/viewModel";
-import { OVERDUE_BG } from "@/pages/workboard/viewModel";
+import { OVERDUE_BADGE, OVERDUE_BG } from "@/pages/workboard/theme";
 
 /* ── Tier color badge (Fansly-native palette) ────────────────────── */
 
@@ -46,17 +46,6 @@ function FanAvatar({ name }: { name: string }) {
     </span>
   );
 }
-
-/* ── Recency color (metrics urgency) ─────────────────────────────── */
-
-function recencyColor(daysAgo: number | null): string {
-  if (daysAgo === null) return "text-text-muted";
-  if (daysAgo >= 7) return "text-red-400";
-  if (daysAgo >= 3) return "text-orange-400";
-  return "text-text-secondary";
-}
-
-/* ── Snooze buttons ──────────────────────────────────────────────── */
 
 interface SnoozeButtonsProps {
   onSnooze: (days: number) => void;
@@ -137,8 +126,8 @@ export function WorkboardCard({
           <div className="flex items-center gap-2 min-w-0">
             <FanAvatar name={vm.fanLabel} />
             {vm.kind === "subscriber" && (
-              <span title={`Follow-up schedule: every ${vm.touchpointCode}${vm.overdueDays > 0 ? ` (overdue ${vm.overdueDays}d)` : ""}`}>
-                <TouchpointBadge touchpointCode={vm.touchpointCode} touchpointLabel={vm.touchpointCode} />
+              <span title={`Follow-up cadence: ${vm.touchpointLabel}`}>
+                <TouchpointBadge touchpointCode={vm.touchpointCode} touchpointLabel={vm.touchpointLabel} />
               </span>
             )}
             <span className="text-sm font-semibold text-text-primary truncate">{vm.fanLabel}</span>
@@ -155,6 +144,9 @@ export function WorkboardCard({
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${OVERDUE_BADGE[vm.overdueSeverity]}`}>
+              {vm.overdueLabel}
+            </span>
             <span className="text-[12px] text-text-muted">LTV</span>
             <span className="text-sm font-semibold text-text-primary tabular-nums">{vm.ltvLabel}</span>
           </div>
@@ -162,6 +154,8 @@ export function WorkboardCard({
 
         {/* Row 2: Communication + spend */}
         <div className="mt-1.5 text-[13px] text-text-muted">
+          <span className="font-semibold text-text-primary">{vm.whyNowLabel}</span>
+          <span className="mx-1.5 text-border">·</span>
           Fan: <span className="font-semibold text-text-secondary">{vm.lastFanMessageLabel ?? "never"}</span>
           <span className="mx-1.5 text-border">·</span>
           Model: <span className="font-semibold text-text-secondary">{vm.lastModelMessageLabel ?? "never"}</span>

@@ -5,6 +5,8 @@ import {
   buildFanProfileRoute,
   buildPageRoute,
   buildPageSectionRoute,
+  buildWorkboardRoute,
+  resolveLegacyWorkboardRedirect,
   buildSettingsRoute,
   resolveSettingsTab,
   resolveFanProfileBackTarget,
@@ -46,5 +48,11 @@ describe("fan profile navigation", () => {
     expect(resolveSettingsTab("users")).toBe("users");
     expect(resolveSettingsTab("missing")).toBe("credentials");
     expect(resolveSettingsTab(null)).toBe("credentials");
+  });
+
+  it("builds canonical workboard routes and preserves the legacy CRM redirect target", () => {
+    expect(buildWorkboardRoute("lana")).toBe("/pages/lana/workboard");
+    expect(resolveLegacyWorkboardRedirect("lana")).toBe("/pages/lana/workboard");
+    expect(resolveLegacyWorkboardRedirect(undefined)).toBe("/");
   });
 });

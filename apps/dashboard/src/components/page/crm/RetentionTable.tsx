@@ -1,11 +1,11 @@
 import { Fragment } from "react";
 import type { CrmSummaryResponse } from "@agency_hub_core/contracts";
-import type { RetentionRowVm } from "@/pages/crm/viewModel";
-import { TouchpointBadge } from "./TouchpointBadge.js";
-import { ChatPreviewPanel } from "./ChatPreviewPanel.js";
+import { ChatPreviewPanel } from "@/components/shared/ChatPreviewPanel";
+import { TouchpointBadge } from "@/components/shared/TouchpointBadge";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { Pagination } from "@/components/shared/Pagination";
+import type { RetentionRowVm } from "@/pages/crm/viewModel";
 
 type SortField = "touchpoint" | "subscriptionExpiresAt" | "lifetimeSpendUsd" | "lastContactAt";
 

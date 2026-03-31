@@ -23,6 +23,7 @@ import { Field } from "@/components/shared/Field";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { formatRelativeTime, formatDateTime } from "@/lib/format";
 import { toast } from "sonner";
+import { PageAssignmentsEditor } from "./PageAssignmentsEditor.js";
 import { UserPageAssignmentModal } from "./UserPageAssignmentModal.js";
 
 /* ------------------------------------------------------------------ */
@@ -779,62 +780,16 @@ function ChatterDetailModal({
         </div>
 
         {/* Page Assignments */}
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-text-primary">
-            Assigned Pages
-          </h3>
-          {user.assignedPages.length === 0 ? (
-            <p className="text-sm text-text-muted">No pages assigned.</p>
-          ) : (
-            <div className="space-y-1.5">
-              {user.assignedPages.map((page) => (
-                <div
-                  key={page.id}
-                  className="flex items-center justify-between rounded-lg border border-border bg-bg px-3 py-2"
-                >
-                  <div className="flex items-center gap-2 text-sm text-text-primary">
-                    {page.label}
-                    <PlatformBadge platform={page.platform} />
-                    <span className="text-text-muted">{page.modelName}</span>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={unassignPage.isPending}
-                    onClick={() => handleUnassign(page.label)}
-                    className="rounded px-2 py-0.5 text-xs font-medium text-danger hover:bg-hover disabled:opacity-50"
-                  >
-                    Unassign
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {availablePages.length > 0 && (
-            <div className="mt-3 flex items-center gap-2">
-              <select
-                value={selectedLabel}
-                onChange={(e) => setSelectedLabel(e.target.value)}
-                className="flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              >
-                <option value="">Select a page...</option>
-                {availablePages.map((page) => (
-                  <option key={page.id} value={page.label}>
-                    {page.label} ({page.platform} / {page.modelName})
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                disabled={!selectedLabel || assignPage.isPending}
-                onClick={handleAssign}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
-              >
-                Assign
-              </button>
-            </div>
-          )}
-        </div>
+        <PageAssignmentsEditor
+          assignedPages={user.assignedPages}
+          availablePages={availablePages}
+          selectedLabel={selectedLabel}
+          onSelectedLabelChange={setSelectedLabel}
+          onAssign={handleAssign}
+          onUnassign={handleUnassign}
+          assignPending={assignPage.isPending}
+          unassignPending={unassignPage.isPending}
+        />
       </div>
 
       <div className="mt-6 flex items-center justify-end">

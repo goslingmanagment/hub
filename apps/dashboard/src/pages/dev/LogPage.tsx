@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { useAdminLogs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { EventDetailPanel, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatRelativeTime } from "@/lib/format";
 
 const SEVERITY_FILTERS = [
@@ -20,13 +21,19 @@ export function LogPage() {
     limit: 100,
   };
 
-  const { data, isLoading } = useAdminLogs(params);
+  const { data, isLoading, isError } = useAdminLogs(params);
+
+  function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
+    return typeof details?.code === "string" ? details.code : fallback;
+  }
 
   if (isLoading || !data) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
+    return isLoading ? (
+      <StatusPanel title="Loading logs" description="Fetching recent sync run events." />
+    ) : isError ? (
+      <StatusPanel title="Logs failed to load" description="The log stream could not be fetched." tone="error" />
+    ) : (
+      <StatusPanel title="Logs unavailable" description="The log stream did not return data." tone="error" />
     );
   }
 
@@ -69,8 +76,8 @@ export function LogPage() {
                 </td>
               </tr>
             )}
-            {items.map((log: any, idx: number) => {
-              const rowId = log.id ?? `${idx}`;
+            {items.map((log, idx) => {
+              const rowId = log.id != null ? String(log.id) : `${idx}`;
               const isExpanded = expandedId === rowId;
 
               return (
@@ -108,7 +115,7 @@ export function LogPage() {
                         <EventDetailPanel
                           message={log.message}
                           syncRunId={log.syncRunId}
-                          eventCode={log.details?.code ?? log.eventType}
+                          eventCode={resolveEventCode(log.details, log.eventType)}
                           severity={log.severity}
                           details={log.details}
                         />

@@ -4,10 +4,10 @@ import type { WorkboardSnoozedVm } from "@/pages/workboard/viewModel";
 interface SnoozedSectionProps {
   items: WorkboardSnoozedVm[];
   onUnsnooze: (fanId: number) => void;
-  isUnsnoozePending: boolean;
+  pendingFanId: number | null;
 }
 
-export function SnoozedSection({ items, onUnsnooze, isUnsnoozePending }: SnoozedSectionProps) {
+export function SnoozedSection({ items, onUnsnooze, pendingFanId }: SnoozedSectionProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   if (items.length === 0) return null;
@@ -37,11 +37,11 @@ export function SnoozedSection({ items, onUnsnooze, isUnsnoozePending }: Snoozed
               </div>
               <button
                 type="button"
-                disabled={isUnsnoozePending}
+                disabled={pendingFanId === item.fanId}
                 onClick={() => onUnsnooze(item.fanId)}
                 className="px-2 py-1 text-[11px] font-medium rounded border border-border text-text-muted hover:text-text-secondary hover:bg-hover transition-colors disabled:opacity-50 shrink-0"
               >
-                Unsnooze
+                {pendingFanId === item.fanId ? "Unsnoozing..." : "Unsnooze"}
               </button>
             </div>
           ))}

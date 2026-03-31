@@ -1,9 +1,9 @@
 import { Fragment } from "react";
-import type { ReactivationRowVm } from "@/pages/crm/viewModel";
-import { ChatPreviewPanel } from "./ChatPreviewPanel.js";
+import { ChatPreviewPanel } from "@/components/shared/ChatPreviewPanel";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { Pagination } from "@/components/shared/Pagination";
+import type { ReactivationRowVm } from "@/pages/crm/viewModel";
 
 type SortField = "reactivationScore" | "lifetimeSpendUsd" | "silenceDays" | "lastContactAt";
 

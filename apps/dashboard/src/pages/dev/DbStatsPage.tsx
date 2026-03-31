@@ -1,4 +1,5 @@
 import { useAdminDbStats } from "@/api/queries";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatDateTime } from "@/lib/format";
 
 function formatBytes(bytes: number | null | undefined): string {
@@ -10,13 +11,15 @@ function formatBytes(bytes: number | null | undefined): string {
 }
 
 export function DbStatsPage() {
-  const { data, isLoading } = useAdminDbStats();
+  const { data, isLoading, isError } = useAdminDbStats();
 
   if (isLoading || !data) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
+    return isLoading ? (
+      <StatusPanel title="Loading database stats" description="Fetching table sizes and migration history." />
+    ) : isError ? (
+      <StatusPanel title="Database stats failed to load" description="The database diagnostics could not be fetched." tone="error" />
+    ) : (
+      <StatusPanel title="Database stats unavailable" description="The database diagnostics did not return data." tone="error" />
     );
   }
 
@@ -56,7 +59,7 @@ export function DbStatsPage() {
                 </td>
               </tr>
             )}
-            {tables.map((t: any) => (
+            {tables.map((t) => (
               <tr
                 key={t.table}
                 className="border-t border-border transition-colors hover:bg-hover"
@@ -105,7 +108,7 @@ export function DbStatsPage() {
                 </td>
               </tr>
             )}
-            {migrations.map((m: any, idx: number) => (
+            {migrations.map((m, idx) => (
               <tr
                 key={m.id ?? idx}
                 className="border-t border-border transition-colors hover:bg-hover"

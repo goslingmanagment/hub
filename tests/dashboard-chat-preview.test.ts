@@ -9,7 +9,7 @@ const queryMocks = vi.hoisted(() => ({
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
-import { ChatPreviewPanel } from "../apps/dashboard/src/components/page/crm/ChatPreviewPanel.tsx";
+import { ChatPreviewPanel } from "../apps/dashboard/src/components/shared/ChatPreviewPanel.tsx";
 
 function buildSyncUx(
   overrides: Partial<{

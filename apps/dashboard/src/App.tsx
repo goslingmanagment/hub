@@ -1,7 +1,8 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route, Navigate } from "react-router";
+import { Routes, Route, Navigate, useParams } from "react-router";
 import { OwnerRoute } from "./components/layout/OwnerRoute.js";
 import { ProtectedLayout } from "./components/layout/ProtectedLayout.js";
+import { resolveLegacyWorkboardRedirect } from "./lib/navigation.js";
 
 const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
 const OverviewPage = lazy(() => import("./pages/OverviewPage.js").then((m) => ({ default: m.OverviewPage })));
@@ -10,7 +11,6 @@ const SubscribersPage = lazy(() => import("./pages/SubscribersPage.js").then((m)
 const FollowersPage = lazy(() => import("./pages/FollowersPage.js").then((m) => ({ default: m.FollowersPage })));
 const FanProfilePage = lazy(() => import("./pages/FanProfilePage.js").then((m) => ({ default: m.FanProfilePage })));
 const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage.js").then((m) => ({ default: m.TopSupportersPage })));
-const CrmPage = lazy(() => import("./pages/CrmPage.js").then((m) => ({ default: m.CrmPage })));
 const WorkboardPage = lazy(() => import("./pages/WorkboardPage.js").then((m) => ({ default: m.WorkboardPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage.js").then((m) => ({ default: m.SettingsPage })));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage.js").then((m) => ({ default: m.NotificationsPage })));
@@ -18,9 +18,15 @@ const LogPage = lazy(() => import("./pages/dev/LogPage.js").then((m) => ({ defau
 const QueuePage = lazy(() => import("./pages/dev/QueuePage.js").then((m) => ({ default: m.QueuePage })));
 const DbStatsPage = lazy(() => import("./pages/dev/DbStatsPage.js").then((m) => ({ default: m.DbStatsPage })));
 const IncidentsPage = lazy(() => import("./pages/dev/IncidentsPage.js").then((m) => ({ default: m.IncidentsPage })));
+const SyncStatusPage = lazy(() => import("./pages/dev/SyncStatusPage.js").then((m) => ({ default: m.SyncStatusPage })));
 
 function LazyFallback() {
   return <div className="flex items-center justify-center h-full py-20 text-zinc-500">Loading…</div>;
+}
+
+function LegacyWorkboardRedirect() {
+  const { pageLabel } = useParams<{ pageLabel: string }>();
+  return <Navigate to={resolveLegacyWorkboardRedirect(pageLabel)} replace />;
 }
 
 export function App() {
@@ -34,7 +40,8 @@ export function App() {
           <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
           <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />
           <Route path="pages/:pageLabel/top-supporters" element={<TopSupportersPage />} />
-          <Route path="pages/:pageLabel/crm" element={<WorkboardPage />} />
+          <Route path="pages/:pageLabel/workboard" element={<WorkboardPage />} />
+          <Route path="pages/:pageLabel/crm" element={<LegacyWorkboardRedirect />} />
           <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
           <Route path="notifications" element={<OwnerRoute><NotificationsPage /></OwnerRoute>} />
           <Route
@@ -49,6 +56,7 @@ export function App() {
           <Route path="dev/queue" element={<OwnerRoute><QueuePage /></OwnerRoute>} />
           <Route path="dev/db-stats" element={<OwnerRoute><DbStatsPage /></OwnerRoute>} />
           <Route path="dev/incidents" element={<OwnerRoute><IncidentsPage /></OwnerRoute>} />
+          <Route path="dev/sync-status" element={<OwnerRoute><SyncStatusPage /></OwnerRoute>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

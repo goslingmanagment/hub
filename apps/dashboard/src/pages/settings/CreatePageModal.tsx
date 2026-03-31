@@ -2,17 +2,14 @@ import { useState } from "react";
 import type {
   CreatePageBody,
   ModelListItem,
-  VerifyCredentialsBody,
   VerifyCredentialsResponse,
 } from "@agency_hub_core/contracts";
-import { buildProxyConfig } from "@agency_hub_core/shared";
 import { useAdminCreatePage, useAdminVerifyCredentials } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Field } from "@/components/shared/Field";
-import { ProxyInput } from "@/components/shared/ProxyInput";
 import { toast } from "sonner";
+import { buildCredentialsBody, PlatformCredentialsFields, type Platform, type PlatformCredentialsValues } from "./PlatformCredentialsFields.js";
 
-type Platform = "fansly" | "onlyfans";
 type VerifyState = "idle" | "verifying" | "verified" | "verify-failed";
 
 export function CreatePageModal({
@@ -29,19 +26,15 @@ export function CreatePageModal({
   const [platform, setPlatform] = useState<Platform>("fansly");
   const [modelSlug, setModelSlug] = useState(models[0]?.slug ?? "");
   const [label, setLabel] = useState("");
-
-  // Fansly fields
-  const [authorization, setAuthorization] = useState("");
-  const [fanslyClientId, setFanslyClientId] = useState("");
-  const [fanslyClientCheck, setFanslyClientCheck] = useState("");
-  const [fanslySessionId, setFanslySessionId] = useState("");
-
-  // OnlyFans fields
-  const [onlyFansToken, setOnlyFansToken] = useState("");
-  const [onlyFansUsername, setOnlyFansUsername] = useState("");
-
-  // Proxy
-  const [proxyRaw, setProxyRaw] = useState("");
+  const [credentials, setCredentials] = useState<PlatformCredentialsValues>({
+    authorization: "",
+    fanslyClientId: "",
+    fanslyClientCheck: "",
+    fanslySessionId: "",
+    onlyFansToken: "",
+    onlyFansUsername: "",
+    proxyRaw: "",
+  });
 
   // Verify state
   const [verifyState, setVerifyState] = useState<VerifyState>("idle");
@@ -56,34 +49,22 @@ export function CreatePageModal({
     }
   }
 
-  function buildCredentialsBody(): VerifyCredentialsBody {
-    const proxy = buildProxyConfig(proxyRaw);
-
-    if (platform === "fansly") {
-      return {
-        platform: "fansly",
-        session: {
-          authorization: authorization.trim(),
-          fanslyClientId: fanslyClientId.trim() || undefined,
-          fanslyClientCheck: fanslyClientCheck.trim() || undefined,
-          fanslySessionId: fanslySessionId.trim() || undefined,
-        },
-        proxy,
-      };
-    }
-    return {
-      platform: "onlyfans",
-      auth: { token: onlyFansToken.trim() },
-      username: onlyFansUsername.trim(),
-      proxy,
-    };
+  function updateCredential<K extends keyof PlatformCredentialsValues>(
+    field: K,
+    value: PlatformCredentialsValues[K],
+  ) {
+    setCredentials((current) => ({ ...current, [field]: value }));
+    resetVerify();
   }
 
   async function handleVerify() {
     setVerifyState("verifying");
     setVerifyError("");
     try {
-      const result = await verifyCredentials.mutateAsync(buildCredentialsBody());
+      const result = await verifyCredentials.mutateAsync(buildCredentialsBody({
+        platform,
+        values: credentials,
+      }));
       setVerifyResult(result);
       setVerifyState("verified");
     } catch (error) {
@@ -93,7 +74,10 @@ export function CreatePageModal({
   }
 
   async function handleCreate() {
-    const credBody = buildCredentialsBody();
+    const credBody = buildCredentialsBody({
+      platform,
+      values: credentials,
+    });
     const body: CreatePageBody = {
       ...credBody,
       modelSlug,
@@ -111,8 +95,8 @@ export function CreatePageModal({
 
   const canVerify =
     platform === "fansly"
-      ? authorization.trim().length > 0
-      : onlyFansToken.trim().length > 0 && onlyFansUsername.trim().length > 0;
+      ? credentials.authorization.trim().length > 0
+      : credentials.onlyFansToken.trim().length > 0 && credentials.onlyFansUsername.trim().length > 0;
 
   const canCreate = verifyState === "verified" && label.trim().length > 0 && modelSlug.length > 0;
 
@@ -164,82 +148,10 @@ export function CreatePageModal({
           </Field>
         </div>
 
-        {platform === "fansly" ? (
-          <>
-            <Field label="Authorization">
-              <textarea
-                value={authorization}
-                onChange={(event) => {
-                  setAuthorization(event.target.value);
-                  resetVerify();
-                }}
-                rows={4}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-              />
-            </Field>
-            <Field label="fansly-client-id (optional)">
-              <input
-                value={fanslyClientId}
-                onChange={(event) => {
-                  setFanslyClientId(event.target.value);
-                  resetVerify();
-                }}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-            </Field>
-            <Field label="fansly-client-check (optional)">
-              <input
-                value={fanslyClientCheck}
-                onChange={(event) => {
-                  setFanslyClientCheck(event.target.value);
-                  resetVerify();
-                }}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-            </Field>
-            <Field label="fansly-session-id (optional)">
-              <input
-                value={fanslySessionId}
-                onChange={(event) => {
-                  setFanslySessionId(event.target.value);
-                  resetVerify();
-                }}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-            </Field>
-          </>
-        ) : (
-          <>
-            <Field label="Auth token">
-              <textarea
-                value={onlyFansToken}
-                onChange={(event) => {
-                  setOnlyFansToken(event.target.value);
-                  resetVerify();
-                }}
-                rows={4}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-              />
-            </Field>
-            <Field label="Username">
-              <input
-                value={onlyFansUsername}
-                onChange={(event) => {
-                  setOnlyFansUsername(event.target.value);
-                  resetVerify();
-                }}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-            </Field>
-          </>
-        )}
-
-        <ProxyInput
-          value={proxyRaw}
-          onChange={(v) => {
-            setProxyRaw(v);
-            resetVerify();
-          }}
+        <PlatformCredentialsFields
+          platform={platform}
+          values={credentials}
+          onChange={updateCredential}
         />
 
         {/* Verify result / error */}

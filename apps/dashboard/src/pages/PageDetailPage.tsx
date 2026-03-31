@@ -2,7 +2,6 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router";
 import {
   useAuthMe,
-  useOverview,
   usePageRevenue,
   usePageSubscribers,
   usePageTransactions,
@@ -17,6 +16,7 @@ import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { RemainingBar } from "@/components/shared/RemainingBar";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
 import { buildFanProfileNavigation, buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
@@ -29,6 +29,8 @@ import {
   transactionTypeLabel,
   daysRemaining,
 } from "@/lib/format";
+import { useDashboardShell } from "@/components/layout/DashboardShellContext";
+import type { SpenderListResponse, SubscriberListResponse, TransactionListResponse } from "@agency_hub_core/contracts";
 type TabKey = "transactions" | "spenders" | "followers";
 
 const PAGE_SIZE = 50;
@@ -46,10 +48,10 @@ export function PageDetailPage() {
   const navigate = useNavigate();
   const { data: auth } = useAuthMe();
   const { period } = usePeriodStore();
-  const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
+  const selectedPeriod = period;
 
-  const { data: overview, isLoading: overviewLoading } = useOverview();
-  const page = overview?.pages.find((p: { label: string }) => p.label === pageLabel);
+  const { findPageByLabel, pageCatalogState, pageCatalogError } = useDashboardShell();
+  const page = findPageByLabel(pageLabel);
 
   const { data: selectedRevenue } = usePageRevenue(pageLabel!, selectedPeriod);
 
@@ -97,15 +99,27 @@ export function PageDetailPage() {
     }
   }, [activeTab, isFansly]);
 
-  if (overviewLoading || !overview) {
+  if (pageCatalogState === "loading") {
     return <PageDetailSkeleton />;
+  }
+
+  if (pageCatalogState === "error") {
+    return (
+      <StatusPanel
+        title="Page details failed to load"
+        description={pageCatalogError?.message ?? "The page catalog could not be loaded."}
+        tone="error"
+      />
+    );
   }
 
   if (!page) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Page not found</span>
-      </div>
+      <StatusPanel
+        title="Page not found"
+        description="The requested page does not exist in the dashboard catalog."
+        tone="error"
+      />
     );
   }
 
@@ -153,6 +167,17 @@ export function PageDetailPage() {
   ];
   if (isFansly) {
     tabs.push({ key: "followers", label: "Followers" });
+  }
+
+  function openFanProfile(platformUserId: string, fanLabel: string) {
+    const fanNavigation = buildFanProfileNavigation(
+      pageLabel!,
+      page!.platform,
+      platformUserId,
+      buildPageRoute(pageLabel!),
+      fanLabel,
+    );
+    navigate(fanNavigation.to, { state: fanNavigation.state });
   }
 
   return (
@@ -238,124 +263,11 @@ export function PageDetailPage() {
         />
       </Suspense>
 
-      <div className="bg-card border border-border rounded-xl overflow-hidden mb-6">
-        <div className="flex items-center justify-between p-4 px-[22px] border-b border-border bg-hover-alt">
-          <Link
-            to={`/pages/${pageLabel}/subscribers`}
-            className="font-bold text-[15px] text-text-primary hover:text-accent transition-colors"
-          >
-            Subscribers
-          </Link>
-          <div className="flex items-center gap-3">
-            <span className="text-[12px] text-text-muted">
-              {subscribers?.total ?? 0} total
-            </span>
-            <Link
-              to={`/pages/${pageLabel}/subscribers`}
-              className="text-accent text-[12px] font-medium hover:underline"
-            >
-              View all &rarr;
-            </Link>
-          </div>
-        </div>
-
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              {[
-                "Username",
-                "Since",
-                "Expires",
-                "Remaining",
-                "Renew",
-                "Spent",
-                "Last Txn",
-              ].map((col) => (
-                <th
-                  key={col}
-                  className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border"
-                >
-                  {col}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {(subscribers?.items ?? []).map((item) => {
-              const days = item.endsAt ? daysRemaining(item.endsAt) : null;
-              const fanLabel = resolveFanLabelForScope(item, "page");
-              const isNew = isRecent(item.startedAt);
-              const fanNavigation = buildFanProfileNavigation(
-                pageLabel!,
-                page.platform,
-                item.platformUserId,
-                buildPageRoute(pageLabel!),
-                fanLabel.label,
-              );
-
-              return (
-                <tr
-                  key={item.platformSubscriptionId}
-                  onClick={() => navigate(fanNavigation.to, { state: fanNavigation.state })}
-                  className="cursor-pointer hover:bg-hover-alt transition-colors"
-                >
-                  <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
-                    <div className="flex items-center gap-2">
-                      <div className="flex flex-col">
-                        <span className="text-text-primary font-medium">
-                          {fanLabel.label}
-                        </span>
-                        {fanLabel.secondaryPlatformHandle && (
-                          <span className="text-[12px] text-text-muted">
-                            @{fanLabel.secondaryPlatformHandle}
-                          </span>
-                        )}
-                      </div>
-                      {isNew && <Badge variant="new">NEW</Badge>}
-                    </div>
-                  </td>
-                  <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
-                    {item.startedAt ? formatDate(item.startedAt) : "\u2014"}
-                  </td>
-                  <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
-                    {item.endsAt ? formatDate(item.endsAt) : "\u2014"}
-                  </td>
-                  <td className="p-3.5 px-[22px] text-sm border-b border-border-light">
-                    {days !== null ? <RemainingBar days={days} /> : "\u2014"}
-                  </td>
-                  <td className="p-3.5 px-[22px] text-sm border-b border-border-light">
-                    {item.autoRenew === true && (
-                      <span className="text-green font-medium">On</span>
-                    )}
-                    {item.autoRenew === false && (
-                      <span className="text-danger font-medium">Off</span>
-                    )}
-                    {item.autoRenew == null && (
-                      <span className="text-text-muted">&mdash;</span>
-                    )}
-                  </td>
-                  <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
-                    {item.totalSpentCents != null ? formatUsdFromCents(item.totalSpentCents) : "\u2014"}
-                  </td>
-                  <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
-                    {item.lastTransactionAt ? formatDateTime(item.lastTransactionAt) : "\u2014"}
-                  </td>
-                </tr>
-              );
-            })}
-            {(subscribers?.items ?? []).length === 0 && (
-              <tr>
-                <td
-                  colSpan={7}
-                  className="p-8 text-center text-sm text-text-muted"
-                >
-                  No subscribers found
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <PageSubscribersSection
+        pageLabel={pageLabel!}
+        subscribers={subscribers}
+        onOpenFanProfile={openFanProfile}
+      />
 
       <div className="flex gap-0 border-b border-border mb-6">
         {tabs.map(({ key, label }) => (
@@ -375,181 +287,352 @@ export function PageDetailPage() {
       </div>
 
       {activeTab === "transactions" && (
-        <div>
-          <div className="mb-3">
-            <FilterButtons
-              filters={[
-                { key: "", label: "All" },
-                { key: "subscription", label: "Subscriptions" },
-                { key: "tip", label: "Tips" },
-                { key: "message_purchase", label: "Messages" },
-              ]}
-              active={txTypeFilter}
-              onChange={setTxTypeFilter}
-            />
-          </div>
-          <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                <th className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
-                  Date
-                </th>
-                <th className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
-                  Fan
-                </th>
-                <th className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
-                  Type
-                </th>
-                <th className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
-                  Status
-                </th>
-                <th className="text-right p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
-                  Amount
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {(transactions?.items ?? []).map((item, idx) => {
-                const fanLabel = item.fan ? resolveFanLabelForScope(item.fan, "page") : null;
-                const fanDisplay = fanLabel?.label ?? null;
-                const fanIsMuted = fanLabel?.isDeletedFallback ?? false;
-
-                return (
-                  <tr
-                    key={item.transactionId ?? idx}
-                    className="cursor-pointer hover:bg-hover-alt transition-colors"
-                  >
-                    <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
-                      {formatDateTime(item.occurredAt)}
-                    </td>
-                    <td
-                      className={`p-3.5 px-[22px] text-sm border-b border-border-light ${fanIsMuted ? "text-text-muted" : "text-text-primary"}`}
-                    >
-                      {fanDisplay ?? "\u2014"}
-                    </td>
-                    <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
-                      {transactionTypeLabel(item.canonicalType)}
-                    </td>
-                    <td className="p-3.5 px-[22px] text-sm border-b border-border-light">
-                      <span className={stateColorClass(item.transactionState)}>
-                        {item.transactionState.charAt(0).toUpperCase() +
-                          item.transactionState.slice(1)}
-                      </span>
-                    </td>
-                    <td className="p-3.5 px-[22px] text-sm text-text-primary font-medium text-right border-b border-border-light">
-                      {formatUsdFromMills(item.netAmountMills)}
-                    </td>
-                  </tr>
-                );
-              })}
-              {(transactions?.items ?? []).length === 0 && (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="p-8 text-center text-sm text-text-muted"
-                  >
-                    No transactions found
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-
-          <Pagination
-            offset={txOffset}
-            limit={PAGE_SIZE}
-            total={transactions?.total ?? 0}
-            onPageChange={setTxOffset}
-          />
-          </div>
-        </div>
+        <PageTransactionsSection
+          transactions={transactions}
+          txOffset={txOffset}
+          txTypeFilter={txTypeFilter}
+          onTxTypeChange={setTxTypeFilter}
+          onTxPageChange={setTxOffset}
+          stateColorClass={stateColorClass}
+        />
       )}
 
       {activeTab === "spenders" && (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-hover-alt">
-                {["Rank", "Username", "Total Spent", "Transactions"].map((col) => (
-                  <th
-                    key={col}
-                    className={`px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted ${
-                      col === "Total Spent" || col === "Transactions" ? "text-right" : "text-left"
-                    }`}
-                  >
-                    {col}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(spenders?.items ?? []).length === 0 && (
-                <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-text-muted">
-                    No spenders found for this period.
-                  </td>
-                </tr>
-              )}
-              {(spenders?.items ?? []).map((item, index) => {
-                const windowMetrics = item.metrics.window;
-                const fanLabel = resolveFanLabelForScope(item.fan, "page");
-                const fanNavigation = buildFanProfileNavigation(
-                  pageLabel!,
-                  page.platform,
-                  item.fan.platformUserId,
-                  buildPageRoute(pageLabel!),
-                  fanLabel.label,
-                );
-
-                return (
-                  <tr
-                    key={item.fan.platformUserId}
-                    onClick={() => navigate(fanNavigation.to, { state: fanNavigation.state })}
-                    className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
-                  >
-                    <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">
-                      {spendersOffset + index + 1}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="text-[15px] font-semibold text-text-primary">
-                        {fanLabel.label}
-                      </div>
-                      {fanLabel.secondaryPlatformHandle && (
-                        <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
-                      {formatUsdFromMills(windowMetrics?.creatorNetAmountMills ?? 0)}
-                    </td>
-                    <td className="px-4 py-3 text-right text-sm text-text-secondary tabular-nums">
-                      {windowMetrics?.transactionCount ?? 0}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-
-          <Pagination
-            offset={spendersOffset}
-            limit={PAGE_SIZE}
-            total={spenders?.total ?? 0}
-            onPageChange={setSpendersOffset}
-          />
-        </div>
+        <PageSpendersSection
+          spenders={spenders}
+          spendersOffset={spendersOffset}
+          onPageChange={setSpendersOffset}
+          onOpenFanProfile={openFanProfile}
+        />
       )}
 
       {activeTab === "followers" && (
-        <div className="bg-card border border-border rounded-xl p-8">
+        <PageFollowersSection pageLabel={pageLabel!} />
+      )}
+    </div>
+  );
+}
+
+function PageSubscribersSection({
+  pageLabel,
+  subscribers,
+  onOpenFanProfile,
+}: {
+  pageLabel: string;
+  subscribers: SubscriberListResponse | undefined;
+  onOpenFanProfile: (platformUserId: string, fanLabel: string) => void;
+}) {
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden mb-6">
+      <div className="flex items-center justify-between p-4 px-[22px] border-b border-border bg-hover-alt">
+        <Link
+          to={`/pages/${pageLabel}/subscribers`}
+          className="font-bold text-[15px] text-text-primary hover:text-accent transition-colors"
+        >
+          Subscribers
+        </Link>
+        <div className="flex items-center gap-3">
+          <span className="text-[12px] text-text-muted">
+            {subscribers?.total ?? 0} total
+          </span>
           <Link
-            to={`/pages/${pageLabel}/followers`}
-            className="text-accent text-sm font-medium hover:underline"
+            to={`/pages/${pageLabel}/subscribers`}
+            className="text-accent text-[12px] font-medium hover:underline"
           >
-            View all followers &rarr;
+            View all &rarr;
           </Link>
         </div>
-      )}
+      </div>
+
+      <table className="w-full border-collapse">
+        <thead>
+          <tr>
+            {[
+              "Username",
+              "Since",
+              "Expires",
+              "Remaining",
+              "Renew",
+              "Spent",
+              "Last Txn",
+            ].map((col) => (
+              <th
+                key={col}
+                className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border"
+              >
+                {col}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {(subscribers?.items ?? []).map((item) => {
+            const days = item.endsAt ? daysRemaining(item.endsAt) : null;
+            const fanLabel = resolveFanLabelForScope(item, "page");
+            const isNew = isRecent(item.startedAt);
+
+            return (
+              <tr
+                key={item.platformSubscriptionId}
+                onClick={() => onOpenFanProfile(item.platformUserId, fanLabel.label)}
+                className="cursor-pointer hover:bg-hover-alt transition-colors"
+              >
+                <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-col">
+                      <span className="text-text-primary font-medium">
+                        {fanLabel.label}
+                      </span>
+                      {fanLabel.secondaryPlatformHandle && (
+                        <span className="text-[12px] text-text-muted">
+                          @{fanLabel.secondaryPlatformHandle}
+                        </span>
+                      )}
+                    </div>
+                    {isNew && <Badge variant="new">NEW</Badge>}
+                  </div>
+                </td>
+                <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
+                  {item.startedAt ? formatDate(item.startedAt) : "\u2014"}
+                </td>
+                <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
+                  {item.endsAt ? formatDate(item.endsAt) : "\u2014"}
+                </td>
+                <td className="p-3.5 px-[22px] text-sm border-b border-border-light">
+                  {days !== null ? <RemainingBar days={days} /> : "\u2014"}
+                </td>
+                <td className="p-3.5 px-[22px] text-sm border-b border-border-light">
+                  {item.autoRenew === true && (
+                    <span className="text-green font-medium">On</span>
+                  )}
+                  {item.autoRenew === false && (
+                    <span className="text-danger font-medium">Off</span>
+                  )}
+                  {item.autoRenew == null && (
+                    <span className="text-text-muted">&mdash;</span>
+                  )}
+                </td>
+                <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
+                  {item.totalSpentCents != null ? formatUsdFromCents(item.totalSpentCents) : "\u2014"}
+                </td>
+                <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
+                  {item.lastTransactionAt ? formatDateTime(item.lastTransactionAt) : "\u2014"}
+                </td>
+              </tr>
+            );
+          })}
+          {(subscribers?.items ?? []).length === 0 && (
+            <tr>
+              <td
+                colSpan={7}
+                className="p-8 text-center text-sm text-text-muted"
+              >
+                No subscribers found
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PageTransactionsSection({
+  transactions,
+  txOffset,
+  txTypeFilter,
+  onTxTypeChange,
+  onTxPageChange,
+  stateColorClass,
+}: {
+  transactions: TransactionListResponse | undefined;
+  txOffset: number;
+  txTypeFilter: string;
+  onTxTypeChange: (value: string) => void;
+  onTxPageChange: (offset: number) => void;
+  stateColorClass: (state: string) => string;
+}) {
+  return (
+    <div>
+      <div className="mb-3">
+        <FilterButtons
+          filters={[
+            { key: "", label: "All" },
+            { key: "subscription", label: "Subscriptions" },
+            { key: "tip", label: "Tips" },
+            { key: "message_purchase", label: "Messages" },
+          ]}
+          active={txTypeFilter}
+          onChange={onTxTypeChange}
+        />
+      </div>
+      <div className="bg-card border border-border rounded-xl overflow-hidden">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr>
+              <th className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
+                Date
+              </th>
+              <th className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
+                Fan
+              </th>
+              <th className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
+                Type
+              </th>
+              <th className="text-left p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
+                Status
+              </th>
+              <th className="text-right p-3 px-[22px] text-[11px] font-semibold text-text-muted uppercase tracking-wider border-b border-border">
+                Amount
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {(transactions?.items ?? []).map((item, idx) => {
+              const fanLabel = item.fan ? resolveFanLabelForScope(item.fan, "page") : null;
+              const fanDisplay = fanLabel?.label ?? null;
+              const fanIsMuted = fanLabel?.isDeletedFallback ?? false;
+
+              return (
+                <tr
+                  key={item.transactionId ?? idx}
+                  className="cursor-pointer hover:bg-hover-alt transition-colors"
+                >
+                  <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
+                    {formatDateTime(item.occurredAt)}
+                  </td>
+                  <td
+                    className={`p-3.5 px-[22px] text-sm border-b border-border-light ${fanIsMuted ? "text-text-muted" : "text-text-primary"}`}
+                  >
+                    {fanDisplay ?? "\u2014"}
+                  </td>
+                  <td className="p-3.5 px-[22px] text-sm text-text-secondary border-b border-border-light">
+                    {transactionTypeLabel(item.canonicalType)}
+                  </td>
+                  <td className="p-3.5 px-[22px] text-sm border-b border-border-light">
+                    <span className={stateColorClass(item.transactionState)}>
+                      {item.transactionState.charAt(0).toUpperCase() +
+                        item.transactionState.slice(1)}
+                    </span>
+                  </td>
+                  <td className="p-3.5 px-[22px] text-sm text-text-primary font-medium text-right border-b border-border-light">
+                    {formatUsdFromMills(item.netAmountMills)}
+                  </td>
+                </tr>
+              );
+            })}
+            {(transactions?.items ?? []).length === 0 && (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="p-8 text-center text-sm text-text-muted"
+                >
+                  No transactions found
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+
+        <Pagination
+          offset={txOffset}
+          limit={PAGE_SIZE}
+          total={transactions?.total ?? 0}
+          onPageChange={onTxPageChange}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PageSpendersSection({
+  spenders,
+  spendersOffset,
+  onPageChange,
+  onOpenFanProfile,
+}: {
+  spenders: SpenderListResponse | undefined;
+  spendersOffset: number;
+  onPageChange: (offset: number) => void;
+  onOpenFanProfile: (platformUserId: string, fanLabel: string) => void;
+}) {
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="bg-hover-alt">
+            {["Rank", "Username", "Total Spent", "Transactions"].map((col) => (
+              <th
+                key={col}
+                className={`px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted ${
+                  col === "Total Spent" || col === "Transactions" ? "text-right" : "text-left"
+                }`}
+              >
+                {col}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {(spenders?.items ?? []).length === 0 && (
+            <tr>
+              <td colSpan={4} className="px-4 py-8 text-center text-sm text-text-muted">
+                No spenders found for this period.
+              </td>
+            </tr>
+          )}
+          {(spenders?.items ?? []).map((item, index) => {
+            const windowMetrics = item.metrics.window;
+            const fanLabel = resolveFanLabelForScope(item.fan, "page");
+
+            return (
+              <tr
+                key={item.fan.platformUserId}
+                onClick={() => onOpenFanProfile(item.fan.platformUserId, fanLabel.label)}
+                className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
+              >
+                <td className="px-4 py-3 text-sm text-text-secondary tabular-nums">
+                  {spendersOffset + index + 1}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="text-[15px] font-semibold text-text-primary">
+                    {fanLabel.label}
+                  </div>
+                  {fanLabel.secondaryPlatformHandle && (
+                    <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
+                  {formatUsdFromMills(windowMetrics?.creatorNetAmountMills ?? 0)}
+                </td>
+                <td className="px-4 py-3 text-right text-sm text-text-secondary tabular-nums">
+                  {windowMetrics?.transactionCount ?? 0}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <Pagination
+        offset={spendersOffset}
+        limit={PAGE_SIZE}
+        total={spenders?.total ?? 0}
+        onPageChange={onPageChange}
+      />
+    </div>
+  );
+}
+
+function PageFollowersSection({ pageLabel }: { pageLabel: string }) {
+  return (
+    <div className="bg-card border border-border rounded-xl p-8">
+      <Link
+        to={`/pages/${pageLabel}/followers`}
+        className="text-accent text-sm font-medium hover:underline"
+      >
+        View all followers &rarr;
+      </Link>
     </div>
   );
 }

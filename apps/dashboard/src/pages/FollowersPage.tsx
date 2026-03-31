@@ -5,6 +5,7 @@ import { Badge } from "@/components/shared/Badge";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
@@ -35,9 +36,21 @@ export function FollowersPage() {
     followedWithinHours: filter === "new24h" ? 24 : undefined,
   }), [filter, offset, searchQuery]);
 
-  const { data, isLoading } = usePageFollowers(pageLabel!, params);
+  const { data, isLoading, isError } = usePageFollowers(pageLabel!, params);
 
   if (isLoading || !data) {
+    if (isLoading) {
+      return <TableSkeleton rows={6} columns={5} />;
+    }
+    if (isError) {
+      return (
+        <StatusPanel
+          title="Followers failed to load"
+          description="The follower list could not be fetched for this page."
+          tone="error"
+        />
+      );
+    }
     return <TableSkeleton rows={6} columns={5} />;
   }
 

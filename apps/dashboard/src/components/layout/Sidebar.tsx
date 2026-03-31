@@ -1,9 +1,11 @@
 import { NavLink, useLocation, Link } from "react-router";
 import { BarChart3, Bell, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Code2, ChevronDown } from "lucide-react";
 import { useState } from "react";
-import { useOverview, useAdminConnections } from "@/api/queries";
+import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
+import { buildWorkboardRoute } from "@/lib/navigation";
+import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
   user: { username: string; role: string };
@@ -17,22 +19,20 @@ const devLinks = [
 ] as const;
 
 export function Sidebar({ user }: SidebarProps) {
-  const { data } = useOverview();
+  const { pages } = useDashboardShell();
   const location = useLocation();
   const [devOpen, setDevOpen] = useState(() => location.pathname.startsWith("/dev"));
   const { data: connections } = useAdminConnections({ enabled: user.role === "owner" });
   const hasSyncWarning = user.role === "owner" && (connections?.some((c) => isAlertState(c.syncUx)) ?? false);
 
-  type PageItem = NonNullable<typeof data>["pages"][number];
+  type PageItem = (typeof pages)[number];
   const modelPages = new Map<string, { modelName: string; pages: PageItem[] }>();
-  if (data) {
-    for (const page of data.pages) {
-      const existing = modelPages.get(page.modelSlug);
-      if (existing) {
-        existing.pages.push(page);
-      } else {
-        modelPages.set(page.modelSlug, { modelName: page.modelName, pages: [page] });
-      }
+  for (const page of pages) {
+    const existing = modelPages.get(page.modelSlug);
+    if (existing) {
+      existing.pages.push(page);
+    } else {
+      modelPages.set(page.modelSlug, { modelName: page.modelName, pages: [page] });
     }
   }
 
@@ -121,14 +121,14 @@ export function Sidebar({ user }: SidebarProps) {
                       </NavLink>
                       {page.platform === "fansly" && (
                         <NavLink
-                          to={`/pages/${page.label}/crm`}
+                          to={buildWorkboardRoute(page.label)}
                           className={({ isActive }) =>
                             `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
                               isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
                             }`
                           }
                         >
-                          <MessageSquare size={12} /> CRM
+                          <MessageSquare size={12} /> Workboard
                         </NavLink>
                       )}
                     </div>

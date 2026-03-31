@@ -6,6 +6,7 @@ import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { SearchInput } from "@/components/shared/SearchInput";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
@@ -38,7 +39,7 @@ export function SubscribersPage() {
     autoRenew: filter === "norenew" ? false : undefined,
   }), [filter, offset, searchQuery]);
 
-  const { data, isLoading } = usePageSubscribers(pageLabel!, params);
+  const { data, isLoading, isError } = usePageSubscribers(pageLabel!, params);
 
   // Filter count queries (lightweight, limit: 1)
   const { data: expiringCount } = usePageSubscribers(pageLabel!, { limit: 1, expiringWithinDays: 7 });
@@ -46,6 +47,18 @@ export function SubscribersPage() {
   const { data: noRenewCount } = usePageSubscribers(pageLabel!, { limit: 1, autoRenew: false });
 
   if (isLoading || !data) {
+    if (isLoading) {
+      return <TableSkeleton rows={6} columns={7} />;
+    }
+    if (isError) {
+      return (
+        <StatusPanel
+          title="Subscribers failed to load"
+          description="The subscriber list could not be fetched for this page."
+          tone="error"
+        />
+      );
+    }
     return <TableSkeleton rows={6} columns={7} />;
   }
 

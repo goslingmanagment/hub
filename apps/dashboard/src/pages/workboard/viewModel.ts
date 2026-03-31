@@ -1,26 +1,14 @@
 import type { WorkboardResponse } from "@agency_hub_core/contracts";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { resolveFanslyExternalLink, type FanslyExternalLinkKind } from "@/lib/platformUrls";
-import { formatMills, formatRelativeTime, formatRelativeTime, daysAgo, formatDate, daysRemaining } from "@/lib/format";
+import { formatMills, formatRelativeTime, formatDate, daysRemaining } from "@/lib/format";
+import { resolveOverdueSeverity, type OverdueSeverity } from "./theme.js";
 
 type SubscriberItem = WorkboardResponse["subscribers"]["items"][number];
 type SpenderItem = WorkboardResponse["activeSpenders"]["items"][number];
 type SnoozedItem = WorkboardResponse["snoozed"]["items"][number];
 type WorkboardFan = SubscriberItem["fan"] | SpenderItem["fan"] | SnoozedItem["fan"];
-
-export type OverdueSeverity = "normal" | "yellow" | "red";
-
-export function resolveOverdueSeverity(days: number): OverdueSeverity {
-  if (days >= 7) return "red";
-  if (days >= 3) return "yellow";
-  return "normal";
-}
-
-export const OVERDUE_BG: Record<OverdueSeverity, string> = {
-  normal: "bg-card",
-  yellow: "bg-yellow-500/5",
-  red: "bg-red-500/5",
-};
+type SpenderSegment = "activeSpenders" | "inactiveSpenders";
 
 function resolveVisibleWorkboardFan(fan: WorkboardFan) {
   const resolved = resolveFanLabelForScope({
@@ -33,8 +21,7 @@ function resolveVisibleWorkboardFan(fan: WorkboardFan) {
   return resolved.isDeletedFallback ? null : resolved;
 }
 
-export interface WorkboardSubscriberVm {
-  kind: "subscriber";
+interface WorkboardBaseVm {
   fanId: number;
   fanLabel: string;
   fanSubLabel: string | null;
@@ -43,38 +30,47 @@ export interface WorkboardSubscriberVm {
   fanslyExternalUrl: string | null;
   fanslyExternalKind: FanslyExternalLinkKind | null;
   ltvLabel: string;
-  touchpointCode: string;
-  touchpointLabel: string;
-  isSoftTouchpoint: boolean;
   overdueDays: number;
   overdueSeverity: OverdueSeverity;
+  overdueLabel: string;
+  whyNowLabel: string;
   lastFanMessageLabel: string | null;
-  lastFanMessageDaysAgo: number | null;
   lastModelMessageLabel: string | null;
-  lastModelMessageDaysAgo: number | null;
   lastTransactionLabel: string | null;
-  lastTransactionDaysAgo: number | null;
+  canPreview: boolean;
+}
+
+export interface WorkboardSubscriberVm extends WorkboardBaseVm {
+  kind: "subscriber";
+  touchpointCode: string;
+  touchpointLabel: string;
   expiryLabel: string;
   expiryRelativeLabel: string;
   autoRenew: boolean | null;
   tierName: string | null;
   tierShortName: string | null;
-  subscribedMonths: number | null;
-  canPreview: boolean;
 }
 
-export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): WorkboardSubscriberVm | null {
+export interface WorkboardSpenderVm extends WorkboardBaseVm {
+  kind: "spender";
+  subscriptionStatus: "expired" | "never";
+  subscriptionExpiresLabel: string | null;
+}
+
+export type WorkboardCardVm = WorkboardSubscriberVm | WorkboardSpenderVm;
+
+function buildBaseVm(pageLabel: string, item: SubscriberItem | SpenderItem): WorkboardBaseVm | null {
   const fan = resolveVisibleWorkboardFan(item.fan);
   if (!fan) {
     return null;
   }
+
   const fanslyExternalLink = resolveFanslyExternalLink({
     platformConversationId: item.conversation.platformConversationId,
     username: fan.username,
   });
 
   return {
-    kind: "subscriber" as const,
     fanId: item.fanId,
     fanLabel: fan.label,
     fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
@@ -83,29 +79,35 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
     fanslyExternalUrl: fanslyExternalLink?.url ?? null,
     fanslyExternalKind: fanslyExternalLink?.kind ?? null,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
-    touchpointCode: item.touchpoint.code,
-    touchpointLabel: item.touchpoint.label,
-    isSoftTouchpoint: item.touchpoint.isSoft,
     overdueDays: item.overdueDays,
     overdueSeverity: resolveOverdueSeverity(item.overdueDays),
+    overdueLabel: item.overdueDays > 0 ? `Overdue ${item.overdueDays}d` : "Due today",
+    whyNowLabel: "",
     lastFanMessageLabel: item.conversation.lastFanMessageAt
       ? formatRelativeTime(item.conversation.lastFanMessageAt)
-      : null,
-    lastFanMessageDaysAgo: item.conversation.lastFanMessageAt
-      ? daysAgo(item.conversation.lastFanMessageAt)
       : null,
     lastModelMessageLabel: item.conversation.lastModelMessageAt
       ? formatRelativeTime(item.conversation.lastModelMessageAt)
       : null,
-    lastModelMessageDaysAgo: item.conversation.lastModelMessageAt
-      ? daysAgo(item.conversation.lastModelMessageAt)
-      : null,
     lastTransactionLabel: item.lastTransactionAt
       ? formatRelativeTime(item.lastTransactionAt)
       : null,
-    lastTransactionDaysAgo: item.lastTransactionAt
-      ? daysAgo(item.lastTransactionAt)
-      : null,
+    canPreview: item.conversation.platformConversationId !== null,
+  };
+}
+
+export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): WorkboardSubscriberVm | null {
+  const baseVm = buildBaseVm(pageLabel, item);
+  if (!baseVm) {
+    return null;
+  }
+
+  return {
+    ...baseVm,
+    kind: "subscriber",
+    touchpointCode: item.touchpoint.code,
+    touchpointLabel: item.touchpoint.label,
+    whyNowLabel: `${item.touchpoint.label} subscriber follow-up`,
     expiryLabel: formatDate(item.subscription.expiresAt),
     expiryRelativeLabel: `in ${daysRemaining(item.subscription.expiresAt)}d`,
     autoRenew: item.subscription.autoRenew,
@@ -113,85 +115,29 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
     tierShortName: item.subscription.tierName
       ? item.subscription.tierName.replace(/\s*\([^)]*\)\s*/g, " ").trim()
       : null,
-    subscribedMonths: item.subscription.subscriberSince
-      ? Math.max(1, Math.round((Date.now() - new Date(item.subscription.subscriberSince).getTime()) / (30.44 * 24 * 60 * 60 * 1000)))
-      : null,
-    canPreview: item.conversation.platformConversationId !== null,
   };
 }
 
-export interface WorkboardSpenderVm {
-  kind: "spender";
-  fanId: number;
-  fanLabel: string;
-  fanSubLabel: string | null;
-  platformConversationId: string | null;
-  profileHref: string;
-  fanslyExternalUrl: string | null;
-  fanslyExternalKind: FanslyExternalLinkKind | null;
-  ltvLabel: string;
-  silenceDays: number;
-  overdueDays: number;
-  overdueSeverity: OverdueSeverity;
-  lastFanMessageLabel: string | null;
-  lastFanMessageDaysAgo: number | null;
-  lastModelMessageLabel: string | null;
-  lastModelMessageDaysAgo: number | null;
-  lastTransactionLabel: string | null;
-  lastTransactionDaysAgo: number | null;
-  subscriptionStatus: "expired" | "never";
-  subscriptionExpiresLabel: string | null;
-  canPreview: boolean;
-}
-
-export type WorkboardCardVm = WorkboardSubscriberVm | WorkboardSpenderVm;
-
-export function mapSpenderVm(pageLabel: string, item: SpenderItem): WorkboardSpenderVm | null {
-  const fan = resolveVisibleWorkboardFan(item.fan);
-  if (!fan) {
+export function mapSpenderVm(
+  pageLabel: string,
+  item: SpenderItem,
+  segment: SpenderSegment,
+): WorkboardSpenderVm | null {
+  const baseVm = buildBaseVm(pageLabel, item);
+  if (!baseVm) {
     return null;
   }
-  const fanslyExternalLink = resolveFanslyExternalLink({
-    platformConversationId: item.conversation.platformConversationId,
-    username: fan.username,
-  });
 
   return {
-    kind: "spender" as const,
-    fanId: item.fanId,
-    fanLabel: fan.label,
-    fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
-    platformConversationId: item.conversation.platformConversationId,
-    profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
-    fanslyExternalUrl: fanslyExternalLink?.url ?? null,
-    fanslyExternalKind: fanslyExternalLink?.kind ?? null,
-    ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
-    silenceDays: item.silenceDays,
-    overdueDays: item.overdueDays,
-    overdueSeverity: resolveOverdueSeverity(item.overdueDays),
-    lastFanMessageLabel: item.conversation.lastFanMessageAt
-      ? formatRelativeTime(item.conversation.lastFanMessageAt)
-      : null,
-    lastFanMessageDaysAgo: item.conversation.lastFanMessageAt
-      ? daysAgo(item.conversation.lastFanMessageAt)
-      : null,
-    lastModelMessageLabel: item.conversation.lastModelMessageAt
-      ? formatRelativeTime(item.conversation.lastModelMessageAt)
-      : null,
-    lastModelMessageDaysAgo: item.conversation.lastModelMessageAt
-      ? daysAgo(item.conversation.lastModelMessageAt)
-      : null,
-    lastTransactionLabel: item.lastTransactionAt
-      ? formatRelativeTime(item.lastTransactionAt)
-      : null,
-    lastTransactionDaysAgo: item.lastTransactionAt
-      ? daysAgo(item.lastTransactionAt)
-      : null,
+    ...baseVm,
+    kind: "spender",
+    whyNowLabel: segment === "activeSpenders"
+      ? `Active spender silent ${item.silenceDays}d`
+      : `Inactive spender silent ${item.silenceDays}d`,
     subscriptionStatus: item.subscription.status,
     subscriptionExpiresLabel: item.subscription.expiresAt
       ? formatDate(item.subscription.expiresAt)
       : null,
-    canPreview: item.conversation.platformConversationId !== null,
   };
 }
 
@@ -215,3 +161,4 @@ export function mapSnoozedVm(item: SnoozedItem): WorkboardSnoozedVm | null {
     snoozedUntilLabel: formatDate(item.snoozedUntil),
   };
 }
+

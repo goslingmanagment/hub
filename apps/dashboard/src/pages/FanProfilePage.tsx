@@ -15,13 +15,27 @@ import { Pagination } from "@/components/shared/Pagination";
 import { FanIntelligenceMarkdown } from "@/components/page/FanIntelligenceMarkdown";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { RemainingBar } from "@/components/shared/RemainingBar";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatDate, formatDateTime, transactionTypeLabel, daysRemaining } from "@/lib/format";
 import { usePeriodStore } from "@/stores/periodStore";
 import { toast } from "sonner";
 import { TRANSACTION_STATE_COLORS } from "@/lib/constants";
 import { resolveFanProfileBackTarget } from "@/lib/navigation";
+import type {
+  FanProfileDocument,
+  FanProfileVersionListResponse,
+  FanTransactionListResponse,
+  PageFanDetailResponse,
+} from "@agency_hub_core/contracts";
 
 const PAGE_SIZE = 50;
+type TimelineEvent = {
+  id: number | string;
+  date: string;
+  label: string;
+  amount: number;
+  type: string;
+};
 
 export function FanProfilePage() {
   const { pageLabel, platform, platformUserId } = useParams();
@@ -33,10 +47,10 @@ export function FanProfilePage() {
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
   const { period } = usePeriodStore();
-  const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
+  const selectedPeriod = period;
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
-  const { data, isLoading } = usePageFanDetail(pageLabel!, platformUserId!);
+  const { data, isLoading, isError } = usePageFanDetail(pageLabel!, platformUserId!);
   const { data: latestProfileData, isLoading: latestProfileLoading } = usePageFanProfile(pageLabel!, platformUserId!);
   const { data: profileVersionsData, isLoading: profileVersionsLoading } = usePageFanProfileVersions(
     pageLabel!,
@@ -61,6 +75,18 @@ export function FanProfilePage() {
   const createNote = useCreateFanNote(pageLabel!, platformUserId!);
 
   if (isLoading || !data) {
+    if (isLoading) {
+      return <FanProfileSkeleton />;
+    }
+    if (isError) {
+      return (
+        <StatusPanel
+          title="Fan profile failed to load"
+          description="The fan details could not be fetched for this page."
+          tone="error"
+        />
+      );
+    }
     return <FanProfileSkeleton />;
   }
 
@@ -259,280 +285,380 @@ export function FanProfilePage() {
         </div>
       )}
 
-      {/* Fan Intelligence - collapsed when empty */}
-      {!latestProfile && !latestProfileLoading && !intelligenceOpen ? (
-        <button
-          type="button"
-          onClick={() => setIntelligenceOpen(true)}
-          className="mb-6 flex w-full items-center justify-between rounded-xl border border-border bg-card px-5 py-4 text-left transition-colors hover:bg-hover-alt"
-        >
-          <span className="text-sm font-bold text-text-primary">Fan Intelligence</span>
+      <FanIntelligenceSection
+        pageLabel={page.pageLabel}
+        latestProfile={latestProfile}
+        latestProfileLoading={latestProfileLoading}
+        intelligenceOpen={intelligenceOpen}
+        onOpen={() => setIntelligenceOpen(true)}
+        viewingHistoricalVersion={viewingHistoricalVersion}
+        selectedProfileVersion={selectedProfileVersion}
+        selectedVersionIsCurrent={selectedVersionIsCurrent}
+        onBackToLatest={() => setSelectedProfileVersion(null)}
+        profileLoading={profileLoading}
+        displayedProfile={displayedProfile}
+        historyOpen={historyOpen}
+        onToggleHistory={() => setHistoryOpen((value) => !value)}
+        profileVersionsLoading={profileVersionsLoading}
+        profileVersions={profileVersions}
+        onSelectProfileVersion={handleSelectProfileVersion}
+      />
+
+      <FanProfileActivityGrid
+        notes={page.notes}
+        noteBody={noteBody}
+        onNoteBodyChange={setNoteBody}
+        onAddNote={handleAddNote}
+        isAddingNote={createNote.isPending}
+        timelineEvents={timelineEvents}
+        timelineDotColor={timelineDotColor}
+      />
+
+      <FanTransactionHistorySection
+        txItems={txItems}
+        txTotal={txTotal}
+        txOffset={txOffset}
+        onPageChange={setTxOffset}
+      />
+    </div>
+  );
+}
+
+function FanIntelligenceSection({
+  pageLabel,
+  latestProfile,
+  latestProfileLoading,
+  intelligenceOpen,
+  onOpen,
+  viewingHistoricalVersion,
+  selectedProfileVersion,
+  selectedVersionIsCurrent,
+  onBackToLatest,
+  profileLoading,
+  displayedProfile,
+  historyOpen,
+  onToggleHistory,
+  profileVersionsLoading,
+  profileVersions,
+  onSelectProfileVersion,
+}: {
+  pageLabel: string;
+  latestProfile: FanProfileDocument | null;
+  latestProfileLoading: boolean;
+  intelligenceOpen: boolean;
+  onOpen: () => void;
+  viewingHistoricalVersion: boolean;
+  selectedProfileVersion: number | null;
+  selectedVersionIsCurrent: boolean;
+  onBackToLatest: () => void;
+  profileLoading: boolean;
+  displayedProfile: FanProfileDocument | null;
+  historyOpen: boolean;
+  onToggleHistory: () => void;
+  profileVersionsLoading: boolean;
+  profileVersions: FanProfileVersionListResponse["items"];
+  onSelectProfileVersion: (version: number) => void;
+}) {
+  if (!latestProfile && !latestProfileLoading && !intelligenceOpen) {
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        className="mb-6 flex w-full items-center justify-between rounded-xl border border-border bg-card px-5 py-4 text-left transition-colors hover:bg-hover-alt"
+      >
+        <span className="text-sm font-bold text-text-primary">Fan Intelligence</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-muted">No profile available</span>
+          <ChevronDown size={16} className="text-text-muted" />
+        </div>
+      </button>
+    );
+  }
+
+  return (
+    <section className="mb-6 rounded-xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-bold text-text-primary">Fan Intelligence</h2>
+          <p className="mt-1 text-xs text-text-muted">
+            Latest ChatMuse profile for this fan on {pageLabel}.
+          </p>
+        </div>
+        {viewingHistoricalVersion && (
           <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted">No profile available</span>
-            <ChevronDown size={16} className="text-text-muted" />
-          </div>
-        </button>
-      ) : (
-        <section className="mb-6 rounded-xl border border-border bg-card p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-bold text-text-primary">Fan Intelligence</h2>
-              <p className="mt-1 text-xs text-text-muted">
-                Latest ChatMuse profile for this fan on {page.pageLabel}.
-              </p>
-            </div>
-            {viewingHistoricalVersion && (
-              <div className="flex items-center gap-2">
-                <span className="rounded-full border border-border bg-hover px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                  Viewing version {selectedProfileVersion}
-                </span>
-                {selectedVersionIsCurrent && (
-                  <span className="rounded-full border border-border bg-hover-alt px-2 py-1 text-[11px] text-text-muted">
-                    Current
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setSelectedProfileVersion(null)}
-                  className="text-xs font-medium text-accent transition-colors hover:opacity-80"
-                >
-                  Back to latest
-                </button>
-              </div>
+            <span className="rounded-full border border-border bg-hover px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+              Viewing version {selectedProfileVersion}
+            </span>
+            {selectedVersionIsCurrent && (
+              <span className="rounded-full border border-border bg-hover-alt px-2 py-1 text-[11px] text-text-muted">
+                Current
+              </span>
             )}
-          </div>
-
-          <div className="mt-4 rounded-xl border border-border bg-hover-alt/40 p-5">
-            {profileLoading ? (
-              <p className="text-sm text-text-muted">
-                {viewingHistoricalVersion ? "Loading selected version..." : "Loading intelligence profile..."}
-              </p>
-            ) : viewingHistoricalVersion && !displayedProfile ? (
-              <p className="text-sm text-text-muted">Unable to load the selected version.</p>
-            ) : displayedProfile ? (
-              <div>
-                <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
-                  <span>Version {displayedProfile.version}</span>
-                  <span>&middot;</span>
-                  <span>{formatDateTime(displayedProfile.createdAt)}</span>
-                </div>
-                <FanIntelligenceMarkdown body={displayedProfile.body} />
-              </div>
-            ) : (
-              <p className="text-sm text-text-muted">No intelligence profile yet</p>
-            )}
-          </div>
-
-          <div className="mt-4">
             <button
               type="button"
-              onClick={() => setHistoryOpen((value) => !value)}
-              className="flex w-full items-center justify-between rounded-lg border border-border bg-hover-alt/30 px-4 py-2.5 text-left transition-colors hover:bg-hover-alt"
-              aria-expanded={historyOpen}
+              onClick={onBackToLatest}
+              className="text-xs font-medium text-accent transition-colors hover:opacity-80"
             >
-              <span className="text-[13px] font-medium text-text-secondary">Version History</span>
-              <ChevronDown
-                size={16}
-                className={`text-text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
-              />
+              Back to latest
             </button>
+          </div>
+        )}
+      </div>
 
-            {historyOpen && (
-              <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
-                {profileVersionsLoading ? (
-                  <div className="px-4 py-4 text-sm text-text-muted">Loading versions...</div>
-                ) : profileVersions.length === 0 ? (
-                  <div className="px-4 py-4 text-sm text-text-muted">No saved versions yet.</div>
-                ) : (
-                  <div>
-                    {profileVersions.map((item) => {
-                      const selected = selectedProfileVersion === item.version;
-                      return (
-                        <button
-                          key={item.version}
-                          type="button"
-                          onClick={() => handleSelectProfileVersion(item.version)}
-                          className={`flex w-full items-center justify-between border-t border-border px-4 py-3 text-left transition-colors first:border-t-0 ${
-                            selected ? "bg-hover" : "hover:bg-hover-alt"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-text-primary">
-                              Version {item.version}
-                            </span>
-                            {item.isCurrent && (
-                              <span className="rounded-full border border-border bg-hover px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                                Current
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-xs text-text-muted">
-                            {formatDateTime(item.createdAt)}
+      <div className="mt-4 rounded-xl border border-border bg-hover-alt/40 p-5">
+        {profileLoading ? (
+          <p className="text-sm text-text-muted">
+            {viewingHistoricalVersion ? "Loading selected version..." : "Loading intelligence profile..."}
+          </p>
+        ) : viewingHistoricalVersion && !displayedProfile ? (
+          <p className="text-sm text-text-muted">Unable to load the selected version.</p>
+        ) : displayedProfile ? (
+          <div>
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
+              <span>Version {displayedProfile.version}</span>
+              <span>&middot;</span>
+              <span>{formatDateTime(displayedProfile.createdAt)}</span>
+            </div>
+            <FanIntelligenceMarkdown body={displayedProfile.body} />
+          </div>
+        ) : (
+          <p className="text-sm text-text-muted">No intelligence profile yet</p>
+        )}
+      </div>
+
+      <div className="mt-4">
+        <button
+          type="button"
+          onClick={onToggleHistory}
+          className="flex w-full items-center justify-between rounded-lg border border-border bg-hover-alt/30 px-4 py-2.5 text-left transition-colors hover:bg-hover-alt"
+          aria-expanded={historyOpen}
+        >
+          <span className="text-[13px] font-medium text-text-secondary">Version History</span>
+          <ChevronDown
+            size={16}
+            className={`text-text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
+          />
+        </button>
+
+        {historyOpen && (
+          <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
+            {profileVersionsLoading ? (
+              <div className="px-4 py-4 text-sm text-text-muted">Loading versions...</div>
+            ) : profileVersions.length === 0 ? (
+              <div className="px-4 py-4 text-sm text-text-muted">No saved versions yet.</div>
+            ) : (
+              <div>
+                {profileVersions.map((item) => {
+                  const selected = selectedProfileVersion === item.version;
+                  return (
+                    <button
+                      key={item.version}
+                      type="button"
+                      onClick={() => onSelectProfileVersion(item.version)}
+                      className={`flex w-full items-center justify-between border-t border-border px-4 py-3 text-left transition-colors first:border-t-0 ${
+                        selected ? "bg-hover" : "hover:bg-hover-alt"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-text-primary">
+                          Version {item.version}
+                        </span>
+                        {item.isCurrent && (
+                          <span className="rounded-full border border-border bg-hover px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                            Current
                           </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+                        )}
+                      </div>
+                      <span className="text-xs text-text-muted">
+                        {formatDateTime(item.createdAt)}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
-        </section>
-      )}
+        )}
+      </div>
+    </section>
+  );
+}
 
-      {/* Two-column: Notes + Timeline */}
-      <div className="mb-6 grid grid-cols-2 gap-4">
-        {/* Notes */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-text-primary">Notes</h2>
-            <button
-              onClick={handleAddNote}
-              disabled={!noteBody.trim() || createNote.isPending}
-              className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Add Note
-            </button>
-          </div>
-
-          {/* Existing notes */}
-          <div className="space-y-2 mb-3">
-            {(page?.notes ?? []).length === 0 && (
-              <p className="text-xs text-text-muted">No notes yet.</p>
-            )}
-            {(page?.notes ?? []).map(
-              (note) => (
-                <div
-                  key={note.id}
-                  className="rounded-md border-l-[3px] border-border bg-hover-alt p-2.5"
-                >
-                  <div className="text-[11px] text-text-muted">
-                    Note &middot; {formatDateTime(note.createdAt)}
-                  </div>
-                  <div className="mt-1 text-sm text-text-primary">{note.body}</div>
-                </div>
-              ),
-            )}
-          </div>
-
-          {/* Add note textarea */}
-          <textarea
-            value={noteBody}
-            onChange={(e) => setNoteBody(e.target.value)}
-            placeholder="Write a note..."
-            rows={3}
-            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent resize-none"
-          />
+function FanProfileActivityGrid({
+  notes,
+  noteBody,
+  onNoteBodyChange,
+  onAddNote,
+  isAddingNote,
+  timelineEvents,
+  timelineDotColor,
+}: {
+  notes: PageFanDetailResponse["page"]["notes"];
+  noteBody: string;
+  onNoteBodyChange: (value: string) => void;
+  onAddNote: () => void;
+  isAddingNote: boolean;
+  timelineEvents: TimelineEvent[];
+  timelineDotColor: (type: string) => string;
+}) {
+  return (
+    <div className="mb-6 grid grid-cols-2 gap-4">
+      <div className="rounded-xl border border-border bg-card p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-text-primary">Notes</h2>
+          <button
+            onClick={onAddNote}
+            disabled={!noteBody.trim() || isAddingNote}
+            className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Add Note
+          </button>
         </div>
 
-        {/* Timeline */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h2 className="mb-3 text-sm font-bold text-text-primary">Timeline</h2>
-          {timelineEvents.length === 0 && (
-            <p className="text-xs text-text-muted">No activity yet.</p>
+        <div className="space-y-2 mb-3">
+          {notes.length === 0 && (
+            <p className="text-xs text-text-muted">No notes yet.</p>
           )}
-          <div className="relative">
-            {timelineEvents.length > 0 && (
-              <div className="absolute left-[5px] top-2 bottom-2 w-px bg-border" />
-            )}
-            <div className="space-y-3">
-              {timelineEvents.map((event) => (
-                <div key={event.id} className="flex items-start gap-3 pl-0">
-                  <div
-                    className={`mt-1.5 h-[11px] w-[11px] flex-shrink-0 rounded-full ${timelineDotColor(event.type)}`}
-                  />
-                  <div>
-                    <div className="text-[11px] text-text-muted">
-                      {formatDateTime(event.date)}
-                    </div>
-                    <div className="text-sm text-text-primary">
-                      {event.label}{" "}
-                      <span className="font-semibold tabular-nums">
-                        {formatUsdFromMills(event.amount)}
-                      </span>
-                    </div>
+          {notes.map((note) => (
+            <div
+              key={note.id}
+              className="rounded-md border-l-[3px] border-border bg-hover-alt p-2.5"
+            >
+              <div className="text-[11px] text-text-muted">
+                Note &middot; {formatDateTime(note.createdAt)}
+              </div>
+              <div className="mt-1 text-sm text-text-primary">{note.body}</div>
+            </div>
+          ))}
+        </div>
+
+        <textarea
+          value={noteBody}
+          onChange={(event) => onNoteBodyChange(event.target.value)}
+          placeholder="Write a note..."
+          rows={3}
+          className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent resize-none"
+        />
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-5">
+        <h2 className="mb-3 text-sm font-bold text-text-primary">Timeline</h2>
+        {timelineEvents.length === 0 && (
+          <p className="text-xs text-text-muted">No activity yet.</p>
+        )}
+        <div className="relative">
+          {timelineEvents.length > 0 && (
+            <div className="absolute left-[5px] top-2 bottom-2 w-px bg-border" />
+          )}
+          <div className="space-y-3">
+            {timelineEvents.map((event) => (
+              <div key={event.id} className="flex items-start gap-3 pl-0">
+                <div
+                  className={`mt-1.5 h-[11px] w-[11px] flex-shrink-0 rounded-full ${timelineDotColor(event.type)}`}
+                />
+                <div>
+                  <div className="text-[11px] text-text-muted">
+                    {formatDateTime(event.date)}
+                  </div>
+                  <div className="text-sm text-text-primary">
+                    {event.label}{" "}
+                    <span className="font-semibold tabular-nums">
+                      {formatUsdFromMills(event.amount)}
+                    </span>
                   </div>
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Transaction History */}
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 className="text-sm font-bold text-text-primary">
-            Transaction History
-            <span className="ml-2 text-xs font-normal text-text-muted">{txTotal} total</span>
-          </h2>
-        </div>
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-hover-alt">
-              {["Date", "Type", "Status", "Amount"].map((col) => (
-                <th
-                  key={col}
-                  className={`px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted ${
-                    col === "Amount" ? "text-right" : "text-left"
-                  }`}
-                >
-                  {col}
-                </th>
-              ))}
+function FanTransactionHistorySection({
+  txItems,
+  txTotal,
+  txOffset,
+  onPageChange,
+}: {
+  txItems: FanTransactionListResponse["items"];
+  txTotal: number;
+  txOffset: number;
+  onPageChange: (offset: number) => void;
+}) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <h2 className="text-sm font-bold text-text-primary">
+          Transaction History
+          <span className="ml-2 text-xs font-normal text-text-muted">{txTotal} total</span>
+        </h2>
+      </div>
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="bg-hover-alt">
+            {["Date", "Type", "Status", "Amount"].map((col) => (
+              <th
+                key={col}
+                className={`px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted ${
+                  col === "Amount" ? "text-right" : "text-left"
+                }`}
+              >
+                {col}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {txItems.length === 0 && (
+            <tr>
+              <td colSpan={4} className="px-4 py-8 text-center text-sm text-text-muted">
+                No transactions found.
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {txItems.length === 0 && (
-              <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No transactions found.
+          )}
+          {txItems.map((tx) => {
+            const stateColor =
+              TRANSACTION_STATE_COLORS[tx.transactionState] ?? "#a8a29e";
+            return (
+              <tr
+                key={tx.transactionId}
+                className="border-t border-border transition-colors hover:bg-hover"
+              >
+                <td className="px-4 py-3 text-sm text-text-secondary">
+                  {formatDateTime(tx.occurredAt)}
+                </td>
+                <td className="px-4 py-3 text-sm text-text-primary font-medium">
+                  {transactionTypeLabel(tx.canonicalType)}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="inline-block h-2 w-2 rounded-full"
+                      style={{ backgroundColor: stateColor }}
+                    />
+                    <span className="text-sm text-text-secondary capitalize">
+                      {tx.transactionState}
+                    </span>
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
+                  {formatUsdFromMills(tx.netAmountMills)}
                 </td>
               </tr>
-            )}
-            {txItems.map((tx) => {
-              const stateColor =
-                TRANSACTION_STATE_COLORS[tx.transactionState] ?? "#a8a29e";
-              return (
-                <tr
-                  key={tx.transactionId}
-                  className="border-t border-border transition-colors hover:bg-hover"
-                >
-                  <td className="px-4 py-3 text-sm text-text-secondary">
-                    {formatDateTime(tx.occurredAt)}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-text-primary font-medium">
-                    {transactionTypeLabel(tx.canonicalType)}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ backgroundColor: stateColor }}
-                      />
-                      <span className="text-sm text-text-secondary capitalize">
-                        {tx.transactionState}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
-                    {formatUsdFromMills(tx.netAmountMills)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+            );
+          })}
+        </tbody>
+      </table>
 
-        {/* Pagination */}
-        <Pagination
-          offset={txOffset}
-          limit={PAGE_SIZE}
-          total={txTotal}
-          onPageChange={setTxOffset}
-        />
-      </section>
-    </div>
+      <Pagination
+        offset={txOffset}
+        limit={PAGE_SIZE}
+        total={txTotal}
+        onPageChange={onPageChange}
+      />
+    </section>
   );
 }
 

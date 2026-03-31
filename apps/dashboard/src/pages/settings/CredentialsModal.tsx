@@ -1,11 +1,9 @@
 import { useState } from "react";
-import type { ConnectionItem, VerifyCredentialsBody } from "@agency_hub_core/contracts";
-import { buildProxyConfig } from "@agency_hub_core/shared";
+import type { ConnectionItem } from "@agency_hub_core/contracts";
 import { useAdminUpdateCredentials } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
-import { Field } from "@/components/shared/Field";
-import { ProxyInput } from "@/components/shared/ProxyInput";
 import { toast } from "sonner";
+import { buildCredentialsBody, PlatformCredentialsFields, type PlatformCredentialsValues } from "./PlatformCredentialsFields.js";
 
 export type CredentialsModalConnection = Pick<ConnectionItem, "label" | "platform" | "proxyUrl" | "proxyHasAuth">;
 
@@ -17,50 +15,34 @@ export function CredentialsModal({
   onClose: () => void;
 }) {
   const updateCredentials = useAdminUpdateCredentials(connection.label);
-  const [authorization, setAuthorization] = useState("");
-  const [fanslyClientId, setFanslyClientId] = useState("");
-  const [fanslyClientCheck, setFanslyClientCheck] = useState("");
-  const [fanslySessionId, setFanslySessionId] = useState("");
-  const [onlyFansToken, setOnlyFansToken] = useState("");
-  const [onlyFansUsername, setOnlyFansUsername] = useState("");
+  const [values, setValues] = useState<PlatformCredentialsValues>({
+    authorization: "",
+    fanslyClientId: "",
+    fanslyClientCheck: "",
+    fanslySessionId: "",
+    onlyFansToken: "",
+    onlyFansUsername: "",
+    proxyRaw: connection.proxyUrl ?? "",
+  });
 
   const hadStoredProxy = connection.proxyUrl != null;
-  const [proxyRaw, setProxyRaw] = useState(connection.proxyUrl ?? "");
 
   const title = `Update ${connection.label} credentials`;
 
+  function updateField<K extends keyof PlatformCredentialsValues>(
+    field: K,
+    value: PlatformCredentialsValues[K],
+  ) {
+    setValues((current) => ({ ...current, [field]: value }));
+  }
+
   async function handleSubmit() {
-    const proxyConfig = buildProxyConfig(proxyRaw);
-    // If there was a stored proxy and user cleared the field, explicitly remove it.
-    // If no stored proxy and field is empty, omit proxy (no change).
-    const proxy = proxyConfig !== undefined
-      ? proxyConfig
-      : hadStoredProxy
-        ? null
-        : undefined;
-
-    const body: VerifyCredentialsBody = connection.platform === "fansly"
-      ? {
-        platform: "fansly",
-        session: {
-          authorization: authorization.trim(),
-          fanslyClientId: fanslyClientId.trim() || undefined,
-          fanslyClientCheck: fanslyClientCheck.trim() || undefined,
-          fanslySessionId: fanslySessionId.trim() || undefined,
-        },
-        proxy,
-      }
-      : {
-        platform: "onlyfans",
-        auth: {
-          token: onlyFansToken.trim(),
-        },
-        username: onlyFansUsername.trim(),
-        proxy,
-      };
-
     try {
-      await updateCredentials.mutateAsync(body);
+      await updateCredentials.mutateAsync(buildCredentialsBody({
+        platform: connection.platform,
+        values,
+        hadStoredProxy,
+      }));
       toast.success("Credentials updated");
       onClose();
     } catch (error) {
@@ -71,61 +53,10 @@ export function CredentialsModal({
   return (
     <ModalShell title={title} onClose={onClose}>
       <div className="space-y-4">
-        {connection.platform === "fansly" ? (
-          <>
-            <Field label="Authorization">
-              <textarea
-                value={authorization}
-                onChange={(event) => setAuthorization(event.target.value)}
-                rows={4}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-              />
-            </Field>
-            <Field label="fansly-client-id (optional)">
-              <input
-                value={fanslyClientId}
-                onChange={(event) => setFanslyClientId(event.target.value)}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-            </Field>
-            <Field label="fansly-client-check (optional)">
-              <input
-                value={fanslyClientCheck}
-                onChange={(event) => setFanslyClientCheck(event.target.value)}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-            </Field>
-            <Field label="fansly-session-id (optional)">
-              <input
-                value={fanslySessionId}
-                onChange={(event) => setFanslySessionId(event.target.value)}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-            </Field>
-          </>
-        ) : (
-          <>
-            <Field label="Auth token">
-              <textarea
-                value={onlyFansToken}
-                onChange={(event) => setOnlyFansToken(event.target.value)}
-                rows={4}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-              />
-            </Field>
-            <Field label="Username">
-              <input
-                value={onlyFansUsername}
-                onChange={(event) => setOnlyFansUsername(event.target.value)}
-                className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-            </Field>
-          </>
-        )}
-
-        <ProxyInput
-          value={proxyRaw}
-          onChange={setProxyRaw}
+        <PlatformCredentialsFields
+          platform={connection.platform}
+          values={values}
+          onChange={updateField}
           initialStoredProxy={hadStoredProxy ? { url: connection.proxyUrl!, hasAuth: connection.proxyHasAuth } : null}
         />
       </div>

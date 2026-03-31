@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { Link, useNavigate } from "react-router";
 import { useAuthMe, useOverview, useOverviewRevenue, useOverviewGrowth, useOverviewRevenueDaily } from "@/api/queries";
 import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
 import { buildSettingsRoute } from "@/lib/navigation";
@@ -65,9 +66,9 @@ export function OverviewPage() {
   const navigate = useNavigate();
   const { data: auth } = useAuthMe();
   const { period } = usePeriodStore();
-  const selectedPeriod = period === "today" || period === "7d" || period === "30d" || period === "all" ? period : "30d";
+  const selectedPeriod = period;
 
-  const { data, isLoading: isOverviewLoading } = useOverview();
+  const { data, isLoading: isOverviewLoading, isError: isOverviewError } = useOverview();
   const { data: revenueData } = useOverviewRevenue(selectedPeriod);
   const { data: revenueDailyData } = useOverviewRevenueDaily(selectedPeriod);
   const {
@@ -84,6 +85,18 @@ export function OverviewPage() {
   const growthReady = growthState === "ready";
 
   if (isOverviewLoading || !data) {
+    if (isOverviewLoading) {
+      return <OverviewSkeleton />;
+    }
+    if (isOverviewError) {
+      return (
+        <StatusPanel
+          title="Overview failed to load"
+          description="The dashboard summary could not be fetched."
+          tone="error"
+        />
+      );
+    }
     return <OverviewSkeleton />;
   }
 

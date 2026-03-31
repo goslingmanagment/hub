@@ -21,6 +21,14 @@ export function buildPageSectionRoute(pageLabel: string, section: string) {
   return `${buildPageRoute(pageLabel)}/${section}`;
 }
 
+export function buildWorkboardRoute(pageLabel: string) {
+  return buildPageSectionRoute(pageLabel, "workboard");
+}
+
+export function resolveLegacyWorkboardRedirect(pageLabel: string | undefined) {
+  return pageLabel ? buildWorkboardRoute(pageLabel) : "/";
+}
+
 export function buildFanProfileRoute(
   pageLabel: string,
   platform: string,

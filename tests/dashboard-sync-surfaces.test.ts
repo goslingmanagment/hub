@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
+import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/DashboardShellContext.tsx";
 
 const queryMocks = vi.hoisted(() => ({
   useAuthMe: vi.fn(),
@@ -116,11 +117,27 @@ function buildCrmSummary(
   };
 }
 
-function renderWithRouter(element: ReturnType<typeof createElement>, initialEntries = ["/"]) {
+function renderWithRouter(
+  element: ReturnType<typeof createElement>,
+  initialEntries = ["/"],
+  pages = buildOverviewPage().pages,
+) {
+  const shellValue = {
+    pageCatalogState: "ready" as const,
+    pageCatalogError: null,
+    pages,
+    findPageByLabel: (pageLabel: string | undefined) =>
+      pages.find((page) => page.label === pageLabel) ?? null,
+  };
+
   return renderToStaticMarkup(createElement(
     MemoryRouter,
     { initialEntries },
-    element,
+    createElement(
+      DashboardShellProvider,
+      { value: shellValue },
+      element,
+    ),
   ));
 }
 
@@ -208,14 +225,28 @@ describe("dashboard sync product surfaces", () => {
     expect(html).toContain("href=\"/settings?tab=sync\"");
   });
 
-  it("shows page detail exceptions with generic sync copy", () => {
+  it("renders an explicit overview error state instead of an endless loader", () => {
     queryMocks.useOverview.mockReturnValue({
-      data: buildOverviewPage(buildSyncUx({
-        state: "attention",
-        label: "Needs attention",
-        headline: "Sync needs attention",
-        detail: "Worker needs help.",
-      })),
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    });
+
+    const html = renderWithRouter(createElement(OverviewPage));
+
+    expect(html).toContain("Overview failed to load");
+    expect(html).not.toContain("Loading...");
+  });
+
+  it("shows page detail exceptions with generic sync copy", () => {
+    const overview = buildOverviewPage(buildSyncUx({
+      state: "attention",
+      label: "Needs attention",
+      headline: "Sync needs attention",
+      detail: "Worker needs help.",
+    }));
+    queryMocks.useOverview.mockReturnValue({
+      data: overview,
       isLoading: false,
     });
 
@@ -227,6 +258,7 @@ describe("dashboard sync product surfaces", () => {
         }),
       ),
       ["/pages/lana"],
+      overview.pages,
     );
 
     expect(html).toContain("Data updates paused");
@@ -236,13 +268,14 @@ describe("dashboard sync product surfaces", () => {
   });
 
   it("suppresses credentials exceptions on page detail", () => {
+    const overview = buildOverviewPage(buildSyncUx({
+      state: "attention",
+      label: "Reconnect",
+      headline: "Reconnect to resume sync",
+      requiresAction: true,
+    }));
     queryMocks.useOverview.mockReturnValue({
-      data: buildOverviewPage(buildSyncUx({
-        state: "attention",
-        label: "Reconnect",
-        headline: "Reconnect to resume sync",
-        requiresAction: true,
-      })),
+      data: overview,
       isLoading: false,
     });
 
@@ -254,6 +287,7 @@ describe("dashboard sync product surfaces", () => {
         }),
       ),
       ["/pages/lana"],
+      overview.pages,
     );
 
     expect(html).not.toContain("Data updates paused");

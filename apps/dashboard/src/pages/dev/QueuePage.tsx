@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAdminQueueJobs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatRelativeTime } from "@/lib/format";
 
 const STATE_FILTERS = [
@@ -27,13 +28,15 @@ export function QueuePage() {
     limit: 100,
   };
 
-  const { data, isLoading } = useAdminQueueJobs(params);
+  const { data, isLoading, isError } = useAdminQueueJobs(params);
 
   if (isLoading || !data) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <span className="text-text-muted text-sm">Loading...</span>
-      </div>
+    return isLoading ? (
+      <StatusPanel title="Loading queue jobs" description="Fetching recent pg-boss jobs." />
+    ) : isError ? (
+      <StatusPanel title="Queue failed to load" description="The job queue view could not be fetched." tone="error" />
+    ) : (
+      <StatusPanel title="Queue unavailable" description="The job queue did not return data." tone="error" />
     );
   }
 
@@ -76,8 +79,8 @@ export function QueuePage() {
                 </td>
               </tr>
             )}
-            {jobs.map((job: any, idx: number) => {
-              const rowId = job.id ?? `${idx}`;
+            {jobs.map((job, idx) => {
+              const rowId = job.id != null ? String(job.id) : `${idx}`;
               const isExpanded = expandedId === rowId;
 
               return (
@@ -115,31 +118,31 @@ export function QueuePage() {
         </table>
 
         {expandedId != null && (() => {
-          const job = jobs.find((j: any, i: number) => (j.id ?? `${i}`) === expandedId);
+          const job = jobs.find((entry, index) => (entry.id ?? `${index}`) === expandedId);
           if (!job) return null;
           return (
             <div className="border-t border-border px-4 py-3 space-y-2">
-              {job.data && (
+              {job.data != null && (
                 <div>
                   <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1">
                     Data
                   </h4>
-                  <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 mt-2 overflow-x-auto">
-                    {JSON.stringify(job.data, null, 2)}
-                  </pre>
+                      <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 mt-2 overflow-x-auto">
+                        {JSON.stringify(job.data, null, 2)}
+                      </pre>
                 </div>
               )}
-              {job.output && (
+              {job.output != null && (
                 <div>
                   <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1">
                     Output
                   </h4>
-                  <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 mt-2 overflow-x-auto">
-                    {JSON.stringify(job.output, null, 2)}
-                  </pre>
+                      <pre className="text-xs text-text-muted bg-bg rounded-lg p-3 mt-2 overflow-x-auto">
+                        {JSON.stringify(job.output, null, 2)}
+                      </pre>
                 </div>
               )}
-              {!job.data && !job.output && (
+              {job.data == null && job.output == null && (
                 <p className="text-sm text-text-muted">No data or output available.</p>
               )}
             </div>

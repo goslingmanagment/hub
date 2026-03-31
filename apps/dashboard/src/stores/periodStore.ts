@@ -1,23 +1,36 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type PeriodOption = "today" | "7d" | "30d" | "all" | "custom";
+export type PeriodOption = "today" | "7d" | "30d" | "all";
 
 interface PeriodState {
   period: PeriodOption;
-  customFrom?: string;
-  customTo?: string;
   setPeriod: (period: PeriodOption) => void;
-  setCustomRange: (from: string, to: string) => void;
 }
+
+const DEFAULT_PERIOD: PeriodOption = "30d";
+const SUPPORTED_PERIODS = new Set<PeriodOption>(["today", "7d", "30d", "all"]);
 
 export const usePeriodStore = create<PeriodState>()(
   persist(
     (set) => ({
-      period: "30d",
+      period: DEFAULT_PERIOD,
       setPeriod: (period) => set({ period }),
-      setCustomRange: (from, to) => set({ period: "custom", customFrom: from, customTo: to }),
     }),
-    { name: "agencyhub-period" },
+    {
+      name: "agencyhub-period",
+      version: 2,
+      migrate: (persistedState) => {
+        const persistedPeriod = typeof persistedState === "object"
+          && persistedState !== null
+          && "period" in persistedState
+          && typeof persistedState.period === "string"
+          && SUPPORTED_PERIODS.has(persistedState.period as PeriodOption)
+          ? persistedState.period as PeriodOption
+          : DEFAULT_PERIOD;
+
+        return { period: persistedPeriod };
+      },
+    },
   ),
 );

@@ -35,21 +35,18 @@ function buildSubscriberVm(overrides: Partial<SubscriberCardVm> = {}): Subscribe
     ltvLabel: "$160.00",
     touchpointCode: "1d",
     touchpointLabel: "1d",
-    isSoftTouchpoint: false,
     overdueDays: 1,
     overdueSeverity: "normal",
+    overdueLabel: "Overdue 1d",
+    whyNowLabel: "1d subscriber follow-up",
     lastFanMessageLabel: "7h",
-    lastFanMessageDaysAgo: 0,
     lastModelMessageLabel: "3d",
-    lastModelMessageDaysAgo: 3,
     lastTransactionLabel: "40d",
-    lastTransactionDaysAgo: 40,
     expiryLabel: "Mar 31",
     expiryRelativeLabel: "in 1d",
     autoRenew: false,
     tierName: "Master",
     tierShortName: "Master",
-    subscribedMonths: 1,
     canPreview: false,
     ...overrides,
   };
@@ -85,5 +82,12 @@ describe("WorkboardCard", () => {
     expect(html).not.toContain("Copy Fansly profile link");
     expect(html).not.toContain("Copy chat");
     expect(html).not.toContain("Copy profile");
+  });
+
+  it("shows visible ranking cues directly on the card", () => {
+    const html = renderCard(buildSubscriberVm());
+
+    expect(html).toContain("Overdue 1d");
+    expect(html).toContain("1d subscriber follow-up");
   });
 });

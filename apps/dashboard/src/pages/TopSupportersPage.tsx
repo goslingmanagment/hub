@@ -44,8 +44,6 @@ export function TopSupportersPage() {
   const { pageLabel } = useParams();
   const navigate = useNavigate();
   const selectedPeriod = usePeriodStore((s) => s.period);
-  const customFrom = usePeriodStore((s) => s.customFrom);
-  const customTo = usePeriodStore((s) => s.customTo);
   const [searchQuery, setSearchQuery] = useState("");
   const [offset, setOffset] = useState(0);
 
@@ -64,9 +62,7 @@ export function TopSupportersPage() {
     sortBy: "creatorNetAmountMills" as const,
     sortDir: "desc" as const,
     query: searchQuery || undefined,
-    from: spenderPeriod === "custom" ? customFrom : undefined,
-    to: spenderPeriod === "custom" ? customTo : undefined,
-  }), [pageLabel, spenderPeriod, offset, searchQuery, customFrom, customTo]);
+  }), [pageLabel, spenderPeriod, offset, searchQuery]);
 
   const { data: spenders, isLoading } = useSpenders(spenderParams);
 
@@ -78,15 +74,13 @@ export function TopSupportersPage() {
     return {
       scope: "page",
       pageLabel,
-      period: spenderPeriod === "custom" ? "custom" : spenderPeriod,
-      from: spenderPeriod === "custom" ? customFrom : undefined,
-      to: spenderPeriod === "custom" ? customTo : undefined,
+      period: spenderPeriod,
       fans: items.map((item) => ({
         platform,
         platformUserId: item.fan.platformUserId,
       })),
     };
-  }, [platform, pageLabel, items, spenderPeriod, customFrom, customTo]);
+  }, [platform, pageLabel, items, spenderPeriod]);
 
   const { data: batchData } = useSpenderBatch(batchBody);
 

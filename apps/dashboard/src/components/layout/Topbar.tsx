@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "react-router";
 import { LogOut, ChevronDown } from "lucide-react";
-import { useLogout, useOverview } from "@/api/queries";
+import { useLogout } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { clearDashboardSession } from "@/lib/queryClient";
 import { resolveFanLabelFromState } from "@/lib/navigation";
+import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface TopbarProps {
   user: { username: string; role: string };
@@ -13,11 +14,11 @@ interface TopbarProps {
 export function Topbar({ user }: TopbarProps) {
   const location = useLocation();
   const logout = useLogout();
-  const { data: overview } = useOverview();
+  const { pages } = useDashboardShell();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const breadcrumbs = buildBreadcrumbs(location.pathname, overview, location.state);
+  const breadcrumbs = buildBreadcrumbs(location.pathname, pages, location.state);
   const showPeriodSelector = shouldShowPeriodSelector(location.pathname);
 
   useEffect(() => {
@@ -114,7 +115,7 @@ function shouldShowPeriodSelector(pathname: string): boolean {
 
 function buildBreadcrumbs(
   pathname: string,
-  overview?: OverviewResponse | null,
+  pages: Array<{ label: string }>,
   locationState?: unknown,
 ): { label: string; href?: string }[] {
   const parts = pathname.split("/").filter(Boolean);
@@ -145,7 +146,7 @@ function buildBreadcrumbs(
 
   if (parts[0] === "pages" && parts[1]) {
     const pageLabel = parts[1];
-    const page = overview?.pages.find((item) => item.label === pageLabel);
+    const page = pages.find((item) => item.label === pageLabel);
     const pageTitle = page?.label ?? pageLabel;
     const crumbs: { label: string; href?: string }[] = [
       { label: "Overview", href: "/" },
@@ -160,8 +161,8 @@ function buildBreadcrumbs(
       crumbs.push({ label: "Followers" });
     } else if (parts[2] === "top-supporters") {
       crumbs.push({ label: "Top Supporters" });
-    } else if (parts[2] === "crm") {
-      crumbs.push({ label: "CRM" });
+    } else if (parts[2] === "workboard" || parts[2] === "crm") {
+      crumbs.push({ label: "Workboard" });
     } else if (parts[2] === "fans" && parts[3] && parts[4]) {
       const fanLabel = resolveFanLabelFromState(locationState) ?? parts[4];
       crumbs.push({ label: fanLabel });
@@ -172,5 +173,3 @@ function buildBreadcrumbs(
 
   return [{ label: "Overview" }];
 }
-
-type OverviewResponse = NonNullable<ReturnType<typeof useOverview>["data"]>;

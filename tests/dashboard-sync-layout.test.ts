@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
+import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/DashboardShellContext.tsx";
 
 const queryMocks = vi.hoisted(() => ({
   useAdminConnections: vi.fn(),
@@ -24,6 +25,7 @@ const queryMocks = vi.hoisted(() => ({
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
 import { Sidebar } from "../apps/dashboard/src/components/layout/Sidebar.tsx";
+import { Topbar } from "../apps/dashboard/src/components/layout/Topbar.tsx";
 import { SettingsPage } from "../apps/dashboard/src/pages/SettingsPage.tsx";
 
 function buildSyncUx(
@@ -238,10 +240,23 @@ function buildMonitorResponse() {
 }
 
 function renderWithRouter(element: ReturnType<typeof createElement>, initialEntries = ["/"]) {
+  const pages = buildOverview().pages;
+  const shellValue = {
+    pageCatalogState: "ready" as const,
+    pageCatalogError: null,
+    pages,
+    findPageByLabel: (pageLabel: string | undefined) =>
+      pages.find((page) => page.label === pageLabel) ?? null,
+  };
+
   return renderToStaticMarkup(createElement(
     MemoryRouter,
     { initialEntries },
-    element,
+    createElement(
+      DashboardShellProvider,
+      { value: shellValue },
+      element,
+    ),
   ));
 }
 
@@ -333,6 +348,17 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Settings");
   });
 
+  it("labels the page submenu with Workboard and links to the canonical route", () => {
+    const html = renderWithRouter(
+      createElement(Sidebar, { user: { username: "owner", role: "owner" } }),
+      ["/pages/lana"],
+    );
+
+    expect(html).toContain("Workboard");
+    expect(html).toContain("href=\"/pages/lana/workboard\"");
+    expect(html).not.toContain(">CRM<");
+  });
+
   it("does not enable the owner-only connections query for non-owner sidebars", () => {
     renderWithRouter(
       createElement(Sidebar, { user: { username: "lead", role: "team_lead" } }),
@@ -393,5 +419,30 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("Sync needs attention");
     expect(html).toContain("Subscribers stopped making progress and need the worker to recover.");
+  });
+
+  it("shows Workboard in page breadcrumbs for both canonical and legacy routes", () => {
+    const workboardHtml = renderWithRouter(
+      createElement(Topbar, { user: { username: "owner", role: "owner" } }),
+      ["/pages/lana/workboard"],
+    );
+    const legacyHtml = renderWithRouter(
+      createElement(Topbar, { user: { username: "owner", role: "owner" } }),
+      ["/pages/lana/crm"],
+    );
+
+    expect(workboardHtml).toContain(">Workboard<");
+    expect(legacyHtml).toContain(">Workboard<");
+    expect(workboardHtml).not.toContain(">CRM<");
+  });
+
+  it("shows sync-status breadcrumbs under the dev workspace", () => {
+    const html = renderWithRouter(
+      createElement(Topbar, { user: { username: "owner", role: "owner" } }),
+      ["/dev/sync-status?runId=42"],
+    );
+
+    expect(html).toContain(">Dev<");
+    expect(html).toContain(">Sync Status<");
   });
 });

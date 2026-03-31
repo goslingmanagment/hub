@@ -2,9 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
+import { ApiError } from "../apps/dashboard/src/api/client.ts";
+import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/DashboardShellContext.tsx";
+import { resolveLegacyWorkboardRedirect } from "../apps/dashboard/src/lib/navigation.ts";
 
 const queryMocks = vi.hoisted(() => ({
-  useOverview: vi.fn(),
   useWorkboard: vi.fn(),
   useWorkboardSnooze: vi.fn(),
   useWorkboardUnsnooze: vi.fn(),
@@ -14,28 +16,67 @@ vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
 import { WorkboardPage } from "../apps/dashboard/src/pages/WorkboardPage.tsx";
 
-function renderPage() {
+function buildPage(platform: "fansly" | "onlyfans" = "fansly") {
+  return {
+    id: 1,
+    label: "lana",
+    platform,
+    modelSlug: "lana",
+    modelName: "Lana",
+    username: "lana",
+    subscriberCount: 12,
+    followerCount: 34,
+    syncUx: {
+      state: "healthy" as const,
+      label: "Up to date",
+      headline: "Up to date",
+      detail: null,
+      progressLabel: null,
+      nextRetryAt: null,
+      updatedAt: "2026-03-24T11:55:00.000Z",
+      requiresAction: false,
+    },
+  };
+}
+
+function renderPage({
+  initialEntries = ["/pages/lana/workboard"],
+  pages = [buildPage()],
+  pageCatalogState = "ready" as const,
+  pageCatalogError = null as Error | null,
+} = {}) {
+  const shellValue = {
+    pageCatalogState,
+    pageCatalogError,
+    pages,
+    findPageByLabel: (pageLabel: string | undefined) =>
+      pages.find((page) => page.label === pageLabel) ?? null,
+  };
+
   return renderToStaticMarkup(createElement(
     MemoryRouter,
-    { initialEntries: ["/pages/lana/crm"] },
+    { initialEntries },
     createElement(
-      Routes,
-      undefined,
-      createElement(Route, {
-        path: "/pages/:pageLabel/crm",
-        element: createElement(WorkboardPage),
-      }),
-      createElement(Route, {
-        path: "/pages/:pageLabel",
-        element: createElement("div", null, "Page detail"),
-      }),
+      DashboardShellProvider,
+      { value: shellValue },
+      createElement(
+        Routes,
+        undefined,
+        createElement(Route, {
+          path: "/pages/:pageLabel/workboard",
+          element: createElement(WorkboardPage),
+        }),
+        createElement(Route, {
+          path: "/pages/:pageLabel",
+          element: createElement("div", null, "Page detail"),
+        }),
+      ),
     ),
   ));
 }
 
 describe("WorkboardPage", () => {
   beforeEach(() => {
-    queryMocks.useOverview.mockReset();
     queryMocks.useWorkboard.mockReset();
     queryMocks.useWorkboardSnooze.mockReset();
     queryMocks.useWorkboardUnsnooze.mockReset();
@@ -43,77 +84,72 @@ describe("WorkboardPage", () => {
     queryMocks.useWorkboard.mockReturnValue({
       data: undefined,
       isLoading: false,
+      isError: false,
+      error: undefined,
     });
     queryMocks.useWorkboardSnooze.mockReturnValue({
-      mutate: vi.fn(),
-      isPending: false,
+      mutateAsync: vi.fn(),
     });
     queryMocks.useWorkboardUnsnooze.mockReturnValue({
-      mutate: vi.fn(),
-      isPending: false,
+      mutateAsync: vi.fn(),
     });
   });
 
-  it("shows a loading skeleton while overview is still resolving", () => {
-    queryMocks.useOverview.mockReturnValue({
+  it("shows an explicit loading state while the shell page catalog is still resolving", () => {
+    queryMocks.useWorkboard.mockReturnValue({
       data: undefined,
       isLoading: true,
+      isError: false,
+      error: undefined,
     });
 
-    const html = renderPage();
+    const html = renderPage({
+      pages: [],
+      pageCatalogState: "loading",
+    });
 
-    expect(html).toContain("animate-pulse");
+    expect(html).toContain("Loading workboard");
+    expect(html).toContain("Resolving page details and fetching the workboard snapshot.");
     expect(html).not.toContain("Page not found");
   });
 
-  it("shows not found only after overview has loaded without the page", () => {
-    queryMocks.useOverview.mockReturnValue({
-      data: {
-        pages: [{
-          id: 1,
-          label: "other",
-          platform: "fansly",
-        }],
-      },
-      isLoading: false,
+  it("shows not found only after the shell catalog has loaded without the page", () => {
+    const html = renderPage({
+      pages: [{
+        ...buildPage(),
+        label: "other",
+      }],
     });
 
-    const html = renderPage();
-
     expect(html).toContain("Page not found");
-    expect(html).not.toContain("animate-pulse");
+    expect(queryMocks.useWorkboard).toHaveBeenCalledWith("lana", { enabled: false });
   });
 
   it("redirects non-Fansly pages back to the page detail route", () => {
-    queryMocks.useOverview.mockReturnValue({
-      data: {
-        pages: [{
-          id: 1,
-          label: "lana",
-          platform: "onlyfans",
-        }],
-      },
-      isLoading: false,
+    const html = renderPage({
+      pages: [buildPage("onlyfans")],
     });
-
-    const html = renderPage();
 
     expect(html).toBe("");
     expect(html).not.toContain("Page not found");
     expect(queryMocks.useWorkboard).toHaveBeenCalledWith("lana", { enabled: false });
   });
 
-  it("filters deleted fallback rows from counts and renders the tab as empty", () => {
-    queryMocks.useOverview.mockReturnValue({
-      data: {
-        pages: [{
-          id: 1,
-          label: "lana",
-          platform: "fansly",
-        }],
-      },
+  it("shows an explicit not-found state when the API reports no workboard snapshot", () => {
+    queryMocks.useWorkboard.mockReturnValue({
+      data: undefined,
       isLoading: false,
+      isError: true,
+      error: new ApiError(404, { message: "Missing snapshot" }),
     });
+
+    const html = renderPage();
+
+    expect(html).toContain("Workboard unavailable");
+    expect(html).toContain("does not expose a workboard snapshot");
+  });
+
+  it("keeps API totals in the header while surfacing rows hidden client-side", () => {
     queryMocks.useWorkboard.mockReturnValue({
       data: {
         subscribers: {
@@ -175,14 +211,20 @@ describe("WorkboardPage", () => {
         },
       },
       isLoading: false,
+      isError: false,
+      error: undefined,
     });
 
     const html = renderPage();
 
-    expect(html).toContain("0 need attention");
-    expect(html).toContain("All caught up");
+    expect(html).toContain("1 need attention");
+    expect(html).toContain("1 hidden");
+    expect(html).toContain("No visible fans in this tab");
     expect(html).not.toContain("Deleted user");
-    expect(html).not.toContain("1 snoozed");
-    expect(html).not.toContain("Snoozed (");
+  });
+
+  it("uses the canonical workboard route for legacy CRM aliases", () => {
+    expect(resolveLegacyWorkboardRedirect("lana")).toBe("/pages/lana/workboard");
+    expect(resolveLegacyWorkboardRedirect(undefined)).toBe("/");
   });
 });
