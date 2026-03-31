@@ -303,7 +303,7 @@ describe("db write safety", () => {
     `);
     const credentialRows = await testDb.pool.query(`
       select count(*)::int as count, max(key_version)::int as key_version
-      from platform_account_credentials
+      from page_credentials
       where platform_account_id = ${page.id}
     `);
     const proxyRows = await testDb.pool.query(`
@@ -365,7 +365,7 @@ describe("db write safety", () => {
     const counts = await testDb.pool.query(`
       select
         (select count(*)::int from pages) as pages_count,
-        (select count(*)::int from platform_account_credentials) as credentials_count,
+        (select count(*)::int from page_credentials) as credentials_count,
         (select count(*)::int from egress_endpoints) as proxies_count
     `);
 
@@ -422,7 +422,7 @@ describe("db write safety", () => {
     const counts = await testDb.pool.query(`
       select
         (select count(*)::int from pages) as pages_count,
-        (select count(*)::int from platform_account_credentials) as credentials_count
+        (select count(*)::int from page_credentials) as credentials_count
     `);
 
     expect(counts.rows[0]).toMatchObject({
@@ -1015,7 +1015,7 @@ describe("db write safety", () => {
 
     const credentialRows = await testDb.pool.query(`
       select count(*)::int as count
-      from platform_account_credentials
+      from page_credentials
       where platform_account_id = ${page.id}
     `);
     expect(credentialRows.rows[0]?.count).toBe(0);
@@ -1088,7 +1088,7 @@ describe("db write safety", () => {
 
     const credentialRows = await testDb.pool.query(`
       select count(*)::int as count
-      from platform_account_credentials
+      from page_credentials
       where platform_account_id = ${page.id}
     `);
     expect(credentialRows.rows[0]?.count).toBe(0);
@@ -1139,7 +1139,7 @@ describe("db write safety", () => {
     const counts = await testDb.pool.query(`
       select
         (select count(*)::int from pages) as pages_count,
-        (select count(*)::int from platform_account_credentials) as credentials_count
+        (select count(*)::int from page_credentials) as credentials_count
     `);
 
     expect(counts.rows[0]).toMatchObject({
@@ -1239,7 +1239,7 @@ describe("db write safety", () => {
 
     const credentialRows = await testDb.pool.query(`
       select count(*)::int as count, max(key_version)::int as key_version
-      from platform_account_credentials
+      from page_credentials
       where platform_account_id = ${page.id}
     `);
     expect(credentialRows.rows[0]?.count).toBe(1);
@@ -1284,7 +1284,7 @@ describe("db write safety", () => {
       select count(*)::int as count, max(cursor_text) as cursor_text
       from sync_cursors
       where platform_account_id = ${page.id}
-        and stream = 'transactions'
+        and task = 'transactions'
     `);
     expect(checkpointRows.rows[0]?.count).toBe(1);
     expect(checkpointRows.rows[0]?.cursor_text).toBe("cursor-b");

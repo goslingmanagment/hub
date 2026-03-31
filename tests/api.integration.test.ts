@@ -4355,7 +4355,7 @@ describe("api integration", () => {
       `, [fixture.lanaPage.id]),
       testDb.pool.query<{ count: number }>(`
         select count(*)::int as count
-        from platform_account_credentials
+        from page_credentials
         where platform_account_id = $1
       `, [fixture.lanaPage.id]),
       testDb.pool.query<{ count: number }>(`

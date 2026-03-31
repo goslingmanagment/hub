@@ -730,6 +730,27 @@ async function upsertControlCheckpointRows(
     now: Date;
   },
 ) {
+  const toControlCheckpointRow = (
+    row: {
+      cursorText: string | null;
+      cursorTimestamp: TimestampValue;
+      state: Record<string, unknown>;
+      lastSuccessfulRunId: NumericValue;
+      lastSuccessfulAt: TimestampValue;
+      updatedAt: TimestampValue;
+    },
+  ) => ({
+    id: 0,
+    platformAccountId: input.platformAccountId,
+    stream: input.stream,
+    cursorText: row.cursorText ?? null,
+    cursorTimestamp: parseTimestamp(row.cursorTimestamp, "cursorTimestamp"),
+    state: row.state ?? {},
+    lastSuccessfulRunId: normalizeNullableNumber(row.lastSuccessfulRunId, "lastSuccessfulRunId"),
+    lastSuccessfulAt: parseTimestamp(row.lastSuccessfulAt, "lastSuccessfulAt"),
+    updatedAt: requireTimestamp(row.updatedAt, "updatedAt"),
+  });
+
   const executionContext = getSyncTaskExecutionContext();
   const hasLeaseContext = executionContext &&
     executionContext.platformAccountId === input.platformAccountId &&
@@ -752,42 +773,6 @@ async function upsertControlCheckpointRows(
           and task = ${input.stream}
           and lease_token = ${executionContext.leaseToken}
           and running_generation = ${executionContext.generation}
-      ),
-      legacy_upsert as (
-        insert into ${syncCheckpoints} (
-          platform_account_id,
-          stream,
-          cursor_text,
-          cursor_timestamp,
-          state,
-          last_successful_run_id,
-          last_successful_at,
-          updated_at
-        )
-        select ${input.platformAccountId},
-               ${input.stream},
-               ${input.cursorText ?? null},
-               ${input.cursorTimestamp ?? null},
-               ${input.state ?? {}},
-               ${input.touchSuccessMetadata ? (input.lastSuccessfulRunId ?? null) : null},
-               ${input.touchSuccessMetadata ? input.now : null},
-               ${input.now}
-        from owned_task
-        on conflict (platform_account_id, stream) do update
-        set cursor_text = excluded.cursor_text,
-            cursor_timestamp = excluded.cursor_timestamp,
-            state = excluded.state,
-            last_successful_run_id = case
-              when ${input.touchSuccessMetadata}
-                then excluded.last_successful_run_id
-              else ${syncCheckpoints.lastSuccessfulRunId}
-            end,
-            last_successful_at = case
-              when ${input.touchSuccessMetadata}
-                then excluded.last_successful_at
-              else ${syncCheckpoints.lastSuccessfulAt}
-            end,
-            updated_at = excluded.updated_at
       ),
       cursor_upsert as (
         insert into ${syncCursors} (
@@ -849,49 +834,10 @@ async function upsertControlCheckpointRows(
     }
 
     const row = result.rows[0];
-    return row ? {
-      id: 0,
-      platformAccountId: input.platformAccountId,
-      stream: input.stream,
-      cursorText: row.cursorText ?? null,
-      cursorTimestamp: parseTimestamp(row.cursorTimestamp, "cursorTimestamp"),
-      state: row.state ?? {},
-      lastSuccessfulRunId: normalizeNullableNumber(row.lastSuccessfulRunId, "lastSuccessfulRunId"),
-      lastSuccessfulAt: parseTimestamp(row.lastSuccessfulAt, "lastSuccessfulAt"),
-      updatedAt: requireTimestamp(row.updatedAt!, "updatedAt"),
-    } : null;
+    return row ? toControlCheckpointRow(row) : null;
   }
 
   const [checkpoint] = await db
-    .insert(syncCheckpoints)
-    .values({
-      platformAccountId: input.platformAccountId,
-      task: input.stream,
-      cursorText: input.cursorText ?? null,
-      cursorTimestamp: input.cursorTimestamp ?? null,
-      state: input.state ?? {},
-      lastSuccessfulRunId: input.touchSuccessMetadata ? (input.lastSuccessfulRunId ?? null) : null,
-      lastSuccessfulAt: input.touchSuccessMetadata ? input.now : null,
-      updatedAt: input.now,
-    })
-    .onConflictDoUpdate({
-      target: [syncCheckpoints.platformAccountId, syncCheckpoints.stream],
-      set: {
-        cursorText: input.cursorText ?? null,
-        cursorTimestamp: input.cursorTimestamp ?? null,
-        state: input.state ?? {},
-        lastSuccessfulRunId: input.touchSuccessMetadata
-          ? (input.lastSuccessfulRunId ?? null)
-          : sql`${syncCheckpoints.lastSuccessfulRunId}`,
-        lastSuccessfulAt: input.touchSuccessMetadata
-          ? input.now
-          : sql`${syncCheckpoints.lastSuccessfulAt}`,
-        updatedAt: input.now,
-      },
-    })
-    .returning();
-
-  await db
     .insert(syncCursors)
     .values({
       platformAccountId: input.platformAccountId,
@@ -899,9 +845,9 @@ async function upsertControlCheckpointRows(
       cursorText: input.cursorText ?? null,
       cursorTimestamp: input.cursorTimestamp ?? null,
       state: input.state ?? {},
-      updatedAt: input.now,
       lastSuccessfulRunId: input.touchSuccessMetadata ? (input.lastSuccessfulRunId ?? null) : null,
       lastSuccessfulAt: input.touchSuccessMetadata ? input.now : null,
+      updatedAt: input.now,
     })
     .onConflictDoUpdate({
       target: [syncCursors.platformAccountId, syncCursors.task],
@@ -909,17 +855,18 @@ async function upsertControlCheckpointRows(
         cursorText: input.cursorText ?? null,
         cursorTimestamp: input.cursorTimestamp ?? null,
         state: input.state ?? {},
-        updatedAt: input.now,
         lastSuccessfulRunId: input.touchSuccessMetadata
           ? (input.lastSuccessfulRunId ?? null)
           : sql`${syncCursors.lastSuccessfulRunId}`,
         lastSuccessfulAt: input.touchSuccessMetadata
           ? input.now
           : sql`${syncCursors.lastSuccessfulAt}`,
+        updatedAt: input.now,
       },
-    });
+    })
+    .returning();
 
-  return checkpoint;
+  return checkpoint ? toControlCheckpointRow(checkpoint) : null;
 }
 
 export async function upsertCheckpoint(
