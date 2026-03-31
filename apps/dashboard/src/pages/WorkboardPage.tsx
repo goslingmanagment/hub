@@ -20,6 +20,10 @@ const TAB_LABELS: Record<Tab, string> = {
 
 const TABS: Tab[] = ["subscribers", "activeSpenders", "inactiveSpenders"];
 
+function isPresent<T>(value: T | null | undefined): value is T {
+  return value != null;
+}
+
 export function WorkboardPage() {
   const { pageLabel } = useParams();
   const { data: overview, isLoading: overviewLoading } = useOverview();
@@ -36,29 +40,35 @@ export function WorkboardPage() {
   const [expandedFanId, setExpandedFanId] = useState<number | null>(null);
 
   const subscriberVms = useMemo(
-    () => data?.subscribers.items.map((item) => mapSubscriberVm(resolvedPageLabel, item)) ?? [],
+    () => data?.subscribers.items
+      .map((item) => mapSubscriberVm(resolvedPageLabel, item))
+      .filter(isPresent) ?? [],
     [data?.subscribers.items, resolvedPageLabel],
   );
 
   const activeSpenderVms = useMemo(
-    () => data?.activeSpenders.items.map((item) => mapSpenderVm(resolvedPageLabel, item)) ?? [],
+    () => data?.activeSpenders.items
+      .map((item) => mapSpenderVm(resolvedPageLabel, item))
+      .filter(isPresent) ?? [],
     [data?.activeSpenders.items, resolvedPageLabel],
   );
 
   const inactiveSpenderVms = useMemo(
-    () => data?.inactiveSpenders.items.map((item) => mapSpenderVm(resolvedPageLabel, item)) ?? [],
+    () => data?.inactiveSpenders.items
+      .map((item) => mapSpenderVm(resolvedPageLabel, item))
+      .filter(isPresent) ?? [],
     [data?.inactiveSpenders.items, resolvedPageLabel],
   );
 
   const snoozedVms = useMemo(
-    () => data?.snoozed.items.map(mapSnoozedVm) ?? [],
+    () => data?.snoozed.items.map(mapSnoozedVm).filter(isPresent) ?? [],
     [data?.snoozed.items],
   );
 
   const tabCounts: Record<Tab, number> = {
-    subscribers: data?.subscribers.total ?? 0,
-    activeSpenders: data?.activeSpenders.total ?? 0,
-    inactiveSpenders: data?.inactiveSpenders.total ?? 0,
+    subscribers: subscriberVms.length,
+    activeSpenders: activeSpenderVms.length,
+    inactiveSpenders: inactiveSpenderVms.length,
   };
 
   const totalOverdue = tabCounts.subscribers + tabCounts.activeSpenders + tabCounts.inactiveSpenders;
@@ -100,8 +110,8 @@ export function WorkboardPage() {
         {data && (
           <div className="mt-1 text-sm text-text-muted">
             {totalOverdue} need attention
-            {(data.snoozed.total ?? 0) > 0 && (
-              <span> &middot; {data.snoozed.total} snoozed</span>
+            {snoozedVms.length > 0 && (
+              <span> &middot; {snoozedVms.length} snoozed</span>
             )}
           </div>
         )}

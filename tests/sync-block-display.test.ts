@@ -56,4 +56,34 @@ describe("sync block display", () => {
       substreams: [],
     } as never)).toBe("Updated 2h ago · 4 conversations");
   });
+
+  it("renders stalled blocks with the point they got stuck at", () => {
+    expect(formatBlockSummary({
+      block: "subscribers",
+      state: "error",
+      lastSuccessAt: "2026-03-18T10:00:00.000Z",
+      progress: {
+        label: "1 of 697 subscribers processed",
+        current: 1,
+        total: 697,
+        unit: "subscribers",
+        percent: 0.14347202295552366,
+        details: {},
+      },
+      error: {
+        stream: "subscribers",
+        code: "stalled",
+        summary: "Sync stopped making progress",
+        lastFailedAt: null,
+        consecutiveFailures: 0,
+      },
+      needsAttention: true,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: { subscriberCount: 1 },
+      connectionStatus: null,
+      substreams: [],
+    } as never)).toBe("Sync stalled at 1/697 subscribers");
+  });
 });

@@ -529,7 +529,15 @@ async function seedWorkboardApiFixture(input: {
   testDb: StartedTestDatabase;
   pageId: number;
 }) {
-  const [visibleSubscriber, snoozedSubscriber, activeSpender, inactiveSpender] = await upsertFans(input.testDb.db, [
+  const [
+    visibleSubscriber,
+    snoozedSubscriber,
+    activeSpender,
+    inactiveSpender,
+    deletedSubscriber,
+    deletedActiveSpender,
+    deletedInactiveSpender,
+  ] = await upsertFans(input.testDb.db, [
     {
       platform: "fansly",
       platformUserId: "wb-api-subscriber-visible",
@@ -553,6 +561,18 @@ async function seedWorkboardApiFixture(input: {
       platformUserId: "wb-api-inactive-spender",
       username: "wb_api_inactive_spender",
       displayName: "WB API Inactive Spender",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-api-subscriber-deleted",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-api-active-spender-deleted",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-api-inactive-spender-deleted",
     },
   ]);
 
@@ -580,6 +600,37 @@ async function seedWorkboardApiFixture(input: {
     });
   }
 
+  await upsertFanPage(input.testDb.db, {
+    fanId: deletedSubscriber.id,
+    platformAccountId: input.pageId,
+    isSubscriber: true,
+    subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
+    subscriptionExpiresAt: new Date("2026-03-31T12:00:00.000Z"),
+    autoRenew: false,
+  });
+  await upsertPageSubscription(input.testDb.db, {
+    platformSubscriptionId: "wb-api-sub-deleted",
+    platformAccountId: input.pageId,
+    fanId: deletedSubscriber.id,
+    rawStatus: 3,
+    canonicalStatus: "active",
+    priceMills: 5000n,
+    renewPriceMills: 5000n,
+    autoRenew: false,
+    sourceCreatedAt: new Date("2026-03-01T12:00:00.000Z"),
+    endsAt: new Date("2026-03-31T12:00:00.000Z"),
+    subscriptionTierName: "VIP",
+  });
+
+  await upsertFanPage(input.testDb.db, {
+    fanId: deletedActiveSpender.id,
+    platformAccountId: input.pageId,
+  });
+  await upsertFanPage(input.testDb.db, {
+    fanId: deletedInactiveSpender.id,
+    platformAccountId: input.pageId,
+  });
+
   await upsertTransaction(input.testDb.db, {
     platformAccountId: input.pageId,
     fanId: activeSpender.id,
@@ -606,6 +657,32 @@ async function seedWorkboardApiFixture(input: {
     creatorNetAmountMills: 140000n,
     occurredAt: new Date("2026-02-10T12:00:00.000Z"),
   });
+  await upsertTransaction(input.testDb.db, {
+    platformAccountId: input.pageId,
+    fanId: deletedActiveSpender.id,
+    transactionId: "wb-api-active-tip-deleted",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 135000n,
+    sourceDestinationAmountMills: 135000n,
+    creatorNetAmountMills: 135000n,
+    occurredAt: new Date("2026-03-23T12:00:00.000Z"),
+  });
+  await upsertTransaction(input.testDb.db, {
+    platformAccountId: input.pageId,
+    fanId: deletedInactiveSpender.id,
+    transactionId: "wb-api-inactive-tip-deleted",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 145000n,
+    sourceDestinationAmountMills: 145000n,
+    creatorNetAmountMills: 145000n,
+    occurredAt: new Date("2026-02-05T12:00:00.000Z"),
+  });
 
   await recalculateFanPageSpend(input.testDb.db, input.pageId);
 
@@ -614,6 +691,9 @@ async function seedWorkboardApiFixture(input: {
     snoozedSubscriber,
     activeSpender,
     inactiveSpender,
+    deletedSubscriber,
+    deletedActiveSpender,
+    deletedInactiveSpender,
   };
 }
 
@@ -6562,6 +6642,15 @@ describe("api integration", () => {
       inactiveSpenders: { total: 1 },
       snoozed: { total: 0 },
     });
+    expect(beforeSnooze.json().subscribers.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
+      seeded.deletedSubscriber.id,
+    );
+    expect(beforeSnooze.json().activeSpenders.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
+      seeded.deletedActiveSpender.id,
+    );
+    expect(beforeSnooze.json().inactiveSpenders.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
+      seeded.deletedInactiveSpender.id,
+    );
     const beforeSnoozeSubscriber = beforeSnooze.json().subscribers.items.find(
       (item: { fanId: number }) => item.fanId === seeded.visibleSubscriber.id,
     );
@@ -6581,6 +6670,17 @@ describe("api integration", () => {
       fanId: seeded.snoozedSubscriber.id,
       snoozedUntil: expect.any(String),
     });
+
+    const deletedSnooze = await server.inject({
+      method: "POST",
+      url: "/api/v1/pages/lana-workboard/workboard/snooze",
+      headers: { cookie },
+      payload: {
+        fanId: seeded.deletedSubscriber.id,
+        days: 30,
+      },
+    });
+    expect(deletedSnooze.statusCode).toBe(200);
 
     const afterSnooze = await server.inject({
       method: "GET",
@@ -6606,6 +6706,9 @@ describe("api integration", () => {
         items: [expect.objectContaining({ fanId: seeded.snoozedSubscriber.id })],
       },
     });
+    expect(afterSnooze.json().snoozed.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
+      seeded.deletedSubscriber.id,
+    );
 
     const unsnooze = await server.inject({
       method: "DELETE",

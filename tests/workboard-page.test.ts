@@ -102,4 +102,87 @@ describe("WorkboardPage", () => {
     expect(html).not.toContain("Page not found");
     expect(queryMocks.useWorkboard).toHaveBeenCalledWith("lana", { enabled: false });
   });
+
+  it("filters deleted fallback rows from counts and renders the tab as empty", () => {
+    queryMocks.useOverview.mockReturnValue({
+      data: {
+        pages: [{
+          id: 1,
+          label: "lana",
+          platform: "fansly",
+        }],
+      },
+      isLoading: false,
+    });
+    queryMocks.useWorkboard.mockReturnValue({
+      data: {
+        subscribers: {
+          total: 1,
+          items: [{
+            fanId: 101,
+            fan: {
+              platformUserId: "deleted-user-12345678",
+              pageAlias: null,
+              username: null,
+              displayName: null,
+            },
+            ltv: { creatorNetAmountMills: 3117560 },
+            touchpoint: {
+              code: "7d",
+              label: "7d",
+              isSoft: false,
+              dueAt: "2026-03-30T12:00:00.000Z",
+            },
+            overdueDays: 1,
+            conversation: {
+              platformConversationId: null,
+              lastFanMessageAt: null,
+              lastModelMessageAt: null,
+              lastMessagePreview: null,
+              storedMessageCount: 0,
+              messageBackfillComplete: false,
+            },
+            subscription: {
+              expiresAt: "2026-04-05T12:00:00.000Z",
+              autoRenew: false,
+              tierName: "VIP",
+              subscriberSince: "2026-03-01T12:00:00.000Z",
+            },
+            lastTransactionAt: null,
+          }],
+        },
+        activeSpenders: {
+          total: 0,
+          items: [],
+        },
+        inactiveSpenders: {
+          total: 0,
+          items: [],
+        },
+        snoozed: {
+          total: 1,
+          items: [{
+            fanId: 101,
+            fan: {
+              platformUserId: "deleted-user-12345678",
+              pageAlias: null,
+              username: null,
+              displayName: null,
+            },
+            ltv: { creatorNetAmountMills: 3117560 },
+            snoozedUntil: "2026-04-06T12:00:00.000Z",
+          }],
+        },
+      },
+      isLoading: false,
+    });
+
+    const html = renderPage();
+
+    expect(html).toContain("0 need attention");
+    expect(html).toContain("All caught up");
+    expect(html).not.toContain("Deleted user");
+    expect(html).not.toContain("1 snoozed");
+    expect(html).not.toContain("Snoozed (");
+  });
 });

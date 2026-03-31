@@ -140,6 +140,9 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
       return `Connected${checked ? ` \u00b7 ${checked}` : ""}`;
     }
     if (block.connectionStatus === "error" || block.state === "error") {
+      if (block.error?.code === "stalled") {
+        return "Connection check stalled";
+      }
       const reason = block.error?.summary ?? "connection error";
       return `Connection failed: ${reason}`;
     }
@@ -164,6 +167,15 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
   }
 
   if (block.state === "error") {
+    if (block.error?.code === "stalled") {
+      if (block.progress?.total != null && block.progress.total > 0) {
+        return `Sync stalled at ${block.progress.current.toLocaleString()}/${block.progress.total.toLocaleString()} ${block.progress.unit}`;
+      }
+      if (block.progress?.label) {
+        return `Sync stalled at ${block.progress.label}`;
+      }
+      return "Sync stalled";
+    }
     const reason = block.error?.summary ?? "sync error";
     const failures = block.error?.consecutiveFailures ?? 0;
     return failures > 1 ? `${reason} (${failures} failures)` : reason;

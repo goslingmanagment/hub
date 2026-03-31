@@ -509,6 +509,58 @@ describe("sync blocks service", () => {
     expect(retryingPage?.blocks.top_spenders.state).toBe("retrying");
   });
 
+  it("surfaces stalled running streams as recoverable errors", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 7,
+      label: "lana",
+      platform: "fansly",
+      modelSlug: "lana",
+      modelName: "Lana",
+      username: "lana_page",
+      displayName: "Lana",
+    }]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({
+        stream: "subscribers",
+        runningRunId: 42,
+        runningTrigger: "scheduled",
+        runningStartedAt: new Date("2026-03-24T11:55:00.000Z"),
+        runningLastActivityAt: new Date("2026-03-24T11:58:00.000Z"),
+        checkpointState: {
+          pageCount: 1,
+          providerReportedTotal: 697,
+        },
+      }),
+      buildMonitorRow({ stream: "followers" }),
+      buildMonitorRow({ stream: "dm_conversations" }),
+      buildMonitorRow({ stream: "dm_messages" }),
+    ]);
+    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
+
+    const overview = await getSyncBlocksOverview({
+      db: {},
+    } as never, { now });
+
+    expect(overview.pages[0]?.blocks.subscribers).toMatchObject({
+      state: "error",
+      needsAttention: true,
+      progress: {
+        current: 1,
+        total: 697,
+        unit: "subscribers",
+      },
+      error: {
+        code: "stalled",
+        summary: "Sync stopped making progress",
+      },
+    });
+  });
+
   it("triggers the mapped block stream immediately without reviving auth_failed rows", async () => {
     dbMocks.findPageByLabel.mockResolvedValue({
       page: {

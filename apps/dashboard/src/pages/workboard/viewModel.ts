@@ -5,6 +5,7 @@ import { formatMills, formatRelativeTime, formatDate, daysRemaining } from "@/li
 type SubscriberItem = WorkboardResponse["subscribers"]["items"][number];
 type SpenderItem = WorkboardResponse["activeSpenders"]["items"][number];
 type SnoozedItem = WorkboardResponse["snoozed"]["items"][number];
+type WorkboardFan = SubscriberItem["fan"] | SpenderItem["fan"] | SnoozedItem["fan"];
 
 export type OverdueSeverity = "normal" | "yellow" | "red";
 
@@ -19,6 +20,17 @@ export const OVERDUE_BG: Record<OverdueSeverity, string> = {
   yellow: "bg-yellow-500/5",
   red: "bg-red-500/5",
 };
+
+function resolveVisibleWorkboardFan(fan: WorkboardFan) {
+  const resolved = resolveFanLabelForScope({
+    platformUserId: fan.platformUserId,
+    pageAlias: fan.pageAlias,
+    username: fan.username,
+    displayName: fan.displayName,
+  }, "page");
+
+  return resolved.isDeletedFallback ? null : resolved;
+}
 
 export interface WorkboardSubscriberVm {
   kind: "subscriber";
@@ -45,13 +57,11 @@ export interface WorkboardSubscriberVm {
   canPreview: boolean;
 }
 
-export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): WorkboardSubscriberVm {
-  const fan = resolveFanLabelForScope({
-    platformUserId: item.fan.platformUserId,
-    pageAlias: item.fan.pageAlias,
-    username: item.fan.username,
-    displayName: item.fan.displayName,
-  }, "page");
+export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): WorkboardSubscriberVm | null {
+  const fan = resolveVisibleWorkboardFan(item.fan);
+  if (!fan) {
+    return null;
+  }
 
   return {
     kind: "subscriber" as const,
@@ -110,13 +120,11 @@ export interface WorkboardSpenderVm {
 
 export type WorkboardCardVm = WorkboardSubscriberVm | WorkboardSpenderVm;
 
-export function mapSpenderVm(pageLabel: string, item: SpenderItem): WorkboardSpenderVm {
-  const fan = resolveFanLabelForScope({
-    platformUserId: item.fan.platformUserId,
-    pageAlias: item.fan.pageAlias,
-    username: item.fan.username,
-    displayName: item.fan.displayName,
-  }, "page");
+export function mapSpenderVm(pageLabel: string, item: SpenderItem): WorkboardSpenderVm | null {
+  const fan = resolveVisibleWorkboardFan(item.fan);
+  if (!fan) {
+    return null;
+  }
 
   return {
     kind: "spender" as const,
@@ -153,13 +161,11 @@ export interface WorkboardSnoozedVm {
   snoozedUntilLabel: string;
 }
 
-export function mapSnoozedVm(item: SnoozedItem): WorkboardSnoozedVm {
-  const fan = resolveFanLabelForScope({
-    platformUserId: item.fan.platformUserId,
-    pageAlias: item.fan.pageAlias,
-    username: item.fan.username,
-    displayName: item.fan.displayName,
-  }, "page");
+export function mapSnoozedVm(item: SnoozedItem): WorkboardSnoozedVm | null {
+  const fan = resolveVisibleWorkboardFan(item.fan);
+  if (!fan) {
+    return null;
+  }
 
   return {
     fanId: item.fanId,

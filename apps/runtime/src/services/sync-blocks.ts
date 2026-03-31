@@ -159,6 +159,8 @@ const BLOCK_STATE_PRIORITY: Record<SyncBlockState, number> = {
   auth_failed: 8,
 };
 
+const STALLED_RUN_THRESHOLD_MS = 45_000;
+
 function asRecord(value: unknown) {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -215,6 +217,14 @@ function isBlockSupported(platform: Platform, block: SyncBlockKey) {
   return block === "connection" || block === "transactions";
 }
 
+function isStalled(row: SyncMonitorStreamRow, now: Date) {
+  if (row.runningRunId === null || row.runningLastActivityAt === null) {
+    return false;
+  }
+
+  return now.getTime() - row.runningLastActivityAt.getTime() > STALLED_RUN_THRESHOLD_MS;
+}
+
 function deriveRowBlockState(
   row: SyncMonitorStreamRow,
   now: Date,
@@ -226,7 +236,7 @@ function deriveRowBlockState(
     return "paused";
   }
   if (row.runningRunId !== null) {
-    return "syncing";
+    return isStalled(row, now) ? "error" : "syncing";
   }
   if (row.backoffUntil && row.backoffUntil.getTime() > now.getTime() && row.consecutiveFailures > 0) {
     return "retrying";
@@ -246,11 +256,21 @@ function deriveRowBlockState(
   return "waiting";
 }
 
-function needsAttention(row: SyncMonitorStreamRow) {
-  return row.consecutiveFailures >= 3;
+function needsAttention(row: SyncMonitorStreamRow, now: Date) {
+  return row.consecutiveFailures >= 3 || isStalled(row, now);
 }
 
-function errorForRow(row: SyncMonitorStreamRow): SyncBlockError | null {
+function errorForRow(row: SyncMonitorStreamRow, now: Date): SyncBlockError | null {
+  if (isStalled(row, now)) {
+    return {
+      stream: row.stream,
+      code: "stalled",
+      summary: "Sync stopped making progress",
+      lastFailedAt: null,
+      consecutiveFailures: row.consecutiveFailures,
+    };
+  }
+
   if (!row.lastErrorCode && !row.lastErrorSummary && !row.lastFailedAt) {
     return null;
   }
@@ -348,15 +368,20 @@ function combinedState(states: Exclude<SyncBlockState, "not_available">[]) {
   });
 }
 
-function pickBlockError(rows: SyncMonitorStreamRow[]): SyncBlockError | null {
+function pickBlockError(rows: SyncMonitorStreamRow[], now: Date): SyncBlockError | null {
   const candidates = rows
-    .filter((row) => errorForRow(row) !== null)
+    .filter((row) => errorForRow(row, now) !== null)
     .sort((a, b) => {
+      const leftSynthetic = isStalled(a, now);
+      const rightSynthetic = isStalled(b, now);
+      if (leftSynthetic !== rightSynthetic) {
+        return rightSynthetic ? 1 : -1;
+      }
       const left = a.lastFailedAt?.getTime() ?? 0;
       const right = b.lastFailedAt?.getTime() ?? 0;
       return right - left;
     });
-  return candidates[0] ? errorForRow(candidates[0]) : null;
+  return candidates[0] ? errorForRow(candidates[0], now) : null;
 }
 
 function buildUnsupportedBlock(block: SyncBlockKey): SyncBlockStatus {
@@ -392,8 +417,8 @@ function buildSingleStreamBlock(
         : block === "followers"
           ? progressForPageCountCheckpoint(row, "followers")
           : null,
-    error: errorForRow(row),
-    needsAttention: needsAttention(row),
+    error: errorForRow(row, now),
+    needsAttention: needsAttention(row, now),
     nextDueAt: iso(row.nextDueAt),
     nextRetryAt: row.backoffUntil && row.backoffUntil.getTime() > now.getTime()
       ? row.backoffUntil.toISOString()
@@ -425,8 +450,8 @@ function buildSingleStreamBlock(
         ? row.backoffUntil.toISOString()
         : null,
       cadenceSeconds: row.cadenceSeconds ?? SYNC_STREAM_CONFIG[row.stream].cadenceSeconds,
-      needsAttention: needsAttention(row),
-      error: errorForRow(row),
+      needsAttention: needsAttention(row, now),
+      error: errorForRow(row, now),
     }],
   };
 }
@@ -439,7 +464,9 @@ function buildConnectionBlock(
   const simpleStatus = connectionStatus ? connectionStatusFor(connectionStatus) : "not_connected";
   const state = row
     ? (row.runningRunId !== null
-      ? "syncing"
+      ? isStalled(row, now)
+        ? "error"
+        : "syncing"
       : row.targetStatus === "auth_failed"
         ? "auth_failed"
         : simpleStatus === "error"
@@ -454,8 +481,8 @@ function buildConnectionBlock(
     state,
     lastSuccessAt: iso(row?.lastSucceededAt),
     progress: null,
-    error: row ? errorForRow(row) : null,
-    needsAttention: row ? needsAttention(row) : false,
+    error: row ? errorForRow(row, now) : null,
+    needsAttention: row ? needsAttention(row, now) : false,
     nextDueAt: iso(row?.nextDueAt),
     nextRetryAt: row?.backoffUntil && row.backoffUntil.getTime() > now.getTime()
       ? row.backoffUntil.toISOString()
@@ -476,8 +503,8 @@ function buildConnectionBlock(
           ? row.backoffUntil.toISOString()
           : null,
         cadenceSeconds: row.cadenceSeconds ?? SYNC_STREAM_CONFIG.light.cadenceSeconds,
-        needsAttention: needsAttention(row),
-        error: errorForRow(row),
+        needsAttention: needsAttention(row, now),
+        error: errorForRow(row, now),
       }]
       : [],
   };
@@ -492,14 +519,14 @@ function buildMessagesBlock(
     rowByStream.get("dm_messages"),
   ].filter((row): row is SyncMonitorStreamRow => Boolean(row));
   const states = rows.map((row) => deriveRowBlockState(row, now));
-  const needsAttentionValue = rows.some((row) => needsAttention(row));
+  const needsAttentionValue = rows.some((row) => needsAttention(row, now));
 
   return {
     block: "messages",
     state: combinedState(states),
     lastSuccessAt: earliestIso(rows.map((row) => row.lastSucceededAt)),
     progress: progressForMessages(rowByStream),
-    error: pickBlockError(rows),
+    error: pickBlockError(rows, now),
     needsAttention: needsAttentionValue,
     nextDueAt: earliestIso(rows.map((row) => row.nextDueAt)),
     nextRetryAt: earliestIso(
@@ -536,8 +563,8 @@ function buildMessagesBlock(
         ? row.backoffUntil.toISOString()
         : null,
       cadenceSeconds: row.cadenceSeconds ?? SYNC_STREAM_CONFIG[row.stream].cadenceSeconds,
-      needsAttention: needsAttention(row),
-      error: errorForRow(row),
+      needsAttention: needsAttention(row, now),
+      error: errorForRow(row, now),
     })),
   };
 }

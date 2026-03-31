@@ -110,6 +110,20 @@ function dmMessageSyncEligibleSql(alias: string) {
   return sql`coalesce(${sql.raw(alias)}.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') = ''`;
 }
 
+function hasVisibleFanIdentitySql(input: {
+  pageAlias: SQL;
+  username: SQL;
+  displayName: SQL;
+}) {
+  return sql`
+    coalesce(
+      nullif(btrim(${input.pageAlias}), ''),
+      nullif(btrim(${input.username}), ''),
+      nullif(btrim(${input.displayName}), '')
+    ) is not null
+  `;
+}
+
 export type DmSenderRole = "fan" | "model" | "system" | "unknown";
 
 export interface UpsertPageDmConversationInput {
@@ -1235,7 +1249,11 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
     ? sql`and no_dm_history = true`
     : sql``;
   const hideDeletedFilter = input.hideDeleted
-    ? sql`and not (page_alias is null and username is null and display_name is null)`
+    ? sql`and ${hasVisibleFanIdentitySql({
+      pageAlias: sql.raw("page_alias"),
+      username: sql.raw("username"),
+      displayName: sql.raw("display_name"),
+    })}`
     : sql``;
   const subscriberStateFilter = input.subscriberState === "current"
     ? sql`and is_subscriber = true`
@@ -1749,6 +1767,11 @@ export async function listWorkboardSubscribers(
              )::int as overdue_days
       from filtered
       where is_handled = false
+        and ${hasVisibleFanIdentitySql({
+          pageAlias: sql.raw("filtered.page_alias"),
+          username: sql.raw("filtered.username"),
+          displayName: sql.raw("filtered.display_name"),
+        })}
         ${workboardSnoozeExclusionSql(input.platformAccountId, sql.raw("filtered.fan_id"))}
     )
     select fan_id as "fanId",
@@ -1908,6 +1931,11 @@ function spenderBaseQuery(
       where slp.platform_account_id = ${input.platformAccountId}
         and slp.creator_net_amount_mills >= 100000
         and not coalesce(fp.is_subscriber, false)
+        and ${hasVisibleFanIdentitySql({
+          pageAlias: sql.raw("fp.page_alias"),
+          username: sql.raw("f.username"),
+          displayName: sql.raw("f.display_name"),
+        })}
         and not exists (
           select 1 from retention_due rd where rd.fan_id = slp.fan_id
         )
@@ -2151,6 +2179,11 @@ export async function listWorkboardSnoozed(
      and slp.fan_id = ws.fan_id
     where ws.platform_account_id = ${input.platformAccountId}
       and ws.snoozed_until > now()
+      and ${hasVisibleFanIdentitySql({
+        pageAlias: sql.raw("fp.page_alias"),
+        username: sql.raw("f.username"),
+        displayName: sql.raw("f.display_name"),
+      })}
     order by ws.snoozed_until asc
   `);
 

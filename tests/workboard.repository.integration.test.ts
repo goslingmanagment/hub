@@ -35,7 +35,15 @@ async function createWorkboardPage(testDb: StartedTestDatabase, label: string) {
 }
 
 async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number) {
-  const [visibleSubscriber, snoozedSubscriber, activeSpender, inactiveSpender] = await upsertFans(testDb.db, [
+  const [
+    visibleSubscriber,
+    snoozedSubscriber,
+    activeSpender,
+    inactiveSpender,
+    deletedSubscriber,
+    deletedActiveSpender,
+    deletedInactiveSpender,
+  ] = await upsertFans(testDb.db, [
     {
       platform: "fansly",
       platformUserId: "wb-subscriber-visible",
@@ -59,6 +67,18 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
       platformUserId: "wb-inactive-spender",
       username: "wb_inactive_spender",
       displayName: "WB Inactive Spender",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-subscriber-deleted",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-active-spender-deleted",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-inactive-spender-deleted",
     },
   ]);
 
@@ -88,6 +108,28 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
   }
 
   await upsertFanPage(testDb.db, {
+    fanId: deletedSubscriber.id,
+    platformAccountId: pageId,
+    isSubscriber: true,
+    subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
+    subscriptionExpiresAt: new Date("2026-03-31T12:00:00.000Z"),
+    autoRenew: false,
+  });
+  await upsertPageSubscription(testDb.db, {
+    platformSubscriptionId: "wb-sub-deleted",
+    platformAccountId: pageId,
+    fanId: deletedSubscriber.id,
+    rawStatus: 3,
+    canonicalStatus: "active",
+    priceMills: 5000n,
+    renewPriceMills: 5000n,
+    autoRenew: false,
+    sourceCreatedAt: new Date("2026-03-01T12:00:00.000Z"),
+    endsAt: new Date("2026-03-31T12:00:00.000Z"),
+    subscriptionTierName: "VIP",
+  });
+
+  await upsertFanPage(testDb.db, {
     fanId: activeSpender.id,
     platformAccountId: pageId,
     pageAlias: "Active Spender Alias",
@@ -96,6 +138,14 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
     fanId: inactiveSpender.id,
     platformAccountId: pageId,
     pageAlias: "Inactive Spender Alias",
+  });
+  await upsertFanPage(testDb.db, {
+    fanId: deletedActiveSpender.id,
+    platformAccountId: pageId,
+  });
+  await upsertFanPage(testDb.db, {
+    fanId: deletedInactiveSpender.id,
+    platformAccountId: pageId,
   });
 
   await upsertTransaction(testDb.db, {
@@ -124,6 +174,32 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
     creatorNetAmountMills: 140000n,
     occurredAt: new Date("2026-02-10T12:00:00.000Z"),
   });
+  await upsertTransaction(testDb.db, {
+    platformAccountId: pageId,
+    fanId: deletedActiveSpender.id,
+    transactionId: "wb-active-tip-deleted",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 135000n,
+    sourceDestinationAmountMills: 135000n,
+    creatorNetAmountMills: 135000n,
+    occurredAt: new Date("2026-03-23T12:00:00.000Z"),
+  });
+  await upsertTransaction(testDb.db, {
+    platformAccountId: pageId,
+    fanId: deletedInactiveSpender.id,
+    transactionId: "wb-inactive-tip-deleted",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 145000n,
+    sourceDestinationAmountMills: 145000n,
+    creatorNetAmountMills: 145000n,
+    occurredAt: new Date("2026-02-05T12:00:00.000Z"),
+  });
 
   await recalculateFanPageSpend(testDb.db, pageId);
 
@@ -132,6 +208,9 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
     snoozedSubscriber,
     activeSpender,
     inactiveSpender,
+    deletedSubscriber,
+    deletedActiveSpender,
+    deletedInactiveSpender,
   };
 }
 
@@ -156,7 +235,7 @@ describe("workboard repository integration", () => {
     await resetIntegrationDatabase(testDb.pool);
   });
 
-  it("keeps non-snoozed rows visible across all tabs when one fan is snoozed", async (context) => {
+  it("keeps actionable rows visible across all tabs when deleted or snoozed fans exist", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -170,6 +249,11 @@ describe("workboard repository integration", () => {
       platformAccountId: page.id,
       fanId: seeded.snoozedSubscriber.id,
       days: 7,
+    });
+    await snoozeWorkboardFan(testDb.db, {
+      platformAccountId: page.id,
+      fanId: seeded.deletedSubscriber.id,
+      days: 30,
     });
 
     const [subscribers, activeSpenders, inactiveSpenders, snoozed] = await Promise.all([
@@ -188,6 +272,9 @@ describe("workboard repository integration", () => {
     expect(inactiveSpenders[0]?.pageAlias).toBe("Inactive Spender Alias");
     expect(snoozed.map((row) => row.fanId)).toEqual([seeded.snoozedSubscriber.id]);
     expect(snoozed[0]?.pageAlias).toBe("Subscriber Snoozed Alias");
+    expect(activeSpenders.map((row) => row.fanId)).not.toContain(seeded.deletedActiveSpender.id);
+    expect(inactiveSpenders.map((row) => row.fanId)).not.toContain(seeded.deletedInactiveSpender.id);
+    expect(snoozed.map((row) => row.fanId)).not.toContain(seeded.deletedSubscriber.id);
   });
 
   it("restores the queue after unsnoozing a fan", async (context) => {
@@ -219,6 +306,7 @@ describe("workboard repository integration", () => {
       seeded.visibleSubscriber.id,
       seeded.snoozedSubscriber.id,
     ].sort((left, right) => left - right));
+    expect(subscribers.map((row) => row.fanId)).not.toContain(seeded.deletedSubscriber.id);
     expect(snoozed).toHaveLength(0);
   });
 });
