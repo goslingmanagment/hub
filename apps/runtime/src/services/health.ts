@@ -19,12 +19,16 @@ function ageMinutes(timestamp: string | null, now: Date) {
 
 function firstErrorSummary(
   blocks: Array<{
+    statusReason?: {
+      summary: string | null;
+    } | null;
     error: {
       summary: string | null;
     } | null;
   }>,
 ) {
-  return blocks.find((block) => block.error?.summary)?.error?.summary ?? null;
+  const first = blocks.find((block) => block.statusReason?.summary || block.error?.summary);
+  return first?.statusReason?.summary ?? first?.error?.summary ?? null;
 }
 
 export async function getSystemHealth(app: AppContext) {

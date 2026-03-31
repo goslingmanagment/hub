@@ -5,7 +5,7 @@ import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { SyncBlockRow } from "./SyncBlockRow.js";
 import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
-import { getBlockOrder, needsVisualAttention } from "./syncBlockDisplay.js";
+import { getBlockOrder, getReasonSummary, isDependencyWait, needsVisualAttention } from "./syncBlockDisplay.js";
 
 function PageErrorBar({ page }: { page: SyncBlocksPage }) {
   if (page.diagnosis) {
@@ -13,16 +13,16 @@ function PageErrorBar({ page }: { page: SyncBlocksPage }) {
   }
 
   const blocks = getBlockOrder().map((key) => page.blocks[key]);
-  const attentionBlocks = blocks.filter(needsVisualAttention);
+  const attentionBlocks = blocks.filter(needsVisualAttention).filter((block) => !isDependencyWait(block));
   if (attentionBlocks.length === 0) return null;
 
-  const authFailed = attentionBlocks.find((b) => b.error?.code === "credentials_invalid");
+  const authFailed = attentionBlocks.find((b) => b.statusReason?.code === "credentials_invalid");
   if (authFailed) {
     return (
       <div className="mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
           <span className="text-danger font-medium">
-            {authFailed.error?.summary ?? "Credentials may have expired"}
+            {getReasonSummary(authFailed) ?? "Credentials may have expired"}
           </span>
           <Link
             to="/settings?tab=credentials"
@@ -43,7 +43,7 @@ function PageErrorBar({ page }: { page: SyncBlocksPage }) {
           className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
         >
           <span className="text-danger font-medium">
-            {b.error?.summary ?? `${b.block} needs attention`}
+            {getReasonSummary(b) ?? `${b.block} needs attention`}
           </span>
         </div>
       ))}

@@ -4993,6 +4993,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5000,6 +5002,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5016,12 +5024,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5047,6 +5063,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5054,6 +5072,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5070,12 +5094,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5101,6 +5133,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5108,6 +5142,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5124,12 +5164,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5155,6 +5203,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5162,6 +5212,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5178,12 +5234,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5209,6 +5273,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5216,6 +5282,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5232,12 +5304,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5350,6 +5430,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5357,6 +5439,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5373,12 +5461,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5404,6 +5500,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5411,6 +5509,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5427,12 +5531,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5458,6 +5570,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5465,6 +5579,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5481,12 +5601,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5512,6 +5640,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5519,6 +5649,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5535,12 +5671,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5566,6 +5710,8 @@ export interface paths {
                                                 [key: string]: unknown;
                                             };
                                         } | null;
+                                        progressStream: string | null;
+                                        progressRole: ("primary" | "supporting") | null;
                                         error: {
                                             stream: string | null;
                                             code: string | null;
@@ -5573,6 +5719,12 @@ export interface paths {
                                             lastFailedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
+                                        statusReason: {
+                                            code: string | null;
+                                            summary: string | null;
+                                            waitingFor: string[] | null;
+                                        } | null;
+                                        primaryFresh: boolean;
                                         needsAttention: boolean;
                                         nextDueAt: string | null;
                                         nextRetryAt: string | null;
@@ -5589,12 +5741,20 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
+                                            role: "primary" | "supporting";
+                                            /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
+                                            isFresh: boolean;
                                             needsAttention: boolean;
+                                            statusReason: {
+                                                code: string | null;
+                                                summary: string | null;
+                                                waitingFor: string[] | null;
+                                            } | null;
                                             error: {
                                                 stream: string | null;
                                                 code: string | null;
@@ -5720,6 +5880,8 @@ export interface paths {
                                         [key: string]: unknown;
                                     };
                                 } | null;
+                                progressStream: string | null;
+                                progressRole: ("primary" | "supporting") | null;
                                 error: {
                                     stream: string | null;
                                     code: string | null;
@@ -5727,6 +5889,12 @@ export interface paths {
                                     lastFailedAt: string | null;
                                     consecutiveFailures: number;
                                 } | null;
+                                statusReason: {
+                                    code: string | null;
+                                    summary: string | null;
+                                    waitingFor: string[] | null;
+                                } | null;
+                                primaryFresh: boolean;
                                 needsAttention: boolean;
                                 nextDueAt: string | null;
                                 nextRetryAt: string | null;
@@ -5743,12 +5911,20 @@ export interface paths {
                                     /** @enum {string} */
                                     stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                     /** @enum {string} */
+                                    role: "primary" | "supporting";
+                                    /** @enum {string} */
                                     state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                     lastSuccessAt: string | null;
                                     nextDueAt: string | null;
                                     nextRetryAt: string | null;
                                     cadenceSeconds: number;
+                                    isFresh: boolean;
                                     needsAttention: boolean;
+                                    statusReason: {
+                                        code: string | null;
+                                        summary: string | null;
+                                        waitingFor: string[] | null;
+                                    } | null;
                                     error: {
                                         stream: string | null;
                                         code: string | null;

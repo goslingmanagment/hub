@@ -9,10 +9,16 @@ import {
   getBlockOrder,
   getBlockLabel,
   formatBlockSummary,
+  formatBlockProgressCaption,
   formatCadence,
   formatNextTime,
+  getDependencyWaitDetail,
   getBlockTone,
-  getBlockStateLabel,
+  getReasonSummary,
+  getStreamLabel,
+  getSubstreamTone,
+  isDependencyWait,
+  formatSubstreamStateLabel,
   shouldShowBlockProgressBar,
 } from "./syncBlockDisplay.js";
 
@@ -41,8 +47,15 @@ function BlockDetailCard({
   }
 
   const summary = formatBlockSummary(block);
-  const hasError = block.error && block.error.summary;
+  const statusSummary = getReasonSummary(block);
+  const dependencyWait = isDependencyWait(block);
+  const hasStatusNotice = dependencyWait || Boolean(statusSummary);
   const hasSubstreams = block.substreams.length > 1;
+  const dependencyDetail = getDependencyWaitDetail(block);
+  const progressCaption = formatBlockProgressCaption(block);
+  const statusTone = block.state === "failed"
+    ? "border-danger/20 bg-danger/[0.04] text-danger"
+    : "border-warning/25 bg-warning/10 text-warning-dark";
 
   return (
     <div className="rounded-xl border border-border bg-card px-5 py-4">
@@ -69,26 +82,36 @@ function BlockDetailCard({
             />
           </div>
           <span className="text-[11px] text-text-muted">
-            {block.progress.current.toLocaleString()} / {block.progress.total.toLocaleString()} {block.progress.unit}
+            {progressCaption ?? `${block.progress.current.toLocaleString()} / ${block.progress.total.toLocaleString()} ${block.progress.unit}`}
           </span>
         </div>
       )}
 
-      {/* Error details */}
-      {hasError && (
-        <div className="mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5 space-y-1">
-          <p className="text-xs text-danger font-medium">{block.error!.summary}</p>
-          {block.error!.code && (
-            <p className="text-[11px] text-text-muted">Code: {block.error!.code}</p>
-          )}
-          {block.error!.lastFailedAt && (
-            <p className="text-[11px] text-text-muted">
-              Last failed: {formatRelativeTime(block.error!.lastFailedAt)}
+      {/* Status details */}
+      {hasStatusNotice && (
+        <div className={`mt-3 rounded-lg border px-3 py-2.5 space-y-1 ${statusTone}`}>
+          <p className="text-xs font-medium">
+            {dependencyWait ? "Waiting for prerequisite syncs" : statusSummary}
+          </p>
+          {dependencyWait && dependencyDetail && (
+            <p className="text-[11px] text-text-secondary">
+              Prerequisites: {dependencyDetail}
             </p>
           )}
-          {block.error!.consecutiveFailures > 0 && (
+          {!dependencyWait && block.statusReason?.summary && block.statusReason.summary !== statusSummary && (
+            <p className="text-[11px] text-text-secondary">{block.statusReason.summary}</p>
+          )}
+          {block.error?.code && (
+            <p className="text-[11px] text-text-muted">Code: {block.error.code}</p>
+          )}
+          {block.error?.lastFailedAt && (
             <p className="text-[11px] text-text-muted">
-              Consecutive failures: {block.error!.consecutiveFailures}
+              Last failed: {formatRelativeTime(block.error.lastFailedAt)}
+            </p>
+          )}
+          {block.error && block.error.consecutiveFailures > 0 && (
+            <p className="text-[11px] text-text-muted">
+              Consecutive failures: {block.error.consecutiveFailures}
             </p>
           )}
         </div>
@@ -123,7 +146,7 @@ function BlockDetailCard({
             <span className="text-text-muted">Intervals</span>
             <span className="text-text-secondary">
               {block.intervals
-                .map((i) => `${i.stream} (${formatCadence(i.cadenceSeconds)})`)
+                .map((i) => `${getStreamLabel(i.stream)} (${formatCadence(i.cadenceSeconds)})`)
                 .join(", ")}
             </span>
           </>
@@ -159,11 +182,11 @@ function BlockDetailCard({
               </thead>
               <tbody>
                 {block.substreams.map((sub) => {
-                  const subTone = getBlockTone(sub.state);
+                  const subTone = getSubstreamTone(sub);
                   return (
                     <tr key={sub.stream} className="border-t border-border">
                       <td className="px-3 py-1.5 text-text-primary font-medium">
-                        {sub.stream}
+                        {getStreamLabel(sub.stream)}
                       </td>
                       <td className="px-3 py-1.5">
                         <span className="flex items-center gap-1.5">
@@ -171,7 +194,7 @@ function BlockDetailCard({
                             className={`inline-block h-1.5 w-1.5 rounded-full ${subTone.dot}`}
                           />
                           <span className={subTone.text}>
-                            {getBlockStateLabel(sub.state)}
+                            {formatSubstreamStateLabel(sub)}
                           </span>
                         </span>
                       </td>

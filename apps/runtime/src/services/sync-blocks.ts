@@ -22,6 +22,8 @@ import {
   type SyncDomainBlockKey,
   type SyncDomainBlockState,
   type SyncDomainBlockStatus,
+  type SyncStatusReason,
+  type SyncStreamRole,
   type SyncStatusPage,
 } from "./sync-status.ts";
 import { sendSyncPageWakeup } from "./sync-queue.ts";
@@ -47,6 +49,8 @@ type SyncBlockError = {
   consecutiveFailures: number;
 };
 
+type SyncBlockStatusReason = SyncStatusReason;
+
 type SyncBlockInterval = {
   stream: SyncControlStream;
   cadenceSeconds: number;
@@ -54,12 +58,15 @@ type SyncBlockInterval = {
 
 type SyncBlockSubstream = {
   stream: SyncControlStream;
+  role: SyncStreamRole;
   state: Exclude<SyncBlockState, "not_available">;
   lastSuccessAt: string | null;
   nextDueAt: string | null;
   nextRetryAt: string | null;
   cadenceSeconds: number;
+  isFresh: boolean;
   needsAttention: boolean;
+  statusReason: SyncBlockStatusReason | null;
   error: SyncBlockError | null;
 };
 
@@ -88,7 +95,11 @@ export type SyncBlockStatus = {
   state: SyncBlockState;
   lastSuccessAt: string | null;
   progress: SyncBlockProgress | null;
+  progressStream: string | null;
+  progressRole: SyncStreamRole | null;
   error: SyncBlockError | null;
+  statusReason: SyncBlockStatusReason | null;
+  primaryFresh: boolean;
   needsAttention: boolean;
   nextDueAt: string | null;
   nextRetryAt: string | null;
@@ -164,6 +175,8 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
         details: block.progress.details,
       }
       : null,
+    progressStream: block.progressStream,
+    progressRole: block.progressRole,
     error: block.error
       ? {
         stream: block.error.stream,
@@ -173,6 +186,8 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
         consecutiveFailures: block.error.consecutiveFailures,
       }
       : null,
+    statusReason: block.statusReason,
+    primaryFresh: block.primaryFresh,
     needsAttention: block.needsAttention,
     nextDueAt: block.nextDueAt,
     nextRetryAt: block.nextRetryAt,
@@ -184,12 +199,15 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
     connectionStatus: block.connectionStatus,
     substreams: block.substreams.map((substream) => ({
       stream: substream.stream,
+      role: substream.role,
       state: substream.state,
       lastSuccessAt: substream.lastSuccessAt,
       nextDueAt: substream.nextDueAt,
       nextRetryAt: substream.nextRetryAt,
       cadenceSeconds: substream.cadenceSeconds,
+      isFresh: substream.isFresh,
       needsAttention: substream.needsAttention,
+      statusReason: substream.statusReason,
       error: substream.error
         ? {
           stream: substream.error.stream,
@@ -205,35 +223,35 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
 
 function diagnosisForPage(page: SyncStatusPage): SyncDiagnosis | null {
   const blocks = Object.values(page.blocks);
-  const authBlock = blocks.find((block) => block.error?.code === "credentials_invalid");
+  const authBlock = blocks.find((block) => block.needsAttention && block.statusReason?.code === "credentials_invalid");
   if (authBlock) {
     return {
       code: "auth_failed",
       severity: "error",
       headline: "Reconnect credentials",
-      detail: authBlock.error?.summary ?? "Credentials must be refreshed before sync can continue.",
+      detail: authBlock.statusReason?.summary ?? "Credentials must be refreshed before sync can continue.",
       actionKind: "credentials",
     };
   }
 
-  const stalledBlock = blocks.find((block) => block.error?.code === "progress_stalled");
+  const stalledBlock = blocks.find((block) => block.needsAttention && block.statusReason?.code === "progress_stalled");
   if (stalledBlock) {
     return {
       code: "stalled_run",
       severity: "error",
       headline: "Sync stalled",
-      detail: stalledBlock.error?.summary ?? "A sync worker stopped making progress.",
+      detail: stalledBlock.statusReason?.summary ?? "A sync worker stopped making progress.",
       actionKind: "sync_settings",
     };
   }
 
-  const queuedTooLong = blocks.find((block) => block.error?.code === "queue_delayed");
+  const queuedTooLong = blocks.find((block) => block.needsAttention && block.statusReason?.code === "queue_delayed");
   if (queuedTooLong) {
     return {
       code: "worker_offline",
       severity: "warning",
       headline: "Sync is delayed",
-      detail: queuedTooLong.error?.summary ?? "Queued sync work is waiting longer than expected.",
+      detail: queuedTooLong.statusReason?.summary ?? "Queued sync work is waiting longer than expected.",
       actionKind: "worker",
     };
   }

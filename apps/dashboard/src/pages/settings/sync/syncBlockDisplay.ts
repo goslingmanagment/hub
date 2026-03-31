@@ -3,8 +3,11 @@ import { formatRelativeTime } from "@/lib/format";
 
 type SyncBlockKey = SyncBlockStatus["block"];
 type SyncBlockState = SyncBlockStatus["state"];
+type SyncBlockSubstream = SyncBlockStatus["substreams"][number];
+type SyncReasonCarrier = Pick<SyncBlockStatus, "statusReason" | "error"> |
+  Pick<SyncBlockSubstream, "statusReason" | "error">;
 
-export type { SyncBlockKey, SyncBlockState };
+export type { SyncBlockKey, SyncBlockState, SyncBlockSubstream };
 
 interface BlockTone {
   badge: string;
@@ -19,9 +22,9 @@ const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
     text: "text-text-secondary",
   },
   scheduled: {
-    badge: "border-warning/25 bg-warning/10 text-warning-dark",
-    dot: "bg-warning-dark",
-    text: "text-warning-dark",
+    badge: "border-border bg-hover-alt text-text-secondary",
+    dot: "bg-text-secondary",
+    text: "text-text-secondary",
   },
   up_to_date: {
     badge: "border-green/30 bg-green/10 text-green",
@@ -34,12 +37,12 @@ const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
     text: "text-[#1d4ed8]",
   },
   backfilling: {
-    badge: "border-warning/25 bg-warning/10 text-warning-dark",
-    dot: "bg-warning-dark",
-    text: "text-warning-dark",
+    badge: "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]",
+    dot: "bg-[#2563eb]",
+    text: "text-[#1d4ed8]",
   },
   retrying: {
-    badge: "border-warning/35 bg-warning/12 text-warning-dark",
+    badge: "border-warning/25 bg-warning/10 text-warning-dark",
     dot: "bg-warning-dark",
     text: "text-warning-dark",
   },
@@ -67,7 +70,7 @@ const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
 
 const BLOCK_STATE_LABELS: Record<SyncBlockState, string> = {
   not_started: "Not started",
-  scheduled: "Scheduled",
+  scheduled: "Queued",
   up_to_date: "Up to date",
   syncing: "Syncing",
   backfilling: "Backfilling",
@@ -84,6 +87,24 @@ const BLOCK_LABELS: Record<SyncBlockKey, string> = {
   audience: "Audience",
   messages_live: "Messages Live",
   messages_history: "Messages History",
+};
+
+const STREAM_LABELS: Record<string, string> = {
+  light: "connection",
+  transactions: "transactions",
+  top_spenders: "top spenders",
+  subscribers: "subscribers",
+  followers: "followers",
+  followers_reconcile: "follower reconcile",
+  dm_conversations: "conversation sync",
+  dm_messages: "message history",
+};
+
+const PROGRESS_STREAM_LABELS: Record<string, string> = {
+  top_spenders: "top spenders enrichment",
+  followers_reconcile: "follower reconcile",
+  dm_conversations: "conversation sync",
+  dm_messages: "message history",
 };
 
 const BLOCK_ORDER: SyncBlockKey[] = [
@@ -110,6 +131,15 @@ export function getBlockOrder(): SyncBlockKey[] {
   return BLOCK_ORDER;
 }
 
+export function getStreamLabel(stream: string): string {
+  return STREAM_LABELS[stream] ?? stream.replaceAll("_", " ");
+}
+
+function getProgressStreamLabel(stream: string | null): string | null {
+  if (!stream) return null;
+  return PROGRESS_STREAM_LABELS[stream] ?? getStreamLabel(stream);
+}
+
 export function formatCadence(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const mins = Math.round(seconds / 60);
@@ -133,6 +163,44 @@ export function formatNextTime(iso: string | null): string | null {
   return formatRelativeFuture(iso);
 }
 
+function parseDependencyWait(summary: string | null | undefined): string[] {
+  if (!summary) return [];
+  const prefix = "Waiting for ";
+  if (!summary.startsWith(prefix)) return [];
+  return summary
+    .slice(prefix.length)
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function formatDependencyList(streams: string[]): string {
+  return streams.map((stream) => getStreamLabel(stream)).join(", ");
+}
+
+function getReasonCode(item: SyncReasonCarrier): string | null {
+  return item.statusReason?.code ?? item.error?.code ?? null;
+}
+
+export function getReasonSummary(item: SyncReasonCarrier): string | null {
+  return item.statusReason?.summary ?? item.error?.summary ?? null;
+}
+
+function getDependencyStreams(item: SyncReasonCarrier): string[] {
+  return item.statusReason?.waitingFor ?? parseDependencyWait(getReasonSummary(item));
+}
+
+export function isDependencyWait(item: SyncReasonCarrier): boolean {
+  return getReasonCode(item) === "unmet_dependency";
+}
+
+export function getDependencyWaitDetail(item: SyncReasonCarrier): string | null {
+  if (!isDependencyWait(item)) return null;
+  const streams = getDependencyStreams(item);
+  if (streams.length === 0) return null;
+  return formatDependencyList(streams);
+}
+
 function hasOpaqueAudienceFollowerProgress(block: SyncBlockStatus): boolean {
   return block.block === "audience" && block.progress?.unit === "followers";
 }
@@ -145,6 +213,51 @@ function hasCompletedMessagesLiveProgress(block: SyncBlockStatus): boolean {
     block.progress.total > 0 &&
     block.progress.current >= block.progress.total
   );
+}
+
+function formatSupportingProgressSummary(block: SyncBlockStatus): string | null {
+  if (!block.primaryFresh || block.progressRole !== "supporting") {
+    return null;
+  }
+
+  const label = getProgressStreamLabel(block.progressStream);
+  if (!label) {
+    return null;
+  }
+
+  if (block.block === "financials") {
+    if (block.state === "backfilling") {
+      return `Transactions are current; ${label} is catching up`;
+    }
+    if (block.state === "scheduled") {
+      return `Transactions are current; ${label} is queued`;
+    }
+    if (block.state === "retrying") {
+      return `Transactions are current; ${label} is retrying`;
+    }
+  }
+
+  if (block.block === "audience") {
+    if (block.state === "backfilling") {
+      return `Audience is current; ${label} is catching up`;
+    }
+    if (block.state === "scheduled") {
+      return `Audience is current; ${label} is queued`;
+    }
+  }
+
+  return null;
+}
+
+export function formatBlockProgressCaption(block: SyncBlockStatus): string | null {
+  if (!block.progress) return null;
+
+  const source = getProgressStreamLabel(block.progressStream);
+  const counts = block.progress.total != null && block.progress.total > 0
+    ? `${block.progress.current.toLocaleString()} / ${block.progress.total.toLocaleString()} ${block.progress.unit}`
+    : block.progress.label;
+  if (!counts) return source;
+  return source ? `${source} \u00b7 ${counts}` : counts;
 }
 
 export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
@@ -178,10 +291,7 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
       return `Connected${checked ? ` \u00b7 ${checked}` : ""}`;
     }
     if (block.connectionStatus === "error" || block.state === "failed") {
-      if (block.error?.code === "stalled") {
-        return "Connection check stalled";
-      }
-      const reason = block.error?.summary ?? "connection error";
+      const reason = getReasonSummary(block) ?? "connection error";
       return `Connection failed: ${reason}`;
     }
     if (block.connectionStatus === "not_connected") {
@@ -201,7 +311,7 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
   }
 
   if (block.state === "failed") {
-    if (block.error?.code === "progress_stalled") {
+    if (getReasonCode(block) === "progress_stalled") {
       if (hasOpaqueAudienceFollowerProgress(block)) {
         return "Follower sync stalled";
       }
@@ -213,13 +323,25 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
       }
       return "Sync stalled";
     }
-    const reason = block.error?.summary ?? "sync error";
+    const reason = getReasonSummary(block) ?? "sync error";
     const failures = block.error?.consecutiveFailures ?? 0;
     return failures > 1 ? `${reason} (${failures} failures)` : reason;
   }
 
   if (block.state === "delayed") {
-    return block.error?.summary ?? "Sync is delayed";
+    if (isDependencyWait(block)) {
+      const waitingOn = getDependencyStreams(block);
+      if (waitingOn.length === 1) {
+        return `Waiting for ${getStreamLabel(waitingOn[0])} to finish first`;
+      }
+      return "Waiting for prerequisite syncs to finish first";
+    }
+    return getReasonSummary(block) ?? "Sync is delayed";
+  }
+
+  const supportingProgressSummary = formatSupportingProgressSummary(block);
+  if (supportingProgressSummary) {
+    return supportingProgressSummary;
   }
 
   const progressPrefix = block.state === "backfilling"
@@ -291,7 +413,6 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
     return nextRetry ? `Retrying ${nextRetry}` : "Retrying\u2026";
   }
 
-  // up_to_date
   const metricCount = getMetricCount(block);
   const updated = block.lastSuccessAt
     ? `Updated ${formatRelativeTime(block.lastSuccessAt)}`
@@ -328,7 +449,58 @@ const BLOCK_METRIC_KEYS: Partial<Record<SyncBlockKey, readonly string[]>> = {
   messages_history: ["readyConversationCount", "eligibleConversationCount", "count"],
 };
 
+export function getSubstreamTone(substream: SyncBlockSubstream): BlockTone {
+  if (isDependencyWait(substream)) {
+    return BLOCK_STATE_TONES.scheduled;
+  }
+  if (substream.state === "delayed") {
+    const code = getReasonCode(substream);
+    if (code === "queue_delayed" || code === "progress_stalled" || code === "stale") {
+      return BLOCK_STATE_TONES.delayed;
+    }
+  }
+  if (substream.state === "scheduled") {
+    return BLOCK_STATE_TONES.scheduled;
+  }
+  return getBlockTone(substream.state);
+}
+
+export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string {
+  const code = getReasonCode(substream);
+
+  if (substream.state === "delayed") {
+    if (code === "unmet_dependency") {
+      const detail = getDependencyWaitDetail(substream);
+      return detail ? `Waiting \u00b7 ${detail}` : "Waiting";
+    }
+    if (code === "queue_delayed") {
+      return "Delayed \u00b7 queued too long";
+    }
+    if (code === "progress_stalled") {
+      return "Stalled \u00b7 no progress";
+    }
+    if (code === "stale") {
+      return "Out of date";
+    }
+    return "Delayed";
+  }
+
+  if (substream.state === "scheduled") {
+    return "Queued";
+  }
+
+  if (substream.state === "failed") {
+    return code === "credentials_invalid" ? "Reconnect" : "Failed";
+  }
+
+  return getBlockStateLabel(substream.state);
+}
+
 export function needsVisualAttention(block: SyncBlockStatus): boolean {
+  if (isDependencyWait(block)) {
+    return false;
+  }
+
   return (
     block.needsAttention ||
     block.state === "failed" ||

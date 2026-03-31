@@ -4,6 +4,7 @@ import {
   getBlockLabel,
   getBlockStateLabel,
   formatBlockSummary,
+  formatBlockProgressCaption,
   shouldShowBlockProgressBar,
 } from "./syncBlockDisplay.js";
 
@@ -12,6 +13,7 @@ export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
   const label = getBlockLabel(block.block);
   const summary = formatBlockSummary(block);
   const isNA = block.state === "not_available";
+  const progressCaption = formatBlockProgressCaption(block);
 
   return (
     <div className="grid grid-cols-[9rem_1fr] gap-x-3 py-1 items-baseline">
@@ -34,7 +36,7 @@ export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
               />
             </div>
             <span className="text-[11px] text-text-muted">
-              {block.progress.current.toLocaleString()} / {block.progress.total.toLocaleString()}
+              {progressCaption ?? `${block.progress.current.toLocaleString()} / ${block.progress.total.toLocaleString()}`}
             </span>
           </div>
         )}

@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   formatBlockSummary,
+  formatSubstreamStateLabel,
+  getDependencyWaitDetail,
+  needsVisualAttention,
   shouldShowBlockProgressBar,
 } from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
 
@@ -114,6 +117,34 @@ describe("sync block display", () => {
     } as never)).toBe("Backfilling… 1/697 subscribers");
   });
 
+  it("describes supporting financial enrichment separately from current transactions", () => {
+    expect(formatBlockSummary({
+      block: "financials",
+      state: "backfilling",
+      lastSuccessAt: "2026-03-24T11:59:00.000Z",
+      progress: {
+        label: "14 / 15 months",
+        current: 14,
+        total: 15,
+        unit: "months",
+        percent: 93.33,
+        details: {},
+      },
+      progressStream: "top_spenders",
+      progressRole: "supporting",
+      error: null,
+      statusReason: null,
+      primaryFresh: true,
+      needsAttention: false,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: { transactionCount: 120 },
+      connectionStatus: null,
+      substreams: [],
+    } as never)).toBe("Transactions are current; top spenders enrichment is catching up");
+  });
+
   it("hides completed progress bars once a block is up to date", () => {
     expect(shouldShowBlockProgressBar({
       block: "financials",
@@ -217,5 +248,114 @@ describe("sync block display", () => {
 
     expect(formatBlockSummary(block)).toBe("Syncing… 200/5,000 conversations");
     expect(shouldShowBlockProgressBar(block)).toBe(true);
+  });
+
+  it("formats dependency waits without showing raw stream ids", () => {
+    const block = {
+      block: "financials",
+      state: "delayed",
+      lastSuccessAt: null,
+      progress: null,
+      error: {
+        stream: "top_spenders",
+        code: "unmet_dependency",
+        summary: "Waiting for transactions",
+        lastFailedAt: null,
+        consecutiveFailures: 0,
+      },
+      statusReason: {
+        code: "unmet_dependency",
+        summary: "Waiting for transactions",
+        waitingFor: ["transactions"],
+      },
+      primaryFresh: false,
+      progressStream: null,
+      progressRole: null,
+      needsAttention: true,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: {},
+      connectionStatus: null,
+      substreams: [],
+    } as never;
+
+    expect(formatBlockSummary(block)).toBe("Waiting for transactions to finish first");
+    expect(getDependencyWaitDetail(block)).toBe("transactions");
+  });
+
+  it("collapses long dependency waits into a generic summary", () => {
+    const block = {
+      block: "messages_live",
+      state: "delayed",
+      lastSuccessAt: null,
+      progress: null,
+      error: {
+        stream: "dm_conversations",
+        code: "unmet_dependency",
+        summary: "Waiting for light, top_spenders, transactions, subscribers, followers",
+        lastFailedAt: null,
+        consecutiveFailures: 0,
+      },
+      statusReason: {
+        code: "unmet_dependency",
+        summary: "Waiting for light, top_spenders, transactions, subscribers, followers",
+        waitingFor: ["light", "top_spenders", "transactions", "subscribers", "followers"],
+      },
+      primaryFresh: false,
+      progressStream: null,
+      progressRole: null,
+      needsAttention: true,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: {},
+      connectionStatus: null,
+      substreams: [],
+    } as never;
+
+    expect(formatBlockSummary(block)).toBe("Waiting for prerequisite syncs to finish first");
+    expect(getDependencyWaitDetail(block)).toBe(
+      "connection, top spenders, transactions, subscribers, followers",
+    );
+    expect(needsVisualAttention(block)).toBe(false);
+  });
+
+  it("renders inline human-readable reasons for delayed substreams", () => {
+    expect(formatSubstreamStateLabel({
+      stream: "transactions",
+      role: "primary",
+      state: "delayed",
+      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      nextDueAt: "2026-03-24T12:55:00.000Z",
+      nextRetryAt: null,
+      cadenceSeconds: 3600,
+      isFresh: true,
+      needsAttention: true,
+      statusReason: {
+        code: "queue_delayed",
+        summary: "Sync work has been queued longer than expected.",
+        waitingFor: null,
+      },
+      error: null,
+    } as never)).toBe("Delayed · queued too long");
+
+    expect(formatSubstreamStateLabel({
+      stream: "followers_reconcile",
+      role: "supporting",
+      state: "delayed",
+      lastSuccessAt: null,
+      nextDueAt: "2026-03-24T12:21:00.000Z",
+      nextRetryAt: null,
+      cadenceSeconds: 172800,
+      isFresh: false,
+      needsAttention: true,
+      statusReason: {
+        code: "unmet_dependency",
+        summary: "Waiting for followers",
+        waitingFor: ["followers"],
+      },
+      error: null,
+    } as never)).toBe("Waiting · followers");
   });
 });

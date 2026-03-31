@@ -1782,6 +1782,14 @@ export const syncBlockErrorSchema = z.object({
   consecutiveFailures: z.number().int(),
 });
 
+export const syncStatusReasonSchema = z.object({
+  code: z.string().nullable(),
+  summary: z.string().nullable(),
+  waitingFor: z.array(z.string()).nullable(),
+});
+
+const syncStreamRoleEnum = z.enum(["primary", "supporting"]);
+
 export const syncBlockIntervalSchema = z.object({
   stream: extendedSyncControlStreamEnum,
   cadenceSeconds: z.number().int(),
@@ -1789,12 +1797,15 @@ export const syncBlockIntervalSchema = z.object({
 
 export const syncBlockSubstreamSchema = z.object({
   stream: extendedSyncControlStreamEnum,
+  role: syncStreamRoleEnum,
   state: syncBlockStateEnum.exclude(["not_available"]),
   lastSuccessAt: isoTimestamp.nullable(),
   nextDueAt: isoTimestamp.nullable(),
   nextRetryAt: isoTimestamp.nullable(),
   cadenceSeconds: z.number().int(),
+  isFresh: z.boolean(),
   needsAttention: z.boolean(),
+  statusReason: syncStatusReasonSchema.nullable(),
   error: syncBlockErrorSchema.nullable(),
 });
 
@@ -1803,7 +1814,11 @@ export const syncBlockStatusSchema = z.object({
   state: syncBlockStateEnum,
   lastSuccessAt: isoTimestamp.nullable(),
   progress: syncBlockProgressSchema.nullable(),
+  progressStream: z.string().nullable(),
+  progressRole: syncStreamRoleEnum.nullable(),
   error: syncBlockErrorSchema.nullable(),
+  statusReason: syncStatusReasonSchema.nullable(),
+  primaryFresh: z.boolean(),
   needsAttention: z.boolean(),
   nextDueAt: isoTimestamp.nullable(),
   nextRetryAt: isoTimestamp.nullable(),

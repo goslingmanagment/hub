@@ -247,4 +247,194 @@ describe("sync status service", () => {
     expect(snapshot.pages[0]?.blocks.connection.error?.summary).toBe("Session expired");
     expect(snapshot.pages[0]?.syncUx.state).toBe("attention");
   });
+
+  it("prefers the current dependency blocker over stale last-error fields", async () => {
+    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 7,
+      label: "lana",
+      platform: "fansly",
+      username: "lana_page",
+      displayName: "Lana",
+      followerCount: 9,
+      subscriberCount: 4,
+      lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+      lastFollowerSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+      modelSlug: "lana",
+      modelName: "Lana",
+      hasCredentials: true,
+      proxyUrl: null,
+      proxyHasAuth: false,
+    }]);
+    dbMocks.listSyncTaskRows.mockResolvedValue([
+      buildTaskRow({ task: "light" }),
+      buildTaskRow({ task: "transactions" }),
+      buildTaskRow({
+        task: "dm_conversations",
+        scheduleIntervalSeconds: 1800,
+        status: "blocked",
+        desiredGeneration: 2,
+        appliedGeneration: 1,
+        lastSuccessAt: null,
+        blockerType: "dependency",
+        blockerCode: "unmet_dependency",
+        blockerReason: "Waiting for light, transactions",
+        lastErrorCode: "http_500",
+        lastErrorSummary: "Old transport failure",
+        lastFailureAt: new Date("2026-03-24T11:30:00.000Z"),
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.messages_live).toMatchObject({
+      state: "delayed",
+      error: null,
+      statusReason: {
+        code: "unmet_dependency",
+        summary: "Waiting for light, transactions",
+        waitingFor: ["light", "transactions"],
+      },
+    });
+    expect(snapshot.pages[0]?.blocks.messages_live.substreams[0]).toMatchObject({
+      stream: "dm_conversations",
+      statusReason: {
+        code: "unmet_dependency",
+        waitingFor: ["light", "transactions"],
+      },
+      error: null,
+    });
+  });
+
+  it("keeps financials in catching-up mode when only top spenders enrichment is running", async () => {
+    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 7,
+      label: "lana",
+      platform: "fansly",
+      username: "lana_page",
+      displayName: "Lana",
+      followerCount: 9,
+      subscriberCount: 4,
+      lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+      lastFollowerSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+      modelSlug: "lana",
+      modelName: "Lana",
+      hasCredentials: true,
+      proxyUrl: null,
+      proxyHasAuth: false,
+    }]);
+    dbMocks.listSyncTaskRows.mockResolvedValue([
+      buildTaskRow({
+        task: "transactions",
+        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
+      }),
+      buildTaskRow({
+        task: "top_spenders",
+        status: "running",
+        desiredGeneration: 1,
+        appliedGeneration: 0,
+        currentWorkClass: "maintenance",
+        lastSuccessAt: null,
+        progressPayload: {
+          totalMonths: 15,
+          completedMonths: 14,
+        },
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.financials).toMatchObject({
+      state: "backfilling",
+      primaryFresh: true,
+      progressStream: "top_spenders",
+      progressRole: "supporting",
+    });
+    expect(snapshot.pages[0]?.blocks.financials.substreams).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stream: "transactions",
+        role: "primary",
+        state: "up_to_date",
+        isFresh: true,
+      }),
+      expect.objectContaining({
+        stream: "top_spenders",
+        role: "supporting",
+        state: "backfilling",
+      }),
+    ]));
+    expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");
+  });
+
+  it("surfaces queue-delayed runtime problems on primary financial streams", async () => {
+    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 7,
+      label: "lana",
+      platform: "fansly",
+      username: "lana_page",
+      displayName: "Lana",
+      followerCount: 9,
+      subscriberCount: 4,
+      lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+      lastFollowerSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+      modelSlug: "lana",
+      modelName: "Lana",
+      hasCredentials: true,
+      proxyUrl: null,
+      proxyHasAuth: false,
+    }]);
+    dbMocks.listSyncTaskRows.mockResolvedValue([
+      buildTaskRow({
+        task: "transactions",
+        status: "queued",
+        desiredGeneration: 2,
+        appliedGeneration: 1,
+        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
+        lastRequestedAt: new Date("2026-03-24T11:49:00.000Z"),
+      }),
+      buildTaskRow({
+        task: "top_spenders",
+        lastSuccessAt: new Date("2026-03-24T11:56:00.000Z"),
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.financials.state).toBe("delayed");
+    expect(snapshot.pages[0]?.blocks.financials.statusReason).toMatchObject({
+      code: "queue_delayed",
+      summary: "Sync work has been queued longer than expected.",
+    });
+    expect(snapshot.pages[0]?.blocks.financials.substreams[0]).toMatchObject({
+      stream: "transactions",
+      state: "delayed",
+      statusReason: expect.objectContaining({
+        code: "queue_delayed",
+      }),
+    });
+  });
 });

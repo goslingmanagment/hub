@@ -17455,6 +17455,30 @@
                                       }
                                     ]
                                   },
+                                  "progressStream": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "progressRole": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "error": {
                                     "anyOf": [
                                       {
@@ -17519,6 +17543,60 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "statusReason": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "code": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "summary": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "waitingFor": {
+                                            "anyOf": [
+                                              {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "code",
+                                          "summary",
+                                          "waitingFor"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "primaryFresh": {
+                                    "type": "boolean"
                                   },
                                   "needsAttention": {
                                     "type": "boolean"
@@ -17614,6 +17692,13 @@
                                             "followers_reconcile"
                                           ]
                                         },
+                                        "role": {
+                                          "type": "string",
+                                          "enum": [
+                                            "primary",
+                                            "supporting"
+                                          ]
+                                        },
                                         "state": {
                                           "type": "string",
                                           "enum": [
@@ -17663,8 +17748,62 @@
                                           "minimum": -9007199254740991,
                                           "maximum": 9007199254740991
                                         },
+                                        "isFresh": {
+                                          "type": "boolean"
+                                        },
                                         "needsAttention": {
                                           "type": "boolean"
+                                        },
+                                        "statusReason": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "code": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "summary": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "waitingFor": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "code",
+                                                "summary",
+                                                "waitingFor"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
                                         },
                                         "error": {
                                           "anyOf": [
@@ -17734,12 +17873,15 @@
                                       },
                                       "required": [
                                         "stream",
+                                        "role",
                                         "state",
                                         "lastSuccessAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
+                                        "isFresh",
                                         "needsAttention",
+                                        "statusReason",
                                         "error"
                                       ],
                                       "additionalProperties": false
@@ -17751,7 +17893,11 @@
                                   "state",
                                   "lastSuccessAt",
                                   "progress",
+                                  "progressStream",
+                                  "progressRole",
                                   "error",
+                                  "statusReason",
+                                  "primaryFresh",
                                   "needsAttention",
                                   "nextDueAt",
                                   "nextRetryAt",
@@ -17861,6 +18007,30 @@
                                       }
                                     ]
                                   },
+                                  "progressStream": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "progressRole": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "error": {
                                     "anyOf": [
                                       {
@@ -17925,6 +18095,60 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "statusReason": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "code": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "summary": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "waitingFor": {
+                                            "anyOf": [
+                                              {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "code",
+                                          "summary",
+                                          "waitingFor"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "primaryFresh": {
+                                    "type": "boolean"
                                   },
                                   "needsAttention": {
                                     "type": "boolean"
@@ -18020,6 +18244,13 @@
                                             "followers_reconcile"
                                           ]
                                         },
+                                        "role": {
+                                          "type": "string",
+                                          "enum": [
+                                            "primary",
+                                            "supporting"
+                                          ]
+                                        },
                                         "state": {
                                           "type": "string",
                                           "enum": [
@@ -18069,8 +18300,62 @@
                                           "minimum": -9007199254740991,
                                           "maximum": 9007199254740991
                                         },
+                                        "isFresh": {
+                                          "type": "boolean"
+                                        },
                                         "needsAttention": {
                                           "type": "boolean"
+                                        },
+                                        "statusReason": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "code": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "summary": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "waitingFor": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "code",
+                                                "summary",
+                                                "waitingFor"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
                                         },
                                         "error": {
                                           "anyOf": [
@@ -18140,12 +18425,15 @@
                                       },
                                       "required": [
                                         "stream",
+                                        "role",
                                         "state",
                                         "lastSuccessAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
+                                        "isFresh",
                                         "needsAttention",
+                                        "statusReason",
                                         "error"
                                       ],
                                       "additionalProperties": false
@@ -18157,7 +18445,11 @@
                                   "state",
                                   "lastSuccessAt",
                                   "progress",
+                                  "progressStream",
+                                  "progressRole",
                                   "error",
+                                  "statusReason",
+                                  "primaryFresh",
                                   "needsAttention",
                                   "nextDueAt",
                                   "nextRetryAt",
@@ -18267,6 +18559,30 @@
                                       }
                                     ]
                                   },
+                                  "progressStream": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "progressRole": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "error": {
                                     "anyOf": [
                                       {
@@ -18331,6 +18647,60 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "statusReason": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "code": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "summary": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "waitingFor": {
+                                            "anyOf": [
+                                              {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "code",
+                                          "summary",
+                                          "waitingFor"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "primaryFresh": {
+                                    "type": "boolean"
                                   },
                                   "needsAttention": {
                                     "type": "boolean"
@@ -18426,6 +18796,13 @@
                                             "followers_reconcile"
                                           ]
                                         },
+                                        "role": {
+                                          "type": "string",
+                                          "enum": [
+                                            "primary",
+                                            "supporting"
+                                          ]
+                                        },
                                         "state": {
                                           "type": "string",
                                           "enum": [
@@ -18475,8 +18852,62 @@
                                           "minimum": -9007199254740991,
                                           "maximum": 9007199254740991
                                         },
+                                        "isFresh": {
+                                          "type": "boolean"
+                                        },
                                         "needsAttention": {
                                           "type": "boolean"
+                                        },
+                                        "statusReason": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "code": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "summary": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "waitingFor": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "code",
+                                                "summary",
+                                                "waitingFor"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
                                         },
                                         "error": {
                                           "anyOf": [
@@ -18546,12 +18977,15 @@
                                       },
                                       "required": [
                                         "stream",
+                                        "role",
                                         "state",
                                         "lastSuccessAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
+                                        "isFresh",
                                         "needsAttention",
+                                        "statusReason",
                                         "error"
                                       ],
                                       "additionalProperties": false
@@ -18563,7 +18997,11 @@
                                   "state",
                                   "lastSuccessAt",
                                   "progress",
+                                  "progressStream",
+                                  "progressRole",
                                   "error",
+                                  "statusReason",
+                                  "primaryFresh",
                                   "needsAttention",
                                   "nextDueAt",
                                   "nextRetryAt",
@@ -18673,6 +19111,30 @@
                                       }
                                     ]
                                   },
+                                  "progressStream": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "progressRole": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "error": {
                                     "anyOf": [
                                       {
@@ -18737,6 +19199,60 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "statusReason": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "code": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "summary": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "waitingFor": {
+                                            "anyOf": [
+                                              {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "code",
+                                          "summary",
+                                          "waitingFor"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "primaryFresh": {
+                                    "type": "boolean"
                                   },
                                   "needsAttention": {
                                     "type": "boolean"
@@ -18832,6 +19348,13 @@
                                             "followers_reconcile"
                                           ]
                                         },
+                                        "role": {
+                                          "type": "string",
+                                          "enum": [
+                                            "primary",
+                                            "supporting"
+                                          ]
+                                        },
                                         "state": {
                                           "type": "string",
                                           "enum": [
@@ -18881,8 +19404,62 @@
                                           "minimum": -9007199254740991,
                                           "maximum": 9007199254740991
                                         },
+                                        "isFresh": {
+                                          "type": "boolean"
+                                        },
                                         "needsAttention": {
                                           "type": "boolean"
+                                        },
+                                        "statusReason": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "code": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "summary": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "waitingFor": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "code",
+                                                "summary",
+                                                "waitingFor"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
                                         },
                                         "error": {
                                           "anyOf": [
@@ -18952,12 +19529,15 @@
                                       },
                                       "required": [
                                         "stream",
+                                        "role",
                                         "state",
                                         "lastSuccessAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
+                                        "isFresh",
                                         "needsAttention",
+                                        "statusReason",
                                         "error"
                                       ],
                                       "additionalProperties": false
@@ -18969,7 +19549,11 @@
                                   "state",
                                   "lastSuccessAt",
                                   "progress",
+                                  "progressStream",
+                                  "progressRole",
                                   "error",
+                                  "statusReason",
+                                  "primaryFresh",
                                   "needsAttention",
                                   "nextDueAt",
                                   "nextRetryAt",
@@ -19079,6 +19663,30 @@
                                       }
                                     ]
                                   },
+                                  "progressStream": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "progressRole": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "error": {
                                     "anyOf": [
                                       {
@@ -19143,6 +19751,60 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "statusReason": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "code": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "summary": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "waitingFor": {
+                                            "anyOf": [
+                                              {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "code",
+                                          "summary",
+                                          "waitingFor"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "primaryFresh": {
+                                    "type": "boolean"
                                   },
                                   "needsAttention": {
                                     "type": "boolean"
@@ -19238,6 +19900,13 @@
                                             "followers_reconcile"
                                           ]
                                         },
+                                        "role": {
+                                          "type": "string",
+                                          "enum": [
+                                            "primary",
+                                            "supporting"
+                                          ]
+                                        },
                                         "state": {
                                           "type": "string",
                                           "enum": [
@@ -19287,8 +19956,62 @@
                                           "minimum": -9007199254740991,
                                           "maximum": 9007199254740991
                                         },
+                                        "isFresh": {
+                                          "type": "boolean"
+                                        },
                                         "needsAttention": {
                                           "type": "boolean"
+                                        },
+                                        "statusReason": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "code": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "summary": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "waitingFor": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "string"
+                                                      }
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "code",
+                                                "summary",
+                                                "waitingFor"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
                                         },
                                         "error": {
                                           "anyOf": [
@@ -19358,12 +20081,15 @@
                                       },
                                       "required": [
                                         "stream",
+                                        "role",
                                         "state",
                                         "lastSuccessAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
+                                        "isFresh",
                                         "needsAttention",
+                                        "statusReason",
                                         "error"
                                       ],
                                       "additionalProperties": false
@@ -19375,7 +20101,11 @@
                                   "state",
                                   "lastSuccessAt",
                                   "progress",
+                                  "progressStream",
+                                  "progressRole",
                                   "error",
+                                  "statusReason",
+                                  "primaryFresh",
                                   "needsAttention",
                                   "nextDueAt",
                                   "nextRetryAt",
@@ -19721,6 +20451,30 @@
                                     }
                                   ]
                                 },
+                                "progressStream": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "progressRole": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "primary",
+                                        "supporting"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "error": {
                                   "anyOf": [
                                     {
@@ -19785,6 +20539,60 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "statusReason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "code": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "summary": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "waitingFor": {
+                                          "anyOf": [
+                                            {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "code",
+                                        "summary",
+                                        "waitingFor"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "primaryFresh": {
+                                  "type": "boolean"
                                 },
                                 "needsAttention": {
                                   "type": "boolean"
@@ -19880,6 +20688,13 @@
                                           "followers_reconcile"
                                         ]
                                       },
+                                      "role": {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
                                       "state": {
                                         "type": "string",
                                         "enum": [
@@ -19929,8 +20744,62 @@
                                         "minimum": -9007199254740991,
                                         "maximum": 9007199254740991
                                       },
+                                      "isFresh": {
+                                        "type": "boolean"
+                                      },
                                       "needsAttention": {
                                         "type": "boolean"
+                                      },
+                                      "statusReason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "code": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "summary": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "waitingFor": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "code",
+                                              "summary",
+                                              "waitingFor"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       },
                                       "error": {
                                         "anyOf": [
@@ -20000,12 +20869,15 @@
                                     },
                                     "required": [
                                       "stream",
+                                      "role",
                                       "state",
                                       "lastSuccessAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
+                                      "isFresh",
                                       "needsAttention",
+                                      "statusReason",
                                       "error"
                                     ],
                                     "additionalProperties": false
@@ -20017,7 +20889,11 @@
                                 "state",
                                 "lastSuccessAt",
                                 "progress",
+                                "progressStream",
+                                "progressRole",
                                 "error",
+                                "statusReason",
+                                "primaryFresh",
                                 "needsAttention",
                                 "nextDueAt",
                                 "nextRetryAt",
@@ -20127,6 +21003,30 @@
                                     }
                                   ]
                                 },
+                                "progressStream": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "progressRole": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "primary",
+                                        "supporting"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "error": {
                                   "anyOf": [
                                     {
@@ -20191,6 +21091,60 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "statusReason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "code": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "summary": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "waitingFor": {
+                                          "anyOf": [
+                                            {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "code",
+                                        "summary",
+                                        "waitingFor"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "primaryFresh": {
+                                  "type": "boolean"
                                 },
                                 "needsAttention": {
                                   "type": "boolean"
@@ -20286,6 +21240,13 @@
                                           "followers_reconcile"
                                         ]
                                       },
+                                      "role": {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
                                       "state": {
                                         "type": "string",
                                         "enum": [
@@ -20335,8 +21296,62 @@
                                         "minimum": -9007199254740991,
                                         "maximum": 9007199254740991
                                       },
+                                      "isFresh": {
+                                        "type": "boolean"
+                                      },
                                       "needsAttention": {
                                         "type": "boolean"
+                                      },
+                                      "statusReason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "code": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "summary": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "waitingFor": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "code",
+                                              "summary",
+                                              "waitingFor"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       },
                                       "error": {
                                         "anyOf": [
@@ -20406,12 +21421,15 @@
                                     },
                                     "required": [
                                       "stream",
+                                      "role",
                                       "state",
                                       "lastSuccessAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
+                                      "isFresh",
                                       "needsAttention",
+                                      "statusReason",
                                       "error"
                                     ],
                                     "additionalProperties": false
@@ -20423,7 +21441,11 @@
                                 "state",
                                 "lastSuccessAt",
                                 "progress",
+                                "progressStream",
+                                "progressRole",
                                 "error",
+                                "statusReason",
+                                "primaryFresh",
                                 "needsAttention",
                                 "nextDueAt",
                                 "nextRetryAt",
@@ -20533,6 +21555,30 @@
                                     }
                                   ]
                                 },
+                                "progressStream": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "progressRole": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "primary",
+                                        "supporting"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "error": {
                                   "anyOf": [
                                     {
@@ -20597,6 +21643,60 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "statusReason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "code": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "summary": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "waitingFor": {
+                                          "anyOf": [
+                                            {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "code",
+                                        "summary",
+                                        "waitingFor"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "primaryFresh": {
+                                  "type": "boolean"
                                 },
                                 "needsAttention": {
                                   "type": "boolean"
@@ -20692,6 +21792,13 @@
                                           "followers_reconcile"
                                         ]
                                       },
+                                      "role": {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
                                       "state": {
                                         "type": "string",
                                         "enum": [
@@ -20741,8 +21848,62 @@
                                         "minimum": -9007199254740991,
                                         "maximum": 9007199254740991
                                       },
+                                      "isFresh": {
+                                        "type": "boolean"
+                                      },
                                       "needsAttention": {
                                         "type": "boolean"
+                                      },
+                                      "statusReason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "code": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "summary": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "waitingFor": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "code",
+                                              "summary",
+                                              "waitingFor"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       },
                                       "error": {
                                         "anyOf": [
@@ -20812,12 +21973,15 @@
                                     },
                                     "required": [
                                       "stream",
+                                      "role",
                                       "state",
                                       "lastSuccessAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
+                                      "isFresh",
                                       "needsAttention",
+                                      "statusReason",
                                       "error"
                                     ],
                                     "additionalProperties": false
@@ -20829,7 +21993,11 @@
                                 "state",
                                 "lastSuccessAt",
                                 "progress",
+                                "progressStream",
+                                "progressRole",
                                 "error",
+                                "statusReason",
+                                "primaryFresh",
                                 "needsAttention",
                                 "nextDueAt",
                                 "nextRetryAt",
@@ -20939,6 +22107,30 @@
                                     }
                                   ]
                                 },
+                                "progressStream": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "progressRole": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "primary",
+                                        "supporting"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "error": {
                                   "anyOf": [
                                     {
@@ -21003,6 +22195,60 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "statusReason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "code": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "summary": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "waitingFor": {
+                                          "anyOf": [
+                                            {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "code",
+                                        "summary",
+                                        "waitingFor"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "primaryFresh": {
+                                  "type": "boolean"
                                 },
                                 "needsAttention": {
                                   "type": "boolean"
@@ -21098,6 +22344,13 @@
                                           "followers_reconcile"
                                         ]
                                       },
+                                      "role": {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
                                       "state": {
                                         "type": "string",
                                         "enum": [
@@ -21147,8 +22400,62 @@
                                         "minimum": -9007199254740991,
                                         "maximum": 9007199254740991
                                       },
+                                      "isFresh": {
+                                        "type": "boolean"
+                                      },
                                       "needsAttention": {
                                         "type": "boolean"
+                                      },
+                                      "statusReason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "code": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "summary": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "waitingFor": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "code",
+                                              "summary",
+                                              "waitingFor"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       },
                                       "error": {
                                         "anyOf": [
@@ -21218,12 +22525,15 @@
                                     },
                                     "required": [
                                       "stream",
+                                      "role",
                                       "state",
                                       "lastSuccessAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
+                                      "isFresh",
                                       "needsAttention",
+                                      "statusReason",
                                       "error"
                                     ],
                                     "additionalProperties": false
@@ -21235,7 +22545,11 @@
                                 "state",
                                 "lastSuccessAt",
                                 "progress",
+                                "progressStream",
+                                "progressRole",
                                 "error",
+                                "statusReason",
+                                "primaryFresh",
                                 "needsAttention",
                                 "nextDueAt",
                                 "nextRetryAt",
@@ -21345,6 +22659,30 @@
                                     }
                                   ]
                                 },
+                                "progressStream": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "progressRole": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "primary",
+                                        "supporting"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "error": {
                                   "anyOf": [
                                     {
@@ -21409,6 +22747,60 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "statusReason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "code": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "summary": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "waitingFor": {
+                                          "anyOf": [
+                                            {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "code",
+                                        "summary",
+                                        "waitingFor"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "primaryFresh": {
+                                  "type": "boolean"
                                 },
                                 "needsAttention": {
                                   "type": "boolean"
@@ -21504,6 +22896,13 @@
                                           "followers_reconcile"
                                         ]
                                       },
+                                      "role": {
+                                        "type": "string",
+                                        "enum": [
+                                          "primary",
+                                          "supporting"
+                                        ]
+                                      },
                                       "state": {
                                         "type": "string",
                                         "enum": [
@@ -21553,8 +22952,62 @@
                                         "minimum": -9007199254740991,
                                         "maximum": 9007199254740991
                                       },
+                                      "isFresh": {
+                                        "type": "boolean"
+                                      },
                                       "needsAttention": {
                                         "type": "boolean"
+                                      },
+                                      "statusReason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "code": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "summary": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "waitingFor": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "code",
+                                              "summary",
+                                              "waitingFor"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       },
                                       "error": {
                                         "anyOf": [
@@ -21624,12 +23077,15 @@
                                     },
                                     "required": [
                                       "stream",
+                                      "role",
                                       "state",
                                       "lastSuccessAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
+                                      "isFresh",
                                       "needsAttention",
+                                      "statusReason",
                                       "error"
                                     ],
                                     "additionalProperties": false
@@ -21641,7 +23097,11 @@
                                 "state",
                                 "lastSuccessAt",
                                 "progress",
+                                "progressStream",
+                                "progressRole",
                                 "error",
+                                "statusReason",
+                                "primaryFresh",
                                 "needsAttention",
                                 "nextDueAt",
                                 "nextRetryAt",
@@ -22024,6 +23484,30 @@
                             }
                           ]
                         },
+                        "progressStream": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "progressRole": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "primary",
+                                "supporting"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "error": {
                           "anyOf": [
                             {
@@ -22088,6 +23572,60 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "statusReason": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "code": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "summary": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "waitingFor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "summary",
+                                "waitingFor"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "primaryFresh": {
+                          "type": "boolean"
                         },
                         "needsAttention": {
                           "type": "boolean"
@@ -22183,6 +23721,13 @@
                                   "followers_reconcile"
                                 ]
                               },
+                              "role": {
+                                "type": "string",
+                                "enum": [
+                                  "primary",
+                                  "supporting"
+                                ]
+                              },
                               "state": {
                                 "type": "string",
                                 "enum": [
@@ -22232,8 +23777,62 @@
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
                               },
+                              "isFresh": {
+                                "type": "boolean"
+                              },
                               "needsAttention": {
                                 "type": "boolean"
+                              },
+                              "statusReason": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "code": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "summary": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "waitingFor": {
+                                        "anyOf": [
+                                          {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "code",
+                                      "summary",
+                                      "waitingFor"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               },
                               "error": {
                                 "anyOf": [
@@ -22303,12 +23902,15 @@
                             },
                             "required": [
                               "stream",
+                              "role",
                               "state",
                               "lastSuccessAt",
                               "nextDueAt",
                               "nextRetryAt",
                               "cadenceSeconds",
+                              "isFresh",
                               "needsAttention",
+                              "statusReason",
                               "error"
                             ],
                             "additionalProperties": false
@@ -22320,7 +23922,11 @@
                         "state",
                         "lastSuccessAt",
                         "progress",
+                        "progressStream",
+                        "progressRole",
                         "error",
+                        "statusReason",
+                        "primaryFresh",
                         "needsAttention",
                         "nextDueAt",
                         "nextRetryAt",
