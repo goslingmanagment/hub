@@ -8,18 +8,16 @@ import {
   upsertPageDmMessages,
 } from "@agency_hub_core/db";
 
-import { applyTestMigrations, startTestDatabase } from "./helpers/db.ts";
+import { startTestDatabase } from "./helpers/db.ts";
 import { acquireTestPrerequisite } from "./helpers/prerequisites.ts";
 
-describe("Fansly DM tip normalization migration", () => {
-  it("backfills stored Fansly DM tip amounts from mills to cents without touching other rows", async () => {
+describe("Fansly DM tip normalization", () => {
+  it("stores canonical tip amounts in cents without touching other rows", async () => {
     const testDb = await acquireTestPrerequisite(
-      () => startTestDatabase({
-        through: "0027_workboard_snoozes.sql",
-      }),
+      () => startTestDatabase(),
       {
         prerequisite: "Docker-backed Postgres for migration tests",
-        reason: "This test validates the Fansly DM tip backfill against a pre-migration schema snapshot.",
+        reason: "This test validates canonical DM tip storage against the baseline schema.",
       },
     );
     if (!testDb) {
@@ -56,7 +54,7 @@ describe("Fansly DM tip normalization migration", () => {
 
       const seededAt = new Date("2026-03-24T07:00:00.000Z");
       const fanslyConversation = await testDb.pool.query<{ id: number }>(`
-        insert into page_dm_conversations (
+        insert into page_dm_threads (
           platform_account_id,
           fan_id,
           platform_conversation_id,
@@ -119,7 +117,7 @@ describe("Fansly DM tip normalization migration", () => {
         seededAt,
       ]);
       const onlyFansConversation = await testDb.pool.query<{ id: number }>(`
-        insert into page_dm_conversations (
+        insert into page_dm_threads (
           platform_account_id,
           fan_id,
           platform_conversation_id,
@@ -191,7 +189,7 @@ describe("Fansly DM tip normalization migration", () => {
           senderRole: "fan",
           createdAt: new Date("2026-03-24T05:00:00.000Z"),
           content: "tip event",
-          totalTipAmountCents: 20000,
+          totalTipAmountCents: 2000,
           inReplyToMessageId: null,
           inReplyToRootMessageId: null,
         },
@@ -215,7 +213,7 @@ describe("Fansly DM tip normalization migration", () => {
           senderRole: "fan",
           createdAt: new Date("2026-03-24T06:00:00.000Z"),
           content: "tip event",
-          totalTipAmountCents: 20000,
+          totalTipAmountCents: 2000,
           inReplyToMessageId: null,
           inReplyToRootMessageId: null,
         },
@@ -250,11 +248,6 @@ describe("Fansly DM tip normalization migration", () => {
         new Date("2026-03-24T05:00:00.000Z"),
       ]);
 
-      await applyTestMigrations(testDb.pool, {
-        from: "0028_fansly_dm_tip_amount_cents_fix.sql",
-        through: "0028_fansly_dm_tip_amount_cents_fix.sql",
-      });
-
       const rows = await testDb.pool.query<{
         platformMessageId: string;
         platform: string;
@@ -265,7 +258,7 @@ describe("Fansly DM tip normalization migration", () => {
           pa.platform,
           pdm.total_tip_amount_cents as "totalTipAmountCents"
         from page_dm_messages pdm
-        join platform_accounts pa on pa.id = pdm.platform_account_id
+        join pages pa on pa.id = pdm.platform_account_id
         where pdm.platform_message_id in (
           'fansly-tip-positive',
           'fansly-tip-zero',
@@ -288,7 +281,7 @@ describe("Fansly DM tip normalization migration", () => {
         {
           platformMessageId: "onlyfans-tip-positive",
           platform: "onlyfans",
-          totalTipAmountCents: 20000,
+          totalTipAmountCents: 2000,
         },
       ]);
 
@@ -300,7 +293,7 @@ describe("Fansly DM tip normalization migration", () => {
           pdm.total_tip_amount_cents as "messageTipAmountCents",
           t.gross_amount_mills::integer as "grossAmountMills"
         from page_dm_messages pdm
-        join page_dm_conversations pdc on pdc.id = pdm.conversation_id
+        join page_dm_threads pdc on pdc.id = pdm.conversation_id
         join transactions t
           on t.platform_account_id = pdm.platform_account_id
          and t.fan_id = pdc.fan_id

@@ -428,7 +428,7 @@ describe("crm repository integration", () => {
     });
   });
 
-  it("computes reactivation score from mills and ignores fan_pages.last_seen_at", async (context) => {
+  it("computes reactivation score from mills and ignores page_fans.last_seen_at", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -467,7 +467,7 @@ describe("crm repository integration", () => {
     await recalculateFanPageSpend(testDb.db, page.id);
     await testDb.pool.query(
       `
-        update fan_pages
+        update page_fans
         set last_seen_at = $1
         where platform_account_id = $2
           and fan_id = $3

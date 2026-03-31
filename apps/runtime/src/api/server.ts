@@ -1957,7 +1957,7 @@ export async function buildApiServer(appContext: AppContext) {
                  pa.label as "pageLabel"
           FROM sync_run_events e
           INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
-          INNER JOIN platform_accounts pa ON pa.id = e.platform_account_id
+          INNER JOIN pages pa ON pa.id = e.platform_account_id
           WHERE e.severity = ${severity}
           ORDER BY e.emitted_at DESC
           LIMIT ${limit}
@@ -1970,7 +1970,7 @@ export async function buildApiServer(appContext: AppContext) {
                  pa.label as "pageLabel"
           FROM sync_run_events e
           INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
-          INNER JOIN platform_accounts pa ON pa.id = e.platform_account_id
+          INNER JOIN pages pa ON pa.id = e.platform_account_id
           ORDER BY e.emitted_at DESC
           LIMIT ${limit}
         `)).rows;
@@ -2086,7 +2086,7 @@ export async function buildApiServer(appContext: AppContext) {
              pa.label as "pageLabel"
       FROM sync_run_events e
       INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
-      INNER JOIN platform_accounts pa ON pa.id = e.platform_account_id
+      INNER JOIN pages pa ON pa.id = e.platform_account_id
       WHERE ${condition}
       ORDER BY e.emitted_at DESC
       LIMIT ${limit}

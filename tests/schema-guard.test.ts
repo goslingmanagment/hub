@@ -33,6 +33,18 @@ describe("runtime schema guard", () => {
           };
         }
 
+        if (text.includes("table_name in ('pages', 'sync_state', 'sync_cursors')")) {
+          return {
+            rows: [{ name: "pages" }, { name: "sync_state" }, { name: "sync_cursors" }],
+          };
+        }
+
+        if (text.includes("table_name in ('platform_accounts', 'platform_account_proxies', 'sync_stream_state', 'sync_checkpoints')")) {
+          return {
+            rows: [],
+          };
+        }
+
         return {
           rows: [{
             column_default: "'{}'::jsonb",
@@ -79,16 +91,8 @@ describe("runtime schema guard", () => {
   }, 30_000);
 
   it("fails when the latest migration is missing from schema_migrations", async () => {
-    const { files } = await resolveMigrationFiles();
-    const latestMigration = files.at(-1);
-    if (!latestMigration) {
-      throw new Error("Expected at least one migration file");
-    }
-
     const testDb = await acquireTestPrerequisite(
-      () => startTestDatabase({
-        through: "0012_fansly_utc_business_dates.sql",
-      }),
+      () => startTestDatabase(),
       {
         prerequisite: "Docker-backed Postgres for schema guard tests",
         reason: "These tests validate runtime schema expectations against the migrated database schema.",
@@ -105,6 +109,8 @@ describe("runtime schema guard", () => {
       if (!latestMigration) {
         throw new Error("Expected at least one migration file");
       }
+
+      await testDb.pool.query("delete from schema_migrations where id = $1", [latestMigration]);
 
       await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
         `missing latest migration ${latestMigration}`,

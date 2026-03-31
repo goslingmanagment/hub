@@ -325,7 +325,7 @@ export async function listModelsWithPageCounts(db: Database) {
            m.name,
            count(pa.id)::int as page_count
     from models m
-    left join platform_accounts pa on pa.model_id = m.id
+    left join pages pa on pa.model_id = m.id
     group by m.id, m.slug, m.name
     order by m.slug asc
   `);
@@ -391,7 +391,7 @@ export async function deleteModelBySlug(db: Database, slug: string) {
     where m.slug = ${slug}
       and not exists (
         select 1
-        from platform_accounts pa
+        from pages pa
         where pa.model_id = m.id
       )
     returning m.id
@@ -528,9 +528,9 @@ export async function listPageSummaries(db: Database) {
            pa.last_follower_sync_at,
            pap.url as proxy_url,
            (pap.encrypted_auth is not null) as proxy_has_auth
-    from platform_accounts pa
+    from pages pa
     join models m on m.id = pa.model_id
-    left join platform_account_proxies pap on pap.platform_account_id = pa.id
+    left join egress_endpoints pap on pap.platform_account_id = pa.id
     order by m.slug asc, pa.label asc
   `);
 }
@@ -651,7 +651,7 @@ export async function mergePageMetadata(
   const patchJson = JSON.stringify(metadataPatch);
 
   const result = await db.execute(sql`
-    update platform_accounts
+    update pages
     set metadata = coalesce(metadata, '{}'::jsonb) || ${patchJson}::jsonb,
         updated_at = ${now}
     where id = ${platformAccountId}

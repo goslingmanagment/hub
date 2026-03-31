@@ -452,7 +452,7 @@ export async function deactivatePageFollowsMissingFromSnapshot(
 
 export async function refreshFanPageFollowerState(db: Database, platformAccountId: number) {
   await db.execute(sql`
-    update fan_pages fp
+    update page_fans fp
     set is_follower = active.active_followed_at is not null,
         follower_since = active.active_followed_at,
         last_seen_at = now()
@@ -468,7 +468,7 @@ export async function refreshFanPageFollowerState(db: Database, platformAccountI
       and fp.fan_id = active.fan_id
   `);
   await db.execute(sql`
-    update fan_pages
+    update page_fans
     set is_follower = false,
         follower_since = null,
         last_seen_at = now()
@@ -683,7 +683,7 @@ export async function deactivatePageSubscriptionsByGeneration(
 
 export async function refreshFanPageSubscriberState(db: Database, platformAccountId: number) {
   await db.execute(sql`
-    update fan_pages fp
+    update page_fans fp
     set is_subscriber = active.active_subscriber_since is not null,
         subscriber_since = active.active_subscriber_since,
         subscription_expires_at = active.active_subscription_expires_at,
@@ -703,7 +703,7 @@ export async function refreshFanPageSubscriberState(db: Database, platformAccoun
       and fp.fan_id = active.fan_id
   `);
   await db.execute(sql`
-    update fan_pages
+    update page_fans
     set is_subscriber = false,
         subscriber_since = null,
         subscription_expires_at = null,
@@ -732,9 +732,9 @@ export async function getFanSpendByIdentifier(
     select f.platform_user_id,
            f.username,
            coalesce(slp.creator_net_amount_mills, 0)::bigint as total_creator_net_mills
-    from fan_pages fp
+    from page_fans fp
     join fans f on f.id = fp.fan_id
-    left join spender_lifetime_page slp
+    left join fan_spend_lifetime slp
       on slp.platform_account_id = fp.platform_account_id
      and slp.fan_id = fp.fan_id
     where fp.platform_account_id = ${platformAccountId}
@@ -772,9 +772,9 @@ export async function listTopFansForPage(
            fp.is_subscriber,
            fp.is_follower,
            slp.last_transaction_at
-    from fan_pages fp
+    from page_fans fp
     join fans f on f.id = fp.fan_id
-    left join spender_lifetime_page slp
+    left join fan_spend_lifetime slp
       on slp.platform_account_id = fp.platform_account_id
      and slp.fan_id = fp.fan_id
     where fp.platform_account_id = ${platformAccountId}

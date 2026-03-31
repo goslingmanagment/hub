@@ -124,7 +124,7 @@ export async function rebuildRevenueRollups(
       )
       : eq(dailyRevenue.platformAccountId, platformAccountId));
     await tx.execute(sql`
-      insert into daily_revenue (
+      insert into revenue_daily (
         platform_account_id,
         business_date,
         canonical_type,
@@ -145,7 +145,7 @@ export async function rebuildRevenueRollups(
              coalesce(sum(t.creator_net_amount_mills), 0)::bigint,
              now()
       from transactions t
-      join platform_accounts pa on pa.id = t.platform_account_id
+      join pages pa on pa.id = t.platform_account_id
       where t.platform_account_id = ${platformAccountId}
         and t.is_active = true
         and t.canonical_type in (${reportableTransactionTypeSql})

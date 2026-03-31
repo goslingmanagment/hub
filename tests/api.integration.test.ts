@@ -486,7 +486,7 @@ async function seedCrmApiFixture(input: {
   await input.testDb.db.insert(syncStreamState).values([
     {
       platformAccountId: input.pageId,
-      stream: "dm_conversations",
+      task: "dm_conversations",
       cadenceSeconds: 1800,
       slotOffsetSeconds: 0,
       nextDueAt: new Date("2026-03-17T12:30:00.000Z"),
@@ -498,7 +498,7 @@ async function seedCrmApiFixture(input: {
     },
     {
       platformAccountId: input.pageId,
-      stream: "dm_messages",
+      task: "dm_messages",
       cadenceSeconds: 86400,
       slotOffsetSeconds: 0,
       nextDueAt: new Date("2026-03-17T14:00:00.000Z"),
@@ -512,7 +512,7 @@ async function seedCrmApiFixture(input: {
 
   await input.testDb.db.insert(syncCheckpoints).values({
     platformAccountId: input.pageId,
-    stream: "dm_conversations",
+    task: "dm_conversations",
     state: {
       version: 1,
       lastFullSweepCompletedAt: "2026-03-17T09:00:00.000Z",
@@ -1032,7 +1032,7 @@ async function seedSyncMonitorScenario(
   await testDb.db.insert(syncStreamState).values([
     {
       platformAccountId: pageId,
-      stream: "light",
+      task: "light",
       status: "active",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
@@ -1045,7 +1045,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "transactions",
+      task: "transactions" as const,
       status: "active",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
@@ -1058,7 +1058,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "subscribers",
+      task: "subscribers" as const,
       status: "paused",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
@@ -1070,7 +1070,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "dm_conversations",
+      task: "dm_conversations" as const,
       status: "auth_failed",
       cadenceSeconds: 1800,
       slotOffsetSeconds: 0,
@@ -1085,7 +1085,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "dm_messages",
+      task: "dm_messages" as const,
       status: "active",
       cadenceSeconds: 86400,
       slotOffsetSeconds: 0,
@@ -1098,7 +1098,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "followers",
+      task: "followers" as const,
       status: "active",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
@@ -1115,7 +1115,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "followers_reconcile",
+      task: "followers_reconcile",
       status: "disabled",
       cadenceSeconds: 172800,
       slotOffsetSeconds: 0,
@@ -1130,7 +1130,7 @@ async function seedSyncMonitorScenario(
   await testDb.db.insert(syncCheckpoints).values([
     {
       platformAccountId: pageId,
-      stream: "transactions",
+      task: "transactions",
       state: {
         mode: "backfill",
         completed: false,
@@ -1148,7 +1148,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "subscribers",
+      task: "subscribers",
       state: {
         revision: 1,
         generation: 1,
@@ -1159,7 +1159,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "dm_conversations",
+      task: "dm_conversations",
       state: {
         version: 1,
         mode: "full_scan",
@@ -1174,7 +1174,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "dm_messages",
+      task: "dm_messages",
       state: {
         version: 1,
         currentConversationId: completedConversation.id,
@@ -1186,7 +1186,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "followers",
+      task: "followers",
       state: {
         revision: 6,
         knownFollowId: "monitor-follow-004",
@@ -1199,7 +1199,7 @@ async function seedSyncMonitorScenario(
     },
     {
       platformAccountId: pageId,
-      stream: "followers_reconcile",
+      task: "followers_reconcile" as const,
       state: {
         revision: 1,
         generation: 1,
@@ -2554,7 +2554,7 @@ describe("api integration", () => {
     const rollupRows = await testDb.pool.query(`
       select business_date::text as business_date,
              creator_net_amount_mills as net_amount_mills
-      from daily_revenue
+      from revenue_daily
       where platform_account_id = ${onlyFansPage.id}
       order by business_date asc
     `);
@@ -2667,7 +2667,7 @@ describe("api integration", () => {
     const rollupRows = await testDb.pool.query(`
       select business_date::text as business_date,
              creator_net_amount_mills as net_amount_mills
-      from daily_revenue
+      from revenue_daily
       where platform_account_id = ${fixture.lilyPage.id}
         and business_date between '2025-11-30'::date and '2026-01-01'::date
       order by business_date asc
@@ -3354,7 +3354,7 @@ describe("api integration", () => {
     });
     await rebuildRevenueRollups(testDb.db, fixture!.lanaPage.id);
     await testDb.pool.query(`
-      insert into daily_revenue (
+      insert into revenue_daily (
         platform_account_id,
         business_date,
         canonical_type,
@@ -4326,7 +4326,7 @@ describe("api integration", () => {
       model_slug: string;
     }>(`
       select pa.label, m.slug as model_slug
-      from platform_accounts pa
+      from pages pa
       join models m on m.id = pa.model_id
       where pa.id = $1
     `, [fixture.lanaPage.id]);
@@ -4350,7 +4350,7 @@ describe("api integration", () => {
     const [accountRows, credentialRows, proxyRows, assignmentRows] = await Promise.all([
       testDb.pool.query<{ count: number }>(`
         select count(*)::int as count
-        from platform_accounts
+        from pages
         where id = $1
       `, [fixture.lanaPage.id]),
       testDb.pool.query<{ count: number }>(`
@@ -4360,7 +4360,7 @@ describe("api integration", () => {
       `, [fixture.lanaPage.id]),
       testDb.pool.query<{ count: number }>(`
         select count(*)::int as count
-        from platform_account_proxies
+        from egress_endpoints
         where platform_account_id = $1
       `, [fixture.lanaPage.id]),
       testDb.pool.query<{ count: number }>(`
@@ -4615,7 +4615,7 @@ describe("api integration", () => {
         }>(`
           select sr.stream, sr.status
           from sync_runs sr
-          join platform_accounts pa on pa.id = sr.platform_account_id
+          join pages pa on pa.id = sr.platform_account_id
           where pa.label = 'auto-sync-page'
           order by sr.stream asc
         `);
@@ -4632,7 +4632,7 @@ describe("api integration", () => {
       }>(`
         select sr.stream, sr.status, sr.trigger
         from sync_runs sr
-        join platform_accounts pa on pa.id = sr.platform_account_id
+        join pages pa on pa.id = sr.platform_account_id
         where pa.label = 'auto-sync-page'
         order by sr.stream asc
       `);
@@ -4700,7 +4700,7 @@ describe("api integration", () => {
 
     const pageRows = await activeTestDb.pool.query<{ count: string }>(`
       select count(*)::text as count
-      from platform_accounts
+      from pages
       where label = 'enqueue-fail-page'
     `);
     expect(pageRows.rows[0]?.count).toBe("1");
@@ -5547,7 +5547,7 @@ describe("api integration", () => {
 
     const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
       select count(*)::int as count
-      from sync_stream_state
+      from sync_state
       where platform_account_id = $1
         and status = 'auth_failed'
     `, [fixture!.lanaPage.id]);
@@ -5652,7 +5652,7 @@ describe("api integration", () => {
 
     const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
       select count(*)::int as count
-      from sync_stream_state
+      from sync_state
       where platform_account_id = $1
         and status = 'auth_failed'
     `, [fixture!.lanaPage.id]);
@@ -5808,9 +5808,9 @@ describe("api integration", () => {
 
     const proxyRows = await activeTestDb.pool.query(`
       select url, encrypted_auth is not null as has_encrypted_auth
-      from platform_account_proxies
+      from egress_endpoints
       where platform_account_id = (
-        select id from platform_accounts where label = 'lana'
+        select id from pages where label = 'lana'
       )
     `);
 
@@ -5883,7 +5883,7 @@ describe("api integration", () => {
 
     const proxyRows = await activeTestDb.pool.query<{ count: number }>(`
       select count(*)::int as count
-      from platform_account_proxies
+      from egress_endpoints
       where platform_account_id = $1
     `, [fixture.lanaPage.id]);
 

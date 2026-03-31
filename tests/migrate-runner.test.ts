@@ -69,7 +69,7 @@ describe("runMigrations", () => {
       await expect(runMigrations({ db: db as never })).resolves.toBeUndefined();
       expect(db.query).toHaveBeenCalledWith(
         "select 1 from schema_migrations where id = $1",
-        ["0000_phase1.sql"],
+        ["0000_baseline.sql"],
       );
     } finally {
       process.chdir(originalCwd);

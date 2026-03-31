@@ -62,7 +62,7 @@ export async function rebuildSpenderDailyFacts(
     )
     : eq(spenderDailyFacts.platformAccountId, platformAccountId));
   await db.execute(sql`
-    insert into spender_daily_facts (
+    insert into fan_spend_daily (
       platform_account_id,
       fan_id,
       business_date,
@@ -102,7 +102,7 @@ export async function rebuildSpenderLifetimePage(
   if (!from) {
     await db.delete(spenderLifetimePage).where(eq(spenderLifetimePage.platformAccountId, platformAccountId));
     await db.execute(sql`
-      insert into spender_lifetime_page (
+      insert into fan_spend_lifetime (
         platform_account_id,
         fan_id,
         gross_amount_mills,
@@ -116,7 +116,7 @@ export async function rebuildSpenderLifetimePage(
              coalesce(sum(sdf.creator_net_amount_mills), 0)::bigint,
              max(sdf.last_transaction_at),
              now()
-      from spender_daily_facts sdf
+      from fan_spend_daily sdf
       where sdf.platform_account_id = ${platformAccountId}
       group by 1, 2
     `);
@@ -145,7 +145,7 @@ export async function rebuildSpenderLifetimePage(
     inArray(spenderLifetimePage.fanId, affectedFanIds),
   ));
   await db.execute(sql`
-    insert into spender_lifetime_page (
+    insert into fan_spend_lifetime (
       platform_account_id,
       fan_id,
       gross_amount_mills,
@@ -159,17 +159,17 @@ export async function rebuildSpenderLifetimePage(
            coalesce(sum(sdf.creator_net_amount_mills), 0)::bigint,
            max(sdf.last_transaction_at),
            now()
-    from spender_daily_facts sdf
+    from fan_spend_daily sdf
     where sdf.platform_account_id = ${platformAccountId}
       and sdf.fan_id in (${sql.join(affectedFanIds.map((fanId) => sql`${fanId}`), sql`, `)})
     group by 1, 2
   `);
 
   await db.execute(sql`
-    update fan_pages fp
+    update page_fans fp
     set total_creator_net_mills = coalesce((
           select slp.creator_net_amount_mills
-          from spender_lifetime_page slp
+          from fan_spend_lifetime slp
           where slp.platform_account_id = fp.platform_account_id
             and slp.fan_id = fp.fan_id
         ), 0)::bigint
@@ -214,10 +214,10 @@ export async function rebuildSpenderProjections(
     await rebuildSpenderLifetimePage(dbTx, platformAccountId, from);
     if (!from) {
       await tx.execute(sql`
-        update fan_pages fp
+        update page_fans fp
         set total_creator_net_mills = coalesce((
               select slp.creator_net_amount_mills
-              from spender_lifetime_page slp
+              from fan_spend_lifetime slp
               where slp.platform_account_id = fp.platform_account_id
                 and slp.fan_id = fp.fan_id
             ), 0)::bigint

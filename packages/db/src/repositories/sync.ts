@@ -350,7 +350,7 @@ function normalizeSyncStreamStateRow<T extends {
 }>(row: T) {
   const stream = asSyncAuditStream(row.stream);
   if (stream === "cleanup") {
-    throw new Error("sync_stream_state cannot contain cleanup rows");
+    throw new Error("sync_state cannot contain cleanup rows");
   }
 
   return {
@@ -866,7 +866,7 @@ async function upsertControlCheckpointRows(
     .insert(syncCheckpoints)
     .values({
       platformAccountId: input.platformAccountId,
-      stream: input.stream,
+      task: input.stream,
       cursorText: input.cursorText ?? null,
       cursorTimestamp: input.cursorTimestamp ?? null,
       state: input.state ?? {},
@@ -947,7 +947,7 @@ export async function upsertCheckpoint(
     .insert(syncCheckpoints)
     .values({
       platformAccountId: input.platformAccountId,
-      stream: input.stream,
+      task: input.stream,
       cursorText: input.cursorText ?? null,
       cursorTimestamp: input.cursorTimestamp ?? null,
       state: input.state ?? {},
@@ -993,7 +993,7 @@ export async function upsertCheckpointProgress(
     .insert(syncCheckpoints)
     .values({
       platformAccountId: input.platformAccountId,
-      stream: input.stream,
+      task: input.stream,
       cursorText: input.cursorText ?? null,
       cursorTimestamp: input.cursorTimestamp ?? null,
       state: input.state ?? {},
@@ -1240,7 +1240,7 @@ export async function listRecentSyncRuns(
            sr.error_summary as "errorSummary",
            sr.stats as "stats"
     from sync_runs sr
-    inner join platform_accounts pa on pa.id = sr.platform_account_id
+    inner join pages pa on pa.id = sr.platform_account_id
     where ${and(...clauses)}
     order by sr.started_at desc, sr.id desc
     limit ${input?.limit ?? 20}
@@ -1275,7 +1275,7 @@ export async function getSyncRun(db: Database, runId: number) {
            sr.error_summary as "errorSummary",
            sr.stats as "stats"
     from sync_runs sr
-    inner join platform_accounts pa on pa.id = sr.platform_account_id
+    inner join pages pa on pa.id = sr.platform_account_id
     where sr.id = ${runId}
     limit 1
   `);
@@ -1338,7 +1338,7 @@ export async function listSyncRunEvents(
            e.details as "details",
            e.emitted_at as "emittedAt"
     from sync_run_events e
-    inner join platform_accounts pa on pa.id = e.platform_account_id
+    inner join pages pa on pa.id = e.platform_account_id
     where ${and(...clauses)}
     order by e.id asc
     limit ${input.limit ?? 200}
@@ -1410,8 +1410,8 @@ export async function listSyncRequestAttempts(
            a.error_message as "errorMessage",
            a.started_at as "startedAt",
            a.finished_at as "finishedAt"
-    from sync_request_attempts a
-    inner join platform_accounts pa on pa.id = a.platform_account_id
+    from sync_http_attempts a
+    inner join pages pa on pa.id = a.platform_account_id
     where ${and(...clauses)}
     order by a.started_at asc, a.id asc
     limit ${input.limit ?? 1000}
@@ -1482,7 +1482,7 @@ export async function hasRecentTerminalProxyFailure(
     with recent_attempts as (
       select a.state,
              a.failure_kind as "failureKind"
-      from sync_request_attempts a
+      from sync_http_attempts a
       where a.sync_run_id = ${input.runId}
       order by a.started_at desc, a.id desc
       limit ${input.limit ?? 2000}
@@ -1651,7 +1651,7 @@ export async function listRunningSyncRuns(
     with request_activity as (
       select sync_run_id,
              max(coalesce(finished_at, started_at)) as last_attempt_at
-      from sync_request_attempts
+      from sync_http_attempts
       group by sync_run_id
     ),
     event_activity as (
@@ -1677,7 +1677,7 @@ export async function listRunningSyncRuns(
              coalesce(ea.last_event_at, sr.started_at)
            ) as "lastActivityAt"
     from sync_runs sr
-    inner join platform_accounts pa on pa.id = sr.platform_account_id
+    inner join pages pa on pa.id = sr.platform_account_id
     left join request_activity ra on ra.sync_run_id = sr.id
     left join event_activity ea on ea.sync_run_id = sr.id
     where ${and(...clauses)}
@@ -2056,10 +2056,10 @@ export async function listSyncMonitorStreamRows(
     from page_streams ps
     left join ${syncStreamState} sss
       on sss.platform_account_id = ps."pageId"
-     and sss.stream = ps."stream"
+     and sss.task::text = ps."stream"::text
     left join ${syncCheckpoints} cp
       on cp.platform_account_id = ps."pageId"
-     and cp.stream = ps."stream"
+     and cp.task::text = ps."stream"::text
     left join running_runs rr
       on rr."pageId" = ps."pageId"
      and rr."stream" = ps."stream"
@@ -2233,6 +2233,17 @@ function syncStreamArraySql(streams: readonly SyncControlStream[]) {
   )}]::sync_stream[]`;
 }
 
+function syncTaskArraySql(streams: readonly SyncControlStream[]) {
+  if (streams.length === 0) {
+    return sql`ARRAY[]::sync_task[]`;
+  }
+
+  return sql`ARRAY[${sql.join(
+    streams.map((stream) => sql`${stream}::sync_task`),
+    sql`, `,
+  )}]::sync_task[]`;
+}
+
 function streamOrderSql(columnName: string) {
   return sql.raw(`
     case ${columnName}
@@ -2258,9 +2269,9 @@ function dmSyncDependenciesSatisfiedSql(
       ${streamColumnName} not in ('dm_conversations', 'dm_messages')
       or not exists (
         select 1
-        from sync_stream_state dm_dep
+        from sync_state dm_dep
         where dm_dep.platform_account_id = ${platformAccountIdColumnName}
-          and dm_dep.stream = any(ARRAY['light', 'top_spenders', 'transactions', 'subscribers', 'followers']::sync_stream[])
+          and dm_dep.task = any(ARRAY['light', 'top_spenders', 'transactions', 'subscribers', 'followers']::sync_task[])
           and dm_dep.last_succeeded_at is null
       )
     )
@@ -2629,23 +2640,29 @@ function buildSeedSyncStreamStateValue(
 
   return {
     platformAccountId: page.platformAccountId,
-    stream,
+    task: stream,
     status: "active" as const,
+    scheduleIntervalSeconds: config.cadenceSeconds,
     cadenceSeconds: config.cadenceSeconds,
     slotOffsetSeconds,
     nextDueAt,
     basePriority: config.basePriority,
     effectivePriority,
     pendingReason,
+    desiredGeneration: shouldRecover ? 1 : 0,
     desiredRevision: shouldRecover ? 1 : 0,
+    appliedGeneration: 0,
     satisfiedRevision: 0,
     desiredAt: shouldRecover ? now : null,
-    requestPayload: null,
+    requestPayload: {},
+    retryAt: new Date(0),
     backoffUntil: new Date(0),
     lastEnqueuedAt: null,
     lastStartedAt: null,
     lastFinishedAt: lastSucceededAt,
+    lastSuccessAt: lastSucceededAt,
     lastSucceededAt,
+    lastFailureAt: null,
     lastFailedAt: null,
     consecutiveFailures: 0,
     lastErrorCode: null,
@@ -2669,12 +2686,12 @@ export async function listSyncStreamStateRows(
   }
 
   if (input?.streams?.length) {
-    clauses.push(sql`stream = any(${syncStreamArraySql(input.streams)})`);
+    clauses.push(sql`task = any(${syncTaskArraySql(input.streams)})`);
   }
 
   const result = await db.execute(sql`
     select platform_account_id as "platformAccountId",
-           stream as "stream",
+           task as "stream",
            status as "status",
            cadence_seconds as "cadenceSeconds",
            slot_offset_seconds as "slotOffsetSeconds",
@@ -2697,9 +2714,9 @@ export async function listSyncStreamStateRows(
            last_error_summary as "lastErrorSummary",
            created_at as "createdAt",
            updated_at as "updatedAt"
-    from sync_stream_state
+    from sync_state
     where ${and(...clauses)}
-    order by platform_account_id asc, ${streamOrderSql("stream")} asc
+    order by platform_account_id asc, ${streamOrderSql("task")} asc
   `);
 
   return normalizeSyncStreamStateRows(result.rows);
@@ -2766,14 +2783,14 @@ async function reconcileSyncStreamStateConfig(
     const database = tx as unknown as Database;
     for (const update of updates) {
       await database.execute(sql`
-        update sync_stream_state
+        update sync_state
         set cadence_seconds = ${update.cadenceSeconds},
             slot_offset_seconds = ${update.slotOffsetSeconds},
             next_due_at = ${update.nextDueAt},
             base_priority = ${update.basePriority},
             updated_at = ${input.now}
         where platform_account_id = ${update.platformAccountId}
-          and stream = ${update.stream}
+          and task = ${update.stream}
       `);
     }
   });
@@ -2805,7 +2822,7 @@ export async function ensureSyncStreamStateRows(
              where pf.platform_account_id = pa.id
                and pf.is_active = true
            ), 0)::int as "activeFollowerCount"
-    from platform_accounts pa
+    from pages pa
     where ${and(...pageClauses)}
     order by pa.id asc
   `);
@@ -2863,12 +2880,12 @@ export async function rebalanceSyncStreamPriorities(
   }
 
   await db.execute(sql`
-    update sync_stream_state
-    set base_priority = ${syncBasePriorityCaseSql("stream")},
+    update sync_state
+    set base_priority = ${syncBasePriorityCaseSql("task")},
         effective_priority = case
           when desired_revision > satisfied_revision
-            then ${syncRequestedPriorityCaseSql("stream", "pending_reason")}
-          else ${syncBasePriorityCaseSql("stream")}
+            then ${syncRequestedPriorityCaseSql("task", "pending_reason")}
+          else ${syncBasePriorityCaseSql("task")}
         end,
         updated_at = ${now}
     where ${and(...clauses)}
@@ -2881,14 +2898,14 @@ export async function promoteDueSyncStreamStateRows(
 ) {
   const dueRows = await db.execute(sql`
     select platform_account_id as "platformAccountId",
-           stream as "stream",
+           task as "stream",
            cadence_seconds as "cadenceSeconds",
            slot_offset_seconds as "slotOffsetSeconds"
-    from sync_stream_state
+    from sync_state
     where status = 'active'
       and desired_revision = satisfied_revision
       and next_due_at <= ${now}
-    order by next_due_at asc, platform_account_id asc, ${streamOrderSql("stream")} asc
+    order by next_due_at asc, platform_account_id asc, ${streamOrderSql("task")} asc
   `);
 
   const promoted: Array<{ platformAccountId: number; stream: SyncControlStream; desiredRevision: number }> = [];
@@ -2906,7 +2923,7 @@ export async function promoteDueSyncStreamStateRows(
 
     const nextDueAt = computeSyncStreamNextDueAt(now, row.cadenceSeconds, row.slotOffsetSeconds);
     const update = await db.execute(sql`
-      update sync_stream_state
+      update sync_state
       set desired_revision = desired_revision + 1,
           desired_at = ${now},
           pending_reason = 'scheduled',
@@ -2914,7 +2931,7 @@ export async function promoteDueSyncStreamStateRows(
           next_due_at = ${nextDueAt},
           updated_at = ${now}
       where platform_account_id = ${row.platformAccountId}
-        and stream = ${stream}
+        and task = ${stream}
         and status = 'active'
         and desired_revision = satisfied_revision
         and next_due_at <= ${now}
@@ -2944,13 +2961,13 @@ export async function listRunnableSyncPages(
            max(sss.effective_priority)::int as "priority",
            min(sss.desired_at) as "desiredAt",
            pap.url as "proxyUrl"
-    from sync_stream_state sss
-    inner join platform_accounts pa on pa.id = sss.platform_account_id
-    left join platform_account_proxies pap on pap.platform_account_id = sss.platform_account_id
+    from sync_state sss
+    inner join pages pa on pa.id = sss.platform_account_id
+    left join egress_endpoints pap on pap.platform_account_id = sss.platform_account_id
     where sss.status = 'active'
       and sss.desired_revision > sss.satisfied_revision
       and sss.backoff_until <= ${now}
-      and ${dmSyncDependenciesSatisfiedSql("sss.stream", "sss.platform_account_id")}
+      and ${dmSyncDependenciesSatisfiedSql("sss.task", "sss.platform_account_id")}
     group by sss.platform_account_id, pa.platform, pap.url
     order by max(sss.effective_priority) desc,
              min(sss.desired_at) asc nulls last,
@@ -2973,7 +2990,7 @@ export async function listRunnableSyncStreamStatesForPage(
 ) {
   const result = await db.execute(sql`
     select platform_account_id as "platformAccountId",
-           stream as "stream",
+           task as "stream",
            status as "status",
            cadence_seconds as "cadenceSeconds",
            slot_offset_seconds as "slotOffsetSeconds",
@@ -2996,15 +3013,15 @@ export async function listRunnableSyncStreamStatesForPage(
            last_error_summary as "lastErrorSummary",
            created_at as "createdAt",
            updated_at as "updatedAt"
-    from sync_stream_state
+    from sync_state
     where platform_account_id = ${platformAccountId}
       and status = 'active'
       and desired_revision > satisfied_revision
       and backoff_until <= ${now}
-      and ${dmSyncDependenciesSatisfiedSql("stream", "platform_account_id")}
+      and ${dmSyncDependenciesSatisfiedSql("task", "platform_account_id")}
     order by effective_priority desc,
              desired_at asc nulls last,
-             ${streamOrderSql("stream")} asc
+             ${streamOrderSql("task")} asc
   `);
 
   return normalizeSyncStreamStateRows(result.rows);
@@ -3016,7 +3033,7 @@ export async function markSyncPageWakeupEnqueued(
   now = new Date(),
 ) {
   await db.execute(sql`
-    update sync_stream_state
+    update sync_state
     set last_enqueued_at = ${now},
         updated_at = ${now}
     where platform_account_id = ${platformAccountId}
@@ -3052,7 +3069,7 @@ export async function requestSyncStreamRevisions(
       const payload = input.requestPayloadByStream?.[stream] ?? null;
       const priority = resolveSyncRequestPriority(stream, input.reason);
       const result = await database.execute(sql`
-        update sync_stream_state
+        update sync_state
         set status = case
                        when status in ('paused', 'disabled') then status
                        when ${input.preserveAuthFailed ?? false} and status = 'auth_failed' then 'auth_failed'
@@ -3065,7 +3082,7 @@ export async function requestSyncStreamRevisions(
             request_payload = ${payload},
             updated_at = ${now}
         where platform_account_id = ${input.platformAccountId}
-          and stream = ${stream}
+          and task = ${stream}
         returning desired_revision as "desiredRevision"
       `);
 
@@ -3091,11 +3108,11 @@ export async function recordSyncStreamChunkStarted(
   now = new Date(),
 ) {
   await db.execute(sql`
-    update sync_stream_state
+    update sync_state
     set last_started_at = ${now},
         updated_at = ${now}
     where platform_account_id = ${platformAccountId}
-      and stream = ${stream}
+      and task = ${stream}
   `);
 }
 
@@ -3106,7 +3123,7 @@ export async function recordSyncStreamChunkYielded(
   now = new Date(),
 ) {
   await db.execute(sql`
-    update sync_stream_state
+    update sync_state
     set last_finished_at = ${now},
         consecutive_failures = 0,
         last_error_code = null,
@@ -3114,7 +3131,7 @@ export async function recordSyncStreamChunkYielded(
         backoff_until = '-infinity'::timestamptz,
         updated_at = ${now}
     where platform_account_id = ${platformAccountId}
-      and stream = ${stream}
+      and task = ${stream}
   `);
 }
 
@@ -3147,7 +3164,7 @@ export async function recordSyncStreamChunkSucceeded(
     : sql``;
 
   await db.execute(sql`
-    update sync_stream_state
+    update sync_state
     set last_finished_at = ${now},
         consecutive_failures = 0,
         last_error_code = null,
@@ -3156,7 +3173,7 @@ export async function recordSyncStreamChunkSucceeded(
         updated_at = ${now}
         ${successSet}
     where platform_account_id = ${input.platformAccountId}
-      and stream = ${input.stream}
+      and task = ${input.stream}
   `);
 }
 
@@ -3176,7 +3193,7 @@ export async function recordSyncStreamChunkFailure(
   const backoffUntil = new Date(now.getTime() + resolveBackoffDelaySeconds(nextFailures) * 1000);
 
   await db.execute(sql`
-    update sync_stream_state
+    update sync_state
     set last_finished_at = ${now},
         last_failed_at = ${now},
         consecutive_failures = ${nextFailures},
@@ -3185,7 +3202,7 @@ export async function recordSyncStreamChunkFailure(
         backoff_until = ${backoffUntil},
         updated_at = ${now}
     where platform_account_id = ${input.platformAccountId}
-      and stream = ${input.stream}
+      and task = ${input.stream}
   `);
 }
 
@@ -3200,7 +3217,7 @@ export async function markSyncPageAuthFailed(
 ) {
   const now = input.now ?? new Date();
   await db.execute(sql`
-    update sync_stream_state
+    update sync_state
     set status = 'auth_failed',
         last_finished_at = ${now},
         last_failed_at = ${now},
@@ -3219,7 +3236,7 @@ export async function clearSyncPageAuthFailed(
   now = new Date(),
 ) {
   await db.execute(sql`
-    update sync_stream_state
+    update sync_state
     set status = 'active',
         backoff_until = '-infinity'::timestamptz,
         updated_at = ${now}
@@ -3244,11 +3261,11 @@ export async function setSyncStreamStatuses(
   const now = input.now ?? new Date();
   const nextStatus = input.status;
   await db.execute(sql`
-    update sync_stream_state
-    set status = case
+    update sync_state
+        set status = case
                    when status = 'disabled' then 'disabled'
                    when status = 'auth_failed' and ${nextStatus} = 'active' then 'auth_failed'
-                   else ${nextStatus}::sync_target_status
+                   else ${nextStatus}::sync_task_status
                  end,
         backoff_until = case
                           when ${nextStatus} = 'active' then '-infinity'::timestamptz
@@ -3256,7 +3273,7 @@ export async function setSyncStreamStatuses(
                         end,
         updated_at = ${now}
     where platform_account_id = ${input.platformAccountId}
-      and stream = any(${syncStreamArraySql(input.streams)})
+      and task = any(${syncTaskArraySql(input.streams)})
   `);
 }
 
@@ -3274,17 +3291,17 @@ export async function resetSyncStreamStateRows(
 
   const now = input.now ?? new Date();
   await db.execute(sql`
-    update sync_stream_state
+    update sync_state
     set status = case
-                   when status = 'disabled' then 'disabled'::sync_target_status
-                   when status = 'auth_failed' then 'auth_failed'::sync_target_status
-                   else 'active'::sync_target_status
+                   when status = 'disabled' then 'disabled'::sync_task_status
+                   when status = 'auth_failed' then 'auth_failed'::sync_task_status
+                   else 'active'::sync_task_status
                  end,
         pending_reason = 'scheduled',
         desired_revision = 0,
         satisfied_revision = 0,
         desired_at = null,
-        request_payload = null,
+        request_payload = '{}'::jsonb,
         backoff_until = '-infinity'::timestamptz,
         last_enqueued_at = null,
         last_started_at = null,
@@ -3297,7 +3314,7 @@ export async function resetSyncStreamStateRows(
         next_due_at = ${now},
         updated_at = ${now}
     where platform_account_id = ${input.platformAccountId}
-      and stream = any(${syncStreamArraySql(input.streams)})
+      and task = any(${syncTaskArraySql(input.streams)})
   `);
 }
 
@@ -3327,11 +3344,11 @@ export async function updateSyncStreamStateRequestPayload(
 ) {
   const now = input.now ?? new Date();
   await db.execute(sql`
-    update sync_stream_state
+    update sync_state
     set request_payload = ${input.requestPayload},
         updated_at = ${now}
     where platform_account_id = ${input.platformAccountId}
-      and stream = ${input.stream}
+      and task = ${input.stream}
   `);
 }
 
@@ -3387,7 +3404,7 @@ export async function ensureSyncProviderRateLimitProfile(
   )`);
 
   await db.execute(sql`
-    insert into sync_provider_rate_limits (
+    insert into rate_limit_buckets (
       provider,
       scope,
       egress_key,
@@ -3452,7 +3469,7 @@ export async function reserveSyncProviderRateLimit(
                egress_key as "egressKey",
                min_spacing_ms as "minSpacingMs",
                next_available_at as "nextAvailableAt"
-        from sync_provider_rate_limits
+        from rate_limit_buckets
         where provider = ${scope.provider}
           and scope = ${scope.scope}
           and egress_key = ${scope.egressKey}
@@ -3474,7 +3491,7 @@ export async function reserveSyncProviderRateLimit(
     for (const row of lockedRows) {
       const nextAvailableAt = new Date(nextAt.getTime() + row.minSpacingMs);
       await database.execute(sql`
-        update sync_provider_rate_limits
+        update rate_limit_buckets
         set next_available_at = ${nextAvailableAt},
             updated_at = ${now}
         where provider = ${row.provider}

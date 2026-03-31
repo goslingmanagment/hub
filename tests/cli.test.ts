@@ -512,7 +512,7 @@ describe("CLI parsing", () => {
     expect(logSpy).toHaveBeenCalledWith("Completed light sync for lora-main");
   });
 
-  it("supports sync --no-wait without polling sync_stream_state", async () => {
+  it("supports sync --no-wait without polling sync_state", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     cliMocks.findPageByLabel.mockResolvedValueOnce({
       page: {

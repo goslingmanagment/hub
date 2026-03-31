@@ -105,7 +105,7 @@ describe("fan page identity repository integration", () => {
       page_alias_synced_at: Date | null;
     }>(
       `select page_alias, page_alias_source, page_alias_source_note_id, page_alias_synced_at
-       from fan_pages
+       from page_fans
        where platform_account_id = $1 and fan_id = $2`,
       [page.id, fan.id],
     );
@@ -115,7 +115,7 @@ describe("fan page identity repository integration", () => {
       body: string | null;
     }>(
       `select external_note_id, is_active, body
-       from fan_page_external_notes
+       from page_fan_external_notes
        where platform_account_id = $1 and fan_id = $2
        order by external_note_id asc`,
       [page.id, fan.id],
@@ -125,7 +125,7 @@ describe("fan page identity repository integration", () => {
       source_note_id: string | null;
     }>(
       `select alias, source_note_id
-       from fan_page_aliases
+       from page_fan_aliases
        where platform_account_id = $1 and fan_id = $2
        order by alias asc`,
       [page.id, fan.id],
@@ -218,7 +218,7 @@ describe("fan page identity repository integration", () => {
       page_alias_synced_at: Date | null;
     }>(
       `select page_alias, page_alias_source, page_alias_source_note_id, page_alias_synced_at
-       from fan_pages
+       from page_fans
        where platform_account_id = $1 and fan_id = $2`,
       [page.id, fan.id],
     );
@@ -227,14 +227,14 @@ describe("fan page identity repository integration", () => {
       is_active: boolean;
     }>(
       `select external_note_id, is_active
-       from fan_page_external_notes
+       from page_fan_external_notes
        where platform_account_id = $1 and fan_id = $2
        order by external_note_id asc`,
       [page.id, fan.id],
     );
     const aliasesResult = await testDb.pool.query<{ alias: string }>(
       `select alias
-       from fan_page_aliases
+       from page_fan_aliases
        where platform_account_id = $1 and fan_id = $2`,
       [page.id, fan.id],
     );

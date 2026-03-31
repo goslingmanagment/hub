@@ -529,7 +529,7 @@ describe("sync integration", () => {
     expect(stateRows[0]?.lastEnqueuedAt?.toISOString()).toBe(now.toISOString());
   });
 
-  it("converges a Fansly all-scope sync through sync_stream_state and executor wakeups", async (context) => {
+  it("converges a Fansly all-scope sync through sync_state and executor wakeups", async (context) => {
     if (!testDb) {
       context.skip();
       return;

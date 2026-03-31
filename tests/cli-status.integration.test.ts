@@ -268,7 +268,7 @@ async function seedSyncMonitorRows(
   await testDb.db.insert(syncStreamState).values([
     {
       platformAccountId: pageId,
-      stream: "light",
+      task: "light",
       status: "active",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
@@ -281,7 +281,7 @@ async function seedSyncMonitorRows(
     },
     {
       platformAccountId: pageId,
-      stream: "transactions",
+      task: "transactions",
       status: "active",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
@@ -295,7 +295,7 @@ async function seedSyncMonitorRows(
   ]);
   await testDb.db.insert(syncCheckpoints).values({
     platformAccountId: pageId,
-    stream: "transactions",
+    task: "transactions",
     state: {
       mode: "backfill",
       completed: false,

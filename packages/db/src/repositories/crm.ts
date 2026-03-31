@@ -256,7 +256,7 @@ export async function markPageDmConversationsInvisibleByGeneration(
 ) {
   const now = input.now ?? new Date();
   await db.execute(sql`
-    update page_dm_conversations
+    update page_dm_threads
     set is_visible = false,
         updated_at = ${now}
     where platform_account_id = ${input.platformAccountId}
@@ -680,11 +680,11 @@ export async function selectNextPageDmMessageSyncCandidate(
            c.message_coverage_status as "messageCoverageStatus",
            c.message_backfill_complete as "messageBackfillComplete",
            c.last_message_sync_at as "lastMessageSyncAt"
-    from page_dm_conversations c
-    left join fan_pages fp
+    from page_dm_threads c
+    left join page_fans fp
       on fp.platform_account_id = c.platform_account_id
      and fp.fan_id = c.fan_id
-    left join spender_lifetime_page slp
+    left join fan_spend_lifetime slp
       on slp.platform_account_id = c.platform_account_id
      and slp.fan_id = c.fan_id
     where c.platform_account_id = ${input.platformAccountId}
@@ -782,7 +782,7 @@ export async function getCrmFreshnessCoverage(
       select count(*) filter (
                where is_visible = true
                  and fan_id is not null
-                 and ${dmMessageSyncEligibleSql("page_dm_conversations")}
+                 and ${dmMessageSyncEligibleSql("page_dm_threads")}
                  and message_coverage_status = 'pending_backfill'::dm_message_coverage_status
              )::int as "pendingMessageBackfillCount",
              count(*) filter (
@@ -792,14 +792,14 @@ export async function getCrmFreshnessCoverage(
              )::int as "partialWindowConversationCount",
              count(*) filter (
                where is_visible = true
-                 and coalesce(page_dm_conversations.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') <> ''
+                 and coalesce(page_dm_threads.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') <> ''
              )::int as "excludedConversationCount",
              count(*) filter (
                where is_visible = true
-                 and coalesce(page_dm_conversations.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') = ''
+                 and coalesce(page_dm_threads.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') = ''
                  and (
                    fan_id is null
-                   or ${unresolvedIdentitySql("page_dm_conversations")}
+                   or ${unresolvedIdentitySql("page_dm_threads")}
                  )
              )::int as "unresolvedConversationCount",
              count(*) filter (
@@ -807,7 +807,7 @@ export async function getCrmFreshnessCoverage(
                  and fan_id is not null
                  and stored_message_count > 0
              )::int as "previewReadyConversationCount"
-      from page_dm_conversations
+      from page_dm_threads
       where platform_account_id = ${platformAccountId}
     `),
   ]);
@@ -966,7 +966,7 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
                  order by c.last_message_at desc nulls last,
                           c.platform_conversation_id desc
                ) as rn
-        from page_dm_conversations c
+        from page_dm_threads c
         where c.platform_account_id = ${input.platformAccountId}
           and c.is_visible = true
           and c.fan_id is not null
@@ -1042,7 +1042,7 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
                when fp.subscription_expires_at <= ${nowPlus21Days} then fp.subscription_expires_at - interval '21 days'
                else null
              end as touchpoint_due_at
-      from fan_pages fp
+      from page_fans fp
       inner join fans f on f.id = fp.fan_id
       left join current_subscription cs
         on cs.platform_account_id = fp.platform_account_id
@@ -1050,7 +1050,7 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
       left join primary_conversation pc
         on pc.platform_account_id = fp.platform_account_id
        and pc.fan_id = fp.fan_id
-      left join spender_lifetime_page slp
+      left join fan_spend_lifetime slp
         on slp.platform_account_id = fp.platform_account_id
        and slp.fan_id = fp.fan_id
       where fp.platform_account_id = ${input.platformAccountId}
@@ -1388,7 +1388,7 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
                  order by c.last_message_at desc nulls last,
                           c.platform_conversation_id desc
                ) as rn
-        from page_dm_conversations c
+        from page_dm_threads c
         where c.platform_account_id = ${input.platformAccountId}
           and c.is_visible = true
           and c.fan_id is not null
@@ -1397,7 +1397,7 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
     ),
     retention_due as (
       select fp.fan_id
-      from fan_pages fp
+      from page_fans fp
       where fp.platform_account_id = ${input.platformAccountId}
         and fp.is_subscriber = true
         and fp.subscription_expires_at > ${nowSql}
@@ -1434,9 +1434,9 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
                fp.subscription_expires_at,
                fp.subscriber_since
              ) as silence_anchor
-      from spender_lifetime_page slp
+      from fan_spend_lifetime slp
       inner join fans f on f.id = slp.fan_id
-      left join fan_pages fp
+      left join page_fans fp
         on fp.platform_account_id = slp.platform_account_id
        and fp.fan_id = slp.fan_id
       left join primary_conversation pc
@@ -2054,7 +2054,7 @@ function spenderBaseQuery(
                  order by c.last_message_at desc nulls last,
                           c.platform_conversation_id desc
                ) as rn
-        from page_dm_conversations c
+        from page_dm_threads c
         where c.platform_account_id = ${input.platformAccountId}
           and c.is_visible = true
           and c.fan_id is not null
@@ -2063,7 +2063,7 @@ function spenderBaseQuery(
     ),
     retention_due as (
       select fp.fan_id
-      from fan_pages fp
+      from page_fans fp
       where fp.platform_account_id = ${input.platformAccountId}
         and fp.is_subscriber = true
         and fp.subscription_expires_at > ${nowSql}
@@ -2099,9 +2099,9 @@ function spenderBaseQuery(
                end,
                pc.last_message_at
              ) as last_contact_at
-      from spender_lifetime_page slp
+      from fan_spend_lifetime slp
       inner join fans f on f.id = slp.fan_id
-      left join fan_pages fp
+      left join page_fans fp
         on fp.platform_account_id = slp.platform_account_id
        and fp.fan_id = slp.fan_id
       left join primary_conversation pc
@@ -2367,10 +2367,10 @@ export async function listWorkboardSnoozed(
            ws.snoozed_until as "snoozedUntil"
     from workboard_snoozes ws
     inner join fans f on f.id = ws.fan_id
-    left join fan_pages fp
+    left join page_fans fp
       on fp.platform_account_id = ws.platform_account_id
      and fp.fan_id = ws.fan_id
-    left join spender_lifetime_page slp
+    left join fan_spend_lifetime slp
       on slp.platform_account_id = ws.platform_account_id
      and slp.fan_id = ws.fan_id
     where ws.platform_account_id = ${input.platformAccountId}

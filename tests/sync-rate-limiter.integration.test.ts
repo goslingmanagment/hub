@@ -10,7 +10,7 @@ async function listFanslyRateLimitRows(testDb: StartedTestDatabase, egressKey: s
     min_spacing_ms: number;
   }>(`
     select scope, min_spacing_ms
-    from sync_provider_rate_limits
+    from rate_limit_buckets
     where provider = 'fansly'
       and egress_key = $1
     order by scope asc
@@ -70,7 +70,7 @@ describe("sync rate limiter integration", () => {
     ]);
 
     await testDb.pool.query(`
-      update sync_provider_rate_limits
+      update rate_limit_buckets
       set next_available_at = now() - interval '1 second'
       where provider = 'fansly'
         and egress_key = $1

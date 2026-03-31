@@ -486,7 +486,7 @@ describe("notification incidents integration", () => {
 
     const statusRows = await testDb.pool.query<{ count: string }>(`
       select count(*)::int as count
-      from sync_stream_state
+      from sync_state
       where platform_account_id = $1
         and status = 'auth_failed'
     `, [page.id]);

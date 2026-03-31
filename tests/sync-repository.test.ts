@@ -336,9 +336,9 @@ describe("sync repository timestamp normalization", () => {
     const sqlText = extractSqlText(query);
     const params = extractQueryParams(query);
 
-    expect(sqlText).toContain("update sync_stream_state");
+    expect(sqlText).toContain("update sync_state");
     expect(sqlText).toContain("set base_priority =");
-    expect(sqlText).toContain("case stream");
+    expect(sqlText).toContain("case task");
     expect(sqlText).toContain("effective_priority = case");
     expect(sqlText).toContain("pending_reason");
     expect(sqlText).not.toContain("desired_revision =");
@@ -468,7 +468,7 @@ describe("sync repository timestamp normalization", () => {
 
     const pageQuery = execute.mock.calls[0]?.[0];
     const streamQuery = execute.mock.calls[1]?.[0];
-    const dependencyClause = "ARRAY['light', 'top_spenders', 'transactions', 'subscribers', 'followers']::sync_stream[]";
+    const dependencyClause = "ARRAY['light', 'top_spenders', 'transactions', 'subscribers', 'followers']::sync_task[]";
 
     expect(extractSqlText(pageQuery)).toContain(dependencyClause);
     expect(extractSqlText(streamQuery)).toContain(dependencyClause);
@@ -518,7 +518,7 @@ describe("sync repository timestamp normalization", () => {
   it("parameterizes runtime stream filters instead of interpolating them into SQL", async () => {
     const execute = vi.fn().mockResolvedValue({ rows: [] });
     const db = { execute } as never;
-    const injected = "light'::sync_stream[]); drop table sync_stream_state; --";
+    const injected = "light'::sync_stream[]); drop table sync_state; --";
 
     await listSyncStreamStateRows(db, {
       platformAccountId: 55,
@@ -526,7 +526,7 @@ describe("sync repository timestamp normalization", () => {
     });
 
     const query = execute.mock.calls[0]?.[0];
-    expect(extractSqlText(query)).not.toContain("drop table sync_stream_state");
+    expect(extractSqlText(query)).not.toContain("drop table sync_state");
     expect(extractQueryParams(query)).toEqual(expect.arrayContaining([
       55,
       injected,

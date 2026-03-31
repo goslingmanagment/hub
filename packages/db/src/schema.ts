@@ -46,12 +46,7 @@ export const syncTaskEnum = pgEnum("sync_task", [
   "dm_conversations",
   "dm_messages",
   "followers_reconcile",
-]);
-export const syncTargetStatusEnum = pgEnum("sync_target_status", [
-  "active",
-  "paused",
-  "auth_failed",
-  "disabled",
+  "cleanup",
 ]);
 export const syncTaskStatusEnum = pgEnum("sync_task_status", [
   "idle",
@@ -60,6 +55,9 @@ export const syncTaskStatusEnum = pgEnum("sync_task_status", [
   "retry_wait",
   "blocked",
   "paused",
+  "active",
+  "auth_failed",
+  "disabled",
 ]);
 export const syncRequestReasonEnum = pgEnum("sync_request_reason", [
   "scheduled",
@@ -151,8 +149,8 @@ export const users = pgTable("users", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const platformAccounts = pgTable(
-  "platform_accounts",
+export const pages = pgTable(
+  "pages",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     modelId: bigint("model_id", { mode: "number" })
@@ -165,14 +163,15 @@ export const platformAccounts = pgTable(
       mode: "number",
     }).default(0).notNull(),
     label: text("label").notNull().unique(),
-    platformAccountId: text("platform_account_id"),
+    platformAccountId: text("external_page_id"),
     username: text("username"),
     displayName: text("display_name"),
     followerCount: integer("follower_count"),
     subscriberCount: integer("subscriber_count"),
+    egressEndpointId: bigint("egress_endpoint_id", { mode: "number" }),
     earningsBalanceMills: bigint("earnings_balance_mills", {
       mode: "bigint",
-    }).default(0n).notNull(),
+    }).default(sql`0`).notNull(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
     lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
     lastLightSyncAt: timestamp("last_light_sync_at", { withTimezone: true }),
@@ -181,18 +180,18 @@ export const platformAccounts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    modelIdx: index("platform_accounts_model_idx").on(table.modelId),
-    platformAccountUniq: unique("platform_accounts_platform_account_uniq").on(
+    modelIdx: index("pages_model_idx").on(table.modelId),
+    platformAccountUniq: unique("pages_platform_external_id_uniq").on(
       table.platform,
       table.platformAccountId,
     ),
   }),
 );
 
-export const platformAccountCredentials = pgTable("platform_account_credentials", {
+export const pageCredentials = pgTable("page_credentials", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   platformAccountId: bigint("platform_account_id", { mode: "number" })
-    .references(() => platformAccounts.id, { onDelete: "cascade" })
+    .references(() => pages.id, { onDelete: "cascade" })
     .notNull()
     .unique(),
   encryptedSession: text("encrypted_session").notNull(),
@@ -200,15 +199,17 @@ export const platformAccountCredentials = pgTable("platform_account_credentials"
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const platformAccountProxies = pgTable("platform_account_proxies", {
+export const egressEndpoints = pgTable("egress_endpoints", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   platformAccountId: bigint("platform_account_id", { mode: "number" })
-    .references(() => platformAccounts.id, { onDelete: "cascade" })
+    .references(() => pages.id, { onDelete: "cascade" })
     .notNull()
     .unique(),
+  kind: text("kind").default("proxy").notNull(),
   url: text("url").notNull(),
   encryptedAuth: text("encrypted_auth"),
   keyVersion: integer("key_version"),
+  rateLimitScopeKey: text("rate_limit_scope_key"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -219,7 +220,7 @@ export const notificationIncidents = pgTable(
     incidentKey: text("incident_key").notNull().unique(),
     kind: notificationIncidentKindEnum("kind").notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     stream: syncStreamEnum("stream"),
     status: notificationIncidentStatusEnum("status").default("open").notNull(),
@@ -275,12 +276,11 @@ export const telegramDeliveryAttempts = pgTable(
   }),
 );
 
-export const syncOperations = pgTable(
-  "sync_operations",
+export const syncRequests = pgTable("sync_requests",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     task: syncTaskEnum("task").notNull(),
     generation: bigint("generation", { mode: "number" }).notNull(),
@@ -294,11 +294,11 @@ export const syncOperations = pgTable(
     requestedAt: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    accountRequestedIdx: index("sync_operations_account_requested_idx").on(
+    accountRequestedIdx: index("sync_requests_account_requested_idx").on(
       table.platformAccountId,
       table.requestedAt,
     ),
-    generationUniq: unique("sync_operations_account_task_generation_uniq").on(
+    generationUniq: unique("sync_requests_account_task_generation_uniq").on(
       table.platformAccountId,
       table.task,
       table.generation,
@@ -311,9 +311,9 @@ export const syncRuns = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
-    operationId: bigint("operation_id", { mode: "number" }).references(() => syncOperations.id, {
+    operationId: bigint("operation_id", { mode: "number" }).references(() => syncRequests.id, {
       onDelete: "set null",
     }),
     task: syncTaskEnum("task"),
@@ -336,17 +336,16 @@ export const syncRuns = pgTable(
   }),
 );
 
-export const syncRequestAttempts = pgTable(
-  "sync_request_attempts",
+export const syncHttpAttempts = pgTable("sync_http_attempts",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     syncRunId: bigint("sync_run_id", { mode: "number" })
       .references(() => syncRuns.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
-    operationId: bigint("operation_id", { mode: "number" }).references(() => syncOperations.id, {
+    operationId: bigint("operation_id", { mode: "number" }).references(() => syncRequests.id, {
       onDelete: "set null",
     }),
     task: syncTaskEnum("task"),
@@ -368,16 +367,16 @@ export const syncRequestAttempts = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (table) => ({
-    runStartedIdx: index("sync_request_attempts_run_started_idx").on(
+    runStartedIdx: index("sync_http_attempts_run_started_idx").on(
       table.syncRunId,
       table.startedAt,
     ),
-    logicalIdx: index("sync_request_attempts_logical_idx").on(
+    logicalIdx: index("sync_http_attempts_logical_idx").on(
       table.syncRunId,
       table.logicalRequestId,
       table.attemptNumber,
     ),
-    retentionIdx: index("sync_request_attempts_retention_idx").on(table.startedAt),
+    retentionIdx: index("sync_http_attempts_retention_idx").on(table.startedAt),
   }),
 );
 
@@ -389,9 +388,9 @@ export const syncRunEvents = pgTable(
       .references(() => syncRuns.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
-    operationId: bigint("operation_id", { mode: "number" }).references(() => syncOperations.id, {
+    operationId: bigint("operation_id", { mode: "number" }).references(() => syncRequests.id, {
       onDelete: "set null",
     }),
     task: syncTaskEnum("task"),
@@ -411,46 +410,31 @@ export const syncRunEvents = pgTable(
   }),
 );
 
-export const syncCheckpoints = pgTable(
-  "sync_checkpoints",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
-      .notNull(),
-    stream: syncStreamEnum("stream").notNull(),
-    cursorText: text("cursor_text"),
-    cursorTimestamp: timestamp("cursor_timestamp", { withTimezone: true }),
-    state: jsonb("state").$type<Record<string, unknown>>().default({}).notNull(),
-    lastSuccessfulRunId: bigint("last_successful_run_id", { mode: "number" }).references(
-      () => syncRuns.id,
-      { onDelete: "set null" },
-    ),
-    lastSuccessfulAt: timestamp("last_successful_at", { withTimezone: true }),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => ({
-    uniq: unique("sync_checkpoints_account_stream_uniq").on(
-      table.platformAccountId,
-      table.stream,
-    ),
-  }),
-);
-
-export const syncTasks = pgTable(
-  "sync_tasks",
+export const syncState = pgTable("sync_state",
   {
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     task: syncTaskEnum("task").notNull(),
     status: syncTaskStatusEnum("status").default("idle").notNull(),
     desiredGeneration: bigint("desired_generation", { mode: "number" }).default(0).notNull(),
     runningGeneration: bigint("running_generation", { mode: "number" }),
     appliedGeneration: bigint("applied_generation", { mode: "number" }).default(0).notNull(),
-    scheduleIntervalSeconds: integer("schedule_interval_seconds").notNull(),
+    scheduleIntervalSeconds: integer("schedule_interval_seconds").default(0).notNull(),
     slotOffsetSeconds: integer("slot_offset_seconds").notNull(),
     lastScheduledSlot: bigint("last_scheduled_slot", { mode: "number" }).default(-1).notNull(),
+    nextDueAt: timestamp("next_due_at", { withTimezone: true }),
+    basePriority: integer("base_priority"),
+    effectivePriority: integer("effective_priority"),
+    pendingReason: syncRequestReasonEnum("pending_reason"),
+    desiredRevision: bigint("desired_revision", { mode: "number" }),
+    satisfiedRevision: bigint("satisfied_revision", { mode: "number" }),
+    desiredAt: timestamp("desired_at", { withTimezone: true }),
+    requestPayload: jsonb("request_payload").$type<Record<string, unknown>>().default({}).notNull(),
+    cadenceSeconds: integer("cadence_seconds"),
+    backoffUntil: timestamp("backoff_until", { withTimezone: true }),
+    lastSucceededAt: timestamp("last_succeeded_at", { withTimezone: true }),
+    lastFailedAt: timestamp("last_failed_at", { withTimezone: true }),
     lastRequestedAt: timestamp("last_requested_at", { withTimezone: true }),
     lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
     lastStartedAt: timestamp("last_started_at", { withTimezone: true }),
@@ -479,18 +463,18 @@ export const syncTasks = pgTable(
   },
   (table) => ({
     pk: primaryKey({
-      name: "sync_tasks_pkey",
+      name: "sync_state_pkey",
       columns: [table.platformAccountId, table.task],
     }),
-    freshnessIdx: index("sync_tasks_freshness_idx").on(table.task, table.lastSuccessAt),
-    leaseIdx: index("sync_tasks_lease_idx").on(table.status, table.leaseExpiresAt),
-    runnableIdx: index("sync_tasks_runnable_idx").on(
+    freshnessIdx: index("sync_state_freshness_idx").on(table.task, table.lastSuccessAt),
+    leaseIdx: index("sync_state_lease_idx").on(table.status, table.leaseExpiresAt),
+    runnableIdx: index("sync_state_runnable_idx").on(
       table.status,
       table.retryAt,
       table.platformAccountId,
       table.task,
     ),
-    scheduleIdx: index("sync_tasks_schedule_idx").on(
+    scheduleIdx: index("sync_state_schedule_idx").on(
       table.status,
       table.lastScheduledSlot,
       table.platformAccountId,
@@ -503,7 +487,7 @@ export const syncCursors = pgTable(
   "sync_cursors",
   {
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     task: syncTaskEnum("task").notNull(),
     cursorText: text("cursor_text"),
@@ -524,64 +508,8 @@ export const syncCursors = pgTable(
     }),
   }),
 );
-
-export const syncStreamState = pgTable(
-  "sync_stream_state",
-  {
-    platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
-      .notNull(),
-    stream: syncStreamEnum("stream").notNull(),
-    status: syncTargetStatusEnum("status").default("active").notNull(),
-    cadenceSeconds: integer("cadence_seconds").notNull(),
-    slotOffsetSeconds: integer("slot_offset_seconds").notNull(),
-    nextDueAt: timestamp("next_due_at", { withTimezone: true }).notNull(),
-    basePriority: integer("base_priority").notNull(),
-    effectivePriority: integer("effective_priority").notNull(),
-    pendingReason: syncRequestReasonEnum("pending_reason").default("scheduled").notNull(),
-    desiredRevision: bigint("desired_revision", { mode: "number" }).default(0).notNull(),
-    satisfiedRevision: bigint("satisfied_revision", { mode: "number" }).default(0).notNull(),
-    desiredAt: timestamp("desired_at", { withTimezone: true }),
-    requestPayload: jsonb("request_payload").$type<Record<string, unknown> | null>(),
-    backoffUntil: timestamp("backoff_until", { withTimezone: true })
-      .default(sql`'-infinity'::timestamptz`)
-      .notNull(),
-    lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
-    lastStartedAt: timestamp("last_started_at", { withTimezone: true }),
-    lastFinishedAt: timestamp("last_finished_at", { withTimezone: true }),
-    lastSucceededAt: timestamp("last_succeeded_at", { withTimezone: true }),
-    lastFailedAt: timestamp("last_failed_at", { withTimezone: true }),
-    consecutiveFailures: integer("consecutive_failures").default(0).notNull(),
-    lastErrorCode: text("last_error_code"),
-    lastErrorSummary: text("last_error_summary"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({
-      name: "sync_stream_state_pkey",
-      columns: [table.platformAccountId, table.stream],
-    }),
-    dueIdx: index("sync_stream_state_due_idx").on(table.nextDueAt, table.platformAccountId),
-    pendingIdx: index("sync_stream_state_pending_idx").on(
-      table.effectivePriority,
-      table.desiredAt,
-      table.platformAccountId,
-      table.stream,
-    ),
-    backoffIdx: index("sync_stream_state_backoff_idx").on(
-      table.backoffUntil,
-      table.platformAccountId,
-    ),
-    freshnessIdx: index("sync_stream_state_freshness_idx").on(
-      table.stream,
-      table.lastSucceededAt,
-    ),
-  }),
-);
-
-export const syncProviderRateLimits = pgTable(
-  "sync_provider_rate_limits",
+export const rateLimitBuckets = pgTable(
+  "rate_limit_buckets",
   {
     provider: platformEnum("provider").notNull(),
     scope: text("scope").notNull(),
@@ -592,7 +520,7 @@ export const syncProviderRateLimits = pgTable(
   },
   (table) => ({
     pk: primaryKey({
-      name: "sync_provider_rate_limits_pkey",
+      name: "rate_limit_buckets_pkey",
       columns: [table.provider, table.scope, table.egressKey],
     }),
   }),
@@ -603,7 +531,7 @@ export const rawPayloads = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     syncRunId: bigint("sync_run_id", { mode: "number" }).references(() => syncRuns.id, {
       onDelete: "set null",
@@ -660,18 +588,18 @@ export const fanUsernameAliases = pgTable(
   }),
 );
 
-export const fanPages = pgTable(
-  "fan_pages",
+export const pageFans = pgTable(
+  "page_fans",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     totalCreatorNetMills: bigint("total_creator_net_mills", { mode: "bigint" })
-      .default(0n)
+      .default(sql`0`)
       .notNull(),
     currency: text("currency").default("USD").notNull(),
     isFollower: boolean("is_follower").default(false).notNull(),
@@ -688,21 +616,21 @@ export const fanPages = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    uniq: unique("fan_pages_fan_account_uniq").on(table.fanId, table.platformAccountId),
-    platformAccountIdx: index("fan_pages_platform_account_idx").on(table.platformAccountId),
-    pageAliasIdx: index("fan_pages_platform_account_alias_idx").on(
+    uniq: unique("page_fans_fan_account_uniq").on(table.fanId, table.platformAccountId),
+    platformAccountIdx: index("page_fans_platform_account_idx").on(table.platformAccountId),
+    pageAliasIdx: index("page_fans_platform_account_alias_idx").on(
       table.platformAccountId,
       table.pageAlias,
     ),
   }),
 );
 
-export const fanPageExternalNotes = pgTable(
-  "fan_page_external_notes",
+export const pageFanExternalNotes = pgTable(
+  "page_fan_external_notes",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -720,17 +648,17 @@ export const fanPageExternalNotes = pgTable(
     raw: jsonb("raw").$type<Record<string, unknown>>().default({}).notNull(),
   },
   (table) => ({
-    uniq: unique("fan_page_external_notes_account_provider_external_note_uniq").on(
+    uniq: unique("page_fan_external_notes_account_provider_external_note_uniq").on(
       table.platformAccountId,
       table.provider,
       table.externalNoteId,
     ),
-    pageFanProviderIdx: index("fan_page_external_notes_page_fan_provider_idx").on(
+    pageFanProviderIdx: index("page_fan_external_notes_page_fan_provider_idx").on(
       table.platformAccountId,
       table.fanId,
       table.provider,
     ),
-    pageFanProviderActiveIdx: index("fan_page_external_notes_page_fan_provider_active_idx").on(
+    pageFanProviderActiveIdx: index("page_fan_external_notes_page_fan_provider_active_idx").on(
       table.platformAccountId,
       table.fanId,
       table.provider,
@@ -739,11 +667,11 @@ export const fanPageExternalNotes = pgTable(
   }),
 );
 
-export const fanPageAliases = pgTable(
-  "fan_page_aliases",
+export const pageFanAliases = pgTable(
+  "page_fan_aliases",
   {
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -755,14 +683,14 @@ export const fanPageAliases = pgTable(
   },
   (table) => ({
     pk: primaryKey({
-      name: "fan_page_aliases_pkey",
+      name: "page_fan_aliases_pkey",
       columns: [table.platformAccountId, table.fanId, table.alias],
     }),
-    aliasIdx: index("fan_page_aliases_platform_account_alias_idx").on(
+    aliasIdx: index("page_fan_aliases_platform_account_alias_idx").on(
       table.platformAccountId,
       table.alias,
     ),
-    fanIdx: index("fan_page_aliases_fan_idx").on(table.fanId),
+    fanIdx: index("page_fan_aliases_fan_idx").on(table.fanId),
   }),
 );
 
@@ -771,7 +699,7 @@ export const pageFollows = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -808,7 +736,7 @@ export const pageSubscriptions = pgTable(
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformSubscriptionId: text("platform_subscription_id").notNull().unique(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -848,12 +776,12 @@ export const pageSubscriptions = pgTable(
   }),
 );
 
-export const pageDmConversations = pgTable(
-  "page_dm_conversations",
+export const pageDmThreads = pgTable(
+  "page_dm_threads",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" }).references(() => fans.id, {
       onDelete: "set null",
@@ -892,39 +820,39 @@ export const pageDmConversations = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    uniq: unique("page_dm_conversations_account_conversation_uniq").on(
+    uniq: unique("page_dm_threads_account_conversation_uniq").on(
       table.platformAccountId,
       table.platformConversationId,
     ),
-    fanIdx: index("page_dm_conversations_account_fan_idx").on(
+    fanIdx: index("page_dm_threads_account_fan_idx").on(
       table.platformAccountId,
       table.fanId,
     ),
-    visibleMessageIdx: index("page_dm_conversations_visible_message_idx").on(
+    visibleMessageIdx: index("page_dm_threads_visible_message_idx").on(
       table.platformAccountId,
       table.isVisible,
       table.lastMessageAt.desc(),
       table.id.desc(),
     ),
-    visibleUnreadIdx: index("page_dm_conversations_visible_unread_idx").on(
+    visibleUnreadIdx: index("page_dm_threads_visible_unread_idx").on(
       table.platformAccountId,
       table.isVisible,
       table.unreadCount.desc(),
       table.lastMessageAt.desc(),
       table.id.desc(),
     ),
-    backfillIdx: index("page_dm_conversations_backfill_idx").on(
+    backfillIdx: index("page_dm_threads_backfill_idx").on(
       table.platformAccountId,
       table.isVisible,
       table.messageCoverageStatus,
       table.lastMessageSyncAt,
     ),
-    generationIdx: index("page_dm_conversations_generation_idx").on(
+    generationIdx: index("page_dm_threads_generation_idx").on(
       table.platformAccountId,
       table.lastSeenGeneration,
     ),
     storedMessageCountCheck: check(
-      "page_dm_conversations_stored_message_count_check",
+      "page_dm_threads_stored_message_count_check",
       sql`${table.storedMessageCount} between 0 and 25`,
     ),
   }),
@@ -935,10 +863,10 @@ export const pageDmMessages = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     conversationId: bigint("conversation_id", { mode: "number" })
-      .references(() => pageDmConversations.id, { onDelete: "cascade" })
+      .references(() => pageDmThreads.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     platformMessageId: text("platform_message_id").notNull(),
     senderPlatformUserId: text("sender_platform_user_id"),
@@ -974,7 +902,7 @@ export const workboardSnoozes = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -1000,7 +928,7 @@ export const transactions = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" }).references(() => fans.id, {
       onDelete: "set null",
@@ -1054,42 +982,42 @@ export const transactions = pgTable(
   }),
 );
 
-export const dailyRevenue = pgTable(
-  "daily_revenue",
+export const revenueDaily = pgTable(
+  "revenue_daily",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     businessDate: date("business_date").notNull(),
     canonicalType: transactionTypeEnum("canonical_type").notNull(),
     transactionState: transactionStateEnum("transaction_state").notNull(),
     transactionCount: integer("transaction_count").default(0).notNull(),
-    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(sql`0`).notNull(),
     creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" })
-      .default(0n)
+      .default(sql`0`)
       .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    uniq: unique("daily_revenue_account_date_type_state_uniq").on(
+    uniq: unique("revenue_daily_account_date_type_state_uniq").on(
       table.platformAccountId,
       table.businessDate,
       table.canonicalType,
       table.transactionState,
     ),
-    accountDateIdx: index("daily_revenue_account_date_idx").on(
+    accountDateIdx: index("revenue_daily_account_date_idx").on(
       table.platformAccountId,
       table.businessDate,
     ),
   }),
 );
 
-export const spenderDailyFacts = pgTable(
-  "spender_daily_facts",
+export const fanSpendDaily = pgTable(
+  "fan_spend_daily",
   {
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -1098,16 +1026,16 @@ export const spenderDailyFacts = pgTable(
     canonicalType: transactionTypeEnum("canonical_type").notNull(),
     transactionState: transactionStateEnum("transaction_state").notNull(),
     transactionCount: integer("transaction_count").default(0).notNull(),
-    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(sql`0`).notNull(),
     creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" })
-      .default(0n)
+      .default(sql`0`)
       .notNull(),
     lastTransactionAt: timestamp("last_transaction_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     pk: primaryKey({
-      name: "spender_daily_facts_pkey",
+      name: "fan_spend_daily_pkey",
       columns: [
         table.platformAccountId,
         table.fanId,
@@ -1116,12 +1044,12 @@ export const spenderDailyFacts = pgTable(
         table.transactionState,
       ],
     }),
-    accountDateFanIdx: index("spender_daily_facts_account_date_fan_idx").on(
+    accountDateFanIdx: index("fan_spend_daily_account_date_fan_idx").on(
       table.platformAccountId,
       table.businessDate,
       table.fanId,
     ),
-    fanAccountDateIdx: index("spender_daily_facts_fan_account_date_idx").on(
+    fanAccountDateIdx: index("fan_spend_daily_fan_account_date_idx").on(
       table.fanId,
       table.platformAccountId,
       table.businessDate,
@@ -1129,39 +1057,38 @@ export const spenderDailyFacts = pgTable(
   }),
 );
 
-export const spenderLifetimePage = pgTable(
-  "spender_lifetime_page",
+export const fanSpendLifetime = pgTable(
+  "fan_spend_lifetime",
   {
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
-    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(sql`0`).notNull(),
     creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" })
-      .default(0n)
+      .default(sql`0`)
       .notNull(),
     lastTransactionAt: timestamp("last_transaction_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     pk: primaryKey({
-      name: "spender_lifetime_page_pkey",
+      name: "fan_spend_lifetime_pkey",
       columns: [table.platformAccountId, table.fanId],
     }),
-    fanAccountIdx: index("spender_lifetime_page_fan_account_idx").on(
+    fanAccountIdx: index("fan_spend_lifetime_fan_account_idx").on(
       table.fanId,
       table.platformAccountId,
     ),
   }),
 );
 
-export const pageTopSpenders = pgTable(
-  "page_top_spenders",
+export const pageFanIdentities = pgTable("page_fan_identities",
   {
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     sourceIdentityKey: text("source_identity_key").notNull(),
     correlationAccountId: text("correlation_account_id"),
@@ -1169,9 +1096,9 @@ export const pageTopSpenders = pgTable(
     fanId: bigint("fan_id", { mode: "number" }).references(() => fans.id, {
       onDelete: "set null",
     }),
-    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }).default(sql`0`).notNull(),
     creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" })
-      .default(0n)
+      .default(sql`0`)
       .notNull(),
     sourceWindowStartedAt: timestamp("source_window_started_at", { withTimezone: true }).notNull(),
     sourceWindowEndedAt: timestamp("source_window_ended_at", { withTimezone: true }).notNull(),
@@ -1181,21 +1108,21 @@ export const pageTopSpenders = pgTable(
   },
   (table) => ({
     pk: primaryKey({
-      name: "page_top_spenders_pkey",
+      name: "page_fan_identities_pkey",
       columns: [table.platformAccountId, table.sourceIdentityKey],
     }),
-    fanAccountIdx: index("page_top_spenders_fan_account_idx").on(
+    fanAccountIdx: index("page_fan_identities_fan_account_idx").on(
       table.fanId,
       table.platformAccountId,
     ),
   }),
 );
 
-export const spenderProjectionWatermarks = pgTable(
-  "spender_projection_watermarks",
+export const projectionWatermarks = pgTable(
+  "projection_watermarks",
   {
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull()
       .primaryKey(),
     lastRebuiltAt: timestamp("last_rebuilt_at", { withTimezone: true }).notNull(),
@@ -1208,7 +1135,7 @@ export const dailyFollowers = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     businessDate: date("business_date").notNull(),
     newFollowers: integer("new_followers").default(0).notNull(),
@@ -1228,7 +1155,7 @@ export const dailySubscribers = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     businessDate: date("business_date").notNull(),
     newSubscribers: integer("new_subscribers").default(0).notNull(),
@@ -1251,7 +1178,7 @@ export const userPageAssignments = pgTable(
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -1311,7 +1238,7 @@ export const auditEvents = pgTable(
       onDelete: "set null",
     }),
     platformAccountId: bigint("platform_account_id", { mode: "number" }).references(
-      () => platformAccounts.id,
+      () => pages.id,
       { onDelete: "set null" },
     ),
     source: text("source").notNull(),
@@ -1334,7 +1261,7 @@ export const fanNotes = pgTable(
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     authorUserId: bigint("author_user_id", { mode: "number" }).references(() => users.id, {
       onDelete: "set null",
@@ -1355,7 +1282,7 @@ export const fanSummaries = pgTable(
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     authorUserId: bigint("author_user_id", { mode: "number" }).references(() => users.id, {
       onDelete: "set null",
@@ -1376,7 +1303,7 @@ export const fanProfiles = pgTable(
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     version: integer("version").notNull(),
     body: text("body").notNull(),
@@ -1424,3 +1351,30 @@ export const fanFlags = pgTable(
     fanIdx: index("fan_flags_fan_idx").on(table.fanId, table.createdAt),
   }),
 );
+
+export const platformAccounts = pages;
+export const platformAccountCredentials = pageCredentials;
+export const platformAccountProxies = egressEndpoints;
+export const syncOperations = syncRequests;
+export const syncRequestAttempts = syncHttpAttempts;
+export const syncTasks = syncState;
+export const syncStreamState = Object.assign(syncState, {
+  stream: syncState.task,
+}) as typeof syncState & {
+  stream: typeof syncState.task;
+};
+export const syncCheckpoints = Object.assign(syncCursors, {
+  stream: syncCursors.task,
+}) as typeof syncCursors & {
+  stream: typeof syncCursors.task;
+};
+export const syncProviderRateLimits = rateLimitBuckets;
+export const fanPages = pageFans;
+export const fanPageExternalNotes = pageFanExternalNotes;
+export const fanPageAliases = pageFanAliases;
+export const pageDmConversations = pageDmThreads;
+export const dailyRevenue = revenueDaily;
+export const spenderDailyFacts = fanSpendDaily;
+export const spenderLifetimePage = fanSpendLifetime;
+export const spenderProjectionWatermarks = projectionWatermarks;
+export const pageTopSpenders = pageFanIdentities;

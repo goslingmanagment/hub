@@ -228,7 +228,7 @@ describe("db write safety", () => {
 
     const rows = await testDb.pool.query(`
       select label, commission_rate::float8 as commission_rate
-      from platform_accounts
+      from pages
       where id in (${fanslyPage.id}, ${onlyFansPage.id})
       order by label asc
     `);
@@ -298,7 +298,7 @@ describe("db write safety", () => {
              earnings_balance_mills,
              last_verified_at is not null as has_last_verified_at,
              last_light_sync_at is not null as has_last_light_sync_at
-      from platform_accounts
+      from pages
       where id = ${page.id}
     `);
     const credentialRows = await testDb.pool.query(`
@@ -310,7 +310,7 @@ describe("db write safety", () => {
       select count(*)::int as count,
              max(url) as url,
              bool_or(encrypted_auth is not null) as has_encrypted_auth
-      from platform_account_proxies
+      from egress_endpoints
       where platform_account_id = ${page.id}
     `);
 
@@ -364,13 +364,13 @@ describe("db write safety", () => {
 
     const counts = await testDb.pool.query(`
       select
-        (select count(*)::int from platform_accounts) as platform_accounts_count,
+        (select count(*)::int from pages) as pages_count,
         (select count(*)::int from platform_account_credentials) as credentials_count,
-        (select count(*)::int from platform_account_proxies) as proxies_count
+        (select count(*)::int from egress_endpoints) as proxies_count
     `);
 
     expect(counts.rows[0]).toMatchObject({
-      platform_accounts_count: 0,
+      pages_count: 0,
       credentials_count: 0,
       proxies_count: 0,
     });
@@ -421,12 +421,12 @@ describe("db write safety", () => {
 
     const counts = await testDb.pool.query(`
       select
-        (select count(*)::int from platform_accounts) as platform_accounts_count,
+        (select count(*)::int from pages) as pages_count,
         (select count(*)::int from platform_account_credentials) as credentials_count
     `);
 
     expect(counts.rows[0]).toMatchObject({
-      platform_accounts_count: 1,
+      pages_count: 1,
       credentials_count: 1,
     });
   });
@@ -474,7 +474,7 @@ describe("db write safety", () => {
 
     const rows = await testDb.pool.query(`
       select platform_account_id, username, display_name
-      from platform_accounts
+      from pages
       where id = ${page.id}
     `);
 
@@ -506,7 +506,7 @@ describe("db write safety", () => {
 
     const proxyRows = await testDb.pool.query(`
       select url, encrypted_auth is not null as has_encrypted_auth
-      from platform_account_proxies
+      from egress_endpoints
       where platform_account_id = ${page.id}
     `);
 
@@ -574,7 +574,7 @@ describe("db write safety", () => {
 
     const proxyRows = await testDb.pool.query(`
       select url, encrypted_auth is not null as has_encrypted_auth
-      from platform_account_proxies
+      from egress_endpoints
       where platform_account_id = ${page.id}
     `);
 
@@ -724,7 +724,7 @@ describe("db write safety", () => {
 
     const proxyRows = await testDb.pool.query(`
       select count(*)::int as count
-      from platform_account_proxies
+      from egress_endpoints
       where platform_account_id = ${page.id}
     `);
 
@@ -782,7 +782,7 @@ describe("db write safety", () => {
 
     const proxyRows = await testDb.pool.query(`
       select url, encrypted_auth is not null as has_encrypted_auth
-      from platform_account_proxies
+      from egress_endpoints
       where platform_account_id = ${page.id}
     `);
 
@@ -850,7 +850,7 @@ describe("db write safety", () => {
              subscriber_count,
              earnings_balance_mills,
              metadata::text as metadata
-      from platform_accounts
+      from pages
       where id = ${page.id}
     `);
 
@@ -945,7 +945,7 @@ describe("db write safety", () => {
       select platform_account_id,
              username,
              metadata::text as metadata
-      from platform_accounts
+      from pages
       where id = ${page.id}
     `);
 
@@ -1138,12 +1138,12 @@ describe("db write safety", () => {
 
     const counts = await testDb.pool.query(`
       select
-        (select count(*)::int from platform_accounts) as platform_accounts_count,
+        (select count(*)::int from pages) as pages_count,
         (select count(*)::int from platform_account_credentials) as credentials_count
     `);
 
     expect(counts.rows[0]).toMatchObject({
-      platform_accounts_count: 0,
+      pages_count: 0,
       credentials_count: 0,
     });
   });
@@ -1258,7 +1258,7 @@ describe("db write safety", () => {
 
     const proxyRows = await testDb.pool.query(`
       select count(*)::int as count, max(url) as url, max(encrypted_auth) as encrypted_auth
-      from platform_account_proxies
+      from egress_endpoints
       where platform_account_id = ${page.id}
     `);
     expect(proxyRows.rows[0]?.count).toBe(1);
@@ -1282,7 +1282,7 @@ describe("db write safety", () => {
 
     const checkpointRows = await testDb.pool.query(`
       select count(*)::int as count, max(cursor_text) as cursor_text
-      from sync_checkpoints
+      from sync_cursors
       where platform_account_id = ${page.id}
         and stream = 'transactions'
     `);
@@ -1337,7 +1337,7 @@ describe("db write safety", () => {
       select count(*)::int as count,
              bool_or(is_follower) as is_follower,
              bool_or(is_subscriber) as is_subscriber
-      from fan_pages
+      from page_fans
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
@@ -1533,7 +1533,7 @@ describe("db write safety", () => {
 
     const spendBeforePayoutReversal = await testDb.pool.query(`
       select creator_net_amount_mills
-      from spender_lifetime_page
+      from fan_spend_lifetime
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
@@ -1557,7 +1557,7 @@ describe("db write safety", () => {
 
     const spendAfterPayoutReversal = await testDb.pool.query(`
       select creator_net_amount_mills
-      from spender_lifetime_page
+      from fan_spend_lifetime
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
@@ -1931,7 +1931,7 @@ describe("db write safety", () => {
       select business_date,
              gross_amount_mills,
              creator_net_amount_mills
-      from daily_revenue
+      from revenue_daily
       where platform_account_id = ${page.id}
       order by business_date asc
     `);
@@ -2018,7 +2018,7 @@ describe("db write safety", () => {
       select business_date,
              gross_amount_mills,
              creator_net_amount_mills
-      from daily_revenue
+      from revenue_daily
       where platform_account_id = ${page.id}
       order by business_date asc
     `);
@@ -2196,7 +2196,7 @@ describe("db write safety", () => {
 
     const beforeDelete = await testDb.pool.query(`
       select gross_amount_mills, creator_net_amount_mills
-      from spender_lifetime_page
+      from fan_spend_lifetime
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
@@ -2208,7 +2208,7 @@ describe("db write safety", () => {
     ]);
     const beforeDeleteFanPage = await testDb.pool.query(`
       select total_creator_net_mills
-      from fan_pages
+      from page_fans
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
@@ -2224,19 +2224,19 @@ describe("db write safety", () => {
 
     const afterDeleteLifetime = await testDb.pool.query(`
       select count(*)::int as count
-      from spender_lifetime_page
+      from fan_spend_lifetime
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
     const afterDeleteDailyFacts = await testDb.pool.query(`
       select count(*)::int as count
-      from spender_daily_facts
+      from fan_spend_daily
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
     const afterDeleteFanPage = await testDb.pool.query(`
       select total_creator_net_mills
-      from fan_pages
+      from page_fans
       where fan_id = ${fan.id}
         and platform_account_id = ${page.id}
     `);
@@ -2292,7 +2292,7 @@ describe("db write safety", () => {
              creator_net_amount_mills,
              source_window_started_at,
              source_window_ended_at
-      from page_top_spenders
+      from page_fan_identities
       where platform_account_id = ${page.id}
     `);
 

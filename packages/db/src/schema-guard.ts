@@ -80,6 +80,31 @@ export async function assertRuntimeSchemaReady(
     throw driftError(`missing latest migration ${latestMigration}`);
   }
 
+  const requiredTables = await pool.query<{ name: string }>(
+    `select table_name as name
+       from information_schema.tables
+      where table_schema = 'public'
+        and table_name in ('pages', 'sync_state', 'sync_cursors')`,
+  );
+
+  const requiredNames = new Set(requiredTables.rows.map((row) => row.name));
+  for (const name of ["pages", "sync_state", "sync_cursors"]) {
+    if (!requiredNames.has(name)) {
+      throw driftError(`required table ${name} is missing`);
+    }
+  }
+
+  const legacyTables = await pool.query<{ name: string }>(
+    `select table_name as name
+       from information_schema.tables
+      where table_schema = 'public'
+        and table_name in ('platform_accounts', 'platform_account_proxies', 'sync_stream_state', 'sync_checkpoints')`,
+  );
+
+  if (legacyTables.rows.length > 0) {
+    throw driftError(`legacy tables still exist: ${legacyTables.rows.map((row) => row.name).join(", ")}`);
+  }
+
   const statsColumn = await pool.query<ColumnShapeRow>(
     `select data_type, is_nullable, column_default
        from information_schema.columns
