@@ -5,6 +5,10 @@ import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/d
 
 const queryMocks = vi.hoisted(() => ({
   useAdminConnections: vi.fn(),
+  useAdminSyncBlockPause: vi.fn(),
+  useAdminSyncBlockReset: vi.fn(),
+  useAdminSyncBlockResume: vi.fn(),
+  useAdminSyncBlockTrigger: vi.fn(),
   useAdminSyncRuns: vi.fn(),
   useAdminSyncRunDetail: vi.fn(),
   useAdminSyncTrigger: vi.fn(),
@@ -12,6 +16,7 @@ const queryMocks = vi.hoisted(() => ({
   useAuthMe: vi.fn(),
   useLogout: vi.fn(),
   useOverview: vi.fn(),
+  usePageSyncBlocks: vi.fn(),
   useSyncOverview: vi.fn(),
   useSyncMonitor: vi.fn(),
 }));
@@ -94,9 +99,31 @@ function buildSyncBlock(
   };
 }
 
-function buildSyncOverview() {
+function buildSyncOverview(): {
+  generatedAt: string;
+  diagnosis: ReturnType<typeof buildSyncDiagnosis> | null;
+  pages: Array<{
+    pageId: number;
+    pageLabel: string;
+    platform: "fansly";
+    modelSlug: string;
+    modelName: string;
+    username: string;
+    displayName: string;
+    diagnosis: ReturnType<typeof buildSyncDiagnosis> | null;
+    blocks: {
+      connection: ReturnType<typeof buildSyncBlock>;
+      top_spenders: ReturnType<typeof buildSyncBlock>;
+      transactions: ReturnType<typeof buildSyncBlock>;
+      subscribers: ReturnType<typeof buildSyncBlock>;
+      followers: ReturnType<typeof buildSyncBlock>;
+      messages: ReturnType<typeof buildSyncBlock>;
+    };
+  }>;
+} {
   return {
     generatedAt: "2026-03-24T12:00:00.000Z",
+    diagnosis: null,
     pages: [{
       pageId: 1,
       pageLabel: "lana",
@@ -105,6 +132,7 @@ function buildSyncOverview() {
       modelName: "Lana",
       username: "lana",
       displayName: "Lana",
+      diagnosis: null,
       blocks: {
         connection: buildSyncBlock("connection", {
           connectionStatus: "connected",
@@ -126,6 +154,25 @@ function buildSyncOverview() {
         }),
       },
     }],
+  };
+}
+
+function buildSyncDiagnosis(
+  overrides: Partial<{
+    code: "worker_offline" | "stalled_run" | "auth_failed";
+    severity: "warning" | "error";
+    headline: string;
+    detail: string;
+    actionKind: "worker" | "credentials" | "sync_settings" | null;
+  }> = {},
+) {
+  return {
+    code: "worker_offline" as const,
+    severity: "error" as const,
+    headline: "No sync worker is processing jobs",
+    detail: "Sync work is queued, but planner or execute jobs are not being claimed. Start or restart the worker service.",
+    actionKind: "worker" as const,
+    ...overrides,
   };
 }
 
@@ -201,6 +248,10 @@ function renderWithRouter(element: ReturnType<typeof createElement>, initialEntr
 describe("dashboard sync layout", () => {
   beforeEach(() => {
     queryMocks.useAdminConnections.mockReset();
+    queryMocks.useAdminSyncBlockPause.mockReset();
+    queryMocks.useAdminSyncBlockReset.mockReset();
+    queryMocks.useAdminSyncBlockResume.mockReset();
+    queryMocks.useAdminSyncBlockTrigger.mockReset();
     queryMocks.useAdminSyncRuns.mockReset();
     queryMocks.useAdminSyncRunDetail.mockReset();
     queryMocks.useAdminSyncTrigger.mockReset();
@@ -208,12 +259,20 @@ describe("dashboard sync layout", () => {
     queryMocks.useAuthMe.mockReset();
     queryMocks.useLogout.mockReset();
     queryMocks.useOverview.mockReset();
+    queryMocks.usePageSyncBlocks.mockReset();
     queryMocks.useSyncOverview.mockReset();
     queryMocks.useSyncMonitor.mockReset();
 
     queryMocks.useOverview.mockReturnValue({ data: buildOverview() });
     queryMocks.useSyncOverview.mockReturnValue({
       data: buildSyncOverview(),
+      isLoading: false,
+    });
+    queryMocks.usePageSyncBlocks.mockReturnValue({
+      data: {
+        generatedAt: "2026-03-24T12:00:00.000Z",
+        page: buildSyncOverview().pages[0],
+      },
       isLoading: false,
     });
     queryMocks.useLogout.mockReturnValue({ mutateAsync: vi.fn() });
@@ -234,6 +293,22 @@ describe("dashboard sync layout", () => {
       isLoading: false,
     });
     queryMocks.useAdminSyncTrigger.mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    });
+    queryMocks.useAdminSyncBlockTrigger.mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    });
+    queryMocks.useAdminSyncBlockPause.mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    });
+    queryMocks.useAdminSyncBlockResume.mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    });
+    queryMocks.useAdminSyncBlockReset.mockReturnValue({
       isPending: false,
       mutateAsync: vi.fn(),
     });
@@ -281,5 +356,42 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Top Spenders");
     expect(html).toContain("View details");
     expect(html).not.toContain("Update Credentials");
+  });
+
+  it("shows overall and page-level worker diagnostics on the sync overview", () => {
+    const overview = buildSyncOverview();
+    overview.diagnosis = buildSyncDiagnosis();
+    overview.pages[0]!.diagnosis = buildSyncDiagnosis();
+    queryMocks.useSyncOverview.mockReturnValue({
+      data: overview,
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
+
+    expect(html).toContain("No sync worker is processing jobs");
+    expect(html).toContain("Start or restart the worker service.");
+  });
+
+  it("shows page-level diagnosis in sync detail", () => {
+    const overview = buildSyncOverview();
+    overview.pages[0]!.diagnosis = buildSyncDiagnosis({
+      code: "stalled_run",
+      headline: "Sync needs attention",
+      detail: "Subscribers stopped making progress and need the worker to recover.",
+      actionKind: "sync_settings",
+    });
+    queryMocks.usePageSyncBlocks.mockReturnValue({
+      data: {
+        generatedAt: "2026-03-24T12:00:00.000Z",
+        page: overview.pages[0],
+      },
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync&page=lana"]);
+
+    expect(html).toContain("Sync needs attention");
+    expect(html).toContain("Subscribers stopped making progress and need the worker to recover.");
   });
 });

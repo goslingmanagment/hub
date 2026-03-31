@@ -4,6 +4,7 @@ import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { formatRelativeTime } from "@/lib/format";
 import { SyncBlockBadge } from "./SyncBlockRow.js";
 import { SyncBlockActions } from "./SyncBlockActions.js";
+import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
 import {
   getBlockOrder,
   getBlockLabel,
@@ -279,6 +280,9 @@ export function SyncPageDetail({
     <div>
       <PageHeader page={page} onBack={onBack} />
       <div className="space-y-3">
+        {page.diagnosis && (
+          <SyncDiagnosisNotice diagnosis={page.diagnosis} />
+        )}
         {blockKeys.map((key) => (
           <BlockDetailCard
             key={key}

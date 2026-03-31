@@ -181,6 +181,12 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
     return failures > 1 ? `${reason} (${failures} failures)` : reason;
   }
 
+  const progressPrefix = block.state === "catching_up"
+    ? "Catching up\u2026"
+    : block.state === "retrying"
+      ? "Retrying\u2026"
+      : "Syncing\u2026";
+
   // Syncing / catching_up / retrying with progress
   if (
     (block.state === "syncing" || block.state === "catching_up" || block.state === "retrying") &&
@@ -188,14 +194,18 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
   ) {
     const { current, total, unit, label } = block.progress;
     if (total != null && total > 0) {
-      return `Syncing\u2026 ${current.toLocaleString()}/${total.toLocaleString()} ${unit}`;
+      return `${progressPrefix} ${current.toLocaleString()}/${total.toLocaleString()} ${unit}`;
     }
-    if (label) return `Syncing\u2026 ${label}`;
+    if (label) return `${progressPrefix} ${label}`;
+    return progressPrefix;
+  }
+
+  if (block.state === "syncing") {
     return "Syncing\u2026";
   }
 
-  if (block.state === "syncing" || block.state === "catching_up") {
-    return "Syncing\u2026";
+  if (block.state === "catching_up") {
+    return "Catching up\u2026";
   }
 
   if (block.state === "retrying") {

@@ -4,9 +4,14 @@ import { useSyncOverview } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { SyncBlockRow } from "./SyncBlockRow.js";
+import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
 import { getBlockOrder, needsVisualAttention } from "./syncBlockDisplay.js";
 
 function PageErrorBar({ page }: { page: SyncBlocksPage }) {
+  if (page.diagnosis) {
+    return <SyncDiagnosisNotice diagnosis={page.diagnosis} className="mt-3" />;
+  }
+
   const blocks = getBlockOrder().map((key) => page.blocks[key]);
   const attentionBlocks = blocks.filter(needsVisualAttention);
   if (attentionBlocks.length === 0) return null;
@@ -114,6 +119,9 @@ export function SyncPageList({
 
   return (
     <div className="space-y-3">
+      {data?.diagnosis && (
+        <SyncDiagnosisNotice diagnosis={data.diagnosis} />
+      )}
       {pages.map((page) => (
         <PageCard
           key={page.pageId}

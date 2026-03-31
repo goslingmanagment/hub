@@ -117,6 +117,13 @@ function buildMonitorRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildApp(overrides: Record<string, unknown> = {}) {
+  return {
+    db: {},
+    ...overrides,
+  } as never;
+}
+
 describe("sync blocks service", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -559,6 +566,236 @@ describe("sync blocks service", () => {
         summary: "Sync stopped making progress",
       },
     });
+  });
+
+  it("diagnoses worker_offline from an old planner job when pending work is not being claimed", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    const poolQuery = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{ oldest_created_on: new Date("2026-03-24T11:57:00.000Z") }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 7,
+      label: "lana",
+      platform: "fansly",
+      modelSlug: "lana",
+      modelName: "Lana",
+      username: "lana_page",
+      displayName: "Lana",
+    }]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({
+        stream: "subscribers",
+        desiredRevision: 5,
+        satisfiedRevision: 4,
+      }),
+      buildMonitorRow({ stream: "followers" }),
+      buildMonitorRow({ stream: "dm_conversations" }),
+      buildMonitorRow({ stream: "dm_messages" }),
+    ]);
+    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
+
+    const overview = await getSyncBlocksOverview(buildApp({
+      pool: { query: poolQuery },
+    }), { now });
+
+    expect(overview.diagnosis).toMatchObject({
+      code: "worker_offline",
+    });
+    expect(overview.pages[0]?.diagnosis).toMatchObject({
+      code: "worker_offline",
+      actionKind: "worker",
+    });
+  });
+
+  it("diagnoses worker_offline from an old page execute job", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    const poolQuery = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{ oldest_created_on: null }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ page_id: 7, oldest_created_on: new Date("2026-03-24T11:56:00.000Z") }],
+      });
+
+    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 7,
+      label: "lana",
+      platform: "fansly",
+      modelSlug: "lana",
+      modelName: "Lana",
+      username: "lana_page",
+      displayName: "Lana",
+    }]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+      buildMonitorRow({
+        stream: "transactions",
+        desiredRevision: 5,
+        satisfiedRevision: 4,
+      }),
+      buildMonitorRow({ stream: "subscribers" }),
+      buildMonitorRow({ stream: "followers" }),
+      buildMonitorRow({ stream: "dm_conversations" }),
+      buildMonitorRow({ stream: "dm_messages" }),
+    ]);
+    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
+
+    const overview = await getSyncBlocksOverview(buildApp({
+      pool: { query: poolQuery },
+    }), { now });
+
+    expect(overview.pages[0]?.diagnosis).toMatchObject({
+      code: "worker_offline",
+    });
+  });
+
+  it("does not report worker_offline without pending work", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    const poolQuery = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{ oldest_created_on: new Date("2026-03-24T11:57:00.000Z") }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 7,
+      label: "lana",
+      platform: "fansly",
+      modelSlug: "lana",
+      modelName: "Lana",
+      username: "lana_page",
+      displayName: "Lana",
+    }]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({ stream: "subscribers" }),
+      buildMonitorRow({ stream: "followers" }),
+      buildMonitorRow({ stream: "dm_conversations" }),
+      buildMonitorRow({ stream: "dm_messages" }),
+    ]);
+    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
+
+    const overview = await getSyncBlocksOverview(buildApp({
+      pool: { query: poolQuery },
+    }), { now });
+
+    expect(overview.diagnosis).toBeNull();
+    expect(overview.pages[0]?.diagnosis).toBeNull();
+  });
+
+  it("prefers auth_failed over worker_offline", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    const poolQuery = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{ oldest_created_on: new Date("2026-03-24T11:57:00.000Z") }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 7,
+      label: "lana",
+      platform: "fansly",
+      modelSlug: "lana",
+      modelName: "Lana",
+      username: "lana_page",
+      displayName: "Lana",
+    }]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({
+        stream: "top_spenders",
+        targetStatus: "auth_failed",
+        lastErrorCode: "auth_failed",
+        lastErrorSummary: "Fresh credentials are required",
+      }),
+      buildMonitorRow({
+        stream: "transactions",
+        desiredRevision: 5,
+        satisfiedRevision: 4,
+      }),
+      buildMonitorRow({ stream: "subscribers" }),
+      buildMonitorRow({ stream: "followers" }),
+      buildMonitorRow({ stream: "dm_conversations" }),
+      buildMonitorRow({ stream: "dm_messages" }),
+    ]);
+    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
+
+    const overview = await getSyncBlocksOverview(buildApp({
+      pool: { query: poolQuery },
+    }), { now });
+
+    expect(overview.pages[0]?.diagnosis).toMatchObject({
+      code: "auth_failed",
+      actionKind: "credentials",
+    });
+    expect(overview.diagnosis).toBeNull();
+  });
+
+  it("prefers stalled_run over worker_offline", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    const poolQuery = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{ oldest_created_on: new Date("2026-03-24T11:57:00.000Z") }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 7,
+      label: "lana",
+      platform: "fansly",
+      modelSlug: "lana",
+      modelName: "Lana",
+      username: "lana_page",
+      displayName: "Lana",
+    }]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({
+        stream: "subscribers",
+        runningRunId: 42,
+        runningTrigger: "scheduled",
+        runningStartedAt: new Date("2026-03-24T11:55:00.000Z"),
+        runningLastActivityAt: new Date("2026-03-24T11:58:00.000Z"),
+        checkpointState: {
+          pageCount: 1,
+          providerReportedTotal: 697,
+        },
+      }),
+      buildMonitorRow({
+        stream: "followers",
+        desiredRevision: 5,
+        satisfiedRevision: 4,
+      }),
+      buildMonitorRow({ stream: "dm_conversations" }),
+      buildMonitorRow({ stream: "dm_messages" }),
+    ]);
+    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
+
+    const overview = await getSyncBlocksOverview(buildApp({
+      pool: { query: poolQuery },
+    }), { now });
+
+    expect(overview.pages[0]?.diagnosis).toMatchObject({
+      code: "stalled_run",
+      actionKind: "sync_settings",
+    });
+    expect(overview.diagnosis).toBeNull();
   });
 
   it("triggers the mapped block stream immediately without reviving auth_failed rows", async () => {

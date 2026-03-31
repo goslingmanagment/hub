@@ -16382,6 +16382,62 @@
                     "generatedAt": {
                       "type": "string"
                     },
+                    "diagnosis": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "enum": [
+                                "worker_offline",
+                                "stalled_run",
+                                "auth_failed"
+                              ]
+                            },
+                            "severity": {
+                              "type": "string",
+                              "enum": [
+                                "warning",
+                                "error"
+                              ]
+                            },
+                            "headline": {
+                              "type": "string"
+                            },
+                            "detail": {
+                              "type": "string"
+                            },
+                            "actionKind": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "worker",
+                                    "credentials",
+                                    "sync_settings"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "severity",
+                            "headline",
+                            "detail",
+                            "actionKind"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "pages": {
                       "type": "array",
                       "items": {
@@ -16422,6 +16478,62 @@
                             "anyOf": [
                               {
                                 "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "diagnosis": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string",
+                                    "enum": [
+                                      "worker_offline",
+                                      "stalled_run",
+                                      "auth_failed"
+                                    ]
+                                  },
+                                  "severity": {
+                                    "type": "string",
+                                    "enum": [
+                                      "warning",
+                                      "error"
+                                    ]
+                                  },
+                                  "headline": {
+                                    "type": "string"
+                                  },
+                                  "detail": {
+                                    "type": "string"
+                                  },
+                                  "actionKind": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "worker",
+                                          "credentials",
+                                          "sync_settings"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "severity",
+                                  "headline",
+                                  "detail",
+                                  "actionKind"
+                                ],
+                                "additionalProperties": false
                               },
                               {
                                 "type": "null"
@@ -18881,6 +18993,7 @@
                           "modelName",
                           "username",
                           "displayName",
+                          "diagnosis",
                           "blocks"
                         ],
                         "additionalProperties": false
@@ -18889,6 +19002,7 @@
                   },
                   "required": [
                     "generatedAt",
+                    "diagnosis",
                     "pages"
                   ],
                   "additionalProperties": false
@@ -19031,6 +19145,62 @@
                           "anyOf": [
                             {
                               "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "diagnosis": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "code": {
+                                  "type": "string",
+                                  "enum": [
+                                    "worker_offline",
+                                    "stalled_run",
+                                    "auth_failed"
+                                  ]
+                                },
+                                "severity": {
+                                  "type": "string",
+                                  "enum": [
+                                    "warning",
+                                    "error"
+                                  ]
+                                },
+                                "headline": {
+                                  "type": "string"
+                                },
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "actionKind": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "worker",
+                                        "credentials",
+                                        "sync_settings"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "severity",
+                                "headline",
+                                "detail",
+                                "actionKind"
+                              ],
+                              "additionalProperties": false
                             },
                             {
                               "type": "null"
@@ -21490,6 +21660,7 @@
                         "modelName",
                         "username",
                         "displayName",
+                        "diagnosis",
                         "blocks"
                       ],
                       "additionalProperties": false
@@ -21673,6 +21844,62 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "diagnosis": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "code": {
+                                  "type": "string",
+                                  "enum": [
+                                    "worker_offline",
+                                    "stalled_run",
+                                    "auth_failed"
+                                  ]
+                                },
+                                "severity": {
+                                  "type": "string",
+                                  "enum": [
+                                    "warning",
+                                    "error"
+                                  ]
+                                },
+                                "headline": {
+                                  "type": "string"
+                                },
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "actionKind": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "worker",
+                                        "credentials",
+                                        "sync_settings"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "severity",
+                                "headline",
+                                "detail",
+                                "actionKind"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -21682,7 +21909,8 @@
                         "modelSlug",
                         "modelName",
                         "username",
-                        "displayName"
+                        "displayName",
+                        "diagnosis"
                       ],
                       "additionalProperties": false
                     },

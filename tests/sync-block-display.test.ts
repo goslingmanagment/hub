@@ -86,4 +86,28 @@ describe("sync block display", () => {
       substreams: [],
     } as never)).toBe("Sync stalled at 1/697 subscribers");
   });
+
+  it("renders catching_up blocks without the active syncing copy", () => {
+    expect(formatBlockSummary({
+      block: "subscribers",
+      state: "catching_up",
+      lastSuccessAt: "2026-03-18T10:00:00.000Z",
+      progress: {
+        label: "1 of 697 subscribers processed",
+        current: 1,
+        total: 697,
+        unit: "subscribers",
+        percent: 0.14347202295552366,
+        details: {},
+      },
+      error: null,
+      needsAttention: false,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: { subscriberCount: 1 },
+      connectionStatus: null,
+      substreams: [],
+    } as never)).toBe("Catching up… 1/697 subscribers");
+  });
 });

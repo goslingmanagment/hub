@@ -17,6 +17,7 @@ import {
 } from "@agency_hub_core/db";
 import { buildProxyEgressKey, type Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
+import type { Pool } from "pg";
 
 import type { AppContext } from "../bootstrap.ts";
 import { listConnectionStatuses, type ConnectionStatus } from "./connections.ts";
@@ -77,6 +78,26 @@ type SyncBlockSubstream = {
   error: SyncBlockError | null;
 };
 
+export type SyncDiagnosisCode =
+  | "worker_offline"
+  | "stalled_run"
+  | "auth_failed";
+
+export type SyncDiagnosisSeverity = "warning" | "error";
+
+export type SyncDiagnosisActionKind =
+  | "worker"
+  | "credentials"
+  | "sync_settings";
+
+export type SyncDiagnosis = {
+  code: SyncDiagnosisCode;
+  severity: SyncDiagnosisSeverity;
+  headline: string;
+  detail: string;
+  actionKind: SyncDiagnosisActionKind | null;
+};
+
 export type SyncBlockStatus = {
   block: SyncBlockKey;
   state: SyncBlockState;
@@ -100,11 +121,13 @@ export type SyncBlocksPageItem = {
   modelName: string;
   username: string | null;
   displayName: string | null;
+  diagnosis: SyncDiagnosis | null;
   blocks: Record<SyncBlockKey, SyncBlockStatus>;
 };
 
 type SyncBlockOverviewResponse = {
   generatedAt: string;
+  diagnosis: SyncDiagnosis | null;
   pages: SyncBlocksPageItem[];
 };
 
@@ -160,6 +183,13 @@ const BLOCK_STATE_PRIORITY: Record<SyncBlockState, number> = {
 };
 
 const STALLED_RUN_THRESHOLD_MS = 45_000;
+const WORKER_OFFLINE_PLANNER_THRESHOLD_MS = 2 * 60_000;
+const WORKER_OFFLINE_EXECUTE_THRESHOLD_MS = 3 * 60_000;
+
+type QueueHealth = {
+  plannerCreatedAt: Date | null;
+  executeCreatedAtByPageId: Map<number, Date>;
+};
 
 function asRecord(value: unknown) {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -175,8 +205,23 @@ function asNullableString(value: unknown) {
   return value === null || typeof value === "string" ? value : null;
 }
 
+function asInt(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
 function iso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
+}
+
+function asDate(value: unknown) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
 }
 
 function earliestIso(values: Array<Date | null | undefined>) {
@@ -223,6 +268,20 @@ function isStalled(row: SyncMonitorStreamRow, now: Date) {
   }
 
   return now.getTime() - row.runningLastActivityAt.getTime() > STALLED_RUN_THRESHOLD_MS;
+}
+
+function isRunning(row: SyncMonitorStreamRow, now: Date) {
+  return row.runningRunId !== null && !isStalled(row, now);
+}
+
+function isPending(row: SyncMonitorStreamRow) {
+  if (row.targetStatus !== "active") {
+    return false;
+  }
+  if (row.desiredRevision === null || row.satisfiedRevision === null) {
+    return false;
+  }
+  return row.desiredRevision > row.satisfiedRevision && row.runningRunId === null;
 }
 
 function deriveRowBlockState(
@@ -356,6 +415,149 @@ function progressForMessages(
       visibleConversations: conversations.dmConversationCount,
     },
   } satisfies SyncBlockProgress;
+}
+
+function blocksForPage(page: SyncBlocksPageItem) {
+  return Object.values(page.blocks);
+}
+
+function blockLabelForDiagnosis(block: SyncBlockKey) {
+  switch (block) {
+    case "connection":
+      return "Connection";
+    case "top_spenders":
+      return "Top Spenders";
+    case "transactions":
+      return "Transactions";
+    case "subscribers":
+      return "Subscribers";
+    case "followers":
+      return "Followers";
+    case "messages":
+      return "Messages";
+  }
+}
+
+function buildWorkerOfflineDiagnosis(): SyncDiagnosis {
+  return {
+    code: "worker_offline",
+    severity: "error",
+    headline: "No sync worker is processing jobs",
+    detail: "Sync work is queued, but planner or execute jobs are not being claimed. Start or restart the worker service.",
+    actionKind: "worker",
+  };
+}
+
+function buildStalledRunDiagnosis(block: SyncBlockStatus): SyncDiagnosis {
+  return {
+    code: "stalled_run",
+    severity: "error",
+    headline: "Sync needs attention",
+    detail: `${blockLabelForDiagnosis(block.block)} stopped making progress and needs the worker to recover.`,
+    actionKind: "sync_settings",
+  };
+}
+
+function buildAuthFailedDiagnosis(block: SyncBlockStatus): SyncDiagnosis {
+  return {
+    code: "auth_failed",
+    severity: "error",
+    headline: "Reconnect to resume sync",
+    detail: block.error?.summary ?? "Fresh credentials are required before sync can continue.",
+    actionKind: "credentials",
+  };
+}
+
+function hasPlannerBacklog(queueHealth: QueueHealth, now: Date) {
+  return queueHealth.plannerCreatedAt !== null &&
+    now.getTime() - queueHealth.plannerCreatedAt.getTime() > WORKER_OFFLINE_PLANNER_THRESHOLD_MS;
+}
+
+function hasExecuteBacklogForPage(queueHealth: QueueHealth, pageId: number, now: Date) {
+  const createdAt = queueHealth.executeCreatedAtByPageId.get(pageId);
+  return createdAt !== undefined &&
+    now.getTime() - createdAt.getTime() > WORKER_OFFLINE_EXECUTE_THRESHOLD_MS;
+}
+
+async function getQueueHealth(app: AppContext): Promise<QueueHealth> {
+  const pool = (app as Partial<AppContext>).pool as Pool | undefined;
+  if (!pool || typeof pool.query !== "function") {
+    return {
+      plannerCreatedAt: null,
+      executeCreatedAtByPageId: new Map<number, Date>(),
+    };
+  }
+
+  const [plannerResult, executeResult] = await Promise.all([
+    pool.query(
+      `select min(created_on) as oldest_created_on
+       from pgboss.job
+       where name = 'sync.planner'
+         and state = 'created'`,
+    ),
+    pool.query(
+      `select (data->>'platformAccountId')::int as page_id,
+              min(created_on) as oldest_created_on
+       from pgboss.job
+       where name = 'sync.page.execute'
+         and state = 'created'
+       group by (data->>'platformAccountId')::int`,
+    ),
+  ]);
+
+  const executeCreatedAtByPageId = new Map<number, Date>();
+  for (const row of executeResult.rows) {
+    const pageId = asInt(row.page_id);
+    const createdAt = asDate(row.oldest_created_on);
+    if (pageId !== null && createdAt) {
+      executeCreatedAtByPageId.set(pageId, createdAt);
+    }
+  }
+
+  return {
+    plannerCreatedAt: asDate(plannerResult.rows[0]?.oldest_created_on),
+    executeCreatedAtByPageId,
+  };
+}
+
+function buildPageDiagnosis(
+  page: SyncBlocksPageItem,
+  rows: SyncMonitorStreamRow[],
+  queueHealth: QueueHealth,
+  now: Date,
+): SyncDiagnosis | null {
+  const blocks = blocksForPage(page);
+  const authFailedBlock = blocks.find((block) => block.state === "auth_failed");
+  if (authFailedBlock) {
+    return buildAuthFailedDiagnosis(authFailedBlock);
+  }
+
+  const stalledBlock = blocks.find((block) => block.error?.code === "stalled");
+  if (stalledBlock) {
+    return buildStalledRunDiagnosis(stalledBlock);
+  }
+
+  const hasPendingWork = rows.some((row) => isPending(row));
+  if (!hasPendingWork) {
+    return null;
+  }
+
+  const hasActiveRuns = rows.some((row) => isRunning(row, now));
+  if (hasActiveRuns) {
+    return null;
+  }
+
+  if (hasPlannerBacklog(queueHealth, now) || hasExecuteBacklogForPage(queueHealth, page.pageId, now)) {
+    return buildWorkerOfflineDiagnosis();
+  }
+
+  return null;
+}
+
+function buildOverviewDiagnosis(pages: SyncBlocksPageItem[]) {
+  return pages.some((page) => page.diagnosis?.code === "worker_offline")
+    ? buildWorkerOfflineDiagnosis()
+    : null;
 }
 
 function combinedState(states: Exclude<SyncBlockState, "not_available">[]) {
@@ -603,6 +805,7 @@ async function buildPageBlocks(
     rowsByPageId.set(row.pageId, current);
   }
 
+  const queueHealth = await getQueueHealth(app);
   const connections = await listConnectionStatuses(app, {
     pages: filteredPages,
     syncUxByPageId: new Map(),
@@ -633,7 +836,7 @@ async function buildPageBlocks(
         : buildUnsupportedBlock("messages"),
     } satisfies Record<SyncBlockKey, SyncBlockStatus>;
 
-    return {
+    const pageItem = {
       pageId: page.id,
       pageLabel: page.label,
       platform: page.platform,
@@ -641,7 +844,13 @@ async function buildPageBlocks(
       modelName: page.modelName,
       username: page.username,
       displayName: page.displayName,
+      diagnosis: null,
       blocks,
+    } satisfies SyncBlocksPageItem;
+
+    return {
+      ...pageItem,
+      diagnosis: buildPageDiagnosis(pageItem, pageRows, queueHealth, now),
     } satisfies SyncBlocksPageItem;
   });
 }
@@ -716,6 +925,7 @@ export async function getSyncBlocksOverview(
 
   return {
     generatedAt: now.toISOString(),
+    diagnosis: buildOverviewDiagnosis(pages),
     pages,
   };
 }
@@ -764,6 +974,7 @@ export async function getPageMessagesSyncBlock(
       modelName: blocks.page.modelName,
       username: blocks.page.username,
       displayName: blocks.page.displayName,
+      diagnosis: blocks.page.diagnosis,
     },
     block: blocks.page.blocks.messages,
   };

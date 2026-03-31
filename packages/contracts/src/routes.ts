@@ -1784,6 +1784,28 @@ export const syncBlockStatusSchema = z.object({
   substreams: z.array(syncBlockSubstreamSchema),
 });
 
+const syncDiagnosisCodeEnum = z.enum([
+  "worker_offline",
+  "stalled_run",
+  "auth_failed",
+]);
+
+const syncDiagnosisSeverityEnum = z.enum(["warning", "error"]);
+
+const syncDiagnosisActionKindEnum = z.enum([
+  "worker",
+  "credentials",
+  "sync_settings",
+]);
+
+export const syncDiagnosisSchema = z.object({
+  code: syncDiagnosisCodeEnum,
+  severity: syncDiagnosisSeverityEnum,
+  headline: z.string(),
+  detail: z.string(),
+  actionKind: syncDiagnosisActionKindEnum.nullable(),
+});
+
 export const syncBlocksPageSchema = z.object({
   pageId: z.number().int(),
   pageLabel: z.string(),
@@ -1792,6 +1814,7 @@ export const syncBlocksPageSchema = z.object({
   modelName: z.string(),
   username: z.string().nullable(),
   displayName: z.string().nullable(),
+  diagnosis: syncDiagnosisSchema.nullable(),
   blocks: z.object({
     connection: syncBlockStatusSchema,
     top_spenders: syncBlockStatusSchema,
@@ -1804,6 +1827,7 @@ export const syncBlocksPageSchema = z.object({
 
 export const syncOverviewResponseSchema = z.object({
   generatedAt: isoTimestamp,
+  diagnosis: syncDiagnosisSchema.nullable(),
   pages: z.array(syncBlocksPageSchema),
 });
 
@@ -1824,6 +1848,7 @@ export const pageMessagesBlockResponseSchema = z.object({
     modelName: z.string(),
     username: z.string().nullable(),
     displayName: z.string().nullable(),
+    diagnosis: syncDiagnosisSchema.nullable(),
   }),
   block: syncBlockStatusSchema,
 });
@@ -3363,6 +3388,7 @@ export type SyncMonitorResponse = z.infer<typeof syncStatusResponseSchema>;
 export type SyncRequestsQuery = z.infer<typeof syncRequestsQuerySchema>;
 export type SyncRequestItem = z.infer<typeof syncRequestItemSchema>;
 export type SyncRequestsResponse = z.infer<typeof syncRequestsResponseSchema>;
+export type SyncDiagnosis = z.infer<typeof syncDiagnosisSchema>;
 export type SyncBlockStatus = z.infer<typeof syncBlockStatusSchema>;
 export type SyncBlocksPage = z.infer<typeof syncBlocksPageSchema>;
 export type SyncOverviewResponse = z.infer<typeof syncOverviewResponseSchema>;

@@ -4818,6 +4818,15 @@ export interface paths {
                     content: {
                         "application/json": {
                             generatedAt: string;
+                            diagnosis: {
+                                /** @enum {string} */
+                                code: "worker_offline" | "stalled_run" | "auth_failed";
+                                /** @enum {string} */
+                                severity: "warning" | "error";
+                                headline: string;
+                                detail: string;
+                                actionKind: ("worker" | "credentials" | "sync_settings") | null;
+                            } | null;
                             pages: {
                                 pageId: number;
                                 pageLabel: string;
@@ -4827,6 +4836,15 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
+                                diagnosis: {
+                                    /** @enum {string} */
+                                    code: "worker_offline" | "stalled_run" | "auth_failed";
+                                    /** @enum {string} */
+                                    severity: "warning" | "error";
+                                    headline: string;
+                                    detail: string;
+                                    actionKind: ("worker" | "credentials" | "sync_settings") | null;
+                                } | null;
                                 blocks: {
                                     connection: {
                                         /** @enum {string} */
@@ -5229,6 +5247,15 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
+                                diagnosis: {
+                                    /** @enum {string} */
+                                    code: "worker_offline" | "stalled_run" | "auth_failed";
+                                    /** @enum {string} */
+                                    severity: "warning" | "error";
+                                    headline: string;
+                                    detail: string;
+                                    actionKind: ("worker" | "credentials" | "sync_settings") | null;
+                                } | null;
                                 blocks: {
                                     connection: {
                                         /** @enum {string} */
@@ -5644,6 +5671,15 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
+                                diagnosis: {
+                                    /** @enum {string} */
+                                    code: "worker_offline" | "stalled_run" | "auth_failed";
+                                    /** @enum {string} */
+                                    severity: "warning" | "error";
+                                    headline: string;
+                                    detail: string;
+                                    actionKind: ("worker" | "credentials" | "sync_settings") | null;
+                                } | null;
                             };
                             block: {
                                 /** @enum {string} */
