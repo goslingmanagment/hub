@@ -1,6 +1,7 @@
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OverviewResponse } from "@agency_hub_core/contracts";
 import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/DashboardShellContext.tsx";
 
@@ -24,6 +25,9 @@ vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 import { CrmSummaryHeader } from "../apps/dashboard/src/components/page/crm/CrmSummaryHeader.tsx";
 import { OverviewPage } from "../apps/dashboard/src/pages/OverviewPage.tsx";
 import { PageDetailPage } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
+
+type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
+type DashboardPage = DashboardShellValue["pages"][number];
 
 function buildSyncUx(
   overrides: Partial<{
@@ -50,22 +54,64 @@ function buildSyncUx(
   };
 }
 
-function buildOverviewPage(syncUx = buildSyncUx()) {
+function buildOverviewPageItem(syncUx = buildSyncUx(), overrides: Partial<DashboardPage> = {}): DashboardPage {
   return {
+    id: 1,
+    label: "lana",
+    platform: "fansly",
+    modelSlug: "lana",
+    modelName: "Lana",
+    username: "lana",
+    subscriberCount: 12,
+    followerCount: 34,
+    revenueTodayMills: 0,
+    revenue7dMills: 0,
+    revenue30dMills: 0,
+    newSubscribersToday: 0,
+    newFollowersToday: 0,
+    connectionStatus: "active",
+    lastLightSyncAt: null,
+    lastFollowerSyncAt: null,
+    lastSyncError: null,
+    syncUx,
+    ...overrides,
+  };
+}
+
+function buildOverviewPage(syncUx = buildSyncUx()): OverviewResponse {
+  return {
+    counts: {
+      models: 1,
+      pages: 1,
+      fans: 0,
+    },
+    revenue: {
+      "7d": {
+        revenueMills: 0,
+        adjustmentMills: 0,
+        unclassifiedMills: 0,
+        netEarningsMills: 0,
+        previousNetEarningsMills: 0,
+        deltaPct: null,
+      },
+      "30d": {
+        revenueMills: 0,
+        adjustmentMills: 0,
+        unclassifiedMills: 0,
+        netEarningsMills: 0,
+        previousNetEarningsMills: 0,
+        deltaPct: null,
+      },
+    },
     overall: {
       syncUx: buildSyncUx(),
     },
-    pages: [{
-      id: 1,
-      label: "lana",
-      platform: "fansly" as const,
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana",
-      subscriberCount: 12,
-      followerCount: 34,
-      syncUx,
-    }],
+    pages: [buildOverviewPageItem(syncUx)],
+    setup: {
+      hasPages: true,
+      hasFanslyPages: true,
+      hasOnlyFansPages: false,
+    },
   };
 }
 
@@ -122,7 +168,7 @@ function renderWithRouter(
   initialEntries = ["/"],
   pages = buildOverviewPage().pages,
 ) {
-  const shellValue = {
+  const shellValue: DashboardShellValue = {
     pageCatalogState: "ready" as const,
     pageCatalogError: null,
     pages,
@@ -135,8 +181,7 @@ function renderWithRouter(
     { initialEntries },
     createElement(
       DashboardShellProvider,
-      { value: shellValue },
-      element,
+      { value: shellValue, children: element },
     ),
   ));
 }

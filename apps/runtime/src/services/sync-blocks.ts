@@ -479,45 +479,67 @@ function hasExecuteBacklogForPage(queueHealth: QueueHealth, pageId: number, now:
     now.getTime() - createdAt.getTime() > WORKER_OFFLINE_EXECUTE_THRESHOLD_MS;
 }
 
+function emptyQueueHealth(): QueueHealth {
+  return {
+    plannerCreatedAt: null,
+    executeCreatedAtByPageId: new Map<number, Date>(),
+  };
+}
+
+function isMissingPgBossJobRelation(error: unknown) {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "42P01" &&
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message.includes('pgboss.job');
+}
+
 async function getQueueHealth(app: AppContext): Promise<QueueHealth> {
   const pool = (app as Partial<AppContext>).pool as Pool | undefined;
-  if (!pool || typeof pool.query !== "function") {
-    return {
-      plannerCreatedAt: null,
-      executeCreatedAtByPageId: new Map<number, Date>(),
-    };
+  const databaseUrl = (app as Partial<AppContext>).config?.databaseUrl;
+  if ((databaseUrl !== undefined && !databaseUrl) || !pool || typeof pool.query !== "function") {
+    return emptyQueueHealth();
   }
 
-  const [plannerResult, executeResult] = await Promise.all([
-    pool.query(
-      `select min(created_on) as oldest_created_on
-       from pgboss.job
-       where name = 'sync.planner'
-         and state = 'created'`,
-    ),
-    pool.query(
-      `select (data->>'platformAccountId')::int as page_id,
-              min(created_on) as oldest_created_on
-       from pgboss.job
-       where name = 'sync.page.execute'
-         and state = 'created'
-       group by (data->>'platformAccountId')::int`,
-    ),
-  ]);
+  try {
+    const [plannerResult, executeResult] = await Promise.all([
+      pool.query(
+        `select min(created_on) as oldest_created_on
+         from pgboss.job
+         where name = 'sync.planner'
+           and state = 'created'`,
+      ),
+      pool.query(
+        `select (data->>'platformAccountId')::int as page_id,
+                min(created_on) as oldest_created_on
+         from pgboss.job
+         where name = 'sync.page.execute'
+           and state = 'created'
+         group by (data->>'platformAccountId')::int`,
+      ),
+    ]);
 
-  const executeCreatedAtByPageId = new Map<number, Date>();
-  for (const row of executeResult.rows) {
-    const pageId = asInt(row.page_id);
-    const createdAt = asDate(row.oldest_created_on);
-    if (pageId !== null && createdAt) {
-      executeCreatedAtByPageId.set(pageId, createdAt);
+    const executeCreatedAtByPageId = new Map<number, Date>();
+    for (const row of executeResult.rows) {
+      const pageId = asInt(row.page_id);
+      const createdAt = asDate(row.oldest_created_on);
+      if (pageId !== null && createdAt) {
+        executeCreatedAtByPageId.set(pageId, createdAt);
+      }
     }
-  }
 
-  return {
-    plannerCreatedAt: asDate(plannerResult.rows[0]?.oldest_created_on),
-    executeCreatedAtByPageId,
-  };
+    return {
+      plannerCreatedAt: asDate(plannerResult.rows[0]?.oldest_created_on),
+      executeCreatedAtByPageId,
+    };
+  } catch (error) {
+    if (isMissingPgBossJobRelation(error)) {
+      return emptyQueueHealth();
+    }
+    throw error;
+  }
 }
 
 function buildPageDiagnosis(

@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
@@ -16,7 +16,11 @@ vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
 import { WorkboardPage } from "../apps/dashboard/src/pages/WorkboardPage.tsx";
 
-function buildPage(platform: "fansly" | "onlyfans" = "fansly") {
+type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
+type DashboardPage = DashboardShellValue["pages"][number];
+type PageCatalogState = DashboardShellValue["pageCatalogState"];
+
+function buildPage(platform: "fansly" | "onlyfans" = "fansly"): DashboardPage {
   return {
     id: 1,
     label: "lana",
@@ -26,6 +30,15 @@ function buildPage(platform: "fansly" | "onlyfans" = "fansly") {
     username: "lana",
     subscriberCount: 12,
     followerCount: 34,
+    revenueTodayMills: 0,
+    revenue7dMills: 0,
+    revenue30dMills: 0,
+    newSubscribersToday: 0,
+    newFollowersToday: 0,
+    connectionStatus: "active",
+    lastLightSyncAt: null,
+    lastFollowerSyncAt: null,
+    lastSyncError: null,
     syncUx: {
       state: "healthy" as const,
       label: "Up to date",
@@ -42,10 +55,15 @@ function buildPage(platform: "fansly" | "onlyfans" = "fansly") {
 function renderPage({
   initialEntries = ["/pages/lana/workboard"],
   pages = [buildPage()],
-  pageCatalogState = "ready" as const,
+  pageCatalogState = "ready" as PageCatalogState,
   pageCatalogError = null as Error | null,
+}: {
+  initialEntries?: string[];
+  pages?: DashboardPage[];
+  pageCatalogState?: PageCatalogState;
+  pageCatalogError?: Error | null;
 } = {}) {
-  const shellValue = {
+  const shellValue: DashboardShellValue = {
     pageCatalogState,
     pageCatalogError,
     pages,
@@ -58,19 +76,21 @@ function renderPage({
     { initialEntries },
     createElement(
       DashboardShellProvider,
-      { value: shellValue },
-      createElement(
-        Routes,
-        undefined,
-        createElement(Route, {
-          path: "/pages/:pageLabel/workboard",
-          element: createElement(WorkboardPage),
-        }),
-        createElement(Route, {
-          path: "/pages/:pageLabel",
-          element: createElement("div", null, "Page detail"),
-        }),
-      ),
+      {
+        value: shellValue,
+        children: createElement(
+          Routes,
+          undefined,
+          createElement(Route, {
+            path: "/pages/:pageLabel/workboard",
+            element: createElement(WorkboardPage),
+          }),
+          createElement(Route, {
+            path: "/pages/:pageLabel",
+            element: createElement("div", null, "Page detail"),
+          }),
+        ),
+      },
     ),
   ));
 }

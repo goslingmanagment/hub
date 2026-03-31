@@ -19,12 +19,20 @@ const sharedMocks = vi.hoisted(() => ({
 }));
 
 const fanHydrationMocks = vi.hoisted(() => ({
-  prepareHydratedFans: vi.fn(),
+  hydrateFans: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
-vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", () => fanHydrationMocks);
+vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
+  const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync/fan-hydration.ts")>(
+    "../apps/runtime/src/services/sync/fan-hydration.ts",
+  );
+  return {
+    ...actual,
+    hydrateFans: fanHydrationMocks.hydrateFans,
+  };
+});
 
 import { syncTransactions } from "../apps/runtime/src/services/sync/transactions.ts";
 
@@ -70,11 +78,11 @@ describe("syncTransactions", () => {
     }
     sharedMocks.persistRawPayload.mockReset();
     sharedMocks.retentionDate.mockReset();
-    fanHydrationMocks.prepareHydratedFans.mockReset();
+    fanHydrationMocks.hydrateFans.mockReset();
 
     sharedMocks.persistRawPayload.mockResolvedValue(undefined);
     sharedMocks.retentionDate.mockReturnValue(new Date("2026-09-10T00:00:00.000Z"));
-    fanHydrationMocks.prepareHydratedFans.mockResolvedValue([]);
+    fanHydrationMocks.hydrateFans.mockResolvedValue(new Map());
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
     dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);
     dbMocks.rebuildRevenueRollups.mockResolvedValue(undefined);

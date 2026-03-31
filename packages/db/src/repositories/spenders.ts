@@ -30,6 +30,10 @@ import {
   pageAliasMatchedValueSql,
 } from "./search.ts";
 
+function qualifiedSubqueryColumn<T>(subqueryAlias: string, columnName: string) {
+  return sql<T>`${sql.raw(`"${subqueryAlias}"."${columnName}"`)}`;
+}
+
 function transactionTypeListSql(transactionTypes: TransactionType[]) {
   return sql.join(
     transactionTypes.map((transactionType) => sql`${transactionType}::transaction_type`),
@@ -793,20 +797,36 @@ export async function listRankedSpenders(
 
   const whereClause = buildSpenderQueryClause(input.query, input);
   const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
+  const currentMetricFields = {
+    grossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "gross_amount_mills"),
+    creatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "creator_net_amount_mills"),
+    postedGrossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "posted_gross_amount_mills"),
+    pendingGrossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "pending_gross_amount_mills"),
+    unknownGrossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "unknown_gross_amount_mills"),
+    postedCreatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "posted_creator_net_amount_mills"),
+    pendingCreatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "pending_creator_net_amount_mills"),
+    unknownCreatorNetAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "unknown_creator_net_amount_mills"),
+    transactionCount: qualifiedSubqueryColumn<number>("current_metrics", "transaction_count"),
+    lastTransactionAt: qualifiedSubqueryColumn<Date | null>("current_metrics", "last_transaction_at"),
+  };
+  const lifetimeMetricFields = {
+    grossAmountMills: qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_gross_amount_mills"),
+    creatorNetAmountMills: qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_creator_net_amount_mills"),
+  };
   const sortFieldMap = {
-    grossAmountMills: currentMetrics.grossAmountMills,
-    creatorNetAmountMills: currentMetrics.creatorNetAmountMills,
-    postedGrossAmountMills: currentMetrics.postedGrossAmountMills,
-    pendingGrossAmountMills: currentMetrics.pendingGrossAmountMills,
-    postedCreatorNetAmountMills: currentMetrics.postedCreatorNetAmountMills,
-    pendingCreatorNetAmountMills: currentMetrics.pendingCreatorNetAmountMills,
-    lifetimeGrossAmountMills: lifetimeMetrics.grossAmountMills,
-    lifetimeCreatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
-    lastTransactionAt: currentMetrics.lastTransactionAt,
+    grossAmountMills: currentMetricFields.grossAmountMills,
+    creatorNetAmountMills: currentMetricFields.creatorNetAmountMills,
+    postedGrossAmountMills: currentMetricFields.postedGrossAmountMills,
+    pendingGrossAmountMills: currentMetricFields.pendingGrossAmountMills,
+    postedCreatorNetAmountMills: currentMetricFields.postedCreatorNetAmountMills,
+    pendingCreatorNetAmountMills: currentMetricFields.pendingCreatorNetAmountMills,
+    lifetimeGrossAmountMills: lifetimeMetricFields.grossAmountMills,
+    lifetimeCreatorNetAmountMills: lifetimeMetricFields.creatorNetAmountMills,
+    lastTransactionAt: currentMetricFields.lastTransactionAt,
     platformUserId: fans.platformUserId,
     username: fans.username,
     displayName: fans.displayName,
-  } satisfies Record<SpenderSortBy, typeof currentMetrics.grossAmountMills | typeof currentMetrics.lastTransactionAt | typeof lifetimeMetrics.grossAmountMills | typeof lifetimeMetrics.creatorNetAmountMills | typeof fans.platformUserId | typeof fans.username | typeof fans.displayName>;
+  };
 
   const sortField = sortFieldMap[input.sortBy];
   const orderBy = input.sortDir === "asc" ? asc(sortField) : desc(sortField);
@@ -819,18 +839,18 @@ export async function listRankedSpenders(
     username: fans.username,
     displayName: fans.displayName,
     createdAtExternal: fans.createdAtExternal,
-    grossAmountMills: currentMetrics.grossAmountMills,
-    creatorNetAmountMills: currentMetrics.creatorNetAmountMills,
-    postedGrossAmountMills: currentMetrics.postedGrossAmountMills,
-    pendingGrossAmountMills: currentMetrics.pendingGrossAmountMills,
-    unknownGrossAmountMills: currentMetrics.unknownGrossAmountMills,
-    postedCreatorNetAmountMills: currentMetrics.postedCreatorNetAmountMills,
-    pendingCreatorNetAmountMills: currentMetrics.pendingCreatorNetAmountMills,
-    unknownCreatorNetAmountMills: currentMetrics.unknownCreatorNetAmountMills,
-    transactionCount: currentMetrics.transactionCount,
-    lastTransactionAt: currentMetrics.lastTransactionAt,
-    lifetimeGrossAmountMills: sql<bigint>`coalesce(${lifetimeMetrics.grossAmountMills}, 0)::bigint`.as("lifetime_gross_amount_mills"),
-    lifetimeCreatorNetAmountMills: sql<bigint>`coalesce(${lifetimeMetrics.creatorNetAmountMills}, 0)::bigint`.as("lifetime_creator_net_amount_mills"),
+    grossAmountMills: currentMetricFields.grossAmountMills,
+    creatorNetAmountMills: currentMetricFields.creatorNetAmountMills,
+    postedGrossAmountMills: currentMetricFields.postedGrossAmountMills,
+    pendingGrossAmountMills: currentMetricFields.pendingGrossAmountMills,
+    unknownGrossAmountMills: currentMetricFields.unknownGrossAmountMills,
+    postedCreatorNetAmountMills: currentMetricFields.postedCreatorNetAmountMills,
+    pendingCreatorNetAmountMills: currentMetricFields.pendingCreatorNetAmountMills,
+    unknownCreatorNetAmountMills: currentMetricFields.unknownCreatorNetAmountMills,
+    transactionCount: currentMetricFields.transactionCount,
+    lastTransactionAt: currentMetricFields.lastTransactionAt,
+    lifetimeGrossAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.grossAmountMills}, 0)::bigint`.as("lifetime_gross_amount_mills"),
+    lifetimeCreatorNetAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.creatorNetAmountMills}, 0)::bigint`.as("lifetime_creator_net_amount_mills"),
   }).from(currentMetrics)
     .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
     .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))

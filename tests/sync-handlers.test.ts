@@ -60,6 +60,7 @@ const sharedMocks = vi.hoisted(() => ({
 
 const fanHydrationMocks = vi.hoisted(() => ({
   hydrateFans: vi.fn(),
+  upsertHydratedFansForPage: vi.fn(),
 }));
 
 const transactionMocks = vi.hoisted(() => ({
@@ -75,7 +76,16 @@ vi.mock("@agency_hub_core/db", async () => {
 });
 vi.mock("../apps/runtime/src/services/sync/onlyfans-transactions.ts", () => onlyFansTransactionMocks);
 vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
-vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", () => fanHydrationMocks);
+vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
+  const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync/fan-hydration.ts")>(
+    "../apps/runtime/src/services/sync/fan-hydration.ts",
+  );
+  return {
+    ...actual,
+    hydrateFans: fanHydrationMocks.hydrateFans,
+    upsertHydratedFansForPage: fanHydrationMocks.upsertHydratedFansForPage,
+  };
+});
 vi.mock("../apps/runtime/src/services/sync/transactions.ts", () => transactionMocks);
 
 import {
@@ -177,6 +187,7 @@ describe("sync executor handlers", () => {
     sharedMocks.persistRawPayload.mockReset();
     sharedMocks.refreshPageMetadata.mockReset();
     fanHydrationMocks.hydrateFans.mockReset();
+    fanHydrationMocks.upsertHydratedFansForPage.mockReset();
     transactionMocks.syncTransactions.mockReset();
 
     dbMocks.upsertCheckpointProgress.mockResolvedValue({});
@@ -226,6 +237,50 @@ describe("sync executor handlers", () => {
     sharedMocks.persistRawPayload.mockResolvedValue(undefined);
     sharedMocks.trimFanslyMessagingGroupsPayload.mockReset();
     sharedMocks.trimFanslyMessagingGroupsPayload.mockImplementation((value: unknown) => value);
+    fanHydrationMocks.hydrateFans.mockResolvedValue(new Map());
+    fanHydrationMocks.upsertHydratedFansForPage.mockImplementation(async (
+      db: object,
+      input: {
+        platformAccountId: number;
+        accounts: Array<{
+          id: string;
+          username: string | null;
+          displayName: string | null;
+          createdAt?: number | null;
+        }>;
+        fallbackIds?: string[];
+      },
+    ) => {
+      const fans: Array<{ id: number; platformUserId: string }> = await dbMocks.upsertFans(db, [
+        ...input.accounts.map((account: {
+          id: string;
+          username: string | null;
+          displayName: string | null;
+          createdAt?: number | null;
+        }) => ({
+          platform: "fansly" as const,
+          platformUserId: account.id,
+          username: account.username,
+          displayName: account.displayName,
+          createdAtExternal: account.createdAt ? new Date(account.createdAt) : null,
+          metadata: {},
+        })),
+        ...(input.fallbackIds ?? []).map((platformUserId: string) => ({
+          platform: "fansly" as const,
+          platformUserId,
+          metadata: {},
+        })),
+      ]);
+
+      if (fans.length > 0) {
+        await dbMocks.upsertFanPages(db, fans.map((fan: { id: number; platformUserId: string }) => ({
+          fanId: fan.id,
+          platformAccountId: input.platformAccountId,
+        })));
+      }
+
+      return new Map(fans.map((fan: { id: number; platformUserId: string }) => [fan.platformUserId, fan.id] as const));
+    });
   });
 
   it("syncs Fansly top spenders in steady state using the trailing 7 day window", async () => {
