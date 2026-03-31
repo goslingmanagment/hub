@@ -1,17 +1,25 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
-  ensureSyncStreamStateRows,
+  acquireNextSyncTaskLeaseForPage,
+  blockSyncTaskGeneration,
+  completeSyncTaskGeneration,
+  ensureSyncTaskRows,
+  failSyncTaskGeneration,
   findPageById,
-  listRunnableSyncStreamStatesForPage,
-  markSyncPageAuthFailed,
-  recordSyncStreamChunkFailure,
-  recordSyncStreamChunkStarted,
-  recordSyncStreamChunkSucceeded,
-  recordSyncStreamChunkYielded,
+  heartbeatSyncTaskLease,
+  listRunnableSyncPagesV2,
+  resolveSyncTaskPriority,
+  runWithSyncTaskExecutionContext,
   startSyncRun,
+  type SyncRequestReason,
   type SyncControlStream,
   type SyncStreamStateRow,
+  type SyncTaskLeaseRow,
+  type SyncTargetStatus,
+  type SyncWorkClass,
+  yieldSyncTaskGeneration,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import { OnlyMonsterApiError } from "@agency_hub_core/onlyfans";
@@ -34,6 +42,7 @@ import { persistFailedSyncPayload } from "./shared.ts";
 const PAGE_EXECUTOR_IDLE_POLL_MS = 1_000;
 const PAGE_EXECUTOR_HEARTBEAT_MS = 15_000;
 const SYNC_RUN_HEARTBEAT_MS = 30_000;
+const SYNC_TASK_LEASE_TTL_MS = 120_000;
 const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 
 export interface SyncPageChunkResult {
@@ -60,44 +69,97 @@ function isAuthError(error: unknown) {
   return false;
 }
 
+function computeNextDueAt(task: SyncTaskLeaseRow) {
+  return new Date(((task.lastScheduledSlot + 1) * task.scheduleIntervalSeconds + task.slotOffsetSeconds) * 1000);
+}
+
+function mapOperationSourceToLegacyTrigger(source: SyncTaskLeaseRow["operationSource"]): SyncRequestReason {
+  if (source === "reset") {
+    return "manual";
+  }
+
+  return source ?? "scheduled";
+}
+
+function toLegacyStreamState(task: SyncTaskLeaseRow): SyncStreamStateRow {
+  const pendingReason = mapOperationSourceToLegacyTrigger(task.operationSource);
+  const status: SyncTargetStatus = task.status === "paused"
+    ? "paused"
+    : task.status === "blocked" && task.blockerType === "auth"
+      ? "auth_failed"
+      : "active";
+
+  return {
+    platformAccountId: task.platformAccountId,
+    stream: task.task,
+    status,
+    cadenceSeconds: task.scheduleIntervalSeconds,
+    slotOffsetSeconds: task.slotOffsetSeconds,
+    nextDueAt: computeNextDueAt(task),
+    basePriority: resolveSyncTaskPriority(task.task, "scheduled"),
+    effectivePriority: resolveSyncTaskPriority(task.task, task.operationSource ?? "scheduled"),
+    pendingReason,
+    desiredRevision: task.desiredGeneration,
+    satisfiedRevision: task.appliedGeneration,
+    desiredAt: task.lastRequestedAt,
+    requestPayload: task.requestPayload,
+    backoffUntil: task.retryAt ?? new Date(0),
+    lastEnqueuedAt: task.lastEnqueuedAt,
+    lastStartedAt: task.lastStartedAt,
+    lastFinishedAt: task.lastFinishedAt,
+    lastSucceededAt: task.lastSuccessAt,
+    lastFailedAt: task.lastFailureAt,
+    consecutiveFailures: task.consecutiveFailures,
+    lastErrorCode: task.lastErrorCode,
+    lastErrorSummary: task.lastErrorSummary,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  };
+}
+
+async function resolveContinuationPriority(
+  app: Pick<AppContext, "db">,
+  platformAccountId: number,
+) {
+  const pages = await listRunnableSyncPagesV2(app.db, new Date());
+  return pages.find((page) => page.platformAccountId === platformAccountId)?.priority ?? null;
+}
+
 function buildContinuationResult(
   platformAccountId: number,
   stream: SyncControlStream | null,
   runId: number | null,
   kind: SyncPageChunkResult["kind"],
-  nextRows: SyncStreamStateRow[],
+  continuationPriority: number | null,
 ): SyncPageChunkResult {
   return {
     kind,
     platformAccountId,
     stream,
     runId,
-    needsContinuation: nextRows.length > 0,
-    continuationPriority: nextRows[0]?.effectivePriority ?? null,
+    needsContinuation: continuationPriority !== null,
+    continuationPriority,
   };
 }
 
 async function createChunkTelemetry(
   app: AppContext,
-  streamState: SyncStreamStateRow,
+  taskLease: SyncTaskLeaseRow,
 ) {
-  const storedPage = await findPageById(app.db, streamState.platformAccountId);
+  const storedPage = await findPageById(app.db, taskLease.platformAccountId);
   if (!storedPage) {
-    throw new Error(`Page ${streamState.platformAccountId} not found`);
+    throw new Error(`Page ${taskLease.platformAccountId} not found`);
   }
 
-  const run = await startSyncRun(app.db, {
-    platformAccountId: storedPage.page.id,
-    stream: streamState.stream,
-    trigger: streamState.pendingReason,
-  });
+  const trigger = mapOperationSourceToLegacyTrigger(taskLease.operationSource);
+  const run = await startTaskRun(app, taskLease, trigger);
   const telemetry = new SyncRunTelemetry(app, {
     runId: run.id,
     platformAccountId: storedPage.page.id,
     pageLabel: storedPage.page.label,
     provider: storedPage.page.platform,
-    stream: streamState.stream,
-    trigger: streamState.pendingReason,
+    stream: taskLease.task,
+    trigger,
     egressKey: buildProxyEgressKey(storedPage.proxy ? { url: storedPage.proxy.url } : null),
   }, {
     runStartedAt: run.startedAt,
@@ -109,6 +171,22 @@ async function createChunkTelemetry(
     run,
     telemetry,
   };
+}
+
+async function startTaskRun(
+  app: AppContext,
+  taskLease: SyncTaskLeaseRow,
+  trigger: string,
+) {
+  return startSyncRun(app.db, {
+    platformAccountId: taskLease.platformAccountId,
+    operationId: taskLease.operationId,
+    stream: taskLease.task,
+    task: taskLease.task,
+    generation: taskLease.runningGeneration ?? taskLease.desiredGeneration,
+    leaseToken: taskLease.leaseToken,
+    trigger,
+  });
 }
 
 async function resolveSyncPageWakeupTarget(
@@ -126,15 +204,160 @@ async function resolveSyncPageWakeupTarget(
   };
 }
 
+function classifyTaskFailure(
+  error: unknown,
+  failure: ReturnType<typeof normalizeSyncError>,
+): {
+  mode: "retry" | "blocked";
+  retryClass?: string;
+  blockerType?: string;
+  blockerCode?: string;
+  blockerReason?: string;
+} {
+  if (error instanceof FanslyApiError || error instanceof OnlyMonsterApiError) {
+    if (error.status === 429) {
+      return {
+        mode: "retry",
+        retryClass: "rate_limit",
+      };
+    }
+
+    if (error.status && error.status >= 500) {
+      return {
+        mode: "retry",
+        retryClass: "provider_5xx",
+      };
+    }
+
+    if (error.status && error.status >= 400) {
+      return {
+        mode: "blocked",
+        blockerType: "provider_bad_data",
+        blockerCode: "provider_bad_data",
+        blockerReason: failure.summary,
+      };
+    }
+  }
+
+  const lowerCode = failure.error.code?.toLowerCase() ?? "";
+  const lowerSummary = failure.summary.toLowerCase();
+  if (lowerCode.includes("cursor") || lowerSummary.includes("cursor")) {
+    return {
+      mode: "blocked",
+      blockerType: "invalid_cursor",
+      blockerCode: "invalid_cursor",
+      blockerReason: failure.summary,
+    };
+  }
+
+  if (lowerCode === "http_429" || lowerSummary.includes("429")) {
+    return {
+      mode: "retry",
+      retryClass: "rate_limit",
+    };
+  }
+
+  if (lowerCode.startsWith("http_5") || lowerSummary.includes("timeout")) {
+    return {
+      mode: "retry",
+      retryClass: lowerCode.startsWith("http_5") ? "provider_5xx" : "transient_network",
+    };
+  }
+
+  if (lowerSummary.includes("manual action") || lowerSummary.includes("shared rate limit")) {
+    return {
+      mode: "blocked",
+      blockerType: "manual_action_required",
+      blockerCode: "manual_action_required",
+      blockerReason: failure.summary,
+    };
+  }
+
+  return {
+    mode: "retry",
+    retryClass: "transient_network",
+  };
+}
+
+function sanitizeProgressPayload(taskLease: SyncTaskLeaseRow, stats: Record<string, unknown> | undefined) {
+  if (!stats || Object.keys(stats).length === 0) {
+    return taskLease.progressPayload;
+  }
+
+  const next = Object.fromEntries(
+    Object.entries(stats)
+      .filter(([, value]) => {
+        if (value === null) {
+          return true;
+        }
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+          return true;
+        }
+        if (typeof value === "object" && !Array.isArray(value)) {
+          return Object.keys(value as Record<string, unknown>).length <= 8;
+        }
+        return false;
+      })
+      .slice(0, 12),
+  );
+
+  return {
+    ...taskLease.progressPayload,
+    ...next,
+  };
+}
+
+function resolveCurrentPhase(stats: Record<string, unknown> | undefined) {
+  const phase = stats?.phase;
+  if (typeof phase === "string" && phase.trim().length > 0) {
+    return phase;
+  }
+
+  const currentMode = stats?.currentMode;
+  if (typeof currentMode === "string" && currentMode.trim().length > 0) {
+    return currentMode;
+  }
+
+  return null;
+}
+
+function resolveCurrentWorkClass(taskLease: SyncTaskLeaseRow, stats: Record<string, unknown> | undefined): SyncWorkClass {
+  const currentMode = stats?.currentMode;
+  if (currentMode === "backfill") {
+    return "history";
+  }
+  if (currentMode === "incremental") {
+    return "live";
+  }
+  return taskLease.currentWorkClass ?? (taskLease.task === "dm_messages"
+    ? "history"
+    : taskLease.task === "top_spenders" || taskLease.task === "followers_reconcile"
+      ? "maintenance"
+      : "live");
+}
+
+function hasMeaningfulProgress(
+  result: {
+    satisfied: boolean;
+    stats?: Record<string, unknown>;
+  },
+) {
+  return result.satisfied || Boolean(result.stats && Object.keys(result.stats).length > 0);
+}
 export async function executeNextSyncPageChunk(
   app: AppContext,
   platformAccountId: number,
 ): Promise<SyncPageChunkResult> {
-  await ensureSyncStreamStateRows(app.db, { platformAccountId });
+  await ensureSyncTaskRows(app.db, { platformAccountId });
 
-  const runnableRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
-  const streamState = runnableRows[0];
-  if (!streamState) {
+  const taskLease = await acquireNextSyncTaskLeaseForPage(app.db, {
+    platformAccountId,
+    workerId: `sync-page-executor:${process.pid}`,
+    leaseToken: randomUUID(),
+    leaseTtlMs: SYNC_TASK_LEASE_TTL_MS,
+  });
+
+  if (!taskLease) {
     return {
       kind: "idle",
       platformAccountId,
@@ -145,37 +368,91 @@ export async function executeNextSyncPageChunk(
     };
   }
 
-  const { storedPage, run, telemetry } = await createChunkTelemetry(app, streamState);
+  const { storedPage, run, telemetry } = await createChunkTelemetry(app, taskLease);
   const budget = new SyncChunkBudget();
-  await recordSyncStreamChunkStarted(app.db, platformAccountId, streamState.stream);
-  let pageContext: Awaited<ReturnType<typeof resolveExecutorPageContext>> | null = null;
+  let leaseFenced = false;
   const runHeartbeat = setInterval(() => {
     void telemetry.recordWorkerHeartbeat().catch((error) => {
       app.logger.warn(
-        { err: error, runId: run.id, platformAccountId, stream: streamState.stream },
+        { err: error, runId: run.id, platformAccountId, stream: taskLease.task },
         "Failed to record sync worker heartbeat",
+      );
+    });
+  }, SYNC_RUN_HEARTBEAT_MS);
+  const leaseHeartbeat = setInterval(() => {
+    void heartbeatSyncTaskLease(app.db, {
+      platformAccountId,
+      task: taskLease.task,
+      leaseToken: taskLease.leaseToken ?? "",
+      leaseTtlMs: SYNC_TASK_LEASE_TTL_MS,
+    }).then((owned) => {
+      if (!owned) {
+        leaseFenced = true;
+      }
+    }).catch((error) => {
+      app.logger.warn(
+        { err: error, platformAccountId, stream: taskLease.task },
+        "Failed to heartbeat sync task lease",
       );
     });
   }, SYNC_RUN_HEARTBEAT_MS);
 
   try {
-    pageContext = await resolveExecutorPageContext(app, streamState.platformAccountId);
-    const result = await executeStreamChunk(app, {
+    const pageContext = await resolveExecutorPageContext(app, taskLease.platformAccountId);
+    const legacyStreamState = toLegacyStreamState(taskLease);
+    const result = await runWithSyncTaskExecutionContext({
+      platformAccountId,
+      task: taskLease.task,
+      generation: taskLease.runningGeneration ?? taskLease.desiredGeneration,
+      leaseToken: taskLease.leaseToken ?? "",
+    }, async () => executeStreamChunk(app, {
       pageContext,
-      streamState,
+      streamState: legacyStreamState,
       syncRunId: run.id,
       telemetry,
       budget,
-    });
+    }));
+
+    if (leaseFenced) {
+      await telemetry.recordSkipped("Sync task lease lost");
+      return {
+        kind: "idle",
+        platformAccountId,
+        stream: null,
+        runId: run.id,
+        needsContinuation: false,
+        continuationPriority: null,
+      };
+    }
+
+    const progressPayload = sanitizeProgressPayload(taskLease, result.stats);
+    const currentPhase = resolveCurrentPhase(result.stats);
+    const currentWorkClass = resolveCurrentWorkClass(taskLease, result.stats);
+    const progressAt = hasMeaningfulProgress(result) ? new Date() : taskLease.lastProgressAt;
 
     if (result.satisfied) {
-      await recordSyncStreamChunkSucceeded(app.db, {
+      const applied = await completeSyncTaskGeneration(app.db, {
         platformAccountId,
-        stream: streamState.stream,
-        satisfied: true,
-        targetRevision: streamState.desiredRevision,
-        clearRequestPayload: "clearRequestPayload" in result ? result.clearRequestPayload : undefined,
+        task: taskLease.task,
+        generation: taskLease.runningGeneration ?? taskLease.desiredGeneration,
+        leaseToken: taskLease.leaseToken ?? "",
+        progressAt,
+        currentPhase,
+        currentWorkClass,
+        progressPayload,
       });
+      if (!applied) {
+        await telemetry.recordSkipped("Sync task lease lost");
+        return {
+          kind: "idle",
+          platformAccountId,
+          stream: null,
+          runId: run.id,
+          needsContinuation: false,
+          continuationPriority: null,
+        };
+      }
+
       await telemetry.finish("success", null, {
         chunkBudget: {
           requestCount: budget.totalRequests,
@@ -187,13 +464,34 @@ export async function executeNextSyncPageChunk(
         platformAccountId,
         pageLabel: pageContext.page.label,
         platform: pageContext.platform,
-        stream: streamState.stream,
+        stream: taskLease.task,
       });
-      const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
-      return buildContinuationResult(platformAccountId, streamState.stream, run.id, "success", nextRows);
+      const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
+      return buildContinuationResult(platformAccountId, taskLease.task, run.id, "success", continuationPriority);
     }
 
-    await recordSyncStreamChunkYielded(app.db, platformAccountId, streamState.stream);
+    const yielded = await yieldSyncTaskGeneration(app.db, {
+      platformAccountId,
+      task: taskLease.task,
+      generation: taskLease.runningGeneration ?? taskLease.desiredGeneration,
+      leaseToken: taskLease.leaseToken ?? "",
+      progressAt,
+      currentPhase,
+      currentWorkClass,
+      progressPayload,
+    });
+    if (!yielded) {
+      await telemetry.recordSkipped("Sync task lease lost");
+      return {
+        kind: "idle",
+        platformAccountId,
+        stream: null,
+        runId: run.id,
+        needsContinuation: false,
+        continuationPriority: null,
+      };
+    }
+
     await telemetry.finish("partial", null, {
       yieldReason: result.yieldReason,
       chunkBudget: {
@@ -206,32 +504,41 @@ export async function executeNextSyncPageChunk(
       platformAccountId,
       pageLabel: pageContext.page.label,
       platform: pageContext.platform,
-      stream: streamState.stream,
+      stream: taskLease.task,
     });
-    const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
-    return buildContinuationResult(platformAccountId, streamState.stream, run.id, "yielded", nextRows);
+    const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
+    return buildContinuationResult(platformAccountId, taskLease.task, run.id, "yielded", continuationPriority);
   } catch (error) {
     const failure = normalizeSyncError(error, {
-      endpoint: streamState.stream,
-      action: `executing ${streamState.stream} sync chunk`,
+      endpoint: taskLease.task,
+      action: `executing ${taskLease.task} sync chunk`,
     });
-    const provider = pageContext?.platform ?? telemetry.metadata.provider;
-    const pageLabel = pageContext?.page.label ?? telemetry.metadata.pageLabel;
-    const hasProxy = pageContext ? pageContext.proxy !== null : storedPage.proxy !== null;
+    const provider = storedPage.page.platform;
+    const pageLabel = storedPage.page.label;
+    const hasProxy = storedPage.proxy !== null;
 
     await persistFailedSyncPayload(app, {
       platformAccountId,
       syncRunId: run.id,
-      endpoint: streamState.stream,
+      endpoint: taskLease.task,
       platform: provider,
       failure,
     });
 
     if (isAuthError(error)) {
-      await markSyncPageAuthFailed(app.db, {
+      await blockSyncTaskGeneration(app.db, {
         platformAccountId,
+        task: taskLease.task,
+        generation: taskLease.runningGeneration ?? taskLease.desiredGeneration,
+        leaseToken: taskLease.leaseToken ?? "",
+        blockerType: "auth",
+        blockerCode: "credentials_invalid",
+        blockerReason: failure.summary,
         errorCode: failure.error.code,
         errorSummary: failure.summary,
+        currentPhase: taskLease.currentPhase,
+        currentWorkClass: taskLease.currentWorkClass ?? "live",
+        progressPayload: taskLease.progressPayload,
       });
       await telemetry.finish("failed", failure, {
         chunkStatus: "auth_failed",
@@ -246,19 +553,44 @@ export async function executeNextSyncPageChunk(
       return {
         kind: "auth_failed",
         platformAccountId,
-        stream: streamState.stream,
+        stream: taskLease.task,
         runId: run.id,
         needsContinuation: false,
         continuationPriority: null,
       };
     }
 
-    await recordSyncStreamChunkFailure(app.db, {
-      platformAccountId,
-      stream: streamState.stream,
-      errorCode: failure.error.code,
-      errorSummary: failure.summary,
-    });
+    const classified = classifyTaskFailure(error, failure);
+    if (classified.mode === "blocked") {
+      await blockSyncTaskGeneration(app.db, {
+        platformAccountId,
+        task: taskLease.task,
+        generation: taskLease.runningGeneration ?? taskLease.desiredGeneration,
+        leaseToken: taskLease.leaseToken ?? "",
+        blockerType: classified.blockerType ?? "manual_action_required",
+        blockerCode: classified.blockerCode ?? "manual_action_required",
+        blockerReason: classified.blockerReason ?? failure.summary,
+        errorCode: failure.error.code,
+        errorSummary: failure.summary,
+        currentPhase: taskLease.currentPhase,
+        currentWorkClass: taskLease.currentWorkClass ?? "live",
+        progressPayload: taskLease.progressPayload,
+      });
+    } else {
+      await failSyncTaskGeneration(app.db, {
+        platformAccountId,
+        task: taskLease.task,
+        generation: taskLease.runningGeneration ?? taskLease.desiredGeneration,
+        leaseToken: taskLease.leaseToken ?? "",
+        retryClass: classified.retryClass ?? "transient_network",
+        errorCode: failure.error.code,
+        errorSummary: failure.summary,
+        currentPhase: taskLease.currentPhase,
+        currentWorkClass: taskLease.currentWorkClass ?? "live",
+        progressPayload: taskLease.progressPayload,
+      });
+    }
+
     await telemetry.finish("failed", failure, {
       chunkStatus: "failed",
     });
@@ -266,17 +598,20 @@ export async function executeNextSyncPageChunk(
       platformAccountId,
       pageLabel,
       platform: provider,
-      stream: streamState.stream,
+      stream: taskLease.task,
       runId: run.id,
       hasProxy,
-      previousConsecutiveFailures: streamState.consecutiveFailures,
+      previousConsecutiveFailures: taskLease.consecutiveFailures,
       errorCode: failure.error.code,
       errorSummary: failure.summary,
     });
-    const nextRows = await listRunnableSyncStreamStatesForPage(app.db, platformAccountId);
-    return buildContinuationResult(platformAccountId, streamState.stream, run.id, "failed", nextRows);
+    const continuationPriority = classified.mode === "retry"
+      ? await resolveContinuationPriority(app, platformAccountId)
+      : null;
+    return buildContinuationResult(platformAccountId, taskLease.task, run.id, "failed", continuationPriority);
   } finally {
     clearInterval(runHeartbeat);
+    clearInterval(leaseHeartbeat);
   }
 }
 

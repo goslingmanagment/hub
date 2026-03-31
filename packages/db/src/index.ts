@@ -12,6 +12,8 @@ export * from "./repositories/notifications.ts";
 export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";
 export * from "./repositories/spenders.ts";
+export * from "./repositories/sync-context.ts";
 export * from "./repositories/sync.ts";
+export * from "./repositories/sync-v2.ts";
 export * from "./repositories/top-spenders.ts";
 export * from "./repositories/transactions.ts";

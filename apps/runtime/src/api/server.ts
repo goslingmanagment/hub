@@ -147,6 +147,7 @@ import {
   upsertPageFanProfile,
 } from "../services/fan-profiles.ts";
 import { getSyncMonitorRecentRequests, getSyncMonitorSnapshot } from "../services/sync-monitor.ts";
+import { getSyncStatusSnapshot } from "../services/sync-status.ts";
 import {
   getPageMessagesSyncBlock,
   getPageSyncBlocks,
@@ -170,6 +171,7 @@ import { sql } from "drizzle-orm";
 import { listStatus, getStatusDetail } from "../services/sync.ts";
 import { requestAllPagesSync, requestPageSync } from "../services/sync-control.ts";
 import { refreshPageMetadata } from "../services/sync/shared.ts";
+import { buildOverallSyncUx } from "../services/sync-ux.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "../services/page-onboarding.ts";
 
 declare module "fastify" {
@@ -844,10 +846,11 @@ export async function buildApiServer(appContext: AppContext) {
     for (const p of pages) {
       modelSet.set(p.modelSlug, { slug: p.modelSlug, name: p.modelName });
     }
-    const syncSnapshot = await getSyncMonitorSnapshot(appContext, {
+    const syncSnapshot = await getSyncStatusSnapshot(appContext, {
       pageIds,
     });
     const syncByPageId = new Map(syncSnapshot.pages.map((page) => [page.pageId, page.syncUx]));
+    const overallSyncUx = buildOverallSyncUx(syncSnapshot.pages.map((page) => page.syncUx));
     const connectionStatuses = await listConnectionStatuses(appContext, {
       pageIds: pageScope,
       pages,
@@ -956,12 +959,13 @@ export async function buildApiServer(appContext: AppContext) {
     for (const row of followerTotals) {
       pageNewFollowersToday.set(row.pageId, row.newFollowers);
     }
+    const distinctFans = await countDistinctFansForPages(appContext.db, pageIds);
 
     return {
       counts: {
         models: modelSet.size,
         pages: pages.length,
-        fans: syncSnapshot.overall.counts.fans,
+        fans: distinctFans,
       },
       revenue: {
         "7d": {
@@ -982,7 +986,7 @@ export async function buildApiServer(appContext: AppContext) {
         },
       },
       overall: {
-        syncUx: syncSnapshot.overall.syncUx,
+        syncUx: overallSyncUx,
       },
       pages: pages.map((p) => {
         const status = statusByPageId.get(p.id);
@@ -1004,7 +1008,7 @@ export async function buildApiServer(appContext: AppContext) {
           lastLightSyncAt: p.lastLightSyncAt?.toISOString() ?? null,
           lastFollowerSyncAt: p.lastFollowerSyncAt?.toISOString() ?? null,
           lastSyncError: status?.lastSyncError ?? null,
-          syncUx: syncByPageId.get(p.id) ?? syncSnapshot.overall.syncUx,
+          syncUx: syncByPageId.get(p.id) ?? overallSyncUx,
         };
       }),
       setup: {

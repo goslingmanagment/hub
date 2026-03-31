@@ -19,8 +19,8 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { removeProxy, resolveStoredProxyConfig, saveProxy } from "./page-context.ts";
-import { getSyncMonitorSnapshot } from "./sync-monitor.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
+import { getSyncStatusSnapshot } from "./sync-status.ts";
 
 export type ConnectionStatus =
   | "active"
@@ -122,7 +122,7 @@ export async function listConnectionStatuses(
     }),
     input?.syncUxByPageId
       ? Promise.resolve(null)
-      : getSyncMonitorSnapshot(app, { pageIds: allPageIds }),
+      : getSyncStatusSnapshot(app, { pageIds: allPageIds }),
   ]);
   const runsByPageId = new Map(latestRuns.map((r) => [r.platformAccountId, r]));
   const syncByPageId = input?.syncUxByPageId ?? new Map(

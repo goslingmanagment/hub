@@ -130,11 +130,11 @@ function buildOverview(): OverviewResponse {
 }
 
 function buildSyncBlock(
-  block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages",
+  block: "connection" | "financials" | "audience" | "messages_live" | "messages_history",
   overrides: Partial<{
     connectionStatus: "connected" | "not_connected" | "error" | null;
     metrics: Record<string, unknown>;
-    state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+    state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
   }> = {},
 ) {
   return {
@@ -168,11 +168,10 @@ function buildSyncOverview(): {
     diagnosis: ReturnType<typeof buildSyncDiagnosis> | null;
     blocks: {
       connection: ReturnType<typeof buildSyncBlock>;
-      top_spenders: ReturnType<typeof buildSyncBlock>;
-      transactions: ReturnType<typeof buildSyncBlock>;
-      subscribers: ReturnType<typeof buildSyncBlock>;
-      followers: ReturnType<typeof buildSyncBlock>;
-      messages: ReturnType<typeof buildSyncBlock>;
+      financials: ReturnType<typeof buildSyncBlock>;
+      audience: ReturnType<typeof buildSyncBlock>;
+      messages_live: ReturnType<typeof buildSyncBlock>;
+      messages_history: ReturnType<typeof buildSyncBlock>;
     };
   }>;
 } {
@@ -192,20 +191,17 @@ function buildSyncOverview(): {
         connection: buildSyncBlock("connection", {
           connectionStatus: "connected",
         }),
-        top_spenders: buildSyncBlock("top_spenders", {
-          metrics: { spenderCount: 5 },
-        }),
-        transactions: buildSyncBlock("transactions", {
+        financials: buildSyncBlock("financials", {
           metrics: { transactionCount: 12 },
         }),
-        subscribers: buildSyncBlock("subscribers", {
-          metrics: { subscriberCount: 12 },
-        }),
-        followers: buildSyncBlock("followers", {
+        audience: buildSyncBlock("audience", {
           metrics: { followerCount: 34 },
         }),
-        messages: buildSyncBlock("messages", {
+        messages_live: buildSyncBlock("messages_live", {
           metrics: { visibleConversationCount: 3 },
+        }),
+        messages_history: buildSyncBlock("messages_history", {
+          metrics: { readyConversationCount: 3, eligibleConversationCount: 4 },
         }),
       },
     }],
@@ -431,7 +427,7 @@ describe("dashboard sync layout", () => {
   it("supports settings tab deep links for the sync workspace", () => {
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("Top Spenders");
+    expect(html).toContain("Financials");
     expect(html).toContain("View details");
     expect(html).not.toContain("Update Credentials");
   });

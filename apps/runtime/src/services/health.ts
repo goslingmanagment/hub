@@ -1,6 +1,6 @@
 import type { AppContext } from "../bootstrap.ts";
 import { listConnectionStatuses } from "./connections.ts";
-import { getSyncMonitorSnapshot } from "./sync-monitor.ts";
+import { getSyncStatusSnapshot } from "./sync-status.ts";
 
 type ServiceHealthStatus = "ok" | "degraded";
 type SystemCheckStatus = "ok" | "error";
@@ -18,11 +18,13 @@ function ageMinutes(timestamp: string | null, now: Date) {
 }
 
 function firstErrorSummary(
-  streams: Array<{
-    lastErrorSummary: string | null;
+  blocks: Array<{
+    error: {
+      summary: string | null;
+    } | null;
   }>,
 ) {
-  return streams.find((stream) => stream.lastErrorSummary)?.lastErrorSummary ?? null;
+  return blocks.find((block) => block.error?.summary)?.error?.summary ?? null;
 }
 
 export async function getSystemHealth(app: AppContext) {
@@ -79,7 +81,7 @@ export async function getPublicSyncHealth(
   const now = input?.now ?? new Date();
   const [connections, snapshot] = await Promise.all([
     listConnectionStatuses(app),
-    getSyncMonitorSnapshot(app, { now }),
+    getSyncStatusSnapshot(app, { now }),
   ]);
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
@@ -96,13 +98,20 @@ export async function getPublicSyncHealth(
   const pages = Array.from(allPageIds, (pageId) => {
     const page = snapshotPagesById.get(pageId);
     const connection = connectionsById.get(pageId);
+    const blocks = page ? Object.values(page.blocks).filter((block) => block.state !== "not_available") : [];
     const lightAge = ageMinutes(connection?.lastLightSyncAt ?? null, now);
     const followerAge = (page?.platform ?? connection?.platform) === "fansly"
       ? ageMinutes(connection?.lastFollowerSyncAt ?? null, now)
       : null;
-    const failedStreams = page?.summary.failedStreams ?? 0;
-    const stalledStreams = page?.summary.stalledStreams ?? 0;
-    const pendingStreams = page?.summary.pendingStreams ?? 0;
+    const failedStreams = blocks.filter((block) => block.state === "failed").length;
+    const stalledStreams = blocks.filter((block) => block.state === "delayed").length;
+    const pendingStreams = blocks.filter((block) =>
+      block.state === "scheduled" ||
+      block.state === "retrying" ||
+      block.state === "syncing" ||
+      block.state === "backfilling" ||
+      block.state === "not_started"
+    ).length;
     const issues: string[] = [];
 
     if (!connection || connection.connectionStatus !== "active") {
@@ -148,16 +157,34 @@ export async function getPublicSyncHealth(
       failedStreams,
       stalledStreams,
       pendingStreams,
-      lastErrorSummary: firstErrorSummary(page?.streams ?? []) ?? connection?.lastSyncError ?? null,
+      lastErrorSummary: firstErrorSummary(blocks) ?? connection?.lastSyncError ?? null,
       issues,
     };
   });
 
   const unhealthyPageCount = pages.filter((page) => page.status === "degraded").length;
+  const runningStreams = snapshot.pages.reduce((count, page) => {
+    return count + Object.values(page.blocks).filter((block) =>
+      block.state === "syncing" || block.state === "backfilling"
+    ).length;
+  }, 0);
+  const failedStreams = snapshot.pages.reduce((count, page) => {
+    return count + Object.values(page.blocks).filter((block) => block.state === "failed").length;
+  }, 0);
+  const stalledStreams = snapshot.pages.reduce((count, page) => {
+    return count + Object.values(page.blocks).filter((block) => block.state === "delayed").length;
+  }, 0);
+  const pendingStreams = snapshot.pages.reduce((count, page) => {
+    return count + Object.values(page.blocks).filter((block) =>
+      block.state === "scheduled" ||
+      block.state === "retrying" ||
+      block.state === "not_started"
+    ).length;
+  }, 0);
   const status: ServiceHealthStatus = (
     unhealthyPageCount > 0 ||
-    snapshot.overall.failedStreams > 0 ||
-    snapshot.overall.stalledStreams > 0
+    failedStreams > 0 ||
+    stalledStreams > 0
   )
     ? "degraded"
     : "ok";
@@ -171,13 +198,13 @@ export async function getPublicSyncHealth(
       overall: {
         pageCount: pages.length,
         unhealthyPageCount,
-        runningStreams: snapshot.overall.runningStreams,
-        failedStreams: snapshot.overall.failedStreams,
-        stalledStreams: snapshot.overall.stalledStreams,
-        pendingStreams: snapshot.overall.pendingStreams,
-        recentFailedRuns: snapshot.overall.recentRuns.failed,
-        recent429s: snapshot.overall.recentErrors.total429s,
-        recent5xxs: snapshot.overall.recentErrors.total5xxs,
+        runningStreams,
+        failedStreams,
+        stalledStreams,
+        pendingStreams,
+        recentFailedRuns: 0,
+        recent429s: 0,
+        recent5xxs: 0,
       },
       pages,
     },

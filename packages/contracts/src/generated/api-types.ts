@@ -4979,9 +4979,9 @@ export interface paths {
                                 blocks: {
                                     connection: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5016,7 +5016,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5031,11 +5031,11 @@ export interface paths {
                                             } | null;
                                         }[];
                                     };
-                                    top_spenders: {
+                                    financials: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5070,7 +5070,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5085,11 +5085,11 @@ export interface paths {
                                             } | null;
                                         }[];
                                     };
-                                    transactions: {
+                                    audience: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5124,7 +5124,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5139,11 +5139,11 @@ export interface paths {
                                             } | null;
                                         }[];
                                     };
-                                    subscribers: {
+                                    messages_live: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5178,7 +5178,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5193,11 +5193,11 @@ export interface paths {
                                             } | null;
                                         }[];
                                     };
-                                    followers: {
+                                    messages_history: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5232,61 +5232,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
-                                            lastSuccessAt: string | null;
-                                            nextDueAt: string | null;
-                                            nextRetryAt: string | null;
-                                            cadenceSeconds: number;
-                                            needsAttention: boolean;
-                                            error: {
-                                                stream: string | null;
-                                                code: string | null;
-                                                summary: string | null;
-                                                lastFailedAt: string | null;
-                                                consecutiveFailures: number;
-                                            } | null;
-                                        }[];
-                                    };
-                                    messages: {
-                                        /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
-                                        /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
-                                        lastSuccessAt: string | null;
-                                        progress: {
-                                            label: string;
-                                            current: number;
-                                            total: number | null;
-                                            unit: string;
-                                            percent: number | null;
-                                            details: {
-                                                [key: string]: unknown;
-                                            };
-                                        } | null;
-                                        error: {
-                                            stream: string | null;
-                                            code: string | null;
-                                            summary: string | null;
-                                            lastFailedAt: string | null;
-                                            consecutiveFailures: number;
-                                        } | null;
-                                        needsAttention: boolean;
-                                        nextDueAt: string | null;
-                                        nextRetryAt: string | null;
-                                        intervals: {
-                                            /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
-                                            cadenceSeconds: number;
-                                        }[];
-                                        metrics: {
-                                            [key: string]: unknown;
-                                        };
-                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
-                                        substreams: {
-                                            /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
-                                            /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5390,9 +5336,9 @@ export interface paths {
                                 blocks: {
                                     connection: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5427,7 +5373,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5442,11 +5388,11 @@ export interface paths {
                                             } | null;
                                         }[];
                                     };
-                                    top_spenders: {
+                                    financials: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5481,7 +5427,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5496,11 +5442,11 @@ export interface paths {
                                             } | null;
                                         }[];
                                     };
-                                    transactions: {
+                                    audience: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5535,7 +5481,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5550,11 +5496,11 @@ export interface paths {
                                             } | null;
                                         }[];
                                     };
-                                    subscribers: {
+                                    messages_live: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5589,7 +5535,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5604,11 +5550,11 @@ export interface paths {
                                             } | null;
                                         }[];
                                     };
-                                    followers: {
+                                    messages_history: {
                                         /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                        state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                         lastSuccessAt: string | null;
                                         progress: {
                                             label: string;
@@ -5643,61 +5589,7 @@ export interface paths {
                                             /** @enum {string} */
                                             stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
-                                            lastSuccessAt: string | null;
-                                            nextDueAt: string | null;
-                                            nextRetryAt: string | null;
-                                            cadenceSeconds: number;
-                                            needsAttention: boolean;
-                                            error: {
-                                                stream: string | null;
-                                                code: string | null;
-                                                summary: string | null;
-                                                lastFailedAt: string | null;
-                                                consecutiveFailures: number;
-                                            } | null;
-                                        }[];
-                                    };
-                                    messages: {
-                                        /** @enum {string} */
-                                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
-                                        /** @enum {string} */
-                                        state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
-                                        lastSuccessAt: string | null;
-                                        progress: {
-                                            label: string;
-                                            current: number;
-                                            total: number | null;
-                                            unit: string;
-                                            percent: number | null;
-                                            details: {
-                                                [key: string]: unknown;
-                                            };
-                                        } | null;
-                                        error: {
-                                            stream: string | null;
-                                            code: string | null;
-                                            summary: string | null;
-                                            lastFailedAt: string | null;
-                                            consecutiveFailures: number;
-                                        } | null;
-                                        needsAttention: boolean;
-                                        nextDueAt: string | null;
-                                        nextRetryAt: string | null;
-                                        intervals: {
-                                            /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
-                                            cadenceSeconds: number;
-                                        }[];
-                                        metrics: {
-                                            [key: string]: unknown;
-                                        };
-                                        connectionStatus: ("connected" | "not_connected" | "error") | null;
-                                        substreams: {
-                                            /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
-                                            /** @enum {string} */
-                                            state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                            state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                             lastSuccessAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
@@ -5814,9 +5706,9 @@ export interface paths {
                             };
                             block: {
                                 /** @enum {string} */
-                                block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                                block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                 /** @enum {string} */
-                                state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed" | "not_available";
+                                state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
                                 lastSuccessAt: string | null;
                                 progress: {
                                     label: string;
@@ -5851,7 +5743,7 @@ export interface paths {
                                     /** @enum {string} */
                                     stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                     /** @enum {string} */
-                                    state: "up_to_date" | "syncing" | "catching_up" | "retrying" | "error" | "paused" | "waiting" | "auth_failed";
+                                    state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
                                     lastSuccessAt: string | null;
                                     nextDueAt: string | null;
                                     nextRetryAt: string | null;
@@ -7705,7 +7597,7 @@ export interface paths {
                     "application/json": {
                         pageLabel: string;
                         /** @enum {string} */
-                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                     };
                 };
             };
@@ -7723,7 +7615,7 @@ export interface paths {
                             action: "trigger" | "pause" | "resume" | "reset";
                             pageLabel: string;
                             /** @enum {string} */
-                            block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                            block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                             revisions?: {
                                 /** @enum {string} */
                                 stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
@@ -7827,7 +7719,7 @@ export interface paths {
                     "application/json": {
                         pageLabel: string;
                         /** @enum {string} */
-                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                     };
                 };
             };
@@ -7845,7 +7737,7 @@ export interface paths {
                             action: "trigger" | "pause" | "resume" | "reset";
                             pageLabel: string;
                             /** @enum {string} */
-                            block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                            block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                             revisions?: {
                                 /** @enum {string} */
                                 stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
@@ -7936,7 +7828,7 @@ export interface paths {
                     "application/json": {
                         pageLabel: string;
                         /** @enum {string} */
-                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                     };
                 };
             };
@@ -7954,7 +7846,7 @@ export interface paths {
                             action: "trigger" | "pause" | "resume" | "reset";
                             pageLabel: string;
                             /** @enum {string} */
-                            block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                            block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                             revisions?: {
                                 /** @enum {string} */
                                 stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
@@ -8045,7 +7937,7 @@ export interface paths {
                     "application/json": {
                         pageLabel: string;
                         /** @enum {string} */
-                        block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                        block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                     };
                 };
             };
@@ -8063,7 +7955,7 @@ export interface paths {
                             action: "trigger" | "pause" | "resume" | "reset";
                             pageLabel: string;
                             /** @enum {string} */
-                            block: "connection" | "top_spenders" | "transactions" | "subscribers" | "followers" | "messages";
+                            block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                             revisions?: {
                                 /** @enum {string} */
                                 stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";

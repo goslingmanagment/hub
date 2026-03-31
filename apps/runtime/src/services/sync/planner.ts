@@ -1,9 +1,9 @@
 import {
   closeInactiveSyncRuns,
-  ensureSyncStreamStateRows,
-  listRunnableSyncPages,
-  markSyncPageWakeupEnqueued,
-  promoteDueSyncStreamStateRows,
+  ensureSyncTaskRows,
+  listRunnableSyncPagesV2,
+  markSyncTaskWakeupEnqueued,
+  scheduleDueSyncTasks,
 } from "@agency_hub_core/db";
 import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
@@ -11,7 +11,7 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../../bootstrap.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
 
-const INACTIVE_SYNC_RUN_THRESHOLD_MS = 3 * 60 * 1000;
+const INACTIVE_SYNC_RUN_THRESHOLD_MS = 90 * 1000;
 const INACTIVE_SYNC_RUN_ERROR_SUMMARY = "Sync run auto-closed after inactivity";
 
 export async function runSyncPlannerCycle(
@@ -34,10 +34,10 @@ export async function runSyncPlannerCycle(
     }, "Inactive sync run cleanup complete");
   }
 
-  await ensureSyncStreamStateRows(app.db, { now });
-  await promoteDueSyncStreamStateRows(app.db, now);
+  await ensureSyncTaskRows(app.db, { now });
+  await scheduleDueSyncTasks(app.db, { now });
 
-  const runnablePages = await listRunnableSyncPages(app.db, now);
+  const runnablePages = await listRunnableSyncPagesV2(app.db, now);
   for (const page of runnablePages) {
     const wakeupId = await sendSyncPageWakeup(boss, {
       platformAccountId: page.platformAccountId,
@@ -47,7 +47,7 @@ export async function runSyncPlannerCycle(
     });
 
     if (wakeupId) {
-      await markSyncPageWakeupEnqueued(app.db, page.platformAccountId, now);
+      await markSyncTaskWakeupEnqueued(app.db, page.platformAccountId, now);
     }
   }
 

@@ -16,9 +16,8 @@ const authMocks = vi.hoisted(() => ({
   requireDashboardUser: vi.fn(),
 }));
 
-const syncMonitorMocks = vi.hoisted(() => ({
-  getPageStreamSyncUxByStream: vi.fn(),
-  getSyncMonitorSnapshot: vi.fn(),
+const syncStatusMocks = vi.hoisted(() => ({
+  getSyncStatusSnapshot: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", () => repoMocks);
@@ -26,9 +25,21 @@ vi.mock("../apps/runtime/src/services/auth.ts", () => ({
   canAccessPage: authMocks.canAccessPage,
   requireDashboardUser: authMocks.requireDashboardUser,
 }));
-vi.mock("../apps/runtime/src/services/sync-monitor.ts", () => ({
-  getPageStreamSyncUxByStream: syncMonitorMocks.getPageStreamSyncUxByStream,
-  getSyncMonitorSnapshot: syncMonitorMocks.getSyncMonitorSnapshot,
+vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
+  getSyncStatusSnapshot: syncStatusMocks.getSyncStatusSnapshot,
+  mapDomainBlockToSyncUx: (block: {
+    state: "up_to_date" | "failed";
+    error?: { code: string | null; summary: string | null } | null;
+  }) => ({
+    state: block.state === "failed" ? "attention" : "healthy",
+    label: block.state === "failed" ? "Needs attention" : "Up to date",
+    headline: block.state === "failed" ? "Sync needs attention" : "Up to date",
+    detail: block.error?.summary ?? "Sync is current.",
+    progressLabel: null,
+    nextRetryAt: null,
+    updatedAt: "2026-03-24T11:55:00.000Z",
+    requiresAction: false,
+  }),
 }));
 
 import {
@@ -68,39 +79,25 @@ describe("crm service", () => {
         previewReadyConversationCount: 1,
       },
     });
-    syncMonitorMocks.getPageStreamSyncUxByStream.mockResolvedValue(new Map([
-      ["dm_conversations", {
-        state: "healthy",
-        label: "Up to date",
-        headline: "Up to date",
-        detail: "Conversation sync is current.",
-        progressLabel: null,
-        nextRetryAt: null,
-        updatedAt: "2026-03-24T11:55:00.000Z",
-        requiresAction: false,
+    syncStatusMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-24T12:00:00.000Z",
+      pages: [{
+        pageId: 7,
+        blocks: {
+          messages_live: { state: "up_to_date", error: null },
+          messages_history: { state: "up_to_date", error: null },
+        },
       }],
-      ["dm_messages", {
-        state: "healthy",
-        label: "Up to date",
-        headline: "Up to date",
-        detail: "Message sync is current.",
-        progressLabel: null,
-        nextRetryAt: null,
-        updatedAt: "2026-03-24T11:55:00.000Z",
-        requiresAction: false,
-      }],
-    ]));
+    });
 
     const result = await getCrmSummaryReport({ db: {} } as never, {} as never, "lana");
 
-    expect(syncMonitorMocks.getPageStreamSyncUxByStream).toHaveBeenCalledWith(
+    expect(syncStatusMocks.getSyncStatusSnapshot).toHaveBeenCalledWith(
       { db: {} },
       {
-        pageId: 7,
-        streams: ["dm_conversations", "dm_messages"],
+        pageIds: [7],
       },
     );
-    expect(syncMonitorMocks.getSyncMonitorSnapshot).not.toHaveBeenCalled();
     expect(result.messageSyncUx.state).toBe("healthy");
   });
 
@@ -145,28 +142,16 @@ describe("crm service", () => {
         totalTipAmountCents: 0,
       }],
     });
-    syncMonitorMocks.getPageStreamSyncUxByStream.mockResolvedValue(new Map([
-      ["dm_conversations", {
-        state: "healthy",
-        label: "Up to date",
-        headline: "Up to date",
-        detail: "Conversation sync is current.",
-        progressLabel: null,
-        nextRetryAt: null,
-        updatedAt: "2026-03-24T11:55:00.000Z",
-        requiresAction: false,
+    syncStatusMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-24T12:00:00.000Z",
+      pages: [{
+        pageId: 7,
+        blocks: {
+          messages_live: { state: "up_to_date", error: null },
+          messages_history: { state: "up_to_date", error: null },
+        },
       }],
-      ["dm_messages", {
-        state: "healthy",
-        label: "Up to date",
-        headline: "Up to date",
-        detail: "Message sync is current.",
-        progressLabel: null,
-        nextRetryAt: null,
-        updatedAt: "2026-03-24T11:55:00.000Z",
-        requiresAction: false,
-      }],
-    ]));
+    });
 
     const result = await getCrmConversationPreviewReport(
       { db: {} } as never,
@@ -175,14 +160,12 @@ describe("crm service", () => {
       { limit: 10 },
     );
 
-    expect(syncMonitorMocks.getPageStreamSyncUxByStream).toHaveBeenCalledWith(
+    expect(syncStatusMocks.getSyncStatusSnapshot).toHaveBeenCalledWith(
       { db: {} },
       {
-        pageId: 7,
-        streams: ["dm_conversations", "dm_messages"],
+        pageIds: [7],
       },
     );
-    expect(syncMonitorMocks.getSyncMonitorSnapshot).not.toHaveBeenCalled();
     expect(result.messageSyncUx.state).toBe("healthy");
   });
 });

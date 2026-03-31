@@ -14,13 +14,17 @@ import {
   platformAccountProxies,
   rawPayloads,
   syncCheckpoints,
+  syncCursors,
+  syncOperations,
   syncProviderRateLimits,
   syncRequestAttempts,
   syncStreamState,
   syncRunEvents,
   syncRuns,
+  syncTasks,
   transactions,
 } from "../schema.ts";
+import { getSyncTaskExecutionContext } from "./sync-context.ts";
 
 export const SYNC_CONTROL_STREAMS = [
   "light",
@@ -151,6 +155,20 @@ function asSyncAuditStream(stream: string): SyncAuditStream {
   }
 
   throw new Error(`Unsupported sync stream "${stream}"`);
+}
+
+function isSyncControlStream(stream: SyncAuditStream): stream is SyncControlStream {
+  return stream !== "cleanup";
+}
+
+class SyncLeaseFencedError extends Error {
+  constructor(
+    readonly platformAccountId: number,
+    readonly stream: SyncControlStream,
+  ) {
+    super(`Sync task lease lost for ${platformAccountId}:${stream}`);
+    this.name = "SyncLeaseFencedError";
+  }
 }
 
 type TimestampValue = Date | string | null | undefined;
@@ -478,7 +496,11 @@ export async function startSyncRun(
   db: Database,
   input: {
     platformAccountId: number;
+    operationId?: number | null;
     stream: SyncAuditStream;
+    task?: SyncControlStream | null;
+    generation?: number | null;
+    leaseToken?: string | null;
     trigger: string;
   },
 ) {
@@ -486,7 +508,11 @@ export async function startSyncRun(
     .insert(syncRuns)
     .values({
       platformAccountId: input.platformAccountId,
+      operationId: input.operationId ?? null,
       stream: input.stream,
+      task: input.task ?? (isSyncControlStream(input.stream) ? input.stream : null),
+      generation: input.generation ?? null,
+      leaseToken: input.leaseToken ?? null,
       trigger: input.trigger,
       status: "running",
     })
@@ -660,12 +686,240 @@ export async function getCheckpoint(
   platformAccountId: number,
   stream: SyncAuditStream,
 ) {
+  if (isSyncControlStream(stream)) {
+    const cursor = await db.query.syncCursors.findFirst({
+      where: and(
+        eq(syncCursors.platformAccountId, platformAccountId),
+        eq(syncCursors.task, stream),
+      ),
+    });
+
+    if (cursor) {
+      return {
+        id: 0,
+        platformAccountId,
+        stream,
+        cursorText: cursor.cursorText,
+        cursorTimestamp: cursor.cursorTimestamp,
+        state: cursor.state,
+        lastSuccessfulRunId: cursor.lastSuccessfulRunId,
+        lastSuccessfulAt: cursor.lastSuccessfulAt,
+        updatedAt: cursor.updatedAt,
+      };
+    }
+  }
+
   return (await db.query.syncCheckpoints.findFirst({
     where: and(
       eq(syncCheckpoints.platformAccountId, platformAccountId),
       eq(syncCheckpoints.stream, stream),
     ),
   })) ?? null;
+}
+
+async function upsertControlCheckpointRows(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    stream: SyncControlStream;
+    cursorText?: string | null;
+    cursorTimestamp?: Date | null;
+    state?: Record<string, unknown>;
+    lastSuccessfulRunId?: number | null;
+    touchSuccessMetadata: boolean;
+    now: Date;
+  },
+) {
+  const executionContext = getSyncTaskExecutionContext();
+  const hasLeaseContext = executionContext &&
+    executionContext.platformAccountId === input.platformAccountId &&
+    executionContext.task === input.stream;
+
+  if (hasLeaseContext) {
+    const result = await db.execute<{
+      owned: boolean;
+      cursorText: string | null;
+      cursorTimestamp: TimestampValue;
+      state: Record<string, unknown>;
+      lastSuccessfulRunId: NumericValue;
+      lastSuccessfulAt: TimestampValue;
+      updatedAt: TimestampValue;
+    }>(sql`
+      with owned_task as (
+        select running_generation as generation
+        from ${syncTasks}
+        where platform_account_id = ${input.platformAccountId}
+          and task = ${input.stream}
+          and lease_token = ${executionContext.leaseToken}
+          and running_generation = ${executionContext.generation}
+      ),
+      legacy_upsert as (
+        insert into ${syncCheckpoints} (
+          platform_account_id,
+          stream,
+          cursor_text,
+          cursor_timestamp,
+          state,
+          last_successful_run_id,
+          last_successful_at,
+          updated_at
+        )
+        select ${input.platformAccountId},
+               ${input.stream},
+               ${input.cursorText ?? null},
+               ${input.cursorTimestamp ?? null},
+               ${input.state ?? {}},
+               ${input.touchSuccessMetadata ? (input.lastSuccessfulRunId ?? null) : null},
+               ${input.touchSuccessMetadata ? input.now : null},
+               ${input.now}
+        from owned_task
+        on conflict (platform_account_id, stream) do update
+        set cursor_text = excluded.cursor_text,
+            cursor_timestamp = excluded.cursor_timestamp,
+            state = excluded.state,
+            last_successful_run_id = case
+              when ${input.touchSuccessMetadata}
+                then excluded.last_successful_run_id
+              else ${syncCheckpoints.lastSuccessfulRunId}
+            end,
+            last_successful_at = case
+              when ${input.touchSuccessMetadata}
+                then excluded.last_successful_at
+              else ${syncCheckpoints.lastSuccessfulAt}
+            end,
+            updated_at = excluded.updated_at
+      ),
+      cursor_upsert as (
+        insert into ${syncCursors} (
+          platform_account_id,
+          task,
+          cursor_text,
+          cursor_timestamp,
+          cursor_generation,
+          state,
+          updated_at,
+          last_successful_run_id,
+          last_successful_at
+        )
+        select ${input.platformAccountId},
+               ${input.stream},
+               ${input.cursorText ?? null},
+               ${input.cursorTimestamp ?? null},
+               owned_task.generation,
+               ${input.state ?? {}},
+               ${input.now},
+               ${input.touchSuccessMetadata ? (input.lastSuccessfulRunId ?? null) : null},
+               ${input.touchSuccessMetadata ? input.now : null}
+        from owned_task
+        on conflict (platform_account_id, task) do update
+        set cursor_text = excluded.cursor_text,
+            cursor_timestamp = excluded.cursor_timestamp,
+            cursor_generation = excluded.cursor_generation,
+            state = excluded.state,
+            updated_at = excluded.updated_at,
+            last_successful_run_id = case
+              when ${input.touchSuccessMetadata}
+                then excluded.last_successful_run_id
+              else ${syncCursors.lastSuccessfulRunId}
+            end,
+            last_successful_at = case
+              when ${input.touchSuccessMetadata}
+                then excluded.last_successful_at
+              else ${syncCursors.lastSuccessfulAt}
+            end
+        returning cursor_text as "cursorText",
+                  cursor_timestamp as "cursorTimestamp",
+                  state as "state",
+                  last_successful_run_id as "lastSuccessfulRunId",
+                  last_successful_at as "lastSuccessfulAt",
+                  updated_at as "updatedAt"
+      )
+      select exists(select 1 from owned_task) as "owned",
+             cu."cursorText" as "cursorText",
+             cu."cursorTimestamp" as "cursorTimestamp",
+             cu."state" as "state",
+             cu."lastSuccessfulRunId" as "lastSuccessfulRunId",
+             cu."lastSuccessfulAt" as "lastSuccessfulAt",
+             cu."updatedAt" as "updatedAt"
+      from cursor_upsert cu
+    `);
+
+    if (!result.rows[0]?.owned) {
+      throw new SyncLeaseFencedError(input.platformAccountId, input.stream);
+    }
+
+    const row = result.rows[0];
+    return row ? {
+      id: 0,
+      platformAccountId: input.platformAccountId,
+      stream: input.stream,
+      cursorText: row.cursorText ?? null,
+      cursorTimestamp: parseTimestamp(row.cursorTimestamp, "cursorTimestamp"),
+      state: row.state ?? {},
+      lastSuccessfulRunId: normalizeNullableNumber(row.lastSuccessfulRunId, "lastSuccessfulRunId"),
+      lastSuccessfulAt: parseTimestamp(row.lastSuccessfulAt, "lastSuccessfulAt"),
+      updatedAt: requireTimestamp(row.updatedAt!, "updatedAt"),
+    } : null;
+  }
+
+  const [checkpoint] = await db
+    .insert(syncCheckpoints)
+    .values({
+      platformAccountId: input.platformAccountId,
+      stream: input.stream,
+      cursorText: input.cursorText ?? null,
+      cursorTimestamp: input.cursorTimestamp ?? null,
+      state: input.state ?? {},
+      lastSuccessfulRunId: input.touchSuccessMetadata ? (input.lastSuccessfulRunId ?? null) : null,
+      lastSuccessfulAt: input.touchSuccessMetadata ? input.now : null,
+      updatedAt: input.now,
+    })
+    .onConflictDoUpdate({
+      target: [syncCheckpoints.platformAccountId, syncCheckpoints.stream],
+      set: {
+        cursorText: input.cursorText ?? null,
+        cursorTimestamp: input.cursorTimestamp ?? null,
+        state: input.state ?? {},
+        lastSuccessfulRunId: input.touchSuccessMetadata
+          ? (input.lastSuccessfulRunId ?? null)
+          : sql`${syncCheckpoints.lastSuccessfulRunId}`,
+        lastSuccessfulAt: input.touchSuccessMetadata
+          ? input.now
+          : sql`${syncCheckpoints.lastSuccessfulAt}`,
+        updatedAt: input.now,
+      },
+    })
+    .returning();
+
+  await db
+    .insert(syncCursors)
+    .values({
+      platformAccountId: input.platformAccountId,
+      task: input.stream,
+      cursorText: input.cursorText ?? null,
+      cursorTimestamp: input.cursorTimestamp ?? null,
+      state: input.state ?? {},
+      updatedAt: input.now,
+      lastSuccessfulRunId: input.touchSuccessMetadata ? (input.lastSuccessfulRunId ?? null) : null,
+      lastSuccessfulAt: input.touchSuccessMetadata ? input.now : null,
+    })
+    .onConflictDoUpdate({
+      target: [syncCursors.platformAccountId, syncCursors.task],
+      set: {
+        cursorText: input.cursorText ?? null,
+        cursorTimestamp: input.cursorTimestamp ?? null,
+        state: input.state ?? {},
+        updatedAt: input.now,
+        lastSuccessfulRunId: input.touchSuccessMetadata
+          ? (input.lastSuccessfulRunId ?? null)
+          : sql`${syncCursors.lastSuccessfulRunId}`,
+        lastSuccessfulAt: input.touchSuccessMetadata
+          ? input.now
+          : sql`${syncCursors.lastSuccessfulAt}`,
+      },
+    });
+
+  return checkpoint;
 }
 
 export async function upsertCheckpoint(
@@ -679,6 +933,16 @@ export async function upsertCheckpoint(
     lastSuccessfulRunId?: number | null;
   },
 ) {
+  const now = new Date();
+  if (isSyncControlStream(input.stream)) {
+    return upsertControlCheckpointRows(db, {
+      ...input,
+      stream: input.stream,
+      touchSuccessMetadata: true,
+      now,
+    });
+  }
+
   const [checkpoint] = await db
     .insert(syncCheckpoints)
     .values({
@@ -715,6 +979,16 @@ export async function upsertCheckpointProgress(
     state?: Record<string, unknown>;
   },
 ) {
+  const now = new Date();
+  if (isSyncControlStream(input.stream)) {
+    return upsertControlCheckpointRows(db, {
+      ...input,
+      stream: input.stream,
+      touchSuccessMetadata: false,
+      now,
+    });
+  }
+
   const [checkpoint] = await db
     .insert(syncCheckpoints)
     .values({
@@ -753,6 +1027,14 @@ export async function deleteCheckpoints(
     eq(syncCheckpoints.platformAccountId, input.platformAccountId),
     inArray(syncCheckpoints.stream, input.streams),
   ));
+
+  const controlStreams = input.streams.filter(isSyncControlStream);
+  if (controlStreams.length > 0) {
+    await db.delete(syncCursors).where(and(
+      eq(syncCursors.platformAccountId, input.platformAccountId),
+      inArray(syncCursors.task, controlStreams),
+    ));
+  }
 }
 
 export async function insertRawPayload(
@@ -790,9 +1072,12 @@ export async function insertSyncRequestAttempt(
   db: Database,
   input: {
     syncRunId: number;
+    operationId?: number | null;
     platformAccountId: number;
     provider: "fansly" | "onlyfans";
     stream: SyncAuditStream;
+    task?: SyncControlStream | null;
+    generation?: number | null;
     operation: string;
     logicalRequestId: string;
     attemptNumber: number;
@@ -804,9 +1089,12 @@ export async function insertSyncRequestAttempt(
     .insert(syncRequestAttempts)
     .values({
       syncRunId: input.syncRunId,
+      operationId: input.operationId ?? null,
       platformAccountId: input.platformAccountId,
       provider: input.provider,
       stream: input.stream,
+      task: input.task ?? (isSyncControlStream(input.stream) ? input.stream : null),
+      generation: input.generation ?? null,
       operation: input.operation,
       logicalRequestId: input.logicalRequestId,
       attemptNumber: input.attemptNumber,
@@ -855,9 +1143,13 @@ export async function insertSyncRunEvent(
   db: Database,
   input: {
     syncRunId: number;
+    operationId?: number | null;
     platformAccountId: number;
     provider: "fansly" | "onlyfans";
     stream: SyncAuditStream;
+    task?: SyncControlStream | null;
+    generation?: number | null;
+    leaseToken?: string | null;
     eventType: string;
     severity?: "info" | "warn" | "error";
     message: string;
@@ -869,9 +1161,13 @@ export async function insertSyncRunEvent(
     .insert(syncRunEvents)
     .values({
       syncRunId: input.syncRunId,
+      operationId: input.operationId ?? null,
       platformAccountId: input.platformAccountId,
       provider: input.provider,
       stream: input.stream,
+      task: input.task ?? (isSyncControlStream(input.stream) ? input.stream : null),
+      generation: input.generation ?? null,
+      leaseToken: input.leaseToken ?? null,
       eventType: input.eventType,
       severity: input.severity ?? "info",
       message: input.message,

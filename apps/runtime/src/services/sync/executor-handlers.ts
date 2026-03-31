@@ -13,7 +13,7 @@ import {
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
   rebuildFollowerRollups,
   rebuildSubscriberRollups,
-  requestSyncStreamRevisions,
+  requestSyncTaskGenerations,
   selectNextPageDmMessageSyncCandidate,
   updateLegacySyncTimestamp,
   upsertPageTopSpenders,
@@ -550,10 +550,11 @@ async function triggerFollowersReconcileAnomaly(
   app: AppContext,
   platformAccountId: number,
 ) {
-  await requestSyncStreamRevisions(app.db, {
+  await requestSyncTaskGenerations(app.db, {
     platformAccountId,
-    streams: ["followers_reconcile"],
-    reason: "anomaly",
+    tasks: ["followers_reconcile"],
+    source: "anomaly",
+    requestedByActor: "executor_anomaly",
   });
 }
 

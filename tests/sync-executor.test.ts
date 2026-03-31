@@ -3,15 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 const dbMocks = vi.hoisted(() => ({
-  ensureSyncStreamStateRows: vi.fn(),
+  acquireNextSyncTaskLeaseForPage: vi.fn(),
+  blockSyncTaskGeneration: vi.fn(),
+  completeSyncTaskGeneration: vi.fn(),
+  ensureSyncTaskRows: vi.fn(),
+  failSyncTaskGeneration: vi.fn(),
   findPageById: vi.fn(),
-  listRunnableSyncStreamStatesForPage: vi.fn(),
-  markSyncPageAuthFailed: vi.fn(),
-  recordSyncStreamChunkFailure: vi.fn(),
-  recordSyncStreamChunkStarted: vi.fn(),
-  recordSyncStreamChunkSucceeded: vi.fn(),
-  recordSyncStreamChunkYielded: vi.fn(),
+  heartbeatSyncTaskLease: vi.fn(),
+  listRunnableSyncPagesV2: vi.fn(),
   startSyncRun: vi.fn(),
+  yieldSyncTaskGeneration: vi.fn(),
 }));
 
 const handlerMocks = vi.hoisted(() => ({
@@ -32,7 +33,13 @@ const telemetryMocks = vi.hoisted(() => ({
   }>,
 }));
 
-vi.mock("@agency_hub_core/db", () => dbMocks);
+vi.mock("@agency_hub_core/db", async () => {
+  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  return {
+    ...actual,
+    ...dbMocks,
+  };
+});
 vi.mock("../apps/runtime/src/services/sync/executor-handlers.ts", () => handlerMocks);
 vi.mock("../apps/runtime/src/services/sync/shared.ts", async () => {
   const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync/shared.ts")>(
@@ -69,29 +76,44 @@ import {
 } from "../apps/runtime/src/services/sync/executor.ts";
 
 describe("sync executor", () => {
-  const streamState = {
+  const taskLease = {
     platformAccountId: 55,
-    stream: "followers",
-    status: "active",
-    cadenceSeconds: 43_200,
+    task: "followers",
+    status: "queued",
+    desiredGeneration: 3,
+    runningGeneration: 3,
+    appliedGeneration: 2,
+    scheduleIntervalSeconds: 43_200,
     slotOffsetSeconds: 10,
-    nextDueAt: new Date("2026-03-14T12:00:00.000Z"),
-    basePriority: 20,
-    effectivePriority: 45,
-    pendingReason: "manual",
-    desiredRevision: 3,
-    satisfiedRevision: 2,
-    desiredAt: new Date("2026-03-14T12:00:00.000Z"),
+    lastScheduledSlot: 40000,
+    lastRequestedAt: new Date("2026-03-14T12:00:00.000Z"),
     requestPayload: null,
-    backoffUntil: new Date(0),
+    retryClass: null,
+    retryAt: null,
+    blockerType: null,
+    blockerCode: null,
+    blockerReason: null,
+    blockedSince: null,
+    currentPhase: null,
+    currentWorkClass: "live",
+    progressPayload: {},
+    leaseOwner: "worker-1",
+    leaseToken: "lease-1",
+    leaseHeartbeatAt: new Date("2026-03-14T12:00:00.000Z"),
+    leaseExpiresAt: new Date("2026-03-14T12:02:00.000Z"),
     lastEnqueuedAt: null,
     lastStartedAt: null,
+    lastProgressAt: null,
     lastFinishedAt: null,
-    lastSucceededAt: null,
-    lastFailedAt: null,
+    lastSuccessAt: null,
+    lastFailureAt: null,
     consecutiveFailures: 0,
     lastErrorCode: null,
     lastErrorSummary: null,
+    operationId: 99,
+    operationSource: "manual",
+    platform: "fansly",
+    proxyUrl: "socks5://proxy.example",
     createdAt: new Date("2026-03-14T12:00:00.000Z"),
     updatedAt: new Date("2026-03-14T12:00:00.000Z"),
   } as const;
@@ -114,6 +136,11 @@ describe("sync executor", () => {
       id: 777,
       startedAt: new Date("2026-03-14T12:00:00.000Z"),
     });
+    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValue(null);
+    dbMocks.blockSyncTaskGeneration.mockResolvedValue(true);
+    dbMocks.completeSyncTaskGeneration.mockResolvedValue(true);
+    dbMocks.failSyncTaskGeneration.mockResolvedValue(true);
     dbMocks.findPageById.mockResolvedValue({
       page: {
         id: 55,
@@ -124,6 +151,9 @@ describe("sync executor", () => {
         url: "socks5://proxy.example",
       },
     });
+    dbMocks.heartbeatSyncTaskLease.mockResolvedValue(true);
+    dbMocks.listRunnableSyncPagesV2.mockResolvedValue([]);
+    dbMocks.yieldSyncTaskGeneration.mockResolvedValue(true);
     handlerMocks.resolveExecutorPageContext.mockResolvedValue({
       platform: "fansly",
       page: {
@@ -148,9 +178,16 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
 
-    dbMocks.listRunnableSyncStreamStatesForPage
-      .mockResolvedValueOnce([streamState])
-      .mockResolvedValueOnce([streamState]);
+    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnableSyncPagesV2.mockResolvedValueOnce([
+      {
+        platformAccountId: 55,
+        platform: "fansly",
+        priority: 45,
+        requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+        proxyUrl: "socks5://proxy.example",
+      },
+    ]);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,
       yieldReason: "request_budget",
@@ -165,18 +202,24 @@ describe("sync executor", () => {
       },
     });
 
-    expect(dbMocks.recordSyncStreamChunkStarted).toHaveBeenCalledWith({}, 55, "followers");
-    expect(dbMocks.recordSyncStreamChunkYielded).toHaveBeenCalledWith({}, 55, "followers");
+    expect(dbMocks.ensureSyncTaskRows).toHaveBeenCalledWith({}, { platformAccountId: 55 });
+    expect(dbMocks.yieldSyncTaskGeneration).toHaveBeenCalledWith({}, expect.objectContaining({
+      platformAccountId: 55,
+      task: "followers",
+      generation: 3,
+      leaseToken: "lease-1",
+    }));
     expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
     expect(boss.send).toHaveBeenCalledWith(
       "sync.page.execute",
       { platformAccountId: 55 },
-      {
+      expect.objectContaining({
+        singletonKey: undefined,
         priority: 45,
         group: {
           id: "fansly:socks5://proxy.example:1080",
         },
-      },
+      }),
     );
     expect(boss.send.mock.invocationCallOrder[0]).toBeLessThan(boss.complete.mock.invocationCallOrder[0]);
   });
@@ -196,9 +239,16 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
 
-    dbMocks.listRunnableSyncStreamStatesForPage
-      .mockResolvedValueOnce([streamState])
-      .mockResolvedValueOnce([streamState]);
+    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnableSyncPagesV2.mockResolvedValueOnce([
+      {
+        platformAccountId: 55,
+        platform: "fansly",
+        priority: 45,
+        requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+        proxyUrl: "socks5://proxy.example",
+      },
+    ]);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,
       yieldReason: "request_budget",
@@ -230,10 +280,17 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
 
-    dbMocks.listRunnableSyncStreamStatesForPage
-      .mockResolvedValueOnce([streamState])
-      .mockResolvedValueOnce([streamState])
-      .mockResolvedValueOnce([streamState])
+    dbMocks.acquireNextSyncTaskLeaseForPage
+      .mockResolvedValueOnce(taskLease)
+      .mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnableSyncPagesV2
+      .mockResolvedValueOnce([{
+        platformAccountId: 55,
+        platform: "fansly",
+        priority: 45,
+        requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+        proxyUrl: "socks5://proxy.example",
+      }])
       .mockResolvedValueOnce([]);
     handlerMocks.executeStreamChunk
       .mockResolvedValueOnce({
@@ -256,7 +313,8 @@ describe("sync executor", () => {
 
     expect(boss.send).toHaveBeenCalledTimes(1);
     expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(2);
-    expect(dbMocks.recordSyncStreamChunkStarted).toHaveBeenCalledTimes(2);
+    expect(dbMocks.yieldSyncTaskGeneration).toHaveBeenCalledTimes(1);
+    expect(dbMocks.completeSyncTaskGeneration).toHaveBeenCalledTimes(1);
     expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
     expect(result).toMatchObject({
       kind: "success",
@@ -278,7 +336,14 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
 
-    dbMocks.listRunnableSyncStreamStatesForPage.mockImplementation(async () => [streamState]);
+    dbMocks.acquireNextSyncTaskLeaseForPage.mockImplementation(async () => taskLease);
+    dbMocks.listRunnableSyncPagesV2.mockResolvedValue([{
+      platformAccountId: 55,
+      platform: "fansly",
+      priority: 45,
+      requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+      proxyUrl: "socks5://proxy.example",
+    }]);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,
       yieldReason: "request_budget",
@@ -303,7 +368,7 @@ describe("sync executor", () => {
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
 
-    dbMocks.listRunnableSyncStreamStatesForPage.mockResolvedValueOnce([streamState]);
+    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
     handlerMocks.executeStreamChunk.mockRejectedValue(
       new FanslyApiError("expired session", 401),
     );
@@ -311,11 +376,14 @@ describe("sync executor", () => {
     const result = await executeNextSyncPageChunk(app, 55);
 
     expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledTimes(1);
-    expect(dbMocks.markSyncPageAuthFailed).toHaveBeenCalledWith({}, {
+    expect(dbMocks.blockSyncTaskGeneration).toHaveBeenCalledWith({}, expect.objectContaining({
       platformAccountId: 55,
-      errorCode: null,
-      errorSummary: "expired session",
-    });
+      task: "followers",
+      generation: 3,
+      blockerType: "auth",
+      blockerCode: "credentials_invalid",
+      blockerReason: "expired session",
+    }));
     expect(result).toMatchObject({
       kind: "auth_failed",
       platformAccountId: 55,
@@ -329,9 +397,8 @@ describe("sync executor", () => {
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
 
-    dbMocks.listRunnableSyncStreamStatesForPage
-      .mockResolvedValueOnce([streamState])
-      .mockResolvedValueOnce([]);
+    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnableSyncPagesV2.mockResolvedValueOnce([]);
     handlerMocks.resolveExecutorPageContext.mockRejectedValue(
       new Error("No encryption key configured for version 1"),
     );
@@ -341,9 +408,19 @@ describe("sync executor", () => {
     expect(dbMocks.startSyncRun).toHaveBeenCalledWith({}, {
       platformAccountId: 55,
       stream: "followers",
+      task: "followers",
+      operationId: 99,
+      generation: 3,
+      leaseToken: "lease-1",
       trigger: "manual",
     });
-    expect(dbMocks.recordSyncStreamChunkStarted).toHaveBeenCalledWith({}, 55, "followers");
+    expect(dbMocks.failSyncTaskGeneration).toHaveBeenCalledWith({}, expect.objectContaining({
+      platformAccountId: 55,
+      task: "followers",
+      generation: 3,
+      leaseToken: "lease-1",
+      retryClass: "transient_network",
+    }));
     expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledWith(app, expect.objectContaining({
       platformAccountId: 55,
       syncRunId: 777,
@@ -376,9 +453,7 @@ describe("sync executor", () => {
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
 
-    dbMocks.listRunnableSyncStreamStatesForPage
-      .mockResolvedValueOnce([streamState])
-      .mockResolvedValueOnce([]);
+    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
     handlerMocks.executeStreamChunk.mockImplementation(async () => {
       await vi.advanceTimersByTimeAsync(31_000);
       return {
@@ -390,6 +465,7 @@ describe("sync executor", () => {
     await executeNextSyncPageChunk(app, 55);
 
     expect(telemetryMocks.instances[0]?.recordWorkerHeartbeat).toHaveBeenCalledTimes(1);
+    expect(dbMocks.heartbeatSyncTaskLease).toHaveBeenCalledTimes(1);
   });
 
   it("executor workers fetch with groupConcurrency and ignore active groups", async () => {
@@ -443,9 +519,9 @@ describe("sync executor", () => {
       touch: vi.fn(async () => {}),
     };
 
-    dbMocks.listRunnableSyncStreamStatesForPage
-      .mockResolvedValueOnce([streamState])
-      .mockResolvedValueOnce([]);
+    dbMocks.acquireNextSyncTaskLeaseForPage
+      .mockResolvedValueOnce(taskLease)
+      .mockResolvedValueOnce(null);
     handlerMocks.executeStreamChunk.mockImplementation(async () => {
       await chunkGate;
       return {

@@ -17363,24 +17363,24 @@
                                     "type": "string",
                                     "enum": [
                                       "connection",
-                                      "top_spenders",
-                                      "transactions",
-                                      "subscribers",
-                                      "followers",
-                                      "messages"
+                                      "financials",
+                                      "audience",
+                                      "messages_live",
+                                      "messages_history"
                                     ]
                                   },
                                   "state": {
                                     "type": "string",
                                     "enum": [
+                                      "not_started",
+                                      "scheduled",
+                                      "backfilling",
                                       "up_to_date",
                                       "syncing",
-                                      "catching_up",
                                       "retrying",
-                                      "error",
+                                      "delayed",
+                                      "failed",
                                       "paused",
-                                      "waiting",
-                                      "auth_failed",
                                       "not_available"
                                     ]
                                   },
@@ -17617,14 +17617,15 @@
                                         "state": {
                                           "type": "string",
                                           "enum": [
+                                            "not_started",
+                                            "scheduled",
+                                            "backfilling",
                                             "up_to_date",
                                             "syncing",
-                                            "catching_up",
                                             "retrying",
-                                            "error",
-                                            "paused",
-                                            "waiting",
-                                            "auth_failed"
+                                            "delayed",
+                                            "failed",
+                                            "paused"
                                           ]
                                         },
                                         "lastSuccessAt": {
@@ -17761,31 +17762,31 @@
                                 ],
                                 "additionalProperties": false
                               },
-                              "top_spenders": {
+                              "financials": {
                                 "type": "object",
                                 "properties": {
                                   "block": {
                                     "type": "string",
                                     "enum": [
                                       "connection",
-                                      "top_spenders",
-                                      "transactions",
-                                      "subscribers",
-                                      "followers",
-                                      "messages"
+                                      "financials",
+                                      "audience",
+                                      "messages_live",
+                                      "messages_history"
                                     ]
                                   },
                                   "state": {
                                     "type": "string",
                                     "enum": [
+                                      "not_started",
+                                      "scheduled",
+                                      "backfilling",
                                       "up_to_date",
                                       "syncing",
-                                      "catching_up",
                                       "retrying",
-                                      "error",
+                                      "delayed",
+                                      "failed",
                                       "paused",
-                                      "waiting",
-                                      "auth_failed",
                                       "not_available"
                                     ]
                                   },
@@ -18022,14 +18023,15 @@
                                         "state": {
                                           "type": "string",
                                           "enum": [
+                                            "not_started",
+                                            "scheduled",
+                                            "backfilling",
                                             "up_to_date",
                                             "syncing",
-                                            "catching_up",
                                             "retrying",
-                                            "error",
-                                            "paused",
-                                            "waiting",
-                                            "auth_failed"
+                                            "delayed",
+                                            "failed",
+                                            "paused"
                                           ]
                                         },
                                         "lastSuccessAt": {
@@ -18166,31 +18168,31 @@
                                 ],
                                 "additionalProperties": false
                               },
-                              "transactions": {
+                              "audience": {
                                 "type": "object",
                                 "properties": {
                                   "block": {
                                     "type": "string",
                                     "enum": [
                                       "connection",
-                                      "top_spenders",
-                                      "transactions",
-                                      "subscribers",
-                                      "followers",
-                                      "messages"
+                                      "financials",
+                                      "audience",
+                                      "messages_live",
+                                      "messages_history"
                                     ]
                                   },
                                   "state": {
                                     "type": "string",
                                     "enum": [
+                                      "not_started",
+                                      "scheduled",
+                                      "backfilling",
                                       "up_to_date",
                                       "syncing",
-                                      "catching_up",
                                       "retrying",
-                                      "error",
+                                      "delayed",
+                                      "failed",
                                       "paused",
-                                      "waiting",
-                                      "auth_failed",
                                       "not_available"
                                     ]
                                   },
@@ -18427,14 +18429,15 @@
                                         "state": {
                                           "type": "string",
                                           "enum": [
+                                            "not_started",
+                                            "scheduled",
+                                            "backfilling",
                                             "up_to_date",
                                             "syncing",
-                                            "catching_up",
                                             "retrying",
-                                            "error",
-                                            "paused",
-                                            "waiting",
-                                            "auth_failed"
+                                            "delayed",
+                                            "failed",
+                                            "paused"
                                           ]
                                         },
                                         "lastSuccessAt": {
@@ -18571,31 +18574,31 @@
                                 ],
                                 "additionalProperties": false
                               },
-                              "subscribers": {
+                              "messages_live": {
                                 "type": "object",
                                 "properties": {
                                   "block": {
                                     "type": "string",
                                     "enum": [
                                       "connection",
-                                      "top_spenders",
-                                      "transactions",
-                                      "subscribers",
-                                      "followers",
-                                      "messages"
+                                      "financials",
+                                      "audience",
+                                      "messages_live",
+                                      "messages_history"
                                     ]
                                   },
                                   "state": {
                                     "type": "string",
                                     "enum": [
+                                      "not_started",
+                                      "scheduled",
+                                      "backfilling",
                                       "up_to_date",
                                       "syncing",
-                                      "catching_up",
                                       "retrying",
-                                      "error",
+                                      "delayed",
+                                      "failed",
                                       "paused",
-                                      "waiting",
-                                      "auth_failed",
                                       "not_available"
                                     ]
                                   },
@@ -18832,14 +18835,15 @@
                                         "state": {
                                           "type": "string",
                                           "enum": [
+                                            "not_started",
+                                            "scheduled",
+                                            "backfilling",
                                             "up_to_date",
                                             "syncing",
-                                            "catching_up",
                                             "retrying",
-                                            "error",
-                                            "paused",
-                                            "waiting",
-                                            "auth_failed"
+                                            "delayed",
+                                            "failed",
+                                            "paused"
                                           ]
                                         },
                                         "lastSuccessAt": {
@@ -18976,31 +18980,31 @@
                                 ],
                                 "additionalProperties": false
                               },
-                              "followers": {
+                              "messages_history": {
                                 "type": "object",
                                 "properties": {
                                   "block": {
                                     "type": "string",
                                     "enum": [
                                       "connection",
-                                      "top_spenders",
-                                      "transactions",
-                                      "subscribers",
-                                      "followers",
-                                      "messages"
+                                      "financials",
+                                      "audience",
+                                      "messages_live",
+                                      "messages_history"
                                     ]
                                   },
                                   "state": {
                                     "type": "string",
                                     "enum": [
+                                      "not_started",
+                                      "scheduled",
+                                      "backfilling",
                                       "up_to_date",
                                       "syncing",
-                                      "catching_up",
                                       "retrying",
-                                      "error",
+                                      "delayed",
+                                      "failed",
                                       "paused",
-                                      "waiting",
-                                      "auth_failed",
                                       "not_available"
                                     ]
                                   },
@@ -19237,419 +19241,15 @@
                                         "state": {
                                           "type": "string",
                                           "enum": [
+                                            "not_started",
+                                            "scheduled",
+                                            "backfilling",
                                             "up_to_date",
                                             "syncing",
-                                            "catching_up",
                                             "retrying",
-                                            "error",
-                                            "paused",
-                                            "waiting",
-                                            "auth_failed"
-                                          ]
-                                        },
-                                        "lastSuccessAt": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "nextDueAt": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "nextRetryAt": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "cadenceSeconds": {
-                                          "type": "integer",
-                                          "minimum": -9007199254740991,
-                                          "maximum": 9007199254740991
-                                        },
-                                        "needsAttention": {
-                                          "type": "boolean"
-                                        },
-                                        "error": {
-                                          "anyOf": [
-                                            {
-                                              "type": "object",
-                                              "properties": {
-                                                "stream": {
-                                                  "anyOf": [
-                                                    {
-                                                      "type": "string"
-                                                    },
-                                                    {
-                                                      "type": "null"
-                                                    }
-                                                  ]
-                                                },
-                                                "code": {
-                                                  "anyOf": [
-                                                    {
-                                                      "type": "string"
-                                                    },
-                                                    {
-                                                      "type": "null"
-                                                    }
-                                                  ]
-                                                },
-                                                "summary": {
-                                                  "anyOf": [
-                                                    {
-                                                      "type": "string"
-                                                    },
-                                                    {
-                                                      "type": "null"
-                                                    }
-                                                  ]
-                                                },
-                                                "lastFailedAt": {
-                                                  "anyOf": [
-                                                    {
-                                                      "type": "string"
-                                                    },
-                                                    {
-                                                      "type": "null"
-                                                    }
-                                                  ]
-                                                },
-                                                "consecutiveFailures": {
-                                                  "type": "integer",
-                                                  "minimum": -9007199254740991,
-                                                  "maximum": 9007199254740991
-                                                }
-                                              },
-                                              "required": [
-                                                "stream",
-                                                "code",
-                                                "summary",
-                                                "lastFailedAt",
-                                                "consecutiveFailures"
-                                              ],
-                                              "additionalProperties": false
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        }
-                                      },
-                                      "required": [
-                                        "stream",
-                                        "state",
-                                        "lastSuccessAt",
-                                        "nextDueAt",
-                                        "nextRetryAt",
-                                        "cadenceSeconds",
-                                        "needsAttention",
-                                        "error"
-                                      ],
-                                      "additionalProperties": false
-                                    }
-                                  }
-                                },
-                                "required": [
-                                  "block",
-                                  "state",
-                                  "lastSuccessAt",
-                                  "progress",
-                                  "error",
-                                  "needsAttention",
-                                  "nextDueAt",
-                                  "nextRetryAt",
-                                  "intervals",
-                                  "metrics",
-                                  "connectionStatus",
-                                  "substreams"
-                                ],
-                                "additionalProperties": false
-                              },
-                              "messages": {
-                                "type": "object",
-                                "properties": {
-                                  "block": {
-                                    "type": "string",
-                                    "enum": [
-                                      "connection",
-                                      "top_spenders",
-                                      "transactions",
-                                      "subscribers",
-                                      "followers",
-                                      "messages"
-                                    ]
-                                  },
-                                  "state": {
-                                    "type": "string",
-                                    "enum": [
-                                      "up_to_date",
-                                      "syncing",
-                                      "catching_up",
-                                      "retrying",
-                                      "error",
-                                      "paused",
-                                      "waiting",
-                                      "auth_failed",
-                                      "not_available"
-                                    ]
-                                  },
-                                  "lastSuccessAt": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "progress": {
-                                    "anyOf": [
-                                      {
-                                        "type": "object",
-                                        "properties": {
-                                          "label": {
-                                            "type": "string"
-                                          },
-                                          "current": {
-                                            "type": "integer",
-                                            "minimum": -9007199254740991,
-                                            "maximum": 9007199254740991
-                                          },
-                                          "total": {
-                                            "anyOf": [
-                                              {
-                                                "type": "integer",
-                                                "minimum": -9007199254740991,
-                                                "maximum": 9007199254740991
-                                              },
-                                              {
-                                                "type": "null"
-                                              }
-                                            ]
-                                          },
-                                          "unit": {
-                                            "type": "string"
-                                          },
-                                          "percent": {
-                                            "anyOf": [
-                                              {
-                                                "type": "number"
-                                              },
-                                              {
-                                                "type": "null"
-                                              }
-                                            ]
-                                          },
-                                          "details": {
-                                            "type": "object",
-                                            "propertyNames": {
-                                              "type": "string"
-                                            },
-                                            "additionalProperties": {}
-                                          }
-                                        },
-                                        "required": [
-                                          "label",
-                                          "current",
-                                          "total",
-                                          "unit",
-                                          "percent",
-                                          "details"
-                                        ],
-                                        "additionalProperties": false
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "error": {
-                                    "anyOf": [
-                                      {
-                                        "type": "object",
-                                        "properties": {
-                                          "stream": {
-                                            "anyOf": [
-                                              {
-                                                "type": "string"
-                                              },
-                                              {
-                                                "type": "null"
-                                              }
-                                            ]
-                                          },
-                                          "code": {
-                                            "anyOf": [
-                                              {
-                                                "type": "string"
-                                              },
-                                              {
-                                                "type": "null"
-                                              }
-                                            ]
-                                          },
-                                          "summary": {
-                                            "anyOf": [
-                                              {
-                                                "type": "string"
-                                              },
-                                              {
-                                                "type": "null"
-                                              }
-                                            ]
-                                          },
-                                          "lastFailedAt": {
-                                            "anyOf": [
-                                              {
-                                                "type": "string"
-                                              },
-                                              {
-                                                "type": "null"
-                                              }
-                                            ]
-                                          },
-                                          "consecutiveFailures": {
-                                            "type": "integer",
-                                            "minimum": -9007199254740991,
-                                            "maximum": 9007199254740991
-                                          }
-                                        },
-                                        "required": [
-                                          "stream",
-                                          "code",
-                                          "summary",
-                                          "lastFailedAt",
-                                          "consecutiveFailures"
-                                        ],
-                                        "additionalProperties": false
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "needsAttention": {
-                                    "type": "boolean"
-                                  },
-                                  "nextDueAt": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "nextRetryAt": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "intervals": {
-                                    "type": "array",
-                                    "items": {
-                                      "type": "object",
-                                      "properties": {
-                                        "stream": {
-                                          "type": "string",
-                                          "enum": [
-                                            "light",
-                                            "followers",
-                                            "transactions",
-                                            "top_spenders",
-                                            "subscribers",
-                                            "dm_conversations",
-                                            "dm_messages",
-                                            "followers_reconcile"
-                                          ]
-                                        },
-                                        "cadenceSeconds": {
-                                          "type": "integer",
-                                          "minimum": -9007199254740991,
-                                          "maximum": 9007199254740991
-                                        }
-                                      },
-                                      "required": [
-                                        "stream",
-                                        "cadenceSeconds"
-                                      ],
-                                      "additionalProperties": false
-                                    }
-                                  },
-                                  "metrics": {
-                                    "type": "object",
-                                    "propertyNames": {
-                                      "type": "string"
-                                    },
-                                    "additionalProperties": {}
-                                  },
-                                  "connectionStatus": {
-                                    "anyOf": [
-                                      {
-                                        "type": "string",
-                                        "enum": [
-                                          "connected",
-                                          "not_connected",
-                                          "error"
-                                        ]
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "substreams": {
-                                    "type": "array",
-                                    "items": {
-                                      "type": "object",
-                                      "properties": {
-                                        "stream": {
-                                          "type": "string",
-                                          "enum": [
-                                            "light",
-                                            "followers",
-                                            "transactions",
-                                            "top_spenders",
-                                            "subscribers",
-                                            "dm_conversations",
-                                            "dm_messages",
-                                            "followers_reconcile"
-                                          ]
-                                        },
-                                        "state": {
-                                          "type": "string",
-                                          "enum": [
-                                            "up_to_date",
-                                            "syncing",
-                                            "catching_up",
-                                            "retrying",
-                                            "error",
-                                            "paused",
-                                            "waiting",
-                                            "auth_failed"
+                                            "delayed",
+                                            "failed",
+                                            "paused"
                                           ]
                                         },
                                         "lastSuccessAt": {
@@ -19789,11 +19389,10 @@
                             },
                             "required": [
                               "connection",
-                              "top_spenders",
-                              "transactions",
-                              "subscribers",
-                              "followers",
-                              "messages"
+                              "financials",
+                              "audience",
+                              "messages_live",
+                              "messages_history"
                             ],
                             "additionalProperties": false
                           }
@@ -20030,24 +19629,24 @@
                                   "type": "string",
                                   "enum": [
                                     "connection",
-                                    "top_spenders",
-                                    "transactions",
-                                    "subscribers",
-                                    "followers",
-                                    "messages"
+                                    "financials",
+                                    "audience",
+                                    "messages_live",
+                                    "messages_history"
                                   ]
                                 },
                                 "state": {
                                   "type": "string",
                                   "enum": [
+                                    "not_started",
+                                    "scheduled",
+                                    "backfilling",
                                     "up_to_date",
                                     "syncing",
-                                    "catching_up",
                                     "retrying",
-                                    "error",
+                                    "delayed",
+                                    "failed",
                                     "paused",
-                                    "waiting",
-                                    "auth_failed",
                                     "not_available"
                                   ]
                                 },
@@ -20284,14 +19883,15 @@
                                       "state": {
                                         "type": "string",
                                         "enum": [
+                                          "not_started",
+                                          "scheduled",
+                                          "backfilling",
                                           "up_to_date",
                                           "syncing",
-                                          "catching_up",
                                           "retrying",
-                                          "error",
-                                          "paused",
-                                          "waiting",
-                                          "auth_failed"
+                                          "delayed",
+                                          "failed",
+                                          "paused"
                                         ]
                                       },
                                       "lastSuccessAt": {
@@ -20428,31 +20028,31 @@
                               ],
                               "additionalProperties": false
                             },
-                            "top_spenders": {
+                            "financials": {
                               "type": "object",
                               "properties": {
                                 "block": {
                                   "type": "string",
                                   "enum": [
                                     "connection",
-                                    "top_spenders",
-                                    "transactions",
-                                    "subscribers",
-                                    "followers",
-                                    "messages"
+                                    "financials",
+                                    "audience",
+                                    "messages_live",
+                                    "messages_history"
                                   ]
                                 },
                                 "state": {
                                   "type": "string",
                                   "enum": [
+                                    "not_started",
+                                    "scheduled",
+                                    "backfilling",
                                     "up_to_date",
                                     "syncing",
-                                    "catching_up",
                                     "retrying",
-                                    "error",
+                                    "delayed",
+                                    "failed",
                                     "paused",
-                                    "waiting",
-                                    "auth_failed",
                                     "not_available"
                                   ]
                                 },
@@ -20689,14 +20289,15 @@
                                       "state": {
                                         "type": "string",
                                         "enum": [
+                                          "not_started",
+                                          "scheduled",
+                                          "backfilling",
                                           "up_to_date",
                                           "syncing",
-                                          "catching_up",
                                           "retrying",
-                                          "error",
-                                          "paused",
-                                          "waiting",
-                                          "auth_failed"
+                                          "delayed",
+                                          "failed",
+                                          "paused"
                                         ]
                                       },
                                       "lastSuccessAt": {
@@ -20833,31 +20434,31 @@
                               ],
                               "additionalProperties": false
                             },
-                            "transactions": {
+                            "audience": {
                               "type": "object",
                               "properties": {
                                 "block": {
                                   "type": "string",
                                   "enum": [
                                     "connection",
-                                    "top_spenders",
-                                    "transactions",
-                                    "subscribers",
-                                    "followers",
-                                    "messages"
+                                    "financials",
+                                    "audience",
+                                    "messages_live",
+                                    "messages_history"
                                   ]
                                 },
                                 "state": {
                                   "type": "string",
                                   "enum": [
+                                    "not_started",
+                                    "scheduled",
+                                    "backfilling",
                                     "up_to_date",
                                     "syncing",
-                                    "catching_up",
                                     "retrying",
-                                    "error",
+                                    "delayed",
+                                    "failed",
                                     "paused",
-                                    "waiting",
-                                    "auth_failed",
                                     "not_available"
                                   ]
                                 },
@@ -21094,14 +20695,15 @@
                                       "state": {
                                         "type": "string",
                                         "enum": [
+                                          "not_started",
+                                          "scheduled",
+                                          "backfilling",
                                           "up_to_date",
                                           "syncing",
-                                          "catching_up",
                                           "retrying",
-                                          "error",
-                                          "paused",
-                                          "waiting",
-                                          "auth_failed"
+                                          "delayed",
+                                          "failed",
+                                          "paused"
                                         ]
                                       },
                                       "lastSuccessAt": {
@@ -21238,31 +20840,31 @@
                               ],
                               "additionalProperties": false
                             },
-                            "subscribers": {
+                            "messages_live": {
                               "type": "object",
                               "properties": {
                                 "block": {
                                   "type": "string",
                                   "enum": [
                                     "connection",
-                                    "top_spenders",
-                                    "transactions",
-                                    "subscribers",
-                                    "followers",
-                                    "messages"
+                                    "financials",
+                                    "audience",
+                                    "messages_live",
+                                    "messages_history"
                                   ]
                                 },
                                 "state": {
                                   "type": "string",
                                   "enum": [
+                                    "not_started",
+                                    "scheduled",
+                                    "backfilling",
                                     "up_to_date",
                                     "syncing",
-                                    "catching_up",
                                     "retrying",
-                                    "error",
+                                    "delayed",
+                                    "failed",
                                     "paused",
-                                    "waiting",
-                                    "auth_failed",
                                     "not_available"
                                   ]
                                 },
@@ -21499,14 +21101,15 @@
                                       "state": {
                                         "type": "string",
                                         "enum": [
+                                          "not_started",
+                                          "scheduled",
+                                          "backfilling",
                                           "up_to_date",
                                           "syncing",
-                                          "catching_up",
                                           "retrying",
-                                          "error",
-                                          "paused",
-                                          "waiting",
-                                          "auth_failed"
+                                          "delayed",
+                                          "failed",
+                                          "paused"
                                         ]
                                       },
                                       "lastSuccessAt": {
@@ -21643,31 +21246,31 @@
                               ],
                               "additionalProperties": false
                             },
-                            "followers": {
+                            "messages_history": {
                               "type": "object",
                               "properties": {
                                 "block": {
                                   "type": "string",
                                   "enum": [
                                     "connection",
-                                    "top_spenders",
-                                    "transactions",
-                                    "subscribers",
-                                    "followers",
-                                    "messages"
+                                    "financials",
+                                    "audience",
+                                    "messages_live",
+                                    "messages_history"
                                   ]
                                 },
                                 "state": {
                                   "type": "string",
                                   "enum": [
+                                    "not_started",
+                                    "scheduled",
+                                    "backfilling",
                                     "up_to_date",
                                     "syncing",
-                                    "catching_up",
                                     "retrying",
-                                    "error",
+                                    "delayed",
+                                    "failed",
                                     "paused",
-                                    "waiting",
-                                    "auth_failed",
                                     "not_available"
                                   ]
                                 },
@@ -21904,419 +21507,15 @@
                                       "state": {
                                         "type": "string",
                                         "enum": [
+                                          "not_started",
+                                          "scheduled",
+                                          "backfilling",
                                           "up_to_date",
                                           "syncing",
-                                          "catching_up",
                                           "retrying",
-                                          "error",
-                                          "paused",
-                                          "waiting",
-                                          "auth_failed"
-                                        ]
-                                      },
-                                      "lastSuccessAt": {
-                                        "anyOf": [
-                                          {
-                                            "type": "string"
-                                          },
-                                          {
-                                            "type": "null"
-                                          }
-                                        ]
-                                      },
-                                      "nextDueAt": {
-                                        "anyOf": [
-                                          {
-                                            "type": "string"
-                                          },
-                                          {
-                                            "type": "null"
-                                          }
-                                        ]
-                                      },
-                                      "nextRetryAt": {
-                                        "anyOf": [
-                                          {
-                                            "type": "string"
-                                          },
-                                          {
-                                            "type": "null"
-                                          }
-                                        ]
-                                      },
-                                      "cadenceSeconds": {
-                                        "type": "integer",
-                                        "minimum": -9007199254740991,
-                                        "maximum": 9007199254740991
-                                      },
-                                      "needsAttention": {
-                                        "type": "boolean"
-                                      },
-                                      "error": {
-                                        "anyOf": [
-                                          {
-                                            "type": "object",
-                                            "properties": {
-                                              "stream": {
-                                                "anyOf": [
-                                                  {
-                                                    "type": "string"
-                                                  },
-                                                  {
-                                                    "type": "null"
-                                                  }
-                                                ]
-                                              },
-                                              "code": {
-                                                "anyOf": [
-                                                  {
-                                                    "type": "string"
-                                                  },
-                                                  {
-                                                    "type": "null"
-                                                  }
-                                                ]
-                                              },
-                                              "summary": {
-                                                "anyOf": [
-                                                  {
-                                                    "type": "string"
-                                                  },
-                                                  {
-                                                    "type": "null"
-                                                  }
-                                                ]
-                                              },
-                                              "lastFailedAt": {
-                                                "anyOf": [
-                                                  {
-                                                    "type": "string"
-                                                  },
-                                                  {
-                                                    "type": "null"
-                                                  }
-                                                ]
-                                              },
-                                              "consecutiveFailures": {
-                                                "type": "integer",
-                                                "minimum": -9007199254740991,
-                                                "maximum": 9007199254740991
-                                              }
-                                            },
-                                            "required": [
-                                              "stream",
-                                              "code",
-                                              "summary",
-                                              "lastFailedAt",
-                                              "consecutiveFailures"
-                                            ],
-                                            "additionalProperties": false
-                                          },
-                                          {
-                                            "type": "null"
-                                          }
-                                        ]
-                                      }
-                                    },
-                                    "required": [
-                                      "stream",
-                                      "state",
-                                      "lastSuccessAt",
-                                      "nextDueAt",
-                                      "nextRetryAt",
-                                      "cadenceSeconds",
-                                      "needsAttention",
-                                      "error"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                }
-                              },
-                              "required": [
-                                "block",
-                                "state",
-                                "lastSuccessAt",
-                                "progress",
-                                "error",
-                                "needsAttention",
-                                "nextDueAt",
-                                "nextRetryAt",
-                                "intervals",
-                                "metrics",
-                                "connectionStatus",
-                                "substreams"
-                              ],
-                              "additionalProperties": false
-                            },
-                            "messages": {
-                              "type": "object",
-                              "properties": {
-                                "block": {
-                                  "type": "string",
-                                  "enum": [
-                                    "connection",
-                                    "top_spenders",
-                                    "transactions",
-                                    "subscribers",
-                                    "followers",
-                                    "messages"
-                                  ]
-                                },
-                                "state": {
-                                  "type": "string",
-                                  "enum": [
-                                    "up_to_date",
-                                    "syncing",
-                                    "catching_up",
-                                    "retrying",
-                                    "error",
-                                    "paused",
-                                    "waiting",
-                                    "auth_failed",
-                                    "not_available"
-                                  ]
-                                },
-                                "lastSuccessAt": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "progress": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "label": {
-                                          "type": "string"
-                                        },
-                                        "current": {
-                                          "type": "integer",
-                                          "minimum": -9007199254740991,
-                                          "maximum": 9007199254740991
-                                        },
-                                        "total": {
-                                          "anyOf": [
-                                            {
-                                              "type": "integer",
-                                              "minimum": -9007199254740991,
-                                              "maximum": 9007199254740991
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "unit": {
-                                          "type": "string"
-                                        },
-                                        "percent": {
-                                          "anyOf": [
-                                            {
-                                              "type": "number"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "details": {
-                                          "type": "object",
-                                          "propertyNames": {
-                                            "type": "string"
-                                          },
-                                          "additionalProperties": {}
-                                        }
-                                      },
-                                      "required": [
-                                        "label",
-                                        "current",
-                                        "total",
-                                        "unit",
-                                        "percent",
-                                        "details"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "error": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "stream": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "code": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "summary": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "lastFailedAt": {
-                                          "anyOf": [
-                                            {
-                                              "type": "string"
-                                            },
-                                            {
-                                              "type": "null"
-                                            }
-                                          ]
-                                        },
-                                        "consecutiveFailures": {
-                                          "type": "integer",
-                                          "minimum": -9007199254740991,
-                                          "maximum": 9007199254740991
-                                        }
-                                      },
-                                      "required": [
-                                        "stream",
-                                        "code",
-                                        "summary",
-                                        "lastFailedAt",
-                                        "consecutiveFailures"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "needsAttention": {
-                                  "type": "boolean"
-                                },
-                                "nextDueAt": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "nextRetryAt": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "intervals": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "object",
-                                    "properties": {
-                                      "stream": {
-                                        "type": "string",
-                                        "enum": [
-                                          "light",
-                                          "followers",
-                                          "transactions",
-                                          "top_spenders",
-                                          "subscribers",
-                                          "dm_conversations",
-                                          "dm_messages",
-                                          "followers_reconcile"
-                                        ]
-                                      },
-                                      "cadenceSeconds": {
-                                        "type": "integer",
-                                        "minimum": -9007199254740991,
-                                        "maximum": 9007199254740991
-                                      }
-                                    },
-                                    "required": [
-                                      "stream",
-                                      "cadenceSeconds"
-                                    ],
-                                    "additionalProperties": false
-                                  }
-                                },
-                                "metrics": {
-                                  "type": "object",
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
-                                  "additionalProperties": {}
-                                },
-                                "connectionStatus": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string",
-                                      "enum": [
-                                        "connected",
-                                        "not_connected",
-                                        "error"
-                                      ]
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "substreams": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "object",
-                                    "properties": {
-                                      "stream": {
-                                        "type": "string",
-                                        "enum": [
-                                          "light",
-                                          "followers",
-                                          "transactions",
-                                          "top_spenders",
-                                          "subscribers",
-                                          "dm_conversations",
-                                          "dm_messages",
-                                          "followers_reconcile"
-                                        ]
-                                      },
-                                      "state": {
-                                        "type": "string",
-                                        "enum": [
-                                          "up_to_date",
-                                          "syncing",
-                                          "catching_up",
-                                          "retrying",
-                                          "error",
-                                          "paused",
-                                          "waiting",
-                                          "auth_failed"
+                                          "delayed",
+                                          "failed",
+                                          "paused"
                                         ]
                                       },
                                       "lastSuccessAt": {
@@ -22456,11 +21655,10 @@
                           },
                           "required": [
                             "connection",
-                            "top_spenders",
-                            "transactions",
-                            "subscribers",
-                            "followers",
-                            "messages"
+                            "financials",
+                            "audience",
+                            "messages_live",
+                            "messages_history"
                           ],
                           "additionalProperties": false
                         }
@@ -22734,24 +21932,24 @@
                           "type": "string",
                           "enum": [
                             "connection",
-                            "top_spenders",
-                            "transactions",
-                            "subscribers",
-                            "followers",
-                            "messages"
+                            "financials",
+                            "audience",
+                            "messages_live",
+                            "messages_history"
                           ]
                         },
                         "state": {
                           "type": "string",
                           "enum": [
+                            "not_started",
+                            "scheduled",
+                            "backfilling",
                             "up_to_date",
                             "syncing",
-                            "catching_up",
                             "retrying",
-                            "error",
+                            "delayed",
+                            "failed",
                             "paused",
-                            "waiting",
-                            "auth_failed",
                             "not_available"
                           ]
                         },
@@ -22988,14 +22186,15 @@
                               "state": {
                                 "type": "string",
                                 "enum": [
+                                  "not_started",
+                                  "scheduled",
+                                  "backfilling",
                                   "up_to_date",
                                   "syncing",
-                                  "catching_up",
                                   "retrying",
-                                  "error",
-                                  "paused",
-                                  "waiting",
-                                  "auth_failed"
+                                  "delayed",
+                                  "failed",
+                                  "paused"
                                 ]
                               },
                               "lastSuccessAt": {
@@ -27414,11 +26613,10 @@
                     "type": "string",
                     "enum": [
                       "connection",
-                      "top_spenders",
-                      "transactions",
-                      "subscribers",
-                      "followers",
-                      "messages"
+                      "financials",
+                      "audience",
+                      "messages_live",
+                      "messages_history"
                     ]
                   }
                 },
@@ -27465,11 +26663,10 @@
                       "type": "string",
                       "enum": [
                         "connection",
-                        "top_spenders",
-                        "transactions",
-                        "subscribers",
-                        "followers",
-                        "messages"
+                        "financials",
+                        "audience",
+                        "messages_live",
+                        "messages_history"
                       ]
                     },
                     "revisions": {
@@ -27684,11 +26881,10 @@
                     "type": "string",
                     "enum": [
                       "connection",
-                      "top_spenders",
-                      "transactions",
-                      "subscribers",
-                      "followers",
-                      "messages"
+                      "financials",
+                      "audience",
+                      "messages_live",
+                      "messages_history"
                     ]
                   }
                 },
@@ -27735,11 +26931,10 @@
                       "type": "string",
                       "enum": [
                         "connection",
-                        "top_spenders",
-                        "transactions",
-                        "subscribers",
-                        "followers",
-                        "messages"
+                        "financials",
+                        "audience",
+                        "messages_live",
+                        "messages_history"
                       ]
                     },
                     "revisions": {
@@ -27925,11 +27120,10 @@
                     "type": "string",
                     "enum": [
                       "connection",
-                      "top_spenders",
-                      "transactions",
-                      "subscribers",
-                      "followers",
-                      "messages"
+                      "financials",
+                      "audience",
+                      "messages_live",
+                      "messages_history"
                     ]
                   }
                 },
@@ -27976,11 +27170,10 @@
                       "type": "string",
                       "enum": [
                         "connection",
-                        "top_spenders",
-                        "transactions",
-                        "subscribers",
-                        "followers",
-                        "messages"
+                        "financials",
+                        "audience",
+                        "messages_live",
+                        "messages_history"
                       ]
                     },
                     "revisions": {
@@ -28166,11 +27359,10 @@
                     "type": "string",
                     "enum": [
                       "connection",
-                      "top_spenders",
-                      "transactions",
-                      "subscribers",
-                      "followers",
-                      "messages"
+                      "financials",
+                      "audience",
+                      "messages_live",
+                      "messages_history"
                     ]
                   }
                 },
@@ -28217,11 +27409,10 @@
                       "type": "string",
                       "enum": [
                         "connection",
-                        "top_spenders",
-                        "transactions",
-                        "subscribers",
-                        "followers",
-                        "messages"
+                        "financials",
+                        "audience",
+                        "messages_live",
+                        "messages_history"
                       ]
                     },
                     "revisions": {

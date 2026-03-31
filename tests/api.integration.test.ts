@@ -7149,16 +7149,17 @@ describe("api integration", () => {
     const fanslyPage = body.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana");
     const onlyFansOverview = body.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana-of-sync");
 
-    expect(fanslyPage.blocks.messages.intervals).toEqual(expect.arrayContaining([
+    expect(fanslyPage.blocks.messages_live.intervals).toEqual(expect.arrayContaining([
       expect.objectContaining({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+    ]));
+    expect(fanslyPage.blocks.messages_history.intervals).toEqual(expect.arrayContaining([
       expect.objectContaining({ stream: "dm_messages", cadenceSeconds: 86400 }),
     ]));
     expect(fanslyPage.blocks.connection.connectionStatus).toBeDefined();
     expect(onlyFansOverview.blocks.connection.connectionStatus).toBeDefined();
-    expect(onlyFansOverview.blocks.top_spenders.state).toBe("not_available");
-    expect(onlyFansOverview.blocks.subscribers.state).toBe("not_available");
-    expect(onlyFansOverview.blocks.followers.state).toBe("not_available");
-    expect(onlyFansOverview.blocks.messages.state).toBe("not_available");
+    expect(onlyFansOverview.blocks.audience.state).toBe("not_available");
+    expect(onlyFansOverview.blocks.messages_live.state).toBe("not_available");
+    expect(onlyFansOverview.blocks.messages_history.state).toBe("not_available");
   }, 15_000);
 
   it("returns page block detail and the combined Messages block response", async (context) => {
@@ -7182,8 +7183,10 @@ describe("api integration", () => {
       headers: { cookie: ownerCookie },
     });
     expect(blocksResponse.statusCode).toBe(200);
-    expect(blocksResponse.json().page.blocks.messages.intervals).toEqual(expect.arrayContaining([
+    expect(blocksResponse.json().page.blocks.messages_live.intervals).toEqual(expect.arrayContaining([
       expect.objectContaining({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+    ]));
+    expect(blocksResponse.json().page.blocks.messages_history.intervals).toEqual(expect.arrayContaining([
       expect.objectContaining({ stream: "dm_messages", cadenceSeconds: 86400 }),
     ]));
 
@@ -7199,9 +7202,8 @@ describe("api integration", () => {
         platform: "fansly",
       },
       block: {
-        block: "messages",
+        block: "messages_history",
         intervals: [
-          { stream: "dm_conversations", cadenceSeconds: 1800 },
           { stream: "dm_messages", cadenceSeconds: 86400 },
         ],
       },
@@ -7240,7 +7242,7 @@ describe("api integration", () => {
       headers: { cookie: ownerCookie },
       payload: {
         pageLabel: "lana",
-        block: "top_spenders",
+        block: "financials",
       },
     });
     expect(trigger.statusCode).toBe(200);
@@ -7248,7 +7250,7 @@ describe("api integration", () => {
       accepted: true,
       action: "trigger",
       pageLabel: "lana",
-      block: "top_spenders",
+      block: "financials",
     });
 
     const pause = await server.inject({
@@ -7257,14 +7259,14 @@ describe("api integration", () => {
       headers: { cookie: ownerCookie },
       payload: {
         pageLabel: "lana",
-        block: "followers",
+        block: "audience",
       },
     });
     expect(pause.statusCode).toBe(200);
     expect(pause.json()).toMatchObject({
       accepted: true,
       action: "pause",
-      block: "followers",
+      block: "audience",
     });
 
     const resume = await server.inject({
@@ -7273,14 +7275,14 @@ describe("api integration", () => {
       headers: { cookie: ownerCookie },
       payload: {
         pageLabel: "lana",
-        block: "followers",
+        block: "audience",
       },
     });
     expect(resume.statusCode).toBe(200);
     expect(resume.json()).toMatchObject({
       accepted: true,
       action: "resume",
-      block: "followers",
+      block: "audience",
     });
 
     const reset = await server.inject({
@@ -7289,7 +7291,7 @@ describe("api integration", () => {
       headers: { cookie: ownerCookie },
       payload: {
         pageLabel: "lana",
-        block: "messages",
+        block: "messages_history",
       },
     });
     expect(reset.statusCode).toBe(200);
@@ -7297,7 +7299,7 @@ describe("api integration", () => {
       accepted: true,
       action: "reset",
       pageLabel: "lana",
-      block: "messages",
+      block: "messages_history",
     });
   }, 15_000);
 

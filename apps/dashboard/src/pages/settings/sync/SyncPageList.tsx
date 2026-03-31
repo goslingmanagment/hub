@@ -16,7 +16,7 @@ function PageErrorBar({ page }: { page: SyncBlocksPage }) {
   const attentionBlocks = blocks.filter(needsVisualAttention);
   if (attentionBlocks.length === 0) return null;
 
-  const authFailed = attentionBlocks.find((b) => b.state === "auth_failed");
+  const authFailed = attentionBlocks.find((b) => b.error?.code === "credentials_invalid");
   if (authFailed) {
     return (
       <div className="mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5">

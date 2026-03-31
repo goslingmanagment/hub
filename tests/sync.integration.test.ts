@@ -4,13 +4,16 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  ensureSyncTaskRows,
   ensureSyncStreamStateRows,
   getCurrentSubscribers,
   getFollowersForPage,
   listSyncStreamStateRows,
   pageFollows,
   pageSubscriptions,
+  requestSyncTaskGenerations,
   requestSyncStreamRevisions,
+  resolveSyncTaskPriority,
   resolveSyncRequestPriority,
   storeFanslySession,
   storePlatformCredentials,
@@ -371,25 +374,28 @@ async function requestLightSync(
     proxyUrl?: string | null;
   },
 ) {
-  await ensureSyncStreamStateRows(app.db, {
+  await ensureSyncTaskRows(app.db, {
     platformAccountId: input.platformAccountId,
     now: new Date(),
   });
 
-  const revisions = await requestSyncStreamRevisions(app.db, {
+  const generations = await requestSyncTaskGenerations(app.db, {
     platformAccountId: input.platformAccountId,
-    streams: ["light"],
-    reason: "manual",
+    tasks: ["light"],
+    source: "manual",
   });
 
   await sendSyncPageWakeup(boss, {
     platformAccountId: input.platformAccountId,
-    priority: resolveSyncRequestPriority("light", "manual"),
+    priority: resolveSyncTaskPriority("light", "manual"),
     provider: input.provider,
     egressKey: buildProxyEgressKey(input.proxyUrl ? { url: input.proxyUrl } : null),
   });
 
-  return revisions;
+  return generations.map((generation) => ({
+    stream: generation.task,
+    desiredRevision: generation.desiredGeneration,
+  }));
 }
 
 describe("sync integration", () => {
@@ -478,14 +484,14 @@ describe("sync integration", () => {
     });
     const now = new Date("2026-03-20T12:00:00.000Z");
 
-    await ensureSyncStreamStateRows(app.db, {
+    await ensureSyncTaskRows(app.db, {
       platformAccountId: page.id,
       now,
     });
-    await requestSyncStreamRevisions(app.db, {
+    await requestSyncTaskGenerations(app.db, {
       platformAccountId: page.id,
-      streams: ["light"],
-      reason: "manual",
+      tasks: ["light"],
+      source: "manual",
       now,
     });
 
@@ -499,16 +505,16 @@ describe("sync integration", () => {
     expect(pages[0]).toMatchObject({
       platformAccountId: page.id,
       platform: "fansly",
-      priority: resolveSyncRequestPriority("light", "manual"),
+      priority: resolveSyncTaskPriority("light", "manual"),
       proxyUrl,
     });
-    expect(pages[0]?.desiredAt?.toISOString()).toBe(now.toISOString());
+    expect(pages[0]?.requestedAt?.toISOString()).toBe(now.toISOString());
     expect(boss.send).toHaveBeenCalledWith(
       SYNC_PAGE_EXECUTE_QUEUE,
       { platformAccountId: page.id },
       {
         singletonKey: String(page.id),
-        priority: resolveSyncRequestPriority("light", "manual"),
+        priority: resolveSyncTaskPriority("light", "manual"),
         group: {
           id: buildSyncPageExecuteGroupId("fansly", buildProxyEgressKey({ url: proxyUrl })),
         },

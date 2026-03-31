@@ -13,6 +13,16 @@ interface BlockTone {
 }
 
 const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
+  not_started: {
+    badge: "border-border bg-hover-alt text-text-secondary",
+    dot: "bg-text-muted",
+    text: "text-text-secondary",
+  },
+  scheduled: {
+    badge: "border-warning/25 bg-warning/10 text-warning-dark",
+    dot: "bg-warning-dark",
+    text: "text-warning-dark",
+  },
   up_to_date: {
     badge: "border-green/30 bg-green/10 text-green",
     dot: "bg-green",
@@ -23,7 +33,7 @@ const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
     dot: "bg-[#2563eb]",
     text: "text-[#1d4ed8]",
   },
-  catching_up: {
+  backfilling: {
     badge: "border-warning/25 bg-warning/10 text-warning-dark",
     dot: "bg-warning-dark",
     text: "text-warning-dark",
@@ -33,7 +43,12 @@ const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
     dot: "bg-warning-dark",
     text: "text-warning-dark",
   },
-  error: {
+  delayed: {
+    badge: "border-warning/30 bg-warning/10 text-warning-dark",
+    dot: "bg-warning-dark",
+    text: "text-warning-dark",
+  },
+  failed: {
     badge: "border-danger/30 bg-danger/10 text-danger",
     dot: "bg-danger",
     text: "text-danger",
@@ -43,16 +58,6 @@ const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
     dot: "bg-text-muted",
     text: "text-text-muted",
   },
-  waiting: {
-    badge: "border-border bg-hover-alt text-text-secondary",
-    dot: "bg-text-muted",
-    text: "text-text-secondary",
-  },
-  auth_failed: {
-    badge: "border-danger/30 bg-danger/10 text-danger",
-    dot: "bg-danger",
-    text: "text-danger",
-  },
   not_available: {
     badge: "border-border bg-hover-alt text-text-muted",
     dot: "bg-text-muted/50",
@@ -61,33 +66,32 @@ const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
 };
 
 const BLOCK_STATE_LABELS: Record<SyncBlockState, string> = {
+  not_started: "Not started",
+  scheduled: "Scheduled",
   up_to_date: "Up to date",
   syncing: "Syncing",
-  catching_up: "Catching up",
+  backfilling: "Backfilling",
   retrying: "Retrying",
-  error: "Error",
+  delayed: "Delayed",
+  failed: "Failed",
   paused: "Paused",
-  waiting: "Waiting",
-  auth_failed: "Auth failed",
   not_available: "N/A",
 };
 
 const BLOCK_LABELS: Record<SyncBlockKey, string> = {
   connection: "Connection",
-  top_spenders: "Top Spenders",
-  transactions: "Transactions",
-  subscribers: "Subscribers",
-  followers: "Followers",
-  messages: "Messages",
+  financials: "Financials",
+  audience: "Audience",
+  messages_live: "Messages Live",
+  messages_history: "Messages History",
 };
 
 const BLOCK_ORDER: SyncBlockKey[] = [
   "connection",
-  "top_spenders",
-  "transactions",
-  "subscribers",
-  "followers",
-  "messages",
+  "financials",
+  "audience",
+  "messages_live",
+  "messages_history",
 ];
 
 export function getBlockTone(state: SyncBlockState): BlockTone {
@@ -139,7 +143,7 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
         : "";
       return `Connected${checked ? ` \u00b7 ${checked}` : ""}`;
     }
-    if (block.connectionStatus === "error" || block.state === "error") {
+    if (block.connectionStatus === "error" || block.state === "failed") {
       if (block.error?.code === "stalled") {
         return "Connection check stalled";
       }
@@ -151,10 +155,6 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
     }
   }
 
-  if (block.state === "auth_failed") {
-    return block.error?.summary ?? "Authentication failed";
-  }
-
   if (block.state === "paused") {
     const last = block.lastSuccessAt
       ? `paused \u00b7 last synced ${formatRelativeTime(block.lastSuccessAt)}`
@@ -162,12 +162,12 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
     return last;
   }
 
-  if (block.state === "waiting") {
-    return "Waiting to start";
+  if (block.state === "not_started") {
+    return "Not started";
   }
 
-  if (block.state === "error") {
-    if (block.error?.code === "stalled") {
+  if (block.state === "failed") {
+    if (block.error?.code === "progress_stalled") {
       if (block.progress?.total != null && block.progress.total > 0) {
         return `Sync stalled at ${block.progress.current.toLocaleString()}/${block.progress.total.toLocaleString()} ${block.progress.unit}`;
       }
@@ -181,15 +181,20 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
     return failures > 1 ? `${reason} (${failures} failures)` : reason;
   }
 
-  const progressPrefix = block.state === "catching_up"
-    ? "Catching up\u2026"
+  if (block.state === "delayed") {
+    return block.error?.summary ?? "Sync is delayed";
+  }
+
+  const progressPrefix = block.state === "backfilling"
+    ? "Backfilling\u2026"
+    : block.state === "scheduled"
+      ? "Queued\u2026"
     : block.state === "retrying"
       ? "Retrying\u2026"
       : "Syncing\u2026";
 
-  // Syncing / catching_up / retrying with progress
   if (
-    (block.state === "syncing" || block.state === "catching_up" || block.state === "retrying") &&
+    (block.state === "syncing" || block.state === "backfilling" || block.state === "retrying" || block.state === "scheduled") &&
     block.progress
   ) {
     const { current, total, unit, label } = block.progress;
@@ -204,8 +209,12 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
     return "Syncing\u2026";
   }
 
-  if (block.state === "catching_up") {
-    return "Catching up\u2026";
+  if (block.state === "backfilling") {
+    return "Backfilling\u2026";
+  }
+
+  if (block.state === "scheduled") {
+    return "Queued to continue";
   }
 
   if (block.state === "retrying") {
@@ -237,25 +246,23 @@ function getMetricCount(block: SyncBlockStatus): string | null {
 }
 
 const METRIC_LABELS: Partial<Record<SyncBlockKey, string>> = {
-  top_spenders: "spenders",
-  transactions: "transactions",
-  subscribers: "active",
-  followers: "followers",
-  messages: "conversations",
+  financials: "transactions",
+  audience: "followers",
+  messages_live: "conversations",
+  messages_history: "conversations ready",
 };
 
 const BLOCK_METRIC_KEYS: Partial<Record<SyncBlockKey, readonly string[]>> = {
-  top_spenders: ["spenderCount", "count"],
-  transactions: ["transactionCount", "count"],
-  subscribers: ["subscriberCount", "count"],
-  followers: ["followerCount", "count"],
-  messages: ["visibleConversationCount", "count"],
+  financials: ["transactionCount", "count"],
+  audience: ["followerCount", "subscriberCount", "count"],
+  messages_live: ["visibleConversationCount", "count"],
+  messages_history: ["readyConversationCount", "eligibleConversationCount", "count"],
 };
 
 export function needsVisualAttention(block: SyncBlockStatus): boolean {
   return (
     block.needsAttention ||
-    block.state === "error" ||
-    block.state === "auth_failed"
+    block.state === "failed" ||
+    block.state === "delayed"
   );
 }

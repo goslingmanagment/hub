@@ -37,11 +37,29 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "cleanup",
   "followers_reconcile",
 ]);
+export const syncTaskEnum = pgEnum("sync_task", [
+  "light",
+  "followers",
+  "transactions",
+  "top_spenders",
+  "subscribers",
+  "dm_conversations",
+  "dm_messages",
+  "followers_reconcile",
+]);
 export const syncTargetStatusEnum = pgEnum("sync_target_status", [
   "active",
   "paused",
   "auth_failed",
   "disabled",
+]);
+export const syncTaskStatusEnum = pgEnum("sync_task_status", [
+  "idle",
+  "queued",
+  "running",
+  "retry_wait",
+  "blocked",
+  "paused",
 ]);
 export const syncRequestReasonEnum = pgEnum("sync_request_reason", [
   "scheduled",
@@ -49,6 +67,19 @@ export const syncRequestReasonEnum = pgEnum("sync_request_reason", [
   "onboarding",
   "recovery",
   "anomaly",
+]);
+export const syncOperationSourceEnum = pgEnum("sync_operation_source", [
+  "scheduled",
+  "manual",
+  "onboarding",
+  "recovery",
+  "anomaly",
+  "reset",
+]);
+export const syncWorkClassEnum = pgEnum("sync_work_class", [
+  "live",
+  "history",
+  "maintenance",
 ]);
 export const syncRequestAttemptStateEnum = pgEnum("sync_request_attempt_state", [
   "started",
@@ -244,6 +275,37 @@ export const telegramDeliveryAttempts = pgTable(
   }),
 );
 
+export const syncOperations = pgTable(
+  "sync_operations",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    task: syncTaskEnum("task").notNull(),
+    generation: bigint("generation", { mode: "number" }).notNull(),
+    source: syncOperationSourceEnum("source").notNull(),
+    requestedByActor: text("requested_by_actor"),
+    requestedByUserId: bigint("requested_by_user_id", { mode: "number" }).references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+    requestPayload: jsonb("request_payload").$type<Record<string, unknown>>().default({}).notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    accountRequestedIdx: index("sync_operations_account_requested_idx").on(
+      table.platformAccountId,
+      table.requestedAt,
+    ),
+    generationUniq: unique("sync_operations_account_task_generation_uniq").on(
+      table.platformAccountId,
+      table.task,
+      table.generation,
+    ),
+  }),
+);
+
 export const syncRuns = pgTable(
   "sync_runs",
   {
@@ -251,6 +313,12 @@ export const syncRuns = pgTable(
     platformAccountId: bigint("platform_account_id", { mode: "number" })
       .references(() => platformAccounts.id, { onDelete: "cascade" })
       .notNull(),
+    operationId: bigint("operation_id", { mode: "number" }).references(() => syncOperations.id, {
+      onDelete: "set null",
+    }),
+    task: syncTaskEnum("task"),
+    generation: bigint("generation", { mode: "number" }),
+    leaseToken: text("lease_token"),
     stream: syncStreamEnum("stream").notNull(),
     trigger: text("trigger").notNull(),
     status: syncRunStatusEnum("status").notNull(),
@@ -278,6 +346,11 @@ export const syncRequestAttempts = pgTable(
     platformAccountId: bigint("platform_account_id", { mode: "number" })
       .references(() => platformAccounts.id, { onDelete: "cascade" })
       .notNull(),
+    operationId: bigint("operation_id", { mode: "number" }).references(() => syncOperations.id, {
+      onDelete: "set null",
+    }),
+    task: syncTaskEnum("task"),
+    generation: bigint("generation", { mode: "number" }),
     provider: platformEnum("provider").notNull(),
     stream: syncStreamEnum("stream").notNull(),
     operation: text("operation").notNull(),
@@ -318,6 +391,12 @@ export const syncRunEvents = pgTable(
     platformAccountId: bigint("platform_account_id", { mode: "number" })
       .references(() => platformAccounts.id, { onDelete: "cascade" })
       .notNull(),
+    operationId: bigint("operation_id", { mode: "number" }).references(() => syncOperations.id, {
+      onDelete: "set null",
+    }),
+    task: syncTaskEnum("task"),
+    generation: bigint("generation", { mode: "number" }),
+    leaseToken: text("lease_token"),
     provider: platformEnum("provider").notNull(),
     stream: syncStreamEnum("stream").notNull(),
     eventType: text("event_type").notNull(),
@@ -355,6 +434,94 @@ export const syncCheckpoints = pgTable(
       table.platformAccountId,
       table.stream,
     ),
+  }),
+);
+
+export const syncTasks = pgTable(
+  "sync_tasks",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    task: syncTaskEnum("task").notNull(),
+    status: syncTaskStatusEnum("status").default("idle").notNull(),
+    desiredGeneration: bigint("desired_generation", { mode: "number" }).default(0).notNull(),
+    runningGeneration: bigint("running_generation", { mode: "number" }),
+    appliedGeneration: bigint("applied_generation", { mode: "number" }).default(0).notNull(),
+    scheduleIntervalSeconds: integer("schedule_interval_seconds").notNull(),
+    slotOffsetSeconds: integer("slot_offset_seconds").notNull(),
+    lastScheduledSlot: bigint("last_scheduled_slot", { mode: "number" }).default(-1).notNull(),
+    lastRequestedAt: timestamp("last_requested_at", { withTimezone: true }),
+    lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
+    lastStartedAt: timestamp("last_started_at", { withTimezone: true }),
+    lastProgressAt: timestamp("last_progress_at", { withTimezone: true }),
+    lastFinishedAt: timestamp("last_finished_at", { withTimezone: true }),
+    lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+    lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
+    retryClass: text("retry_class"),
+    retryAt: timestamp("retry_at", { withTimezone: true }),
+    blockerType: text("blocker_type"),
+    blockerCode: text("blocker_code"),
+    blockerReason: text("blocker_reason"),
+    blockedSince: timestamp("blocked_since", { withTimezone: true }),
+    currentPhase: text("current_phase"),
+    currentWorkClass: syncWorkClassEnum("current_work_class"),
+    progressPayload: jsonb("progress_payload").$type<Record<string, unknown>>().default({}).notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseToken: text("lease_token"),
+    leaseHeartbeatAt: timestamp("lease_heartbeat_at", { withTimezone: true }),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    consecutiveFailures: integer("consecutive_failures").default(0).notNull(),
+    lastErrorCode: text("last_error_code"),
+    lastErrorSummary: text("last_error_summary"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "sync_tasks_pkey",
+      columns: [table.platformAccountId, table.task],
+    }),
+    freshnessIdx: index("sync_tasks_freshness_idx").on(table.task, table.lastSuccessAt),
+    leaseIdx: index("sync_tasks_lease_idx").on(table.status, table.leaseExpiresAt),
+    runnableIdx: index("sync_tasks_runnable_idx").on(
+      table.status,
+      table.retryAt,
+      table.platformAccountId,
+      table.task,
+    ),
+    scheduleIdx: index("sync_tasks_schedule_idx").on(
+      table.status,
+      table.lastScheduledSlot,
+      table.platformAccountId,
+      table.task,
+    ),
+  }),
+);
+
+export const syncCursors = pgTable(
+  "sync_cursors",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => platformAccounts.id, { onDelete: "cascade" })
+      .notNull(),
+    task: syncTaskEnum("task").notNull(),
+    cursorText: text("cursor_text"),
+    cursorTimestamp: timestamp("cursor_timestamp", { withTimezone: true }),
+    cursorGeneration: bigint("cursor_generation", { mode: "number" }),
+    state: jsonb("state").$type<Record<string, unknown>>().default({}).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSuccessfulRunId: bigint("last_successful_run_id", { mode: "number" }).references(
+      () => syncRuns.id,
+      { onDelete: "set null" },
+    ),
+    lastSuccessfulAt: timestamp("last_successful_at", { withTimezone: true }),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "sync_cursors_pkey",
+      columns: [table.platformAccountId, table.task],
+    }),
   }),
 );
 

@@ -12,7 +12,7 @@ describe("sync block display", () => {
     vi.setSystemTime(new Date("2026-03-24T12:00:00.000Z"));
 
     expect(formatBlockSummary({
-      block: "transactions",
+      block: "financials",
       state: "up_to_date",
       lastSuccessAt: "2026-03-24T11:00:00.000Z",
       progress: null,
@@ -27,7 +27,7 @@ describe("sync block display", () => {
     } as never)).toBe("Updated 1h ago · 12 transactions");
 
     expect(formatBlockSummary({
-      block: "subscribers",
+      block: "audience",
       state: "up_to_date",
       lastSuccessAt: "2026-03-24T11:30:00.000Z",
       progress: null,
@@ -36,13 +36,13 @@ describe("sync block display", () => {
       nextDueAt: null,
       nextRetryAt: null,
       intervals: [],
-      metrics: { subscriberCount: 5 },
+      metrics: { followerCount: 5 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Updated 30m ago · 5 active");
+    } as never)).toBe("Updated 30m ago · 5 followers");
 
     expect(formatBlockSummary({
-      block: "messages",
+      block: "messages_live",
       state: "up_to_date",
       lastSuccessAt: "2026-03-24T10:00:00.000Z",
       progress: null,
@@ -59,8 +59,8 @@ describe("sync block display", () => {
 
   it("renders stalled blocks with the point they got stuck at", () => {
     expect(formatBlockSummary({
-      block: "subscribers",
-      state: "error",
+      block: "audience",
+      state: "failed",
       lastSuccessAt: "2026-03-18T10:00:00.000Z",
       progress: {
         label: "1 of 697 subscribers processed",
@@ -72,7 +72,7 @@ describe("sync block display", () => {
       },
       error: {
         stream: "subscribers",
-        code: "stalled",
+        code: "progress_stalled",
         summary: "Sync stopped making progress",
         lastFailedAt: null,
         consecutiveFailures: 0,
@@ -87,10 +87,10 @@ describe("sync block display", () => {
     } as never)).toBe("Sync stalled at 1/697 subscribers");
   });
 
-  it("renders catching_up blocks without the active syncing copy", () => {
+  it("renders backfilling blocks without the active syncing copy", () => {
     expect(formatBlockSummary({
-      block: "subscribers",
-      state: "catching_up",
+      block: "audience",
+      state: "backfilling",
       lastSuccessAt: "2026-03-18T10:00:00.000Z",
       progress: {
         label: "1 of 697 subscribers processed",
@@ -108,6 +108,6 @@ describe("sync block display", () => {
       metrics: { subscriberCount: 1 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Catching up… 1/697 subscribers");
+    } as never)).toBe("Backfilling… 1/697 subscribers");
   });
 });

@@ -21,7 +21,7 @@ const dbMocks = vi.hoisted(() => ({
   markPageDmConversationsInvisibleByGeneration: vi.fn(),
   rebuildFollowerRollups: vi.fn(),
   rebuildSubscriberRollups: vi.fn(),
-  requestSyncStreamRevisions: vi.fn(),
+  requestSyncTaskGenerations: vi.fn(),
   selectNextPageDmMessageSyncCandidate: vi.fn(),
   updateLegacySyncTimestamp: vi.fn(),
   upsertCheckpoint: vi.fn(),
@@ -848,10 +848,11 @@ describe("sync executor handlers", () => {
       stream: "followers",
     }));
     expect(dbMocks.countActivePageFollows).toHaveBeenCalledWith(db, 12);
-    expect(dbMocks.requestSyncStreamRevisions).toHaveBeenCalledWith(db, {
+    expect(dbMocks.requestSyncTaskGenerations).toHaveBeenCalledWith(db, {
       platformAccountId: 12,
-      streams: ["followers_reconcile"],
-      reason: "anomaly",
+      tasks: ["followers_reconcile"],
+      source: "anomaly",
+      requestedByActor: "executor_anomaly",
     });
   });
 

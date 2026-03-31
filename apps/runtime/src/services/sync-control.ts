@@ -1,14 +1,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
-  clearSyncPageAuthFailed,
-  ensureSyncStreamStateRows,
+  ensureSyncTaskRows,
   findPageByLabel,
   listPlatformAccounts,
-  listSyncStreamRevisionStates,
-  requestSyncStreamRevisions,
-  resolveSyncRequestPriority,
-  updateSyncStreamStateRequestPayload,
+  listSyncTaskRows,
+  requestSyncTaskGenerations,
+  resolveSyncTaskPriority,
   type SyncControlStream,
   type SyncRequestReason,
 } from "@agency_hub_core/db";
@@ -84,43 +82,34 @@ export async function requestPageSync(
 
   const streams = resolveStreamsForScope(storedPage.page.platform, input.scope);
   const now = new Date();
-  await ensureSyncStreamStateRows(app.db, {
+  await ensureSyncTaskRows(app.db, {
     platformAccountId: storedPage.page.id,
     onboarding: input.reason === "onboarding",
     now,
   });
-  await clearSyncPageAuthFailed(app.db, storedPage.page.id, now);
 
-  const requestedRevisions = await requestSyncStreamRevisions(app.db, {
-    platformAccountId: storedPage.page.id,
-    streams,
-    reason: input.reason,
-    now,
-  });
-
-  if (input.onlyFansTransactionsStart) {
-    if (storedPage.page.platform !== "onlyfans" || !streams.includes("transactions")) {
-      throw new Error("OnlyFans transaction rescan overrides are only supported for OnlyFans transaction syncs");
-    }
-
-    const transactionRevision = requestedRevisions.find((revision) => revision.stream === "transactions");
-    if (!transactionRevision) {
-      throw new Error("Expected a requested transactions revision for OnlyFans rescan override");
-    }
-
-    await updateSyncStreamStateRequestPayload(app.db, {
-      platformAccountId: storedPage.page.id,
-      stream: "transactions",
-      requestPayload: {
-        revision: transactionRevision.desiredRevision,
+  const requestPayloadByTask = input.onlyFansTransactionsStart
+    ? {
+      transactions: {
         onlyFansTransactionsStart: input.onlyFansTransactionsStart.toISOString(),
       },
-      now,
-    });
-  }
+    }
+    : undefined;
+  const requestedRevisions = await requestSyncTaskGenerations(app.db, {
+    platformAccountId: storedPage.page.id,
+    tasks: streams,
+    source: input.reason,
+    requestPayloadByTask,
+    requestedByActor: "manual_api",
+    now,
+  });
+  const revisions = requestedRevisions.map((revision) => ({
+    stream: revision.task,
+    desiredRevision: revision.desiredGeneration,
+  })) satisfies RequestedSyncRevision[];
 
   const priority = streams.reduce((current, stream) => {
-    return Math.max(current, resolveSyncRequestPriority(stream, input.reason));
+    return Math.max(current, resolveSyncTaskPriority(stream, input.reason));
   }, 0);
   const wakeupId = await sendSyncPageWakeup(boss, {
     platformAccountId: storedPage.page.id,
@@ -132,7 +121,7 @@ export async function requestPageSync(
   return {
     page: storedPage.page,
     wakeupId,
-    revisions: requestedRevisions,
+    revisions,
   };
 }
 
@@ -179,27 +168,30 @@ export async function waitForRequestedSyncRevisions(
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const rows = await listSyncStreamRevisionStates(
-      app.db,
-      input.platformAccountId,
-      input.revisions.map((revision) => revision.stream),
-    );
-    const byStream = new Map(rows.map((row) => [row.stream, row]));
+    const rows = await listSyncTaskRows(app.db, {
+      platformAccountId: input.platformAccountId,
+      tasks: input.revisions.map((revision) => revision.stream),
+    });
+    const byTask = new Map(rows.map((row) => [row.task, row] as const));
     const unsatisfied = input.revisions.filter((revision) => {
-      const row = byStream.get(revision.stream);
+      const row = byTask.get(revision.stream);
       if (!row) {
         return true;
       }
 
-      if (row.status === "auth_failed") {
-        throw new Error(`Sync for stream "${row.stream}" is blocked by auth_failed`);
+      if (row.status === "blocked" && row.blockerType === "auth") {
+        throw new Error(`Sync for stream "${revision.stream}" is blocked by auth`);
       }
 
-      if ((row.status === "paused" || row.status === "disabled") && row.satisfiedRevision < revision.desiredRevision) {
-        throw new Error(`Sync for stream "${row.stream}" is ${row.status}`);
+      if (row.status === "blocked" && row.appliedGeneration < revision.desiredRevision) {
+        throw new Error(`Sync for stream "${revision.stream}" is blocked`);
       }
 
-      return row.satisfiedRevision < revision.desiredRevision;
+      if (row.status === "paused" && row.appliedGeneration < revision.desiredRevision) {
+        throw new Error(`Sync for stream "${revision.stream}" is paused`);
+      }
+
+      return row.appliedGeneration < revision.desiredRevision;
     });
 
     if (unsatisfied.length === 0) {

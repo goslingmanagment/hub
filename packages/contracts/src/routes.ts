@@ -1733,22 +1733,22 @@ export const syncRequestsResponseSchema = z.array(syncRequestItemSchema);
 
 const syncBlockKeyEnum = z.enum([
   "connection",
-  "top_spenders",
-  "transactions",
-  "subscribers",
-  "followers",
-  "messages",
+  "financials",
+  "audience",
+  "messages_live",
+  "messages_history",
 ]);
 
 const syncBlockStateEnum = z.enum([
+  "not_started",
+  "scheduled",
+  "backfilling",
   "up_to_date",
   "syncing",
-  "catching_up",
   "retrying",
-  "error",
+  "delayed",
+  "failed",
   "paused",
-  "waiting",
-  "auth_failed",
   "not_available",
 ]);
 
@@ -1846,11 +1846,10 @@ export const syncBlocksPageSchema = z.object({
   diagnosis: syncDiagnosisSchema.nullable(),
   blocks: z.object({
     connection: syncBlockStatusSchema,
-    top_spenders: syncBlockStatusSchema,
-    transactions: syncBlockStatusSchema,
-    subscribers: syncBlockStatusSchema,
-    followers: syncBlockStatusSchema,
-    messages: syncBlockStatusSchema,
+    financials: syncBlockStatusSchema,
+    audience: syncBlockStatusSchema,
+    messages_live: syncBlockStatusSchema,
+    messages_history: syncBlockStatusSchema,
   }),
 });
 

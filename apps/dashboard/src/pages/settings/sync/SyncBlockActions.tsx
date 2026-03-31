@@ -13,25 +13,21 @@ import type { SyncBlockKey, SyncBlockState } from "./syncBlockDisplay.js";
 
 function canTrigger(state: SyncBlockState): boolean {
   return (
+    state === "not_started" ||
+    state === "scheduled" ||
     state === "up_to_date" ||
     state === "retrying" ||
-    state === "error" ||
-    state === "waiting"
+    state === "delayed" ||
+    state === "failed"
   );
 }
 
 function canTriggerDisabled(state: SyncBlockState): boolean {
-  return state === "syncing" || state === "catching_up";
+  return state === "syncing" || state === "backfilling";
 }
 
 function canPause(state: SyncBlockState): boolean {
-  return (
-    state === "up_to_date" ||
-    state === "syncing" ||
-    state === "catching_up" ||
-    state === "retrying" ||
-    state === "waiting"
-  );
+  return state !== "paused" && state !== "not_available";
 }
 
 function canResume(state: SyncBlockState): boolean {
@@ -39,13 +35,7 @@ function canResume(state: SyncBlockState): boolean {
 }
 
 function canReset(state: SyncBlockState): boolean {
-  return (
-    state === "up_to_date" ||
-    state === "retrying" ||
-    state === "error" ||
-    state === "paused" ||
-    state === "auth_failed"
-  );
+  return state !== "not_available";
 }
 
 export function SyncBlockActions({

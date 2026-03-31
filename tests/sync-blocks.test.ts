@@ -3,18 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   deleteCheckpoints: vi.fn(),
   deletePageTopSpenders: vi.fn(),
-  ensureSyncStreamStateRows: vi.fn(),
+  ensureSyncTaskRows: vi.fn(),
   findPageByLabel: vi.fn(),
-  listSyncMonitorStreamRows: vi.fn(),
-  listVisiblePages: vi.fn(),
-  requestSyncStreamRevisions: vi.fn(),
+  pauseSyncTasks: vi.fn(),
+  requestSyncTaskGenerations: vi.fn(),
   resetPageDmSyncState: vi.fn(),
-  resetSyncStreamStateRows: vi.fn(),
-  setSyncStreamStatuses: vi.fn(),
+  resetSyncTasks: vi.fn(),
+  resumeSyncTasks: vi.fn(),
 }));
 
-const connectionMocks = vi.hoisted(() => ({
-  listConnectionStatuses: vi.fn(),
+const syncStatusMocks = vi.hoisted(() => ({
+  getSyncStatusSnapshot: vi.fn(),
 }));
 
 const queueMocks = vi.hoisted(() => ({
@@ -29,25 +28,61 @@ vi.mock("@agency_hub_core/db", async () => {
   };
 });
 
-vi.mock("../apps/runtime/src/services/connections.ts", () => ({
-  listConnectionStatuses: connectionMocks.listConnectionStatuses,
+vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
+  getSyncStatusSnapshot: syncStatusMocks.getSyncStatusSnapshot,
+  SYNC_DOMAIN_BLOCKS: [
+    "connection",
+    "financials",
+    "audience",
+    "messages_live",
+    "messages_history",
+  ],
 }));
 
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   sendSyncPageWakeup: queueMocks.sendSyncPageWakeup,
 }));
 
-import { resolveSyncRequestPriority } from "@agency_hub_core/db";
+import { resolveSyncTaskPriority } from "@agency_hub_core/db";
 
 import {
   getPageMessagesSyncBlock,
   getSyncBlocksOverview,
   pauseSyncBlock,
   resetSyncBlock,
+  resumeSyncBlock,
   triggerSyncBlock,
 } from "../apps/runtime/src/services/sync-blocks.ts";
 
-function buildMonitorRow(overrides: Record<string, unknown> = {}) {
+function buildBlock(overrides: Record<string, unknown> = {}) {
+  return {
+    block: "connection",
+    state: "up_to_date",
+    lastSuccessAt: "2026-03-24T11:00:00.000Z",
+    progress: null,
+    error: null,
+    needsAttention: false,
+    nextDueAt: "2026-03-24T13:00:00.000Z",
+    nextRetryAt: null,
+    intervals: [{ stream: "light", cadenceSeconds: 3600 }],
+    metrics: {},
+    connectionStatus: "connected",
+    substreams: [{
+      stream: "light",
+      state: "up_to_date",
+      lastSuccessAt: "2026-03-24T11:00:00.000Z",
+      nextDueAt: "2026-03-24T13:00:00.000Z",
+      nextRetryAt: null,
+      cadenceSeconds: 3600,
+      needsAttention: false,
+      error: null,
+    }],
+    tasks: [],
+    ...overrides,
+  };
+}
+
+function buildSnapshotPage(overrides: Record<string, unknown> = {}) {
   return {
     pageId: 7,
     pageLabel: "lana",
@@ -56,72 +91,96 @@ function buildMonitorRow(overrides: Record<string, unknown> = {}) {
     modelName: "Lana",
     username: "lana_page",
     displayName: "Lana",
-    fanCount: 12,
-    followerCount: 4,
-    subscriberCount: 2,
-    transactionCount: 8,
-    dmConversationCount: 3,
-    dmMessageCount: 25,
-    dmEligibleConversationCount: 3,
-    dmBackfillCompleteConversationCount: 2,
-    dmLaggingConversationCount: 1,
-    stream: "light",
-    targetStatus: "active",
-    cadenceSeconds: 3600,
-    nextDueAt: new Date("2026-03-24T13:00:00.000Z"),
-    desiredRevision: 4,
-    satisfiedRevision: 4,
-    desiredAt: new Date("2026-03-24T12:00:00.000Z"),
-    backoffUntil: null,
-    lastEnqueuedAt: null,
-    lastStartedAt: null,
-    lastFinishedAt: null,
-    lastSucceededAt: new Date("2026-03-24T11:00:00.000Z"),
-    lastFailedAt: null,
-    consecutiveFailures: 0,
-    lastErrorCode: null,
-    lastErrorSummary: null,
-    checkpointCursorText: null,
-    checkpointCursorTimestamp: null,
-    checkpointState: null,
-    checkpointLastSuccessfulAt: null,
-    checkpointLastSuccessfulRunId: null,
-    runningRunId: null,
-    runningTrigger: null,
-    runningStartedAt: null,
-    runningLastActivityAt: null,
-    runningStats: null,
-    runningErrorSummary: null,
-    lastCompletedRunId: null,
-    lastCompletedTrigger: null,
-    lastCompletedStatus: "success",
-    lastCompletedStartedAt: null,
-    lastCompletedFinishedAt: null,
-    lastCompletedDurationMs: null,
-    lastCompletedStats: null,
-    lastCompletedErrorSummary: null,
-    recentRunningCount: 0,
-    recentSuccessCount: 1,
-    recentPartialCount: 0,
-    recentFailedCount: 0,
-    recentSkippedCount: 0,
-    recent429Count: 0,
-    recent5xxCount: 0,
-    recentFailedAttemptCount: 0,
-    recentRetryCount: 0,
-    last429At: null,
-    last5xxAt: null,
-    providerNextAvailableAt: null,
-    providerMinSpacingMs: null,
+    blocks: {
+      connection: buildBlock({
+        block: "connection",
+        state: "failed",
+        connectionStatus: "error",
+        needsAttention: true,
+        error: {
+          stream: "light",
+          code: "credentials_invalid",
+          summary: "Refresh credentials",
+          lastFailedAt: "2026-03-24T11:45:00.000Z",
+          consecutiveFailures: 1,
+        },
+      }),
+      financials: buildBlock({
+        block: "financials",
+        progress: {
+          label: "1 / 4 months",
+          current: 1,
+          total: 4,
+          unit: "months",
+          percent: 25,
+          percentValid: true,
+          details: {},
+        },
+        metrics: {
+          transactionCount: 12,
+        },
+      }),
+      audience: buildBlock({
+        block: "audience",
+        state: "failed",
+        needsAttention: true,
+        error: {
+          stream: "followers",
+          code: "http_500",
+          summary: "Followers sync failed",
+          lastFailedAt: "2026-03-24T11:30:00.000Z",
+          consecutiveFailures: 3,
+        },
+      }),
+      messages_live: buildBlock({
+        block: "messages_live",
+        metrics: {
+          visibleConversationCount: 3,
+        },
+        intervals: [{ stream: "dm_conversations", cadenceSeconds: 1800 }],
+        substreams: [{
+          stream: "dm_conversations",
+          state: "up_to_date",
+          lastSuccessAt: "2026-03-24T10:50:00.000Z",
+          nextDueAt: "2026-03-24T12:30:00.000Z",
+          nextRetryAt: null,
+          cadenceSeconds: 1800,
+          needsAttention: false,
+          error: null,
+        }],
+      }),
+      messages_history: buildBlock({
+        block: "messages_history",
+        metrics: {
+          messageCount: 25,
+          eligibleConversationCount: 3,
+          readyConversationCount: 2,
+        },
+        intervals: [{ stream: "dm_messages", cadenceSeconds: 86400 }],
+        substreams: [{
+          stream: "dm_messages",
+          state: "up_to_date",
+          lastSuccessAt: "2026-03-24T10:40:00.000Z",
+          nextDueAt: "2026-03-25T10:40:00.000Z",
+          nextRetryAt: null,
+          cadenceSeconds: 86400,
+          needsAttention: false,
+          error: null,
+        }],
+      }),
+    },
+    syncUx: {
+      state: "attention",
+      label: "Needs attention",
+      headline: "Sync needs attention",
+      detail: "Audience sync is blocked.",
+      progressLabel: null,
+      nextRetryAt: null,
+      updatedAt: "2026-03-24T11:30:00.000Z",
+      requiresAction: false,
+    },
     ...overrides,
   };
-}
-
-function buildApp(overrides: Record<string, unknown> = {}) {
-  return {
-    db: {},
-    ...overrides,
-  } as never;
 }
 
 describe("sync blocks service", () => {
@@ -129,729 +188,72 @@ describe("sync blocks service", () => {
     vi.clearAllMocks();
   });
 
-  it("builds the 6-block overview and marks OnlyFans-only unsupported blocks as not_available", async () => {
-    const now = new Date("2026-03-24T12:00:00.000Z");
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.listVisiblePages.mockResolvedValue([
-      {
-        id: 7,
-        label: "lana",
-        platform: "fansly",
-        modelSlug: "lana",
-        modelName: "Lana",
-        username: "lana_page",
-        displayName: "Lana",
-      },
-      {
-        id: 8,
-        label: "of-lana",
-        platform: "onlyfans",
-        modelSlug: "lana",
-        modelName: "Lana",
-        username: "of_lana",
-        displayName: "OF Lana",
-      },
-    ]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({
-        stream: "top_spenders",
-        cadenceSeconds: 3600,
-        checkpointState: {
-          mode: "bootstrap",
-          totalMonths: 4,
-          completedMonths: 1,
-          pendingWindows: [{ kind: "week" }],
-        },
-      }),
-      buildMonitorRow({ stream: "transactions", transactionCount: 12 }),
-      buildMonitorRow({
-        stream: "subscribers",
-        subscriberCount: 5,
-        targetStatus: "paused",
-      }),
-      buildMonitorRow({
-        stream: "followers",
-        followerCount: 9,
-        consecutiveFailures: 3,
-        lastFailedAt: new Date("2026-03-24T11:30:00.000Z"),
-        lastErrorCode: "http_500",
-        lastErrorSummary: "Followers sync failed",
-      }),
-      buildMonitorRow({
-        stream: "dm_conversations",
-        cadenceSeconds: 1800,
-        dmConversationCount: 3,
-        dmEligibleConversationCount: 3,
-        dmBackfillCompleteConversationCount: 2,
-        dmLaggingConversationCount: 1,
-        lastSucceededAt: new Date("2026-03-24T10:50:00.000Z"),
-      }),
-      buildMonitorRow({
-        stream: "dm_messages",
-        cadenceSeconds: 86400,
-        dmMessageCount: 25,
-        lastSucceededAt: new Date("2026-03-24T10:40:00.000Z"),
-      }),
-      buildMonitorRow({
-        pageId: 8,
-        pageLabel: "of-lana",
-        platform: "onlyfans",
-        username: "of_lana",
-        displayName: "OF Lana",
-        stream: "light",
-      }),
-      buildMonitorRow({
-        pageId: 8,
-        pageLabel: "of-lana",
-        platform: "onlyfans",
-        username: "of_lana",
-        displayName: "OF Lana",
-        stream: "transactions",
-      }),
-    ]);
-    connectionMocks.listConnectionStatuses.mockResolvedValue([
-      { id: 7, connectionStatus: "active" },
-      { id: 8, connectionStatus: "expired" },
-    ]);
-
-    const overview = await getSyncBlocksOverview({
-      db: {},
-    } as never, { now });
-
-    expect(overview.generatedAt).toBe(now.toISOString());
-    expect(overview.pages).toHaveLength(2);
-
-    const fanslyPage = overview.pages.find((page) => page.pageLabel === "lana");
-    const onlyFansPage = overview.pages.find((page) => page.pageLabel === "of-lana");
-
-    expect(fanslyPage?.blocks.connection).toMatchObject({
-      state: "up_to_date",
-      connectionStatus: "connected",
-    });
-    expect(fanslyPage?.blocks.top_spenders).toMatchObject({
-      state: "up_to_date",
-      progress: expect.objectContaining({
-        current: 1,
-        total: 4,
-        unit: "months",
-      }),
-    });
-    expect(fanslyPage?.blocks.followers).toMatchObject({
-      state: "error",
-      needsAttention: true,
-      error: expect.objectContaining({
-        code: "http_500",
-        consecutiveFailures: 3,
-      }),
-    });
-    expect(fanslyPage?.blocks.messages).toMatchObject({
-      state: "up_to_date",
-      metrics: expect.objectContaining({
-        storedMessageCount: 25,
-        eligibleConversationCount: 3,
-      }),
-      intervals: [
-        { stream: "dm_conversations", cadenceSeconds: 1800 },
-        { stream: "dm_messages", cadenceSeconds: 86400 },
+  it("maps the canonical snapshot into the dashboard block overview", async () => {
+    syncStatusMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-24T12:00:00.000Z",
+      pages: [
+        buildSnapshotPage(),
+        buildSnapshotPage({
+          pageId: 8,
+          pageLabel: "of-lana",
+          platform: "onlyfans",
+          username: "of_lana",
+          displayName: "OF Lana",
+          blocks: {
+            connection: buildBlock({ block: "connection", connectionStatus: "not_connected" }),
+            financials: buildBlock({ block: "financials" }),
+            audience: buildBlock({ block: "audience", state: "not_available", connectionStatus: null, substreams: [], intervals: [] }),
+            messages_live: buildBlock({ block: "messages_live", state: "not_available", connectionStatus: null, substreams: [], intervals: [] }),
+            messages_history: buildBlock({ block: "messages_history", state: "not_available", connectionStatus: null, substreams: [], intervals: [] }),
+          },
+        }),
       ],
     });
 
-    expect(onlyFansPage?.blocks.connection).toMatchObject({
-      connectionStatus: "not_connected",
-    });
-    expect(onlyFansPage?.blocks.transactions.state).toBe("up_to_date");
-    expect(onlyFansPage?.blocks.top_spenders.state).toBe("not_available");
-    expect(onlyFansPage?.blocks.subscribers.state).toBe("not_available");
-    expect(onlyFansPage?.blocks.followers.state).toBe("not_available");
-    expect(onlyFansPage?.blocks.messages.state).toBe("not_available");
-  });
-
-  it("returns the combined Messages block with both substream cadences", async () => {
-    const now = new Date("2026-03-24T12:00:00.000Z");
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana_page",
-      displayName: "Lana",
-    }]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({ stream: "top_spenders" }),
-      buildMonitorRow({ stream: "transactions" }),
-      buildMonitorRow({ stream: "subscribers" }),
-      buildMonitorRow({ stream: "followers" }),
-      buildMonitorRow({
-        stream: "dm_conversations",
-        cadenceSeconds: 1800,
-        dmConversationCount: 4,
-        dmEligibleConversationCount: 3,
-        dmBackfillCompleteConversationCount: 2,
-        dmLaggingConversationCount: 1,
-        lastSucceededAt: new Date("2026-03-24T10:20:00.000Z"),
-      }),
-      buildMonitorRow({
-        stream: "dm_messages",
-        cadenceSeconds: 86400,
-        dmMessageCount: 14,
-        lastSucceededAt: new Date("2026-03-24T09:20:00.000Z"),
-      }),
-    ]);
-    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
-
-    const response = await getPageMessagesSyncBlock({
-      db: {},
-    } as never, {
-      pageLabel: "lana",
-      now,
-    });
-
-    expect(response.page).toMatchObject({
-      pageLabel: "lana",
-      platform: "fansly",
-    });
-    expect(response.block).toMatchObject({
-      block: "messages",
-      lastSuccessAt: "2026-03-24T09:20:00.000Z",
-      progress: {
-        label: "2 of 3 conversations backfilled",
-        current: 2,
-        total: 3,
-        unit: "conversations",
-        percent: expect.closeTo(66.6666667, 5),
-        details: {
-          laggingConversations: 1,
-          visibleConversations: 4,
-        },
-      },
-      intervals: [
-        { stream: "dm_conversations", cadenceSeconds: 1800 },
-        { stream: "dm_messages", cadenceSeconds: 86400 },
-      ],
-    });
-    expect(response.block.substreams).toHaveLength(2);
-  });
-
-  it("prefers error over waiting while leaving clean pending streams as waiting and backed off streams as retrying", async () => {
-    const now = new Date("2026-03-24T12:00:00.000Z");
-    const buildPageRows = (
-      base: {
-        id: number;
-        label: string;
-        modelSlug: string;
-        modelName: string;
-        username: string;
-        displayName: string;
-      },
-      topSpendersOverrides: Record<string, unknown>,
-    ) => ([
-      buildMonitorRow({
-        pageId: base.id,
-        pageLabel: base.label,
-        modelSlug: base.modelSlug,
-        modelName: base.modelName,
-        username: base.username,
-        displayName: base.displayName,
-        stream: "light",
-      }),
-      buildMonitorRow({
-        pageId: base.id,
-        pageLabel: base.label,
-        modelSlug: base.modelSlug,
-        modelName: base.modelName,
-        username: base.username,
-        displayName: base.displayName,
-        stream: "top_spenders",
-        ...topSpendersOverrides,
-      }),
-      buildMonitorRow({
-        pageId: base.id,
-        pageLabel: base.label,
-        modelSlug: base.modelSlug,
-        modelName: base.modelName,
-        username: base.username,
-        displayName: base.displayName,
-        stream: "transactions",
-      }),
-      buildMonitorRow({
-        pageId: base.id,
-        pageLabel: base.label,
-        modelSlug: base.modelSlug,
-        modelName: base.modelName,
-        username: base.username,
-        displayName: base.displayName,
-        stream: "subscribers",
-      }),
-      buildMonitorRow({
-        pageId: base.id,
-        pageLabel: base.label,
-        modelSlug: base.modelSlug,
-        modelName: base.modelName,
-        username: base.username,
-        displayName: base.displayName,
-        stream: "followers",
-      }),
-      buildMonitorRow({
-        pageId: base.id,
-        pageLabel: base.label,
-        modelSlug: base.modelSlug,
-        modelName: base.modelName,
-        username: base.username,
-        displayName: base.displayName,
-        stream: "dm_conversations",
-      }),
-      buildMonitorRow({
-        pageId: base.id,
-        pageLabel: base.label,
-        modelSlug: base.modelSlug,
-        modelName: base.modelName,
-        username: base.username,
-        displayName: base.displayName,
-        stream: "dm_messages",
-      }),
-    ]);
-
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.listVisiblePages.mockResolvedValue([
-      {
-        id: 7,
-        label: "errored",
-        platform: "fansly",
-        modelSlug: "errored",
-        modelName: "Errored",
-        username: "errored_page",
-        displayName: "Errored",
-      },
-      {
-        id: 8,
-        label: "waiting",
-        platform: "fansly",
-        modelSlug: "waiting",
-        modelName: "Waiting",
-        username: "waiting_page",
-        displayName: "Waiting",
-      },
-      {
-        id: 9,
-        label: "retrying",
-        platform: "fansly",
-        modelSlug: "retrying",
-        modelName: "Retrying",
-        username: "retrying_page",
-        displayName: "Retrying",
-      },
-    ]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      ...buildPageRows({
-        id: 7,
-        label: "errored",
-        modelSlug: "errored",
-        modelName: "Errored",
-        username: "errored_page",
-        displayName: "Errored",
-      }, {
-        desiredRevision: 5,
-        satisfiedRevision: 0,
-        lastSucceededAt: null,
-        lastFailedAt: new Date("2026-03-24T11:30:00.000Z"),
-        consecutiveFailures: 1,
-        lastErrorCode: "23502",
-        lastErrorSummary: "Top spenders insert failed",
-      }),
-      ...buildPageRows({
-        id: 8,
-        label: "waiting",
-        modelSlug: "waiting",
-        modelName: "Waiting",
-        username: "waiting_page",
-        displayName: "Waiting",
-      }, {
-        desiredRevision: 5,
-        satisfiedRevision: 0,
-        lastSucceededAt: null,
-      }),
-      ...buildPageRows({
-        id: 9,
-        label: "retrying",
-        modelSlug: "retrying",
-        modelName: "Retrying",
-        username: "retrying_page",
-        displayName: "Retrying",
-      }, {
-        desiredRevision: 5,
-        satisfiedRevision: 0,
-        lastSucceededAt: null,
-        lastFailedAt: new Date("2026-03-24T11:45:00.000Z"),
-        consecutiveFailures: 1,
-        backoffUntil: new Date("2026-03-24T12:15:00.000Z"),
-        lastErrorCode: "23502",
-        lastErrorSummary: "Top spenders insert failed",
-      }),
-    ]);
-    connectionMocks.listConnectionStatuses.mockResolvedValue([
-      { id: 7, connectionStatus: "active" },
-      { id: 8, connectionStatus: "active" },
-      { id: 9, connectionStatus: "active" },
-    ]);
-
-    const overview = await getSyncBlocksOverview({
-      db: {},
-    } as never, { now });
-
-    const erroredPage = overview.pages.find((page) => page.pageLabel === "errored");
-    const waitingPage = overview.pages.find((page) => page.pageLabel === "waiting");
-    const retryingPage = overview.pages.find((page) => page.pageLabel === "retrying");
-
-    expect(erroredPage?.blocks.top_spenders).toMatchObject({
-      state: "error",
-      error: expect.objectContaining({
-        code: "23502",
-      }),
-    });
-    expect(waitingPage?.blocks.top_spenders.state).toBe("waiting");
-    expect(retryingPage?.blocks.top_spenders.state).toBe("retrying");
-  });
-
-  it("surfaces stalled running streams as recoverable errors", async () => {
-    const now = new Date("2026-03-24T12:00:00.000Z");
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana_page",
-      displayName: "Lana",
-    }]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({ stream: "top_spenders" }),
-      buildMonitorRow({ stream: "transactions" }),
-      buildMonitorRow({
-        stream: "subscribers",
-        runningRunId: 42,
-        runningTrigger: "scheduled",
-        runningStartedAt: new Date("2026-03-24T11:55:00.000Z"),
-        runningLastActivityAt: new Date("2026-03-24T11:58:00.000Z"),
-        checkpointState: {
-          pageCount: 1,
-          providerReportedTotal: 697,
-        },
-      }),
-      buildMonitorRow({ stream: "followers" }),
-      buildMonitorRow({ stream: "dm_conversations" }),
-      buildMonitorRow({ stream: "dm_messages" }),
-    ]);
-    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
-
-    const overview = await getSyncBlocksOverview({
-      db: {},
-    } as never, { now });
-
-    expect(overview.pages[0]?.blocks.subscribers).toMatchObject({
-      state: "error",
-      needsAttention: true,
-      progress: {
-        current: 1,
-        total: 697,
-        unit: "subscribers",
-      },
-      error: {
-        code: "stalled",
-        summary: "Sync stopped making progress",
-      },
-    });
-  });
-
-  it("diagnoses worker_offline from an old planner job when pending work is not being claimed", async () => {
-    const now = new Date("2026-03-24T12:00:00.000Z");
-    const poolQuery = vi.fn()
-      .mockResolvedValueOnce({
-        rows: [{ oldest_created_on: new Date("2026-03-24T11:57:00.000Z") }],
-      })
-      .mockResolvedValueOnce({ rows: [] });
-
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana_page",
-      displayName: "Lana",
-    }]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({ stream: "top_spenders" }),
-      buildMonitorRow({ stream: "transactions" }),
-      buildMonitorRow({
-        stream: "subscribers",
-        desiredRevision: 5,
-        satisfiedRevision: 4,
-      }),
-      buildMonitorRow({ stream: "followers" }),
-      buildMonitorRow({ stream: "dm_conversations" }),
-      buildMonitorRow({ stream: "dm_messages" }),
-    ]);
-    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
-
-    const overview = await getSyncBlocksOverview(buildApp({
-      pool: { query: poolQuery },
-    }), { now });
-
-    expect(overview.diagnosis).toMatchObject({
-      code: "worker_offline",
-    });
-    expect(overview.pages[0]?.diagnosis).toMatchObject({
-      code: "worker_offline",
-      actionKind: "worker",
-    });
-  });
-
-  it("diagnoses worker_offline from an old page execute job", async () => {
-    const now = new Date("2026-03-24T12:00:00.000Z");
-    const poolQuery = vi.fn()
-      .mockResolvedValueOnce({
-        rows: [{ oldest_created_on: null }],
-      })
-      .mockResolvedValueOnce({
-        rows: [{ page_id: 7, oldest_created_on: new Date("2026-03-24T11:56:00.000Z") }],
-      });
-
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana_page",
-      displayName: "Lana",
-    }]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({ stream: "top_spenders" }),
-      buildMonitorRow({
-        stream: "transactions",
-        desiredRevision: 5,
-        satisfiedRevision: 4,
-      }),
-      buildMonitorRow({ stream: "subscribers" }),
-      buildMonitorRow({ stream: "followers" }),
-      buildMonitorRow({ stream: "dm_conversations" }),
-      buildMonitorRow({ stream: "dm_messages" }),
-    ]);
-    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
-
-    const overview = await getSyncBlocksOverview(buildApp({
-      pool: { query: poolQuery },
-    }), { now });
-
-    expect(overview.pages[0]?.diagnosis).toMatchObject({
-      code: "worker_offline",
-    });
-  });
-
-  it("does not report worker_offline without pending work", async () => {
-    const now = new Date("2026-03-24T12:00:00.000Z");
-    const poolQuery = vi.fn()
-      .mockResolvedValueOnce({
-        rows: [{ oldest_created_on: new Date("2026-03-24T11:57:00.000Z") }],
-      })
-      .mockResolvedValueOnce({ rows: [] });
-
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana_page",
-      displayName: "Lana",
-    }]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({ stream: "top_spenders" }),
-      buildMonitorRow({ stream: "transactions" }),
-      buildMonitorRow({ stream: "subscribers" }),
-      buildMonitorRow({ stream: "followers" }),
-      buildMonitorRow({ stream: "dm_conversations" }),
-      buildMonitorRow({ stream: "dm_messages" }),
-    ]);
-    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
-
-    const overview = await getSyncBlocksOverview(buildApp({
-      pool: { query: poolQuery },
-    }), { now });
-
-    expect(overview.diagnosis).toBeNull();
-    expect(overview.pages[0]?.diagnosis).toBeNull();
-  });
-
-  it("prefers auth_failed over worker_offline", async () => {
-    const now = new Date("2026-03-24T12:00:00.000Z");
-    const poolQuery = vi.fn()
-      .mockResolvedValueOnce({
-        rows: [{ oldest_created_on: new Date("2026-03-24T11:57:00.000Z") }],
-      })
-      .mockResolvedValueOnce({ rows: [] });
-
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana_page",
-      displayName: "Lana",
-    }]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({
-        stream: "top_spenders",
-        targetStatus: "auth_failed",
-        lastErrorCode: "auth_failed",
-        lastErrorSummary: "Fresh credentials are required",
-      }),
-      buildMonitorRow({
-        stream: "transactions",
-        desiredRevision: 5,
-        satisfiedRevision: 4,
-      }),
-      buildMonitorRow({ stream: "subscribers" }),
-      buildMonitorRow({ stream: "followers" }),
-      buildMonitorRow({ stream: "dm_conversations" }),
-      buildMonitorRow({ stream: "dm_messages" }),
-    ]);
-    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
-
-    const overview = await getSyncBlocksOverview(buildApp({
-      pool: { query: poolQuery },
-    }), { now });
-
-    expect(overview.pages[0]?.diagnosis).toMatchObject({
-      code: "auth_failed",
-      actionKind: "credentials",
-    });
-    expect(overview.diagnosis).toBeNull();
-  });
-
-  it("prefers stalled_run over worker_offline", async () => {
-    const now = new Date("2026-03-24T12:00:00.000Z");
-    const poolQuery = vi.fn()
-      .mockResolvedValueOnce({
-        rows: [{ oldest_created_on: new Date("2026-03-24T11:57:00.000Z") }],
-      })
-      .mockResolvedValueOnce({ rows: [] });
-
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana_page",
-      displayName: "Lana",
-    }]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({ stream: "top_spenders" }),
-      buildMonitorRow({ stream: "transactions" }),
-      buildMonitorRow({
-        stream: "subscribers",
-        runningRunId: 42,
-        runningTrigger: "scheduled",
-        runningStartedAt: new Date("2026-03-24T11:55:00.000Z"),
-        runningLastActivityAt: new Date("2026-03-24T11:58:00.000Z"),
-        checkpointState: {
-          pageCount: 1,
-          providerReportedTotal: 697,
-        },
-      }),
-      buildMonitorRow({
-        stream: "followers",
-        desiredRevision: 5,
-        satisfiedRevision: 4,
-      }),
-      buildMonitorRow({ stream: "dm_conversations" }),
-      buildMonitorRow({ stream: "dm_messages" }),
-    ]);
-    connectionMocks.listConnectionStatuses.mockResolvedValue([{ id: 7, connectionStatus: "active" }]);
-
-    const overview = await getSyncBlocksOverview(buildApp({
-      pool: { query: poolQuery },
-    }), { now });
-
-    expect(overview.pages[0]?.diagnosis).toMatchObject({
-      code: "stalled_run",
-      actionKind: "sync_settings",
-    });
-    expect(overview.diagnosis).toBeNull();
-  });
-
-  it("triggers the mapped block stream immediately without reviving auth_failed rows", async () => {
-    dbMocks.findPageByLabel.mockResolvedValue({
-      page: {
-        id: 7,
-        label: "lana",
-        platform: "fansly",
-      },
-      proxy: {
-        url: "socks5://proxy.example:1080",
-      },
-    });
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.requestSyncStreamRevisions.mockResolvedValue([
-      { stream: "top_spenders", desiredRevision: 5 },
-    ]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({
-        pageId: 7,
-        stream: "top_spenders",
-      }),
-    ]);
-    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-1");
-
-    const response = await triggerSyncBlock({
-      db: {},
-    } as never, {
-      send: vi.fn(),
-    } as never, {
-      pageLabel: "lana",
-      block: "top_spenders",
+    const overview = await getSyncBlocksOverview({} as never, {
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
 
-    expect(response).toMatchObject({
-      accepted: true,
-      action: "trigger",
-      pageLabel: "lana",
-      block: "top_spenders",
-      revisions: [{ stream: "top_spenders", desiredRevision: 5 }],
+    expect(overview.generatedAt).toBe("2026-03-24T12:00:00.000Z");
+    expect(overview.pages).toHaveLength(2);
+    expect(overview.pages[0]?.blocks.financials.progress).toMatchObject({
+      current: 1,
+      total: 4,
+      unit: "months",
     });
-    expect(dbMocks.requestSyncStreamRevisions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      streams: ["top_spenders"],
-      reason: "manual",
-      preserveAuthFailed: true,
-    }));
-    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      provider: "fansly",
-      priority: resolveSyncRequestPriority("top_spenders", "manual"),
-    }));
+    expect(overview.pages[0]?.blocks.audience).toMatchObject({
+      state: "failed",
+      needsAttention: true,
+      error: expect.objectContaining({
+        code: "http_500",
+      }),
+    });
+    expect(overview.pages[1]?.blocks.messages_live.state).toBe("not_available");
+    expect(overview.pages[1]?.blocks.messages_history.state).toBe("not_available");
+    expect(overview.diagnosis).toMatchObject({
+      code: "auth_failed",
+      severity: "error",
+    });
   });
 
-  it("pauses follower maintenance alongside the visible followers block and fully resets message state", async () => {
+  it("returns the message-history block for the legacy messages endpoint", async () => {
+    syncStatusMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-24T12:00:00.000Z",
+      pages: [buildSnapshotPage()],
+    });
+
+    const response = await getPageMessagesSyncBlock({} as never, {
+      pageLabel: "lana",
+    });
+
+    expect(response.page.pageLabel).toBe("lana");
+    expect(response.block.block).toBe("messages_history");
+    expect(response.block.intervals).toEqual([
+      { stream: "dm_messages", cadenceSeconds: 86400 },
+    ]);
+  });
+
+  it("triggers the financials domain through the v2 task request path", async () => {
     dbMocks.findPageByLabel.mockResolvedValue({
       page: {
         id: 7,
@@ -860,68 +262,137 @@ describe("sync blocks service", () => {
       },
       proxy: null,
     });
-    dbMocks.ensureSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.setSyncStreamStatuses.mockResolvedValue(undefined);
-    dbMocks.deleteCheckpoints.mockResolvedValue(undefined);
-    dbMocks.resetPageDmSyncState.mockResolvedValue(undefined);
-    dbMocks.resetSyncStreamStateRows.mockResolvedValue(undefined);
-    dbMocks.requestSyncStreamRevisions.mockResolvedValue([
-      { stream: "dm_conversations", desiredRevision: 9 },
-      { stream: "dm_messages", desiredRevision: 4 },
-    ]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ pageId: 7, stream: "dm_conversations" }),
-      buildMonitorRow({ pageId: 7, stream: "dm_messages" }),
+    dbMocks.ensureSyncTaskRows.mockResolvedValue(undefined);
+    dbMocks.requestSyncTaskGenerations.mockResolvedValue([
+      { task: "transactions", desiredGeneration: 5 },
+      { task: "top_spenders", desiredGeneration: 5 },
     ]);
     queueMocks.sendSyncPageWakeup.mockResolvedValue("job-1");
 
-    await pauseSyncBlock({
-      db: {},
-    } as never, {
-      pageLabel: "lana",
-      block: "followers",
-      now: new Date("2026-03-24T12:00:00.000Z"),
-    });
-    expect(dbMocks.setSyncStreamStatuses).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      streams: ["followers", "followers_reconcile"],
-      status: "paused",
-    }));
-
-    const response = await resetSyncBlock({
-      db: {},
-    } as never, {
+    const response = await triggerSyncBlock({ db: {} } as never, {
       send: vi.fn(),
     } as never, {
       pageLabel: "lana",
-      block: "messages",
+      block: "financials",
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(response).toMatchObject({
+      accepted: true,
+      action: "trigger",
+      pageLabel: "lana",
+      block: "financials",
+      revisions: [
+        { stream: "transactions", desiredRevision: 5 },
+        { stream: "top_spenders", desiredRevision: 5 },
+      ],
+    });
+    expect(dbMocks.requestSyncTaskGenerations).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 7,
+      tasks: ["transactions", "top_spenders"],
+      source: "manual",
+    }));
+    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 7,
+      provider: "fansly",
+      priority: resolveSyncTaskPriority("transactions", "manual"),
+    }));
+  });
+
+  it("pauses the audience domain including follower reconcile support work", async () => {
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: {
+        id: 7,
+        label: "lana",
+        platform: "fansly",
+      },
+      proxy: null,
+    });
+    dbMocks.ensureSyncTaskRows.mockResolvedValue(undefined);
+    dbMocks.pauseSyncTasks.mockResolvedValue(undefined);
+
+    await pauseSyncBlock({ db: {} } as never, {
+      pageLabel: "lana",
+      block: "audience",
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(dbMocks.pauseSyncTasks).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 7,
+      tasks: ["subscribers", "followers", "followers_reconcile"],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    }));
+  });
+
+  it("resumes the messages live domain through v2 task control", async () => {
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: {
+        id: 7,
+        label: "lana",
+        platform: "fansly",
+      },
+      proxy: null,
+    });
+    dbMocks.ensureSyncTaskRows.mockResolvedValue(undefined);
+    dbMocks.resumeSyncTasks.mockResolvedValue(undefined);
+
+    await resumeSyncBlock({ db: {} } as never, {
+      pageLabel: "lana",
+      block: "messages_live",
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(dbMocks.resumeSyncTasks).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 7,
+      tasks: ["dm_conversations"],
+    }));
+  });
+
+  it("resets message history without clearing auth through the legacy message endpoint", async () => {
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: {
+        id: 7,
+        label: "lana",
+        platform: "fansly",
+      },
+      proxy: null,
+    });
+    dbMocks.ensureSyncTaskRows.mockResolvedValue(undefined);
+    dbMocks.deleteCheckpoints.mockResolvedValue(undefined);
+    dbMocks.resetPageDmSyncState.mockResolvedValue(undefined);
+    dbMocks.resetSyncTasks.mockResolvedValue(undefined);
+    dbMocks.requestSyncTaskGenerations.mockResolvedValue([
+      { task: "dm_messages", desiredGeneration: 4 },
+    ]);
+    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-1");
+
+    const response = await resetSyncBlock({ db: {} } as never, {
+      send: vi.fn(),
+    } as never, {
+      pageLabel: "lana",
+      block: "messages_history",
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
 
     expect(response).toMatchObject({
       accepted: true,
       action: "reset",
-      block: "messages",
+      block: "messages_history",
+      revisions: [{ stream: "dm_messages", desiredRevision: 4 }],
     });
     expect(dbMocks.deleteCheckpoints).toHaveBeenCalledWith(expect.anything(), {
       platformAccountId: 7,
-      streams: ["dm_conversations", "dm_messages"],
+      streams: ["dm_messages"],
     });
     expect(dbMocks.resetPageDmSyncState).toHaveBeenCalledWith(expect.anything(), 7);
-    expect(dbMocks.resetSyncStreamStateRows).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+    expect(dbMocks.resetSyncTasks).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       platformAccountId: 7,
-      streams: ["dm_conversations", "dm_messages"],
+      tasks: ["dm_messages"],
     }));
-    expect(dbMocks.requestSyncStreamRevisions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+    expect(dbMocks.requestSyncTaskGenerations).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       platformAccountId: 7,
-      streams: ["dm_conversations", "dm_messages"],
-      reason: "manual",
-      preserveAuthFailed: true,
-    }));
-    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      provider: "fansly",
-      priority: resolveSyncRequestPriority("dm_conversations", "manual"),
+      tasks: ["dm_messages"],
+      source: "reset",
     }));
   });
 });
