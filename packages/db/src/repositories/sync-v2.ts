@@ -505,13 +505,32 @@ function taskPriorityBySourceSql(taskColumnName: string, sourceColumnName: strin
 }
 
 function normalizeSyncTaskRow(row: Record<string, unknown>): SyncTaskRow {
+  const desiredGeneration = normalizeNumber(row.desiredGeneration as NumericValue, "desiredGeneration");
+  const runningGeneration = normalizeNullableNumber(row.runningGeneration as NumericValue, "runningGeneration");
+  const appliedGeneration = normalizeNumber(row.appliedGeneration as NumericValue, "appliedGeneration");
+  const retryAt = normalizeTimestamp(row.retryAt as TimestampValue, "retryAt");
+  const blockerType = typeof row.blockerType === "string" ? row.blockerType : null;
+  const leaseToken = typeof row.leaseToken === "string" ? row.leaseToken : null;
+  const storedStatus = typeof row.status === "string" ? row.status : null;
+  const status: SyncTaskRuntimeState = storedStatus === "paused" || storedStatus === "disabled"
+    ? "paused"
+    : storedStatus === "auth_failed" || blockerType !== null
+      ? "blocked"
+      : runningGeneration !== null && leaseToken !== null
+        ? "running"
+        : retryAt !== null && desiredGeneration > appliedGeneration
+          ? "retry_wait"
+          : desiredGeneration > appliedGeneration
+            ? "queued"
+            : "idle";
+
   return {
     platformAccountId: normalizeNumber(row.platformAccountId as NumericValue, "platformAccountId"),
     task: asSyncTask(String(row.task)),
-    status: String(row.status) as SyncTaskRuntimeState,
-    desiredGeneration: normalizeNumber(row.desiredGeneration as NumericValue, "desiredGeneration"),
-    runningGeneration: normalizeNullableNumber(row.runningGeneration as NumericValue, "runningGeneration"),
-    appliedGeneration: normalizeNumber(row.appliedGeneration as NumericValue, "appliedGeneration"),
+    status,
+    desiredGeneration,
+    runningGeneration,
+    appliedGeneration,
     scheduleIntervalSeconds: normalizeNumber(
       row.scheduleIntervalSeconds as NumericValue,
       "scheduleIntervalSeconds",
@@ -526,8 +545,8 @@ function normalizeSyncTaskRow(row: Record<string, unknown>): SyncTaskRow {
     lastSuccessAt: normalizeTimestamp(row.lastSuccessAt as TimestampValue, "lastSuccessAt"),
     lastFailureAt: normalizeTimestamp(row.lastFailureAt as TimestampValue, "lastFailureAt"),
     retryClass: typeof row.retryClass === "string" ? row.retryClass : null,
-    retryAt: normalizeTimestamp(row.retryAt as TimestampValue, "retryAt"),
-    blockerType: typeof row.blockerType === "string" ? row.blockerType : null,
+    retryAt,
+    blockerType,
     blockerCode: typeof row.blockerCode === "string" ? row.blockerCode : null,
     blockerReason: typeof row.blockerReason === "string" ? row.blockerReason : null,
     blockedSince: normalizeTimestamp(row.blockedSince as TimestampValue, "blockedSince"),
@@ -537,7 +556,7 @@ function normalizeSyncTaskRow(row: Record<string, unknown>): SyncTaskRow {
       : null,
     progressPayload: normalizeRecord(row.progressPayload, "progressPayload"),
     leaseOwner: typeof row.leaseOwner === "string" ? row.leaseOwner : null,
-    leaseToken: typeof row.leaseToken === "string" ? row.leaseToken : null,
+    leaseToken,
     leaseHeartbeatAt: normalizeTimestamp(row.leaseHeartbeatAt as TimestampValue, "leaseHeartbeatAt"),
     leaseExpiresAt: normalizeTimestamp(row.leaseExpiresAt as TimestampValue, "leaseExpiresAt"),
     consecutiveFailures: normalizeNumber(
@@ -661,7 +680,7 @@ async function listSyncTaskLegacyMirrorRows(
            st.updated_at as "updatedAt",
            so.source as "operationSource",
            so.request_payload as "requestPayload"
-    from sync_tasks st
+    from ${syncTasks} st
     left join ${syncOperations} so
       on so.platform_account_id = st.platform_account_id
      and so.task = st.task
@@ -1044,7 +1063,7 @@ export async function listSyncTaskRows(
            last_error_summary as "lastErrorSummary",
            created_at as "createdAt",
            updated_at as "updatedAt"
-    from sync_tasks
+    from ${syncTasks}
     where ${and(...clauses)}
     order by platform_account_id asc, ${taskOrderSql("task")} asc
   `);
@@ -1205,7 +1224,7 @@ export async function ensureSyncTaskRows(
       }
 
       await database.execute(sql`
-        update sync_tasks
+        update ${syncTasks}
         set schedule_interval_seconds = ${policy.cadenceSeconds},
             slot_offset_seconds = ${slotOffsetSeconds},
             updated_at = ${now}
@@ -1267,7 +1286,7 @@ export async function refreshSyncTaskDependencies(
           }
 
           await database.execute(sql`
-            update sync_tasks
+            update ${syncTasks}
             set status = 'blocked',
                 blocker_type = 'dependency',
                 blocker_code = 'unmet_dependency',
@@ -1290,7 +1309,7 @@ export async function refreshSyncTaskDependencies(
           ? "queued"
           : "idle";
         await database.execute(sql`
-          update sync_tasks
+          update ${syncTasks}
           set status = ${nextStatus}::sync_task_status,
               blocker_type = null,
               blocker_code = null,
@@ -1337,7 +1356,7 @@ export async function reclaimExpiredSyncTasks(
             : "idle";
 
       await database.execute(sql`
-        update sync_tasks
+        update ${syncTasks}
         set status = ${nextStatus}::sync_task_status,
             running_generation = null,
             lease_owner = null,
@@ -1347,7 +1366,8 @@ export async function reclaimExpiredSyncTasks(
             updated_at = ${now}
         where platform_account_id = ${row.platformAccountId}
           and task = ${row.task}
-          and status = 'running'
+          and running_generation is not null
+          and lease_token is not null
           and lease_expires_at < ${now}
       `);
     }
@@ -1399,7 +1419,7 @@ export async function scheduleDueSyncTasks(
       if (row.desiredGeneration > row.appliedGeneration) {
         if (row.status !== "blocked") {
           await database.execute(sql`
-            update sync_tasks
+            update ${syncTasks}
             set status = 'queued',
                 retry_at = null,
                 retry_class = null,
@@ -1432,7 +1452,7 @@ export async function scheduleDueSyncTasks(
       }).onConflictDoNothing();
 
       await database.execute(sql`
-        update sync_tasks
+        update ${syncTasks}
         set desired_generation = ${nextGeneration},
             last_scheduled_slot = ${currentSlot},
             last_requested_at = ${now},
@@ -1474,7 +1494,7 @@ export async function listRunnableSyncPagesV2(
              st.task as "task",
              st.last_requested_at as "lastRequestedAt",
              so.source as "operationSource"
-      from sync_tasks st
+      from ${syncTasks} st
       inner join ${platformAccounts} pa on pa.id = st.platform_account_id
       left join ${platformAccountProxies} pap on pap.platform_account_id = st.platform_account_id
       left join ${syncOperations} so
@@ -1482,10 +1502,10 @@ export async function listRunnableSyncPagesV2(
        and so.task = st.task
        and so.generation = st.desired_generation
       where st.desired_generation > st.applied_generation
-        and (
-          st.status = 'queued'
-          or (st.status = 'retry_wait' and st.retry_at is not null and st.retry_at <= ${now})
-        )
+        and st.status not in ('paused', 'disabled', 'auth_failed')
+        and st.blocker_type is null
+        and st.running_generation is null
+        and (st.retry_at is null or st.retry_at <= ${now})
     )
     select rt."platformAccountId" as "platformAccountId",
            rt."platform" as "platform",
@@ -1514,15 +1534,15 @@ export async function markSyncTaskWakeupEnqueued(
   now = new Date(),
 ) {
   await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set last_enqueued_at = ${now},
         updated_at = ${now}
     where platform_account_id = ${platformAccountId}
       and desired_generation > applied_generation
-      and (
-        status = 'queued'
-        or (status = 'retry_wait' and retry_at is not null and retry_at <= ${now})
-      )
+      and status not in ('paused', 'disabled', 'auth_failed')
+      and blocker_type is null
+      and running_generation is null
+      and (retry_at is null or retry_at <= ${now})
   `);
 
   await mirrorLegacySyncStreamState(db, { platformAccountId });
@@ -1544,24 +1564,24 @@ export async function acquireNextSyncTaskLeaseForPage(
       select st.platform_account_id as "platformAccountId",
              st.task as "task",
              st.desired_generation as "desiredGeneration"
-      from sync_tasks st
+      from ${syncTasks} st
       left join ${syncOperations} so
         on so.platform_account_id = st.platform_account_id
        and so.task = st.task
        and so.generation = st.desired_generation
       where st.platform_account_id = ${input.platformAccountId}
         and st.desired_generation > st.applied_generation
-        and (
-          st.status = 'queued'
-          or (st.status = 'retry_wait' and st.retry_at is not null and st.retry_at <= ${now})
-        )
+        and st.status not in ('paused', 'disabled', 'auth_failed')
+        and st.blocker_type is null
+        and st.running_generation is null
+        and (st.retry_at is null or st.retry_at <= ${now})
       order by ${taskPriorityBySourceSql("st.task", "so.source")} desc,
                st.last_requested_at asc nulls last,
                ${taskOrderSql("st.task")} asc
       limit 1
     ),
     acquired as (
-      update sync_tasks st
+      update ${syncTasks} st
       set status = 'running',
           running_generation = candidate."desiredGeneration",
           lease_owner = ${input.workerId},
@@ -1574,10 +1594,10 @@ export async function acquireNextSyncTaskLeaseForPage(
       where st.platform_account_id = candidate."platformAccountId"
         and st.task = candidate."task"
         and st.desired_generation = candidate."desiredGeneration"
-        and (
-          st.status = 'queued'
-          or (st.status = 'retry_wait' and st.retry_at is not null and st.retry_at <= ${now})
-        )
+        and st.status not in ('paused', 'disabled', 'auth_failed')
+        and st.blocker_type is null
+        and st.running_generation is null
+        and (st.retry_at is null or st.retry_at <= ${now})
       returning st.platform_account_id as "platformAccountId",
                 st.task as "task",
                 st.status as "status",
@@ -1652,14 +1672,14 @@ export async function heartbeatSyncTaskLease(
 ) {
   const now = input.now ?? new Date();
   const result = await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set lease_heartbeat_at = ${now},
         lease_expires_at = ${new Date(now.getTime() + input.leaseTtlMs)},
         updated_at = ${now}
     where platform_account_id = ${input.platformAccountId}
       and task = ${input.task}
       and lease_token = ${input.leaseToken}
-      and status = 'running'
+      and running_generation is not null
   `);
 
   const cleared = (result.rowCount ?? 0) > 0;
@@ -1685,7 +1705,7 @@ export async function clearSyncTaskLease(
 ) {
   const now = input.now ?? new Date();
   const result = await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set status = ${input.nextStatus}::sync_task_status,
         running_generation = null,
         lease_owner = null,
@@ -1726,7 +1746,7 @@ export async function completeSyncTaskGeneration(
   const now = input.now ?? new Date();
   const nextStatus: SyncTaskRuntimeState = "idle";
   const result = await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set status = case
                    when desired_generation > ${input.generation} then 'queued'::sync_task_status
                    else ${nextStatus}::sync_task_status
@@ -1786,7 +1806,7 @@ export async function yieldSyncTaskGeneration(
 ) {
   const now = input.now ?? new Date();
   const result = await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set status = 'queued',
         running_generation = null,
         last_progress_at = coalesce(${input.progressAt ?? null}, last_progress_at),
@@ -1848,7 +1868,7 @@ export async function failSyncTaskGeneration(
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
   const retryAt = new Date(now.getTime() + resolveRetryDelayMs(nextFailures));
   const result = await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set status = 'retry_wait',
         running_generation = null,
         last_progress_at = coalesce(${input.progressAt ?? null}, last_progress_at),
@@ -1911,7 +1931,7 @@ export async function blockSyncTaskGeneration(
   const row = await getSyncTaskRow(db, input.platformAccountId, input.task);
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
   const result = await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set status = 'blocked',
         running_generation = null,
         last_progress_at = coalesce(${input.progressAt ?? null}, last_progress_at),
@@ -1957,7 +1977,7 @@ export async function pauseSyncTasks(
 
   const now = input.now ?? new Date();
   await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set status = 'paused',
         running_generation = null,
         lease_owner = null,
@@ -1989,7 +2009,7 @@ export async function resumeSyncTasks(
 
   const now = input.now ?? new Date();
   await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set status = case
                    when blocker_type is not null then 'blocked'::sync_task_status
                    when desired_generation > applied_generation then 'queued'::sync_task_status
@@ -2032,7 +2052,7 @@ export async function resetSyncTasks(
   });
 
   await db.execute(sql`
-    update sync_tasks
+    update ${syncTasks}
     set running_generation = null,
         applied_generation = applied_generation,
         retry_class = null,
@@ -2109,7 +2129,7 @@ export async function requestSyncTaskGenerations(
           : "queued";
 
       await database.execute(sql`
-        update sync_tasks
+        update ${syncTasks}
         set desired_generation = ${nextGeneration},
             last_requested_at = ${now},
             status = ${nextStatus}::sync_task_status,
