@@ -133,6 +133,26 @@ export function formatNextTime(iso: string | null): string | null {
   return formatRelativeFuture(iso);
 }
 
+function hasOpaqueAudienceFollowerProgress(block: SyncBlockStatus): boolean {
+  return block.block === "audience" && block.progress?.unit === "followers";
+}
+
+export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
+  if (!block.progress || block.progress.total == null || block.progress.total <= 0) {
+    return false;
+  }
+
+  if (!["syncing", "backfilling", "scheduled", "retrying"].includes(block.state)) {
+    return false;
+  }
+
+  if (hasOpaqueAudienceFollowerProgress(block)) {
+    return false;
+  }
+
+  return true;
+}
+
 export function formatBlockSummary(block: SyncBlockStatus): string {
   if (block.state === "not_available") return "Not available";
 
@@ -168,6 +188,9 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
 
   if (block.state === "failed") {
     if (block.error?.code === "progress_stalled") {
+      if (hasOpaqueAudienceFollowerProgress(block)) {
+        return "Follower sync stalled";
+      }
       if (block.progress?.total != null && block.progress.total > 0) {
         return `Sync stalled at ${block.progress.current.toLocaleString()}/${block.progress.total.toLocaleString()} ${block.progress.unit}`;
       }
@@ -189,9 +212,25 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
     ? "Backfilling\u2026"
     : block.state === "scheduled"
       ? "Queued\u2026"
-    : block.state === "retrying"
+      : block.state === "retrying"
       ? "Retrying\u2026"
       : "Syncing\u2026";
+
+  if (hasOpaqueAudienceFollowerProgress(block)) {
+    if (block.state === "syncing") {
+      return "Refreshing followers\u2026";
+    }
+    if (block.state === "backfilling") {
+      return "Reconciling followers\u2026";
+    }
+    if (block.state === "scheduled") {
+      return "Follower sync queued";
+    }
+    if (block.state === "retrying") {
+      const nextRetry = block.nextRetryAt ? formatRelativeFuture(block.nextRetryAt) : null;
+      return nextRetry ? `Retrying follower sync ${nextRetry}` : "Retrying follower sync\u2026";
+    }
+  }
 
   if (
     (block.state === "syncing" || block.state === "backfilling" || block.state === "retrying" || block.state === "scheduled") &&

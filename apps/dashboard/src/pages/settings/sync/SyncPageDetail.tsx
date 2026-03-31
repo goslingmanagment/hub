@@ -13,6 +13,7 @@ import {
   formatNextTime,
   getBlockTone,
   getBlockStateLabel,
+  shouldShowBlockProgressBar,
 } from "./syncBlockDisplay.js";
 
 function BlockDetailCard({
@@ -57,7 +58,7 @@ function BlockDetailCard({
       </p>
 
       {/* Progress bar */}
-      {block.progress && block.progress.total != null && block.progress.total > 0 && (
+      {shouldShowBlockProgressBar(block) && block.progress && block.progress.total != null && block.progress.total > 0 && (
         <div className="mt-2 flex items-center gap-2">
           <div className="h-1.5 flex-1 max-w-[240px] rounded-full bg-hover-alt overflow-hidden">
             <div

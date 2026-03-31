@@ -4,6 +4,7 @@ import {
   getBlockLabel,
   getBlockStateLabel,
   formatBlockSummary,
+  shouldShowBlockProgressBar,
 } from "./syncBlockDisplay.js";
 
 export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
@@ -22,7 +23,7 @@ export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
         <span className={`text-xs ${isNA ? "text-text-muted" : tone.text}`}>
           {summary}
         </span>
-        {block.progress && block.progress.total != null && block.progress.total > 0 && (
+        {shouldShowBlockProgressBar(block) && block.progress && block.progress.total != null && block.progress.total > 0 && (
           <div className="flex items-center gap-2 basis-full mt-0.5">
             <div className="h-1.5 flex-1 max-w-[180px] rounded-full bg-hover-alt overflow-hidden">
               <div

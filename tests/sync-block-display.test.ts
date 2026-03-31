@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { formatBlockSummary } from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
+import {
+  formatBlockSummary,
+  shouldShowBlockProgressBar,
+} from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
 
 describe("sync block display", () => {
   afterEach(() => {
@@ -109,5 +112,56 @@ describe("sync block display", () => {
       connectionStatus: null,
       substreams: [],
     } as never)).toBe("Backfilling… 1/697 subscribers");
+  });
+
+  it("hides completed progress bars once a block is up to date", () => {
+    expect(shouldShowBlockProgressBar({
+      block: "financials",
+      state: "up_to_date",
+      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      progress: {
+        label: "15 / 15 months",
+        current: 15,
+        total: 15,
+        unit: "months",
+        percent: 100,
+        details: {},
+      },
+      error: null,
+      needsAttention: false,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: { transactionCount: 2879 },
+      connectionStatus: null,
+      substreams: [],
+    } as never)).toBe(false);
+  });
+
+  it("uses non-numeric copy for audience follower refresh progress", () => {
+    const block = {
+      block: "audience",
+      state: "syncing",
+      lastSuccessAt: "2026-03-24T11:53:00.000Z",
+      progress: {
+        label: "75 / 75 followers",
+        current: 75,
+        total: 75,
+        unit: "followers",
+        percent: 100,
+        details: {},
+      },
+      error: null,
+      needsAttention: false,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: { followerCount: 4821 },
+      connectionStatus: null,
+      substreams: [],
+    } as never;
+
+    expect(formatBlockSummary(block)).toBe("Refreshing followers…");
+    expect(shouldShowBlockProgressBar(block)).toBe(false);
   });
 });
