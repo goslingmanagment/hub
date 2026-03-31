@@ -88,6 +88,13 @@ function serializeTimestamp(value: Date | string | null | undefined) {
   return new Date(value).toISOString();
 }
 
+function serializePageMetric(value: number | null | undefined) {
+  return {
+    value: value ?? null,
+    available: value !== null && value !== undefined,
+  };
+}
+
 function millsToRoundedCents(value: bigint | number | string | null | undefined) {
   if (value == null) {
     return 0;
@@ -114,8 +121,8 @@ function serializePage(row: {
   platform: "fansly" | "onlyfans";
   username: string | null;
   displayName: string | null;
-  followerCount: number;
-  subscriberCount: number;
+  followerCount: number | null;
+  subscriberCount: number | null;
   lastLightSyncAt: Date | null;
   lastFollowerSyncAt: Date | null;
   modelSlug: string;
@@ -127,8 +134,8 @@ function serializePage(row: {
     platform: row.platform,
     username: row.username,
     displayName: row.displayName,
-    followerCount: row.followerCount,
-    subscriberCount: row.subscriberCount,
+    followerCount: serializePageMetric(row.followerCount),
+    subscriberCount: serializePageMetric(row.subscriberCount),
     lastLightSyncAt: serializeTimestamp(row.lastLightSyncAt),
     lastFollowerSyncAt: serializeTimestamp(row.lastFollowerSyncAt),
     modelSlug: row.modelSlug,

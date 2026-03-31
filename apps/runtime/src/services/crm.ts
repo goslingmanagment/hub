@@ -48,6 +48,13 @@ function serializeTimestamp(value: Date | string | null | undefined) {
   return new Date(value).toISOString();
 }
 
+function serializePageMetric(value: number | null | undefined) {
+  return {
+    value: value ?? null,
+    available: value !== null && value !== undefined,
+  };
+}
+
 function serializePage(page: NonNullable<Awaited<ReturnType<typeof findPageSummaryByLabel>>>) {
   return {
     id: page.id,
@@ -55,8 +62,8 @@ function serializePage(page: NonNullable<Awaited<ReturnType<typeof findPageSumma
     platform: page.platform,
     username: page.username,
     displayName: page.displayName,
-    followerCount: page.followerCount,
-    subscriberCount: page.subscriberCount,
+    followerCount: serializePageMetric(page.followerCount),
+    subscriberCount: serializePageMetric(page.subscriberCount),
     lastLightSyncAt: serializeTimestamp(page.lastLightSyncAt),
     lastFollowerSyncAt: serializeTimestamp(page.lastFollowerSyncAt),
     modelSlug: page.modelSlug,
@@ -73,6 +80,9 @@ function serializeFreshnessCoverage(freshness: Awaited<ReturnType<typeof getCrmF
     },
     coverage: {
       pendingMessageBackfillCount: freshness.pendingMessageBackfillCount,
+      partialWindowConversationCount: freshness.partialWindowConversationCount,
+      excludedConversationCount: freshness.excludedConversationCount,
+      unresolvedConversationCount: freshness.unresolvedConversationCount,
       previewReadyConversationCount: freshness.previewReadyConversationCount,
     },
   };
@@ -211,7 +221,9 @@ export async function getCrmRetentionReport(
         unreadCount: item.unreadCount,
         lastMessageAt: serializeTimestamp(item.lastMessageAt),
         lastMessagePreview: item.lastMessagePreview,
+        messageCoverageStatus: item.messageCoverageStatus,
         messageBackfillComplete: item.messageBackfillComplete,
+        messageSyncEligibility: item.messageSyncEligibility,
         storedMessageCount: item.storedMessageCount,
         lastMessageSenderRole: item.lastMessageSenderRole,
       },
@@ -294,7 +306,9 @@ export async function getCrmReactivationReport(
         unreadCount: item.unreadCount,
         lastMessageAt: serializeTimestamp(item.lastMessageAt),
         lastMessagePreview: item.lastMessagePreview,
+        messageCoverageStatus: item.messageCoverageStatus,
         messageBackfillComplete: item.messageBackfillComplete,
+        messageSyncEligibility: item.messageSyncEligibility,
         storedMessageCount: item.storedMessageCount,
         lastMessageSenderRole: item.lastMessageSenderRole,
       },
@@ -350,7 +364,10 @@ export async function getCrmConversationPreviewReport(
     conversation: {
       platformConversationId: preview.conversation.platformConversationId,
       storedMessageCount: preview.conversation.storedMessageCount,
+      messageCoverageStatus: preview.conversation.messageCoverageStatus,
       messageBackfillComplete: preview.conversation.messageBackfillComplete,
+      messageSyncEligibility: preview.conversation.messageSyncEligibility,
+      messageSyncExcludedReason: preview.conversation.messageSyncExcludedReason,
       lastMessageSyncAt: serializeTimestamp(preview.conversation.lastMessageSyncAt),
       unreadCount: preview.conversation.unreadCount,
       lastMessageAt: serializeTimestamp(preview.conversation.lastMessageAt),
@@ -388,6 +405,17 @@ export async function getPageConversationMessagesReport(
   return {
     page: serializePage(page),
     conversationId: conversation.conversationId,
+    conversation: {
+      platformConversationId: conversation.conversation.platformConversationId,
+      storedMessageCount: conversation.conversation.storedMessageCount,
+      messageCoverageStatus: conversation.conversation.messageCoverageStatus,
+      messageBackfillComplete: conversation.conversation.messageBackfillComplete,
+      messageSyncEligibility: conversation.conversation.messageSyncEligibility,
+      messageSyncExcludedReason: conversation.conversation.messageSyncExcludedReason,
+      lastMessageSyncAt: serializeTimestamp(conversation.conversation.lastMessageSyncAt),
+      unreadCount: conversation.conversation.unreadCount,
+      lastMessageAt: serializeTimestamp(conversation.conversation.lastMessageAt),
+    },
     messages: conversation.messages.map((message) => ({
       messageId: message.messageId,
       senderRole: message.senderRole,
@@ -420,7 +448,9 @@ function serializeSpenderItem(row: Awaited<ReturnType<typeof listWorkboardActive
       lastModelMessageAt: serializeTimestamp(row.lastModelMessageAt),
       lastMessagePreview: row.lastMessagePreview,
       storedMessageCount: row.storedMessageCount,
+      messageCoverageStatus: row.messageCoverageStatus,
       messageBackfillComplete: row.messageBackfillComplete,
+      messageSyncEligibility: row.messageSyncEligibility,
     },
     subscription: {
       status: row.subscriptionStatus,
@@ -468,7 +498,9 @@ export async function getWorkboardReport(
           lastModelMessageAt: serializeTimestamp(row.lastModelMessageAt),
           lastMessagePreview: row.lastMessagePreview,
           storedMessageCount: row.storedMessageCount,
+          messageCoverageStatus: row.messageCoverageStatus,
           messageBackfillComplete: row.messageBackfillComplete,
+          messageSyncEligibility: row.messageSyncEligibility,
         },
         subscription: {
           expiresAt: new Date(row.subscriptionExpiresAt).toISOString(),

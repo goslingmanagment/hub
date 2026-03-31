@@ -32,6 +32,13 @@ import { SettingsPage } from "../apps/dashboard/src/pages/SettingsPage.tsx";
 type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
 type DashboardPage = DashboardShellValue["pages"][number];
 
+function buildPageMetric(value: number | null) {
+  return {
+    value,
+    available: value !== null,
+  };
+}
+
 function buildSyncUx(
   overrides: Partial<{
     state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
@@ -65,8 +72,8 @@ function buildOverviewPage(overrides: Partial<DashboardPage> = {}): DashboardPag
     modelSlug: "lana",
     modelName: "Lana",
     username: "lana",
-    subscriberCount: 12,
-    followerCount: 34,
+    subscriberCount: buildPageMetric(12),
+    followerCount: buildPageMetric(34),
     revenueTodayMills: 0,
     revenue7dMills: 0,
     revenue30dMills: 0,
@@ -237,8 +244,8 @@ function buildConnection(overrides: Partial<{
     platform: "fansly" as const,
     username: "lana",
     displayName: "Lana",
-    subscriberCount: 12,
-    followerCount: 34,
+    subscriberCount: buildPageMetric(12),
+    followerCount: buildPageMetric(34),
     proxyUrl: null,
     proxyHasAuth: false,
     syncUx: buildSyncUx({

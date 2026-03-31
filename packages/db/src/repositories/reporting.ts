@@ -20,6 +20,7 @@ import {
   pageFollows,
   pageSubscriptions,
   platformAccounts,
+  platformAccountCredentials,
   platformAccountProxies,
   spenderLifetimePage,
   transactions,
@@ -55,8 +56,10 @@ export async function findPageSummaryByLabel(db: Database, label: string) {
     lastFollowerSyncAt: platformAccounts.lastFollowerSyncAt,
     modelSlug: models.slug,
     modelName: models.name,
+    hasCredentials: sql<boolean>`${platformAccountCredentials.id} is not null`,
   }).from(platformAccounts)
     .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .leftJoin(platformAccountCredentials, eq(platformAccountCredentials.platformAccountId, platformAccounts.id))
     .where(eq(platformAccounts.label, label));
 
   return row ?? null;
@@ -81,10 +84,12 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
     lastFollowerSyncAt: platformAccounts.lastFollowerSyncAt,
     modelSlug: models.slug,
     modelName: models.name,
+    hasCredentials: sql<boolean>`${platformAccountCredentials.id} is not null`,
     proxyUrl: platformAccountProxies.url,
     proxyHasAuth: sql<boolean>`${platformAccountProxies.encryptedAuth} is not null`,
   }).from(platformAccounts)
     .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .leftJoin(platformAccountCredentials, eq(platformAccountCredentials.platformAccountId, platformAccounts.id))
     .leftJoin(platformAccountProxies, eq(platformAccountProxies.platformAccountId, platformAccounts.id))
     .where(clauses.length > 0 ? and(...clauses) : undefined)
     .orderBy(models.slug, platformAccounts.label);
@@ -144,7 +149,7 @@ function buildTransactionScopeClauses(
     excludeExcludedTypes?: boolean;
   },
 ) {
-  const clauses = [];
+  const clauses = [eq(transactions.isActive, true)];
 
   if (input.excludeExcludedTypes) {
     clauses.push(
@@ -914,6 +919,7 @@ export async function listFanTransactionsOnPage(
   },
 ) {
   const clauses = and(
+    eq(transactions.isActive, true),
     eq(transactions.platformAccountId, input.pageId),
     eq(transactions.fanId, input.fanId),
   );
@@ -953,7 +959,7 @@ export async function listFanTransactionsCrossPage(
     offset: number;
   },
 ) {
-  const clauses = [eq(transactions.fanId, input.fanId)];
+  const clauses = [eq(transactions.isActive, true), eq(transactions.fanId, input.fanId)];
   if (input.pageIds.length > 0) {
     clauses.push(inArray(transactions.platformAccountId, input.pageIds));
   }

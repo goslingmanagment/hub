@@ -426,8 +426,14 @@ export interface paths {
                             modelName: string;
                             username: string | null;
                             displayName: string | null;
-                            followerCount: number;
-                            subscriberCount: number;
+                            followerCount: {
+                                value: number | null;
+                                available: boolean;
+                            };
+                            subscriberCount: {
+                                value: number | null;
+                                available: boolean;
+                            };
                             lastLightSyncAt: string | null;
                             lastFollowerSyncAt: string | null;
                         }[];
@@ -903,8 +909,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -1000,8 +1012,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -1124,8 +1142,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -1236,8 +1260,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -1338,8 +1368,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -1444,8 +1480,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -1545,8 +1587,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -2216,8 +2264,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -2242,6 +2296,9 @@ export interface paths {
                             };
                             coverage: {
                                 pendingMessageBackfillCount: number;
+                                partialWindowConversationCount: number;
+                                excludedConversationCount: number;
+                                unresolvedConversationCount: number;
                                 previewReadyConversationCount: number;
                             };
                             messageSyncUx: {
@@ -2365,8 +2422,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -2396,7 +2459,11 @@ export interface paths {
                                     unreadCount: number;
                                     lastMessageAt: string | null;
                                     lastMessagePreview: string | null;
+                                    /** @enum {string} */
+                                    messageCoverageStatus: "pending_backfill" | "partial_window" | "complete";
                                     messageBackfillComplete: boolean;
+                                    /** @enum {string} */
+                                    messageSyncEligibility: "eligible" | "excluded" | "unresolved_identity";
                                     storedMessageCount: number;
                                     lastMessageSenderRole: ("fan" | "model" | "system" | "unknown") | null;
                                 };
@@ -2420,6 +2487,9 @@ export interface paths {
                                 };
                                 coverage: {
                                     pendingMessageBackfillCount: number;
+                                    partialWindowConversationCount: number;
+                                    excludedConversationCount: number;
+                                    unresolvedConversationCount: number;
                                     previewReadyConversationCount: number;
                                 };
                                 countsByTouchpoint: {
@@ -2543,8 +2613,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -2574,7 +2650,11 @@ export interface paths {
                                     unreadCount: number;
                                     lastMessageAt: string | null;
                                     lastMessagePreview: string | null;
+                                    /** @enum {string} */
+                                    messageCoverageStatus: "pending_backfill" | "partial_window" | "complete";
                                     messageBackfillComplete: boolean;
+                                    /** @enum {string} */
+                                    messageSyncEligibility: "eligible" | "excluded" | "unresolved_identity";
                                     storedMessageCount: number;
                                     lastMessageSenderRole: ("fan" | "model" | "system" | "unknown") | null;
                                 };
@@ -2594,6 +2674,9 @@ export interface paths {
                                 };
                                 coverage: {
                                     pendingMessageBackfillCount: number;
+                                    partialWindowConversationCount: number;
+                                    excludedConversationCount: number;
+                                    unresolvedConversationCount: number;
                                     previewReadyConversationCount: number;
                                 };
                             };
@@ -2700,8 +2783,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -2717,7 +2806,12 @@ export interface paths {
                             conversation: {
                                 platformConversationId: string;
                                 storedMessageCount: number;
+                                /** @enum {string} */
+                                messageCoverageStatus: "pending_backfill" | "partial_window" | "complete";
                                 messageBackfillComplete: boolean;
+                                /** @enum {string} */
+                                messageSyncEligibility: "eligible" | "excluded" | "unresolved_identity";
+                                messageSyncExcludedReason: string | null;
                                 lastMessageSyncAt: string | null;
                                 unreadCount: number;
                                 lastMessageAt: string | null;
@@ -2845,12 +2939,31 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
                             conversationId: string;
+                            conversation: {
+                                platformConversationId: string;
+                                storedMessageCount: number;
+                                /** @enum {string} */
+                                messageCoverageStatus: "pending_backfill" | "partial_window" | "complete";
+                                messageBackfillComplete: boolean;
+                                /** @enum {string} */
+                                messageSyncEligibility: "eligible" | "excluded" | "unresolved_identity";
+                                messageSyncExcludedReason: string | null;
+                                lastMessageSyncAt: string | null;
+                                unreadCount: number;
+                                lastMessageAt: string | null;
+                            };
                             messages: {
                                 messageId: string;
                                 /** @enum {string} */
@@ -2977,7 +3090,11 @@ export interface paths {
                                         lastModelMessageAt: string | null;
                                         lastMessagePreview: string | null;
                                         storedMessageCount: number;
+                                        /** @enum {string} */
+                                        messageCoverageStatus: "pending_backfill" | "partial_window" | "complete";
                                         messageBackfillComplete: boolean;
+                                        /** @enum {string} */
+                                        messageSyncEligibility: "eligible" | "excluded" | "unresolved_identity";
                                     };
                                     subscription: {
                                         expiresAt: string;
@@ -3009,7 +3126,11 @@ export interface paths {
                                         lastModelMessageAt: string | null;
                                         lastMessagePreview: string | null;
                                         storedMessageCount: number;
+                                        /** @enum {string} */
+                                        messageCoverageStatus: "pending_backfill" | "partial_window" | "complete";
                                         messageBackfillComplete: boolean;
+                                        /** @enum {string} */
+                                        messageSyncEligibility: "eligible" | "excluded" | "unresolved_identity";
                                     };
                                     subscription: {
                                         /** @enum {string} */
@@ -3040,7 +3161,11 @@ export interface paths {
                                         lastModelMessageAt: string | null;
                                         lastMessagePreview: string | null;
                                         storedMessageCount: number;
+                                        /** @enum {string} */
+                                        messageCoverageStatus: "pending_backfill" | "partial_window" | "complete";
                                         messageBackfillComplete: boolean;
+                                        /** @enum {string} */
+                                        messageSyncEligibility: "eligible" | "excluded" | "unresolved_identity";
                                     };
                                     subscription: {
                                         /** @enum {string} */
@@ -4362,8 +4487,14 @@ export interface paths {
                                 modelSlug: string;
                                 modelName: string;
                                 username: string | null;
-                                subscriberCount: number;
-                                followerCount: number;
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 revenueTodayMills: number;
                                 revenue7dMills: number;
                                 revenue30dMills: number;
@@ -8051,8 +8182,14 @@ export interface paths {
                             lastLightSyncAt: string | null;
                             lastFollowerSyncAt: string | null;
                             lastSyncError: string | null;
-                            subscriberCount: number;
-                            followerCount: number;
+                            subscriberCount: {
+                                value: number | null;
+                                available: boolean;
+                            };
+                            followerCount: {
+                                value: number | null;
+                                available: boolean;
+                            };
                             proxyUrl: string | null;
                             proxyHasAuth: boolean;
                             syncUx: {
@@ -8452,8 +8589,14 @@ export interface paths {
                             modelName: string;
                             username: string | null;
                             displayName: string | null;
-                            followerCount: number;
-                            subscriberCount: number;
+                            followerCount: {
+                                value: number | null;
+                                available: boolean;
+                            };
+                            subscriberCount: {
+                                value: number | null;
+                                available: boolean;
+                            };
                             lastLightSyncAt: string | null;
                             lastFollowerSyncAt: string | null;
                         }[];
@@ -8548,8 +8691,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };
@@ -8742,8 +8891,14 @@ export interface paths {
                                 modelName: string;
                                 username: string | null;
                                 displayName: string | null;
-                                followerCount: number;
-                                subscriberCount: number;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
                                 lastLightSyncAt: string | null;
                                 lastFollowerSyncAt: string | null;
                             };

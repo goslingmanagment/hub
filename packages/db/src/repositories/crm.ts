@@ -21,6 +21,9 @@ type NumericValue = number | string | bigint | null | undefined;
 
 export const PAGE_DM_MESSAGE_HISTORY_LIMIT = 25;
 
+export type MessageCoverageStatus = "pending_backfill" | "partial_window" | "complete";
+export type MessageSyncEligibility = "eligible" | "excluded" | "unresolved_identity";
+
 function parseTimestamp(value: TimestampValue) {
   if (value === null || value === undefined) {
     return null;
@@ -106,8 +109,41 @@ function normalizeCheckpointTimestamp(value: unknown) {
   return typeof value === "string" ? parseTimestamp(value) : null;
 }
 
+function normalizeMessageCoverageStatus(value: unknown): MessageCoverageStatus {
+  return value === "partial_window" || value === "complete"
+    ? value
+    : "pending_backfill";
+}
+
+function isMessageBackfillComplete(status: MessageCoverageStatus) {
+  return status === "complete";
+}
+
 function dmMessageSyncEligibleSql(alias: string) {
   return sql`coalesce(${sql.raw(alias)}.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') = ''`;
+}
+
+function unresolvedIdentitySql(alias: string) {
+  return sql`coalesce((${sql.raw(alias)}.metadata ->> 'unresolvedIdentity')::boolean, false) = true`;
+}
+
+function getMessageSyncExcludedReason(metadata: Record<string, unknown> | null | undefined) {
+  const rawValue = metadata?.[FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY];
+  return typeof rawValue === "string" && rawValue.trim().length > 0
+    ? rawValue
+    : null;
+}
+
+function getMessageSyncEligibility(input: {
+  fanId: number | null;
+  metadata: Record<string, unknown>;
+}): MessageSyncEligibility {
+  if (getMessageSyncExcludedReason(input.metadata)) {
+    return "excluded";
+  }
+
+  const unresolvedIdentity = input.metadata.unresolvedIdentity === true || input.fanId === null;
+  return unresolvedIdentity ? "unresolved_identity" : "eligible";
 }
 
 function hasVisibleFanIdentitySql(input: {
@@ -147,6 +183,7 @@ export interface UpsertPageDmConversationInput {
   storedMessageCount?: number;
   newestStoredMessageId?: string | null;
   oldestStoredMessageId?: string | null;
+  messageCoverageStatus?: MessageCoverageStatus;
   messageBackfillComplete?: boolean;
   lastMessageSyncAt?: Date | null;
   isVisible?: boolean;
@@ -159,6 +196,11 @@ export async function upsertPageDmConversation(
   input: UpsertPageDmConversationInput,
 ) {
   const now = new Date();
+  const messageCoverageStatus = input.messageCoverageStatus ?? (
+    input.messageBackfillComplete
+      ? "complete"
+      : "pending_backfill"
+  );
   const patch = {
     platformAccountId: input.platformAccountId,
     fanId: input.fanId,
@@ -179,7 +221,8 @@ export async function upsertPageDmConversation(
     storedMessageCount: input.storedMessageCount ?? 0,
     newestStoredMessageId: input.newestStoredMessageId ?? null,
     oldestStoredMessageId: input.oldestStoredMessageId ?? null,
-    messageBackfillComplete: input.messageBackfillComplete ?? false,
+    messageCoverageStatus,
+    messageBackfillComplete: isMessageBackfillComplete(messageCoverageStatus),
     lastMessageSyncAt: input.lastMessageSyncAt ?? null,
     isVisible: input.isVisible ?? true,
     lastSeenGeneration: input.lastSeenGeneration,
@@ -244,7 +287,10 @@ export interface PageDmConversationRow {
   storedMessageCount: number;
   newestStoredMessageId: string | null;
   oldestStoredMessageId: string | null;
+  messageCoverageStatus: MessageCoverageStatus;
   messageBackfillComplete: boolean;
+  messageSyncEligibility: MessageSyncEligibility;
+  messageSyncExcludedReason: string | null;
   lastMessageSyncAt: Date | null;
   isVisible: boolean;
   lastSeenGeneration: number | null;
@@ -256,6 +302,14 @@ export interface PageDmConversationRow {
 }
 
 function normalizeConversationRow(row: typeof pageDmConversations.$inferSelect): PageDmConversationRow {
+  const metadata = row.metadata;
+  const messageCoverageStatus = normalizeMessageCoverageStatus(row.messageCoverageStatus);
+  const messageSyncExcludedReason = getMessageSyncExcludedReason(metadata);
+  const messageSyncEligibility = getMessageSyncEligibility({
+    fanId: row.fanId,
+    metadata,
+  });
+
   return {
     id: row.id,
     platformAccountId: row.platformAccountId,
@@ -278,13 +332,16 @@ function normalizeConversationRow(row: typeof pageDmConversations.$inferSelect):
     storedMessageCount: row.storedMessageCount,
     newestStoredMessageId: row.newestStoredMessageId,
     oldestStoredMessageId: row.oldestStoredMessageId,
-    messageBackfillComplete: row.messageBackfillComplete,
+    messageCoverageStatus,
+    messageBackfillComplete: isMessageBackfillComplete(messageCoverageStatus),
+    messageSyncEligibility,
+    messageSyncExcludedReason,
     lastMessageSyncAt: row.lastMessageSyncAt,
     isVisible: row.isVisible,
     lastSeenGeneration: row.lastSeenGeneration,
     firstSeenAt: row.firstSeenAt,
     lastSeenAt: row.lastSeenAt,
-    metadata: row.metadata,
+    metadata,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -482,7 +539,7 @@ export async function finalizePageDmConversationMessageSync(
   db: Database,
   input: {
     conversationId: number;
-    messageBackfillComplete: boolean;
+    messageCoverageStatus: MessageCoverageStatus;
     lastMessageSyncAt?: Date;
   },
 ) {
@@ -501,7 +558,8 @@ export async function finalizePageDmConversationMessageSync(
         storedMessageCount: summary.storedMessageCount,
         newestStoredMessageId: summary.newestStoredMessageId,
         oldestStoredMessageId: summary.oldestStoredMessageId,
-        messageBackfillComplete: input.messageBackfillComplete,
+        messageCoverageStatus: input.messageCoverageStatus,
+        messageBackfillComplete: isMessageBackfillComplete(input.messageCoverageStatus),
         lastMessageSyncAt,
         lastFanMessageAt: summary.lastFanMessageAt,
         lastModelMessageAt: summary.lastModelMessageAt,
@@ -531,6 +589,7 @@ export async function resetPageDmSyncState(
         storedMessageCount: 0,
         newestStoredMessageId: null,
         oldestStoredMessageId: null,
+        messageCoverageStatus: "pending_backfill",
         messageBackfillComplete: false,
         lastMessageSyncAt: null,
         lastFanMessageAt: null,
@@ -573,6 +632,7 @@ export interface PageDmMessageSyncCandidate {
   lastMessageId: string | null;
   newestStoredMessageId: string | null;
   storedMessageCount: number;
+  messageCoverageStatus: MessageCoverageStatus;
   messageBackfillComplete: boolean;
   lastMessageSyncAt: Date | null;
 }
@@ -604,6 +664,7 @@ export async function selectNextPageDmMessageSyncCandidate(
     lastMessageId: string | null;
     newestStoredMessageId: string | null;
     storedMessageCount: NumericValue;
+    messageCoverageStatus: MessageCoverageStatus;
     messageBackfillComplete: boolean;
     lastMessageSyncAt: TimestampValue;
   }>(sql`
@@ -616,6 +677,7 @@ export async function selectNextPageDmMessageSyncCandidate(
            c.last_message_id as "lastMessageId",
            c.newest_stored_message_id as "newestStoredMessageId",
            c.stored_message_count as "storedMessageCount",
+           c.message_coverage_status as "messageCoverageStatus",
            c.message_backfill_complete as "messageBackfillComplete",
            c.last_message_sync_at as "lastMessageSyncAt"
     from page_dm_conversations c
@@ -631,12 +693,12 @@ export async function selectNextPageDmMessageSyncCandidate(
       and ${dmMessageSyncEligibleSql("c")}
       and (
         ${staleHeadMismatchSql}
-        or c.message_backfill_complete = false
+        or c.message_coverage_status = 'pending_backfill'::dm_message_coverage_status
       )
     order by
       case
         when ${staleHeadMismatchSql} then 0
-        when c.message_backfill_complete = false then 1
+        when c.message_coverage_status = 'pending_backfill'::dm_message_coverage_status then 1
         else 2
       end asc,
       c.unread_count desc,
@@ -668,7 +730,10 @@ export async function selectNextPageDmMessageSyncCandidate(
     lastMessageId: row.lastMessageId,
     newestStoredMessageId: row.newestStoredMessageId,
     storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
-    messageBackfillComplete: row.messageBackfillComplete,
+    messageCoverageStatus: normalizeMessageCoverageStatus(row.messageCoverageStatus),
+    messageBackfillComplete: isMessageBackfillComplete(
+      normalizeMessageCoverageStatus(row.messageCoverageStatus),
+    ),
     lastMessageSyncAt: parseTimestamp(row.lastMessageSyncAt),
   } satisfies PageDmMessageSyncCandidate;
 }
@@ -678,6 +743,9 @@ export interface CrmFreshnessCoverage {
   lastConversationFullSweepAt: Date | null;
   lastMessageChunkSucceededAt: Date | null;
   pendingMessageBackfillCount: number;
+  partialWindowConversationCount: number;
+  excludedConversationCount: number;
+  unresolvedConversationCount: number;
   previewReadyConversationCount: number;
 }
 
@@ -706,14 +774,34 @@ export async function getCrmFreshnessCoverage(
     }),
     db.execute<{
       pendingMessageBackfillCount: number;
+      partialWindowConversationCount: number;
+      excludedConversationCount: number;
+      unresolvedConversationCount: number;
       previewReadyConversationCount: number;
     }>(sql`
       select count(*) filter (
                where is_visible = true
                  and fan_id is not null
                  and ${dmMessageSyncEligibleSql("page_dm_conversations")}
-                 and message_backfill_complete = false
+                 and message_coverage_status = 'pending_backfill'::dm_message_coverage_status
              )::int as "pendingMessageBackfillCount",
+             count(*) filter (
+               where is_visible = true
+                 and fan_id is not null
+                 and message_coverage_status = 'partial_window'::dm_message_coverage_status
+             )::int as "partialWindowConversationCount",
+             count(*) filter (
+               where is_visible = true
+                 and coalesce(page_dm_conversations.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') <> ''
+             )::int as "excludedConversationCount",
+             count(*) filter (
+               where is_visible = true
+                 and coalesce(page_dm_conversations.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') = ''
+                 and (
+                   fan_id is null
+                   or ${unresolvedIdentitySql("page_dm_conversations")}
+                 )
+             )::int as "unresolvedConversationCount",
              count(*) filter (
                where is_visible = true
                  and fan_id is not null
@@ -730,6 +818,9 @@ export async function getCrmFreshnessCoverage(
     lastConversationFullSweepAt: normalizeCheckpointTimestamp(checkpointState?.lastFullSweepCompletedAt),
     lastMessageChunkSucceededAt: messageState?.lastSucceededAt ?? null,
     pendingMessageBackfillCount: coverage.rows[0]?.pendingMessageBackfillCount ?? 0,
+    partialWindowConversationCount: coverage.rows[0]?.partialWindowConversationCount ?? 0,
+    excludedConversationCount: coverage.rows[0]?.excludedConversationCount ?? 0,
+    unresolvedConversationCount: coverage.rows[0]?.unresolvedConversationCount ?? 0,
     previewReadyConversationCount: coverage.rows[0]?.previewReadyConversationCount ?? 0,
   } satisfies CrmFreshnessCoverage;
 }
@@ -808,7 +899,9 @@ export interface CrmRetentionRow {
   lastMessagePreview: string | null;
   lastContactAt: Date | null;
   platformConversationId: string | null;
+  messageCoverageStatus: MessageCoverageStatus;
   messageBackfillComplete: boolean;
+  messageSyncEligibility: MessageSyncEligibility;
   storedMessageCount: number;
   touchpointCode: "21d" | "14d" | "7d" | "5d" | "3d" | "1d";
   touchpointDueAt: Date;
@@ -913,9 +1006,14 @@ function retentionBaseQuery(input: CrmRetentionListInput) {
              pc.last_fan_message_at as last_fan_message_at,
              pc.last_model_message_at as last_model_message_at,
              pc.last_message_preview as last_message_preview,
+             coalesce(
+               pc.message_coverage_status,
+               'pending_backfill'::dm_message_coverage_status
+             ) as message_coverage_status,
              coalesce(pc.message_backfill_complete, false) as message_backfill_complete,
              coalesce(pc.stored_message_count, 0)::int as stored_message_count,
              pc.last_message_sender_role as last_message_sender_role,
+             coalesce(pc.metadata, '{}'::jsonb) as conversation_metadata,
              coalesce(
                case
                  when pc.last_fan_message_at is null and pc.last_model_message_at is null then null
@@ -1000,7 +1098,9 @@ export async function listCrmRetention(
     lastMessagePreview: string | null;
     lastContactAt: TimestampValue;
     platformConversationId: string | null;
+    messageCoverageStatus: MessageCoverageStatus | null;
     messageBackfillComplete: boolean | null;
+    conversationMetadata: unknown;
     storedMessageCount: NumericValue | null;
     lastMessageSenderRole: string | null;
     touchpointCode: CrmRetentionRow["touchpointCode"] | null;
@@ -1039,7 +1139,9 @@ export async function listCrmRetention(
              last_message_preview as "lastMessagePreview",
              last_contact_at as "lastContactAt",
              platform_conversation_id as "platformConversationId",
+             message_coverage_status as "messageCoverageStatus",
              message_backfill_complete as "messageBackfillComplete",
+             conversation_metadata as "conversationMetadata",
              stored_message_count as "storedMessageCount",
              last_message_sender_role as "lastMessageSenderRole",
              touchpoint_code as "touchpointCode",
@@ -1073,7 +1175,9 @@ export async function listCrmRetention(
            p."lastMessagePreview",
            p."lastContactAt",
            p."platformConversationId",
+           p."messageCoverageStatus",
            p."messageBackfillComplete",
+           p."conversationMetadata",
            p."storedMessageCount",
            p."lastMessageSenderRole",
            p."touchpointCode",
@@ -1108,7 +1212,9 @@ export async function listCrmRetention(
         creatorNetAmountMills: NumericValue;
         subscriptionExpiresAt: TimestampValue;
         unreadCount: NumericValue;
+        messageCoverageStatus: MessageCoverageStatus;
         messageBackfillComplete: boolean;
+        conversationMetadata: unknown;
         storedMessageCount: NumericValue;
         touchpointCode: CrmRetentionRow["touchpointCode"];
         touchpointDueAt: TimestampValue;
@@ -1130,7 +1236,14 @@ export async function listCrmRetention(
       lastMessagePreview: row.lastMessagePreview,
       lastContactAt: parseTimestamp(row.lastContactAt),
       platformConversationId: row.platformConversationId,
-      messageBackfillComplete: row.messageBackfillComplete,
+      messageCoverageStatus: normalizeMessageCoverageStatus(row.messageCoverageStatus),
+      messageBackfillComplete: isMessageBackfillComplete(
+        normalizeMessageCoverageStatus(row.messageCoverageStatus),
+      ),
+      messageSyncEligibility: getMessageSyncEligibility({
+        fanId: normalizeNumber(row.fanId, "fanId"),
+        metadata: normalizeNullableJsonRecord(row.conversationMetadata) ?? {},
+      }),
       storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
       lastMessageSenderRole: (row.lastMessageSenderRole as DmSenderRole) ?? null,
       touchpointCode: row.touchpointCode,
@@ -1201,7 +1314,9 @@ export interface CrmReactivationRow {
   lastMessageAt: Date | null;
   lastMessagePreview: string | null;
   platformConversationId: string | null;
+  messageCoverageStatus: MessageCoverageStatus;
   messageBackfillComplete: boolean;
+  messageSyncEligibility: MessageSyncEligibility;
   storedMessageCount: number;
   noDmHistory: boolean;
   silenceDays: number;
@@ -1304,9 +1419,14 @@ function reactivationBaseQuery(input: CrmReactivationListInput) {
              coalesce(pc.unread_count, 0)::int as unread_count,
              pc.last_message_at as last_message_at,
              pc.last_message_preview as last_message_preview,
+             coalesce(
+               pc.message_coverage_status,
+               'pending_backfill'::dm_message_coverage_status
+             ) as message_coverage_status,
              coalesce(pc.message_backfill_complete, false) as message_backfill_complete,
              coalesce(pc.stored_message_count, 0)::int as stored_message_count,
              pc.last_message_sender_role as last_message_sender_role,
+             coalesce(pc.metadata, '{}'::jsonb) as conversation_metadata,
              (pc.id is null) as no_dm_history,
              coalesce(
                pc.last_message_at,
@@ -1384,7 +1504,9 @@ export async function listCrmReactivation(
     lastMessageAt: TimestampValue;
     lastMessagePreview: string | null;
     platformConversationId: string | null;
+    messageCoverageStatus: MessageCoverageStatus | null;
     messageBackfillComplete: boolean;
+    conversationMetadata: unknown;
     storedMessageCount: NumericValue;
     lastMessageSenderRole: string | null;
     noDmHistory: boolean;
@@ -1407,7 +1529,9 @@ export async function listCrmReactivation(
            last_message_at as "lastMessageAt",
            last_message_preview as "lastMessagePreview",
            platform_conversation_id as "platformConversationId",
+           message_coverage_status as "messageCoverageStatus",
            message_backfill_complete as "messageBackfillComplete",
+           conversation_metadata as "conversationMetadata",
            stored_message_count as "storedMessageCount",
            last_message_sender_role as "lastMessageSenderRole",
            no_dm_history as "noDmHistory",
@@ -1437,7 +1561,14 @@ export async function listCrmReactivation(
       lastMessageAt: parseTimestamp(row.lastMessageAt),
       lastMessagePreview: row.lastMessagePreview,
       platformConversationId: row.platformConversationId,
-      messageBackfillComplete: row.messageBackfillComplete,
+      messageCoverageStatus: normalizeMessageCoverageStatus(row.messageCoverageStatus),
+      messageBackfillComplete: isMessageBackfillComplete(
+        normalizeMessageCoverageStatus(row.messageCoverageStatus),
+      ),
+      messageSyncEligibility: getMessageSyncEligibility({
+        fanId: normalizeNumber(row.fanId, "fanId"),
+        metadata: normalizeNullableJsonRecord(row.conversationMetadata) ?? {},
+      }),
       storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
       lastMessageSenderRole: (row.lastMessageSenderRole as DmSenderRole) ?? null,
       noDmHistory: row.noDmHistory,
@@ -1514,7 +1645,10 @@ export interface CrmConversationPreview {
     id: number;
     platformConversationId: string;
     storedMessageCount: number;
+    messageCoverageStatus: MessageCoverageStatus;
     messageBackfillComplete: boolean;
+    messageSyncEligibility: MessageSyncEligibility;
+    messageSyncExcludedReason: string | null;
     lastMessageSyncAt: Date | null;
     unreadCount: number;
     lastMessageAt: Date | null;
@@ -1532,6 +1666,17 @@ export interface PageConversationMessageRow {
 
 export interface PageConversationMessages {
   conversationId: string;
+  conversation: {
+    platformConversationId: string;
+    storedMessageCount: number;
+    messageCoverageStatus: MessageCoverageStatus;
+    messageBackfillComplete: boolean;
+    messageSyncEligibility: MessageSyncEligibility;
+    messageSyncExcludedReason: string | null;
+    lastMessageSyncAt: Date | null;
+    unreadCount: number;
+    lastMessageAt: Date | null;
+  };
   messages: PageConversationMessageRow[];
 }
 
@@ -1572,6 +1717,17 @@ export async function getPageConversationMessages(
 
   return {
     conversationId: conversation.platformConversationId,
+    conversation: {
+      platformConversationId: conversation.platformConversationId,
+      storedMessageCount: conversation.storedMessageCount,
+      messageCoverageStatus: conversation.messageCoverageStatus,
+      messageBackfillComplete: conversation.messageBackfillComplete,
+      messageSyncEligibility: conversation.messageSyncEligibility,
+      messageSyncExcludedReason: conversation.messageSyncExcludedReason,
+      lastMessageSyncAt: conversation.lastMessageSyncAt,
+      unreadCount: conversation.unreadCount,
+      lastMessageAt: conversation.lastMessageAt,
+    },
     messages: messagesResult.rows.map((row) => ({
       messageId: row.messageId,
       senderRole: row.senderRole,
@@ -1657,7 +1813,10 @@ export async function getCrmConversationPreview(
       id: conversation.id,
       platformConversationId: conversation.platformConversationId,
       storedMessageCount: conversation.storedMessageCount,
+      messageCoverageStatus: conversation.messageCoverageStatus,
       messageBackfillComplete: conversation.messageBackfillComplete,
+      messageSyncEligibility: conversation.messageSyncEligibility,
+      messageSyncExcludedReason: conversation.messageSyncExcludedReason,
       lastMessageSyncAt: conversation.lastMessageSyncAt,
       unreadCount: conversation.unreadCount,
       lastMessageAt: conversation.lastMessageAt,
@@ -1713,7 +1872,9 @@ export interface WorkboardSubscriberRow {
   lastModelMessageAt: Date | null;
   lastMessagePreview: string | null;
   storedMessageCount: number;
+  messageCoverageStatus: MessageCoverageStatus;
   messageBackfillComplete: boolean;
+  messageSyncEligibility: MessageSyncEligibility;
   subscriptionExpiresAt: Date;
   autoRenew: boolean | null;
   subscriberSince: Date | null;
@@ -1752,7 +1913,9 @@ export async function listWorkboardSubscribers(
     lastModelMessageAt: TimestampValue;
     lastMessagePreview: string | null;
     storedMessageCount: NumericValue;
+    messageCoverageStatus: MessageCoverageStatus;
     messageBackfillComplete: boolean;
+    conversationMetadata: unknown;
     subscriptionExpiresAt: TimestampValue;
     autoRenew: boolean | null;
     subscriberSince: TimestampValue;
@@ -1789,7 +1952,9 @@ export async function listWorkboardSubscribers(
            last_model_message_at as "lastModelMessageAt",
            last_message_preview as "lastMessagePreview",
            stored_message_count as "storedMessageCount",
+           message_coverage_status as "messageCoverageStatus",
            message_backfill_complete as "messageBackfillComplete",
+           conversation_metadata as "conversationMetadata",
            subscription_expires_at as "subscriptionExpiresAt",
            auto_renew as "autoRenew",
            subscriber_since as "subscriberSince",
@@ -1823,7 +1988,14 @@ export async function listWorkboardSubscribers(
     lastModelMessageAt: parseTimestamp(row.lastModelMessageAt),
     lastMessagePreview: row.lastMessagePreview,
     storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
-    messageBackfillComplete: row.messageBackfillComplete,
+    messageCoverageStatus: normalizeMessageCoverageStatus(row.messageCoverageStatus),
+    messageBackfillComplete: isMessageBackfillComplete(
+      normalizeMessageCoverageStatus(row.messageCoverageStatus),
+    ),
+    messageSyncEligibility: getMessageSyncEligibility({
+      fanId: normalizeNumber(row.fanId, "fanId"),
+      metadata: normalizeNullableJsonRecord(row.conversationMetadata) ?? {},
+    }),
     subscriptionExpiresAt: requireTimestamp(row.subscriptionExpiresAt, "subscriptionExpiresAt"),
     autoRenew: row.autoRenew,
     subscriberSince: parseTimestamp(row.subscriberSince),
@@ -1848,7 +2020,9 @@ export interface WorkboardSpenderRow {
   lastModelMessageAt: Date | null;
   lastMessagePreview: string | null;
   storedMessageCount: number;
+  messageCoverageStatus: MessageCoverageStatus;
   messageBackfillComplete: boolean;
+  messageSyncEligibility: MessageSyncEligibility;
   subscriptionStatus: "expired" | "never";
   subscriptionExpiresAt: Date | null;
   lastTransactionAt: Date | null;
@@ -1908,8 +2082,13 @@ function spenderBaseQuery(
              pc.last_fan_message_at as last_fan_message_at,
              pc.last_model_message_at as last_model_message_at,
              pc.last_message_preview as last_message_preview,
+             coalesce(
+               pc.message_coverage_status,
+               'pending_backfill'::dm_message_coverage_status
+             ) as message_coverage_status,
              coalesce(pc.stored_message_count, 0)::int as stored_message_count,
              coalesce(pc.message_backfill_complete, false) as message_backfill_complete,
+             coalesce(pc.metadata, '{}'::jsonb) as conversation_metadata,
              coalesce(
                case
                  when pc.last_fan_message_at is null and pc.last_model_message_at is null then null
@@ -1975,7 +2154,9 @@ function normalizeSpenderRows(rows: Array<{
   lastModelMessageAt: TimestampValue;
   lastMessagePreview: string | null;
   storedMessageCount: NumericValue;
+  messageCoverageStatus: MessageCoverageStatus;
   messageBackfillComplete: boolean;
+  conversationMetadata: unknown;
   subscriptionStatus: string;
   subscriptionExpiresAt: TimestampValue;
   lastTransactionAt: TimestampValue;
@@ -1994,7 +2175,14 @@ function normalizeSpenderRows(rows: Array<{
     lastModelMessageAt: parseTimestamp(row.lastModelMessageAt),
     lastMessagePreview: row.lastMessagePreview,
     storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
-    messageBackfillComplete: row.messageBackfillComplete,
+    messageCoverageStatus: normalizeMessageCoverageStatus(row.messageCoverageStatus),
+    messageBackfillComplete: isMessageBackfillComplete(
+      normalizeMessageCoverageStatus(row.messageCoverageStatus),
+    ),
+    messageSyncEligibility: getMessageSyncEligibility({
+      fanId: normalizeNumber(row.fanId, "fanId"),
+      metadata: normalizeNullableJsonRecord(row.conversationMetadata) ?? {},
+    }),
     subscriptionStatus: row.subscriptionStatus as "expired" | "never",
     subscriptionExpiresAt: parseTimestamp(row.subscriptionExpiresAt),
     lastTransactionAt: parseTimestamp(row.lastTransactionAt),
@@ -2021,7 +2209,9 @@ export async function listWorkboardActiveSpenders(
     lastModelMessageAt: TimestampValue;
     lastMessagePreview: string | null;
     storedMessageCount: NumericValue;
+    messageCoverageStatus: MessageCoverageStatus;
     messageBackfillComplete: boolean;
+    conversationMetadata: unknown;
     subscriptionStatus: string;
     subscriptionExpiresAt: TimestampValue;
     lastTransactionAt: TimestampValue;
@@ -2040,7 +2230,9 @@ export async function listWorkboardActiveSpenders(
            last_model_message_at as "lastModelMessageAt",
            last_message_preview as "lastMessagePreview",
            stored_message_count as "storedMessageCount",
+           message_coverage_status as "messageCoverageStatus",
            message_backfill_complete as "messageBackfillComplete",
+           conversation_metadata as "conversationMetadata",
            subscription_status as "subscriptionStatus",
            subscription_expires_at as "subscriptionExpiresAt",
            last_transaction_at as "lastTransactionAt"
@@ -2071,7 +2263,9 @@ export async function listWorkboardInactiveSpenders(
     lastModelMessageAt: TimestampValue;
     lastMessagePreview: string | null;
     storedMessageCount: NumericValue;
+    messageCoverageStatus: MessageCoverageStatus;
     messageBackfillComplete: boolean;
+    conversationMetadata: unknown;
     subscriptionStatus: string;
     subscriptionExpiresAt: TimestampValue;
     lastTransactionAt: TimestampValue;
@@ -2090,7 +2284,9 @@ export async function listWorkboardInactiveSpenders(
            last_model_message_at as "lastModelMessageAt",
            last_message_preview as "lastMessagePreview",
            stored_message_count as "storedMessageCount",
+           message_coverage_status as "messageCoverageStatus",
            message_backfill_complete as "messageBackfillComplete",
+           conversation_metadata as "conversationMetadata",
            subscription_status as "subscriptionStatus",
            subscription_expires_at as "subscriptionExpiresAt",
            last_transaction_at as "lastTransactionAt"

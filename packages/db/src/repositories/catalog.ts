@@ -542,8 +542,8 @@ export async function updatePageMetadata(
     platformAccountIdValue: string;
     username: string | null;
     displayName: string | null;
-    followerCount: number;
-    subscriberCount: number;
+    followerCount: number | null;
+    subscriberCount: number | null;
     earningsBalanceMills: bigint;
     metadata: Record<string, unknown>;
     syncType?: "light" | "followers";
@@ -587,8 +587,8 @@ export async function updatePageMetadata(
     platformAccountId: string;
     username: string | null;
     displayName: string | null;
-    followerCount: number;
-    subscriberCount: number;
+    followerCount: number | null;
+    subscriberCount: number | null;
     earningsBalanceMills: bigint;
     metadata: Record<string, unknown>;
     lastVerifiedAt: Date;

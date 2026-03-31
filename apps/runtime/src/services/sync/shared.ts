@@ -324,12 +324,12 @@ export async function refreshPageMetadata(
     platformAccountIdValue: account.parsed.account.platform_account_id,
     username: account.parsed.account.username,
     displayName: account.parsed.account.name,
-      followerCount: 0,
-      subscriberCount: 0,
-      earningsBalanceMills: 0n,
-      metadata: buildOnlyFansMetadata(account.parsed.account, pageContext.page.metadata),
-      ...(syncType ? { syncType } : {}),
-    });
+    followerCount: null,
+    subscriberCount: null,
+    earningsBalanceMills: 0n,
+    metadata: buildOnlyFansMetadata(account.parsed.account, pageContext.page.metadata),
+    ...(syncType ? { syncType } : {}),
+  });
 
   return account;
 }

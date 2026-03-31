@@ -86,6 +86,14 @@ export const transactionStateEnum = pgEnum("transaction_state", [
 export const userRoleEnum = pgEnum("user_role", userRoles);
 export const fanFlagEnum = pgEnum("fan_flag", fanFlagTypes);
 export const dmSenderRoleEnum = pgEnum("dm_sender_role", ["fan", "model", "system", "unknown"]);
+export const dmMessageCoverageStatusEnum = pgEnum("dm_message_coverage_status", [
+  "pending_backfill",
+  "partial_window",
+  "complete",
+]);
+export const transactionInactiveReasonEnum = pgEnum("transaction_inactive_reason", [
+  "missing_from_sync_window",
+]);
 export const notificationIncidentKindEnum = pgEnum("notification_incident_kind", [
   "auth_failed",
   "proxy_failed",
@@ -129,8 +137,8 @@ export const platformAccounts = pgTable(
     platformAccountId: text("platform_account_id"),
     username: text("username"),
     displayName: text("display_name"),
-    followerCount: integer("follower_count").default(0).notNull(),
-    subscriberCount: integer("subscriber_count").default(0).notNull(),
+    followerCount: integer("follower_count"),
+    subscriberCount: integer("subscriber_count"),
     earningsBalanceMills: bigint("earnings_balance_mills", {
       mode: "bigint",
     }).default(0n).notNull(),
@@ -703,6 +711,9 @@ export const pageDmConversations = pgTable(
     storedMessageCount: integer("stored_message_count").default(0).notNull(),
     newestStoredMessageId: text("newest_stored_message_id"),
     oldestStoredMessageId: text("oldest_stored_message_id"),
+    messageCoverageStatus: dmMessageCoverageStatusEnum("message_coverage_status")
+      .default("pending_backfill")
+      .notNull(),
     messageBackfillComplete: boolean("message_backfill_complete").default(false).notNull(),
     lastMessageSyncAt: timestamp("last_message_sync_at", { withTimezone: true }),
     isVisible: boolean("is_visible").default(true).notNull(),
@@ -738,7 +749,7 @@ export const pageDmConversations = pgTable(
     backfillIdx: index("page_dm_conversations_backfill_idx").on(
       table.platformAccountId,
       table.isVisible,
-      table.messageBackfillComplete,
+      table.messageCoverageStatus,
       table.lastMessageSyncAt,
     ),
     generationIdx: index("page_dm_conversations_generation_idx").on(
@@ -848,6 +859,9 @@ export const transactions = pgTable(
     receiverId: text("receiver_id"),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true }),
+    isActive: boolean("is_active").default(true).notNull(),
+    inactiveReason: transactionInactiveReasonEnum("inactive_reason"),
+    inactivatedAt: timestamp("inactivated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -862,6 +876,11 @@ export const transactions = pgTable(
     ),
     occurredIdx: index("transactions_account_occurred_idx").on(
       table.platformAccountId,
+      table.occurredAt,
+    ),
+    activeOccurredIdx: index("transactions_account_active_occurred_idx").on(
+      table.platformAccountId,
+      table.isActive,
       table.occurredAt,
     ),
     fanIdx: index("transactions_fan_idx").on(table.fanId),

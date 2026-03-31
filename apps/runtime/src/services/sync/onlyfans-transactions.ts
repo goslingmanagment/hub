@@ -1,8 +1,8 @@
 import {
-  deleteTransactionsMissingFromWindow,
   getCheckpoint,
   getOldestPendingTransactionAt,
   mergePageMetadata,
+  retireTransactionsMissingFromWindow,
   rebuildSpenderProjections,
   rebuildRevenueRollups,
   upsertCheckpoint,
@@ -1011,7 +1011,7 @@ async function syncOnlyFansTransactionsIncremental(
   let checkpointAfter = null;
   await app.db.transaction(async (tx) => {
     cleanupApplied = true;
-    await deleteTransactionsMissingFromWindow(tx as typeof app.db, {
+    await retireTransactionsMissingFromWindow(tx as typeof app.db, {
       platformAccountId: input.platformAccountId,
       from: start,
       to: end,

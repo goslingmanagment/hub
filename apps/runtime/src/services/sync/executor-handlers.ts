@@ -27,6 +27,7 @@ import {
   upsertPageSubscriptions,
   refreshFanPageFollowerState,
   refreshFanPageSubscriberState,
+  type MessageCoverageStatus,
   type UpsertFanPageInput,
   type UpsertPageFollowInput,
   type UpsertPageSubscriptionInput,
@@ -89,6 +90,28 @@ const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_WEEK_MS = 7 * TOP_SPENDERS_WINDOW_DAY_MS;
+
+function resolveDmConversationCoverageStatus(input: {
+  currentMode: "backfill" | "incremental";
+  existingStatus: MessageCoverageStatus;
+  overlapFound: boolean;
+  providerHistoryExhausted: boolean;
+  hitWindowCap: boolean;
+}): MessageCoverageStatus {
+  if (input.currentMode === "incremental") {
+    return input.existingStatus;
+  }
+
+  if (input.providerHistoryExhausted || input.overlapFound) {
+    return "complete";
+  }
+
+  if (input.hitWindowCap) {
+    return "partial_window";
+  }
+
+  return input.existingStatus;
+}
 
 function createPageRateLimitWaiter(
   app: AppContext,
@@ -2131,6 +2154,7 @@ export async function executeDmConversationsChunk(
         storedMessageCount: existing?.storedMessageCount ?? 0,
         newestStoredMessageId: existing?.newestStoredMessageId ?? null,
         oldestStoredMessageId: existing?.oldestStoredMessageId ?? null,
+        messageCoverageStatus: existing?.messageCoverageStatus ?? "pending_backfill",
         messageBackfillComplete: existing?.messageBackfillComplete ?? false,
         lastMessageSyncAt: existing?.lastMessageSyncAt ?? null,
         isVisible: true,
@@ -2310,9 +2334,9 @@ export async function executeDmMessagesChunk(
           ? "backfill"
           : conversation.lastMessageId !== conversation.newestStoredMessageId
             ? "incremental"
-            : conversation.messageBackfillComplete
-              ? "incremental"
-              : "backfill";
+            : conversation.messageCoverageStatus === "pending_backfill"
+              ? "backfill"
+              : "incremental";
 
         state = {
           ...emptyDmMessagesCheckpointState(),
@@ -2339,6 +2363,7 @@ export async function executeDmMessagesChunk(
         break;
       }
 
+      const currentMode = state.currentMode;
       let collectedThisConversation = 0;
       while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
         dmMessagesRequestObserver.recordConversationTouched(conversation.id);
@@ -2403,6 +2428,7 @@ export async function executeDmMessagesChunk(
             storedMessageCount: conversation.storedMessageCount,
             newestStoredMessageId: conversation.newestStoredMessageId,
             oldestStoredMessageId: conversation.oldestStoredMessageId,
+            messageCoverageStatus: conversation.messageCoverageStatus,
             messageBackfillComplete: conversation.messageBackfillComplete,
             lastMessageSyncAt: conversation.lastMessageSyncAt,
             isVisible: conversation.isVisible,
@@ -2481,9 +2507,9 @@ export async function executeDmMessagesChunk(
         const oldestMessageId = page.items.at(-1)?.id ?? null;
         const providerHistoryExhausted = page.done || !oldestMessageId;
         const hitWindowCap =
-          state.currentMode === "backfill" &&
+          currentMode === "backfill" &&
           (conversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_MESSAGE_HISTORY_LIMIT;
-        const shouldComplete = state.currentMode === "incremental"
+        const shouldComplete = currentMode === "incremental"
           ? overlapFound || providerHistoryExhausted
           : overlapFound || providerHistoryExhausted || hitWindowCap;
 
@@ -2491,11 +2517,16 @@ export async function executeDmMessagesChunk(
           if (overlapFound) {
             overlapHits += 1;
           }
+          const messageCoverageStatus = resolveDmConversationCoverageStatus({
+            currentMode,
+            existingStatus: conversation.messageCoverageStatus,
+            overlapFound,
+            providerHistoryExhausted,
+            hitWindowCap,
+          });
           const finalized = await finalizePageDmConversationMessageSync(app.db, {
             conversationId: conversation.id,
-            messageBackfillComplete: state.currentMode === "backfill"
-              ? providerHistoryExhausted || hitWindowCap
-              : conversation.messageBackfillComplete,
+            messageCoverageStatus,
           });
           conversation = finalized.conversation;
           completedConversations += 1;

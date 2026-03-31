@@ -510,7 +510,7 @@ describe("sync integration", () => {
         singletonKey: String(page.id),
         priority: resolveSyncRequestPriority("light", "manual"),
         group: {
-          id: buildSyncPageExecuteGroupId("fansly", buildProxyEgressKey({ url: proxyUrl })),
+          id: buildSyncPageExecuteGroupId("fansly", buildProxyEgressKey({ url: proxyUrl }), page.id),
         },
       },
     );
@@ -603,7 +603,7 @@ describe("sync integration", () => {
     }
   }, 30_000);
 
-  it("serializes two direct Fansly pages on the same egress even with parallel workers", async (context) => {
+  it("allows two direct Fansly pages to overlap even with parallel workers", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -664,7 +664,7 @@ describe("sync integration", () => {
         }),
       ]);
 
-      expect(probe.maxInFlight).toBe(1);
+      expect(probe.maxInFlight).toBeGreaterThanOrEqual(2);
     } finally {
       abortController.abort();
       await executorPromise;

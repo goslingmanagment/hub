@@ -1323,7 +1323,7 @@ describe("sync executor handlers", () => {
     ]));
     expect(dbMocks.finalizePageDmConversationMessageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       conversationId: 777,
-      messageBackfillComplete: true,
+      messageCoverageStatus: "complete",
     }));
     expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith({}, expect.objectContaining({
       platformAccountId: 55,

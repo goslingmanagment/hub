@@ -29,6 +29,13 @@ import { PageDetailPage } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
 type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
 type DashboardPage = DashboardShellValue["pages"][number];
 
+function buildPageMetric(value: number | null) {
+  return {
+    value,
+    available: value !== null,
+  };
+}
+
 function buildSyncUx(
   overrides: Partial<{
     state: "healthy" | "syncing" | "catching_up" | "retrying" | "attention" | "setup" | "off";
@@ -62,8 +69,8 @@ function buildOverviewPageItem(syncUx = buildSyncUx(), overrides: Partial<Dashbo
     modelSlug: "lana",
     modelName: "Lana",
     username: "lana",
-    subscriberCount: 12,
-    followerCount: 34,
+    subscriberCount: buildPageMetric(12),
+    followerCount: buildPageMetric(34),
     revenueTodayMills: 0,
     revenue7dMills: 0,
     revenue30dMills: 0,
@@ -131,8 +138,8 @@ function buildCrmSummary(
       modelName: "Lana",
       username: "lana",
       displayName: "Lana",
-      followerCount: 34,
-      subscriberCount: 12,
+      followerCount: buildPageMetric(34),
+      subscriberCount: buildPageMetric(12),
       lastLightSyncAt: null,
       lastFollowerSyncAt: null,
     },
@@ -157,6 +164,9 @@ function buildCrmSummary(
     },
     coverage: {
       pendingMessageBackfillCount: overrides.pendingMessageBackfillCount ?? 0,
+      partialWindowConversationCount: 0,
+      excludedConversationCount: 0,
+      unresolvedConversationCount: 0,
       previewReadyConversationCount: overrides.previewReadyConversationCount ?? 1,
     },
     messageSyncUx: overrides.messageSyncUx ?? buildSyncUx(),

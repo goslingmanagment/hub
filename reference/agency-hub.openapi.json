@@ -1154,14 +1154,54 @@
                         ]
                       },
                       "followerCount": {
-                        "type": "integer",
-                        "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "available": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "available"
+                        ],
+                        "additionalProperties": false
                       },
                       "subscriberCount": {
-                        "type": "integer",
-                        "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "available": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "available"
+                        ],
+                        "additionalProperties": false
                       },
                       "lastLightSyncAt": {
                         "anyOf": [
@@ -2534,14 +2574,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -2821,14 +2901,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -3292,14 +3412,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -3675,14 +3835,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -3967,14 +4167,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -4289,14 +4529,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -4578,14 +4858,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -6416,14 +6736,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -6583,6 +6943,21 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "partialWindowConversationCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "excludedConversationCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "unresolvedConversationCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
                         "previewReadyConversationCount": {
                           "type": "integer",
                           "minimum": -9007199254740991,
@@ -6591,6 +6966,9 @@
                       },
                       "required": [
                         "pendingMessageBackfillCount",
+                        "partialWindowConversationCount",
+                        "excludedConversationCount",
+                        "unresolvedConversationCount",
                         "previewReadyConversationCount"
                       ],
                       "additionalProperties": false
@@ -6984,14 +7362,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -7203,8 +7621,24 @@
                                   }
                                 ]
                               },
+                              "messageCoverageStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "pending_backfill",
+                                  "partial_window",
+                                  "complete"
+                                ]
+                              },
                               "messageBackfillComplete": {
                                 "type": "boolean"
+                              },
+                              "messageSyncEligibility": {
+                                "type": "string",
+                                "enum": [
+                                  "eligible",
+                                  "excluded",
+                                  "unresolved_identity"
+                                ]
                               },
                               "storedMessageCount": {
                                 "type": "integer",
@@ -7233,7 +7667,9 @@
                               "unreadCount",
                               "lastMessageAt",
                               "lastMessagePreview",
+                              "messageCoverageStatus",
                               "messageBackfillComplete",
+                              "messageSyncEligibility",
                               "storedMessageCount",
                               "lastMessageSenderRole"
                             ],
@@ -7366,6 +7802,21 @@
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
                             },
+                            "partialWindowConversationCount": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "excludedConversationCount": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "unresolvedConversationCount": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
                             "previewReadyConversationCount": {
                               "type": "integer",
                               "minimum": -9007199254740991,
@@ -7374,6 +7825,9 @@
                           },
                           "required": [
                             "pendingMessageBackfillCount",
+                            "partialWindowConversationCount",
+                            "excludedConversationCount",
+                            "unresolvedConversationCount",
                             "previewReadyConversationCount"
                           ],
                           "additionalProperties": false
@@ -7754,14 +8208,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -7973,8 +8467,24 @@
                                   }
                                 ]
                               },
+                              "messageCoverageStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "pending_backfill",
+                                  "partial_window",
+                                  "complete"
+                                ]
+                              },
                               "messageBackfillComplete": {
                                 "type": "boolean"
+                              },
+                              "messageSyncEligibility": {
+                                "type": "string",
+                                "enum": [
+                                  "eligible",
+                                  "excluded",
+                                  "unresolved_identity"
+                                ]
                               },
                               "storedMessageCount": {
                                 "type": "integer",
@@ -8003,7 +8513,9 @@
                               "unreadCount",
                               "lastMessageAt",
                               "lastMessagePreview",
+                              "messageCoverageStatus",
                               "messageBackfillComplete",
+                              "messageSyncEligibility",
                               "storedMessageCount",
                               "lastMessageSenderRole"
                             ],
@@ -8111,6 +8623,21 @@
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
                             },
+                            "partialWindowConversationCount": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "excludedConversationCount": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "unresolvedConversationCount": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
                             "previewReadyConversationCount": {
                               "type": "integer",
                               "minimum": -9007199254740991,
@@ -8119,6 +8646,9 @@
                           },
                           "required": [
                             "pendingMessageBackfillCount",
+                            "partialWindowConversationCount",
+                            "excludedConversationCount",
+                            "unresolvedConversationCount",
                             "previewReadyConversationCount"
                           ],
                           "additionalProperties": false
@@ -8361,14 +8891,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -8482,8 +9052,34 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "messageCoverageStatus": {
+                          "type": "string",
+                          "enum": [
+                            "pending_backfill",
+                            "partial_window",
+                            "complete"
+                          ]
+                        },
                         "messageBackfillComplete": {
                           "type": "boolean"
+                        },
+                        "messageSyncEligibility": {
+                          "type": "string",
+                          "enum": [
+                            "eligible",
+                            "excluded",
+                            "unresolved_identity"
+                          ]
+                        },
+                        "messageSyncExcludedReason": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "lastMessageSyncAt": {
                           "anyOf": [
@@ -8514,7 +9110,10 @@
                       "required": [
                         "platformConversationId",
                         "storedMessageCount",
+                        "messageCoverageStatus",
                         "messageBackfillComplete",
+                        "messageSyncEligibility",
+                        "messageSyncExcludedReason",
                         "lastMessageSyncAt",
                         "unreadCount",
                         "lastMessageAt"
@@ -8875,14 +9474,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -8922,6 +9561,85 @@
                     },
                     "conversationId": {
                       "type": "string"
+                    },
+                    "conversation": {
+                      "type": "object",
+                      "properties": {
+                        "platformConversationId": {
+                          "type": "string"
+                        },
+                        "storedMessageCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "messageCoverageStatus": {
+                          "type": "string",
+                          "enum": [
+                            "pending_backfill",
+                            "partial_window",
+                            "complete"
+                          ]
+                        },
+                        "messageBackfillComplete": {
+                          "type": "boolean"
+                        },
+                        "messageSyncEligibility": {
+                          "type": "string",
+                          "enum": [
+                            "eligible",
+                            "excluded",
+                            "unresolved_identity"
+                          ]
+                        },
+                        "messageSyncExcludedReason": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lastMessageSyncAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "unreadCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "lastMessageAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "platformConversationId",
+                        "storedMessageCount",
+                        "messageCoverageStatus",
+                        "messageBackfillComplete",
+                        "messageSyncEligibility",
+                        "messageSyncExcludedReason",
+                        "lastMessageSyncAt",
+                        "unreadCount",
+                        "lastMessageAt"
+                      ],
+                      "additionalProperties": false
                     },
                     "messages": {
                       "type": "array",
@@ -8966,6 +9684,7 @@
                   "required": [
                     "page",
                     "conversationId",
+                    "conversation",
                     "messages"
                   ],
                   "additionalProperties": false
@@ -9287,8 +10006,24 @@
                                     "minimum": -9007199254740991,
                                     "maximum": 9007199254740991
                                   },
+                                  "messageCoverageStatus": {
+                                    "type": "string",
+                                    "enum": [
+                                      "pending_backfill",
+                                      "partial_window",
+                                      "complete"
+                                    ]
+                                  },
                                   "messageBackfillComplete": {
                                     "type": "boolean"
+                                  },
+                                  "messageSyncEligibility": {
+                                    "type": "string",
+                                    "enum": [
+                                      "eligible",
+                                      "excluded",
+                                      "unresolved_identity"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -9297,7 +10032,9 @@
                                   "lastModelMessageAt",
                                   "lastMessagePreview",
                                   "storedMessageCount",
-                                  "messageBackfillComplete"
+                                  "messageCoverageStatus",
+                                  "messageBackfillComplete",
+                                  "messageSyncEligibility"
                                 ],
                                 "additionalProperties": false
                               },
@@ -9512,8 +10249,24 @@
                                     "minimum": -9007199254740991,
                                     "maximum": 9007199254740991
                                   },
+                                  "messageCoverageStatus": {
+                                    "type": "string",
+                                    "enum": [
+                                      "pending_backfill",
+                                      "partial_window",
+                                      "complete"
+                                    ]
+                                  },
                                   "messageBackfillComplete": {
                                     "type": "boolean"
+                                  },
+                                  "messageSyncEligibility": {
+                                    "type": "string",
+                                    "enum": [
+                                      "eligible",
+                                      "excluded",
+                                      "unresolved_identity"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -9522,7 +10275,9 @@
                                   "lastModelMessageAt",
                                   "lastMessagePreview",
                                   "storedMessageCount",
-                                  "messageBackfillComplete"
+                                  "messageCoverageStatus",
+                                  "messageBackfillComplete",
+                                  "messageSyncEligibility"
                                 ],
                                 "additionalProperties": false
                               },
@@ -9719,8 +10474,24 @@
                                     "minimum": -9007199254740991,
                                     "maximum": 9007199254740991
                                   },
+                                  "messageCoverageStatus": {
+                                    "type": "string",
+                                    "enum": [
+                                      "pending_backfill",
+                                      "partial_window",
+                                      "complete"
+                                    ]
+                                  },
                                   "messageBackfillComplete": {
                                     "type": "boolean"
+                                  },
+                                  "messageSyncEligibility": {
+                                    "type": "string",
+                                    "enum": [
+                                      "eligible",
+                                      "excluded",
+                                      "unresolved_identity"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -9729,7 +10500,9 @@
                                   "lastModelMessageAt",
                                   "lastMessagePreview",
                                   "storedMessageCount",
-                                  "messageBackfillComplete"
+                                  "messageCoverageStatus",
+                                  "messageBackfillComplete",
+                                  "messageSyncEligibility"
                                 ],
                                 "additionalProperties": false
                               },
@@ -14498,14 +15271,54 @@
                             ]
                           },
                           "subscriberCount": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "available": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "value",
+                              "available"
+                            ],
+                            "additionalProperties": false
                           },
                           "followerCount": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "available": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "value",
+                              "available"
+                            ],
+                            "additionalProperties": false
                           },
                           "revenueTodayMills": {
                             "type": "integer",
@@ -27706,14 +28519,54 @@
                         ]
                       },
                       "subscriberCount": {
-                        "type": "integer",
-                        "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "available": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "available"
+                        ],
+                        "additionalProperties": false
                       },
                       "followerCount": {
-                        "type": "integer",
-                        "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "available": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "available"
+                        ],
+                        "additionalProperties": false
                       },
                       "proxyUrl": {
                         "anyOf": [
@@ -28575,14 +29428,54 @@
                         ]
                       },
                       "followerCount": {
-                        "type": "integer",
-                        "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "available": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "available"
+                        ],
+                        "additionalProperties": false
                       },
                       "subscriberCount": {
-                        "type": "integer",
-                        "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "available": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "available"
+                        ],
+                        "additionalProperties": false
                       },
                       "lastLightSyncAt": {
                         "anyOf": [
@@ -28924,14 +29817,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [
@@ -29225,14 +30158,54 @@
                           ]
                         },
                         "followerCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "subscriberCount": {
-                          "type": "integer",
-                          "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "available": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "available"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastLightSyncAt": {
                           "anyOf": [

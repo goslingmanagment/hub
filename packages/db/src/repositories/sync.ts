@@ -2288,7 +2288,9 @@ function normalizeSeedSyncStreamPageRow<T extends SeedSyncStreamPageRow>(row: T)
     platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
     lastLightSyncAt: parseTimestamp(row.lastLightSyncAt, "lastLightSyncAt"),
     lastFollowerSyncAt: parseTimestamp(row.lastFollowerSyncAt, "lastFollowerSyncAt"),
-    followerCount: normalizeNumber(row.followerCount, "followerCount"),
+    followerCount: row.followerCount === null || row.followerCount === undefined
+      ? 0
+      : normalizeNumber(row.followerCount, "followerCount"),
     activeFollowerCount: normalizeNumber(row.activeFollowerCount, "activeFollowerCount"),
   };
 }

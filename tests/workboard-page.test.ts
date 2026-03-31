@@ -20,6 +20,13 @@ type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"
 type DashboardPage = DashboardShellValue["pages"][number];
 type PageCatalogState = DashboardShellValue["pageCatalogState"];
 
+function buildPageMetric(value: number | null) {
+  return {
+    value,
+    available: value !== null,
+  };
+}
+
 function buildPage(platform: "fansly" | "onlyfans" = "fansly"): DashboardPage {
   return {
     id: 1,
@@ -28,8 +35,8 @@ function buildPage(platform: "fansly" | "onlyfans" = "fansly"): DashboardPage {
     modelSlug: "lana",
     modelName: "Lana",
     username: "lana",
-    subscriberCount: 12,
-    followerCount: 34,
+    subscriberCount: buildPageMetric(12),
+    followerCount: buildPageMetric(34),
     revenueTodayMills: 0,
     revenue7dMills: 0,
     revenue30dMills: 0,

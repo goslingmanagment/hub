@@ -129,7 +129,12 @@ export function buildProxyEgressKey(proxy: ProxyConfig | null | undefined): stri
 export function buildSyncPageExecuteGroupId(
   provider: "fansly" | "onlyfans",
   egressKey: string,
+  platformAccountId: number,
 ) {
+  if (egressKey === "direct") {
+    return `${provider}:page:${platformAccountId}`;
+  }
+
   return `${provider}:${egressKey}`;
 }
 

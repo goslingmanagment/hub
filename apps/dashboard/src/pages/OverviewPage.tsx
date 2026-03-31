@@ -16,6 +16,7 @@ const PageActivityChart = lazy(() =>
 );
 
 type OverviewPageItem = OverviewResponse["pages"][number];
+type PageMetric = OverviewPageItem["subscriberCount"];
 
 const PERIOD_LABELS: Record<string, string> = {
   today: "Today",
@@ -47,6 +48,38 @@ function groupByModel(pages: OverviewPageItem[]): ModelGroup[] {
 
 function formatGrowthValue(value: number | null) {
   return value === null ? GROWTH_PLACEHOLDER : `+${value.toLocaleString()}`;
+}
+
+function getPageMetricValue(metric: PageMetric) {
+  return metric.available && typeof metric.value === "number"
+    ? metric.value
+    : null;
+}
+
+function formatPageMetric(metric: PageMetric) {
+  const value = getPageMetricValue(metric);
+  return value === null ? "N/A" : value.toLocaleString();
+}
+
+function sumPageMetrics(metrics: PageMetric[]) {
+  let availableCount = 0;
+  let total = 0;
+
+  for (const metric of metrics) {
+    const value = getPageMetricValue(metric);
+    if (value === null) {
+      continue;
+    }
+
+    availableCount += 1;
+    total += value;
+  }
+
+  return availableCount === 0 ? null : total;
+}
+
+function formatMetricTotal(total: number | null) {
+  return total === null ? "N/A" : total.toLocaleString();
 }
 
 function getOverviewExceptionMessage(
@@ -120,7 +153,7 @@ export function OverviewPage() {
   }
 
   const totalRevenue = revenueData?.netEarningsMills ?? 0;
-  const totalSubs = pages.reduce((sum, p) => sum + (p.subscriberCount ?? 0), 0);
+  const totalSubs = sumPageMetrics(pages.map((page) => page.subscriberCount));
   const totalNewSubs = growthReady
     ? pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
     : null;
@@ -184,7 +217,7 @@ export function OverviewPage() {
               </div>
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-bold text-text-primary">
-              {totalSubs.toLocaleString()}
+              {formatMetricTotal(totalSubs)}
             </td>
             <td
               className={`px-4 py-3 text-right tabular-nums text-[15px] font-bold ${
@@ -253,7 +286,7 @@ function ModelGroupRows({
 }) {
   const modelName = group.modelName;
   const groupRevenue = group.pages.reduce((sum, p) => sum + (revenueByPageId.get(p.id) ?? 0), 0);
-  const groupSubs = group.pages.reduce((sum, p) => sum + (p.subscriberCount ?? 0), 0);
+  const groupSubs = sumPageMetrics(group.pages.map((page) => page.subscriberCount));
   const groupNewSubs = growthReady
     ? group.pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
     : null;
@@ -274,7 +307,7 @@ function ModelGroupRows({
           {formatUsdFromMills(groupRevenue)}
         </td>
         <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold">
-          {groupSubs.toLocaleString()}
+          {formatMetricTotal(groupSubs)}
         </td>
         <td
           className={`px-4 pt-4 pb-2 text-right tabular-nums font-semibold ${
@@ -342,7 +375,7 @@ function ModelGroupRows({
               {formatUsdFromMills(pageRevenue)}
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
-              {(page.subscriberCount ?? 0).toLocaleString()}
+              {formatPageMetric(page.subscriberCount)}
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[14px]">
               {isFansly ? (

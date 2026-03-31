@@ -56,6 +56,7 @@ describe("connections service", () => {
         lastFollowerSyncAt: now,
         subscriberCount: 10,
         followerCount: 20,
+        hasCredentials: true,
         proxyUrl: null,
         proxyHasAuth: false,
       }],

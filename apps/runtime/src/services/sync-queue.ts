@@ -143,7 +143,7 @@ export async function sendSyncPageWakeup(
       singletonKey: input.dedupe === false ? undefined : String(input.platformAccountId),
       priority: input.priority,
       group: {
-        id: buildSyncPageExecuteGroupId(input.provider, input.egressKey),
+        id: buildSyncPageExecuteGroupId(input.provider, input.egressKey, input.platformAccountId),
       },
     },
   );

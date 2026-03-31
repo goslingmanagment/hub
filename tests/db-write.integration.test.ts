@@ -860,8 +860,8 @@ describe("db write safety", () => {
       platform_account_id: "of-acct-42",
       username: "lora_of",
       display_name: "Lora OF",
-      follower_count: 0,
-      subscriber_count: 0,
+      follower_count: null,
+      subscriber_count: null,
       earnings_balance_mills: 0n,
     });
     expect(JSON.parse(pageRows.rows[0]?.metadata ?? "{}")).toMatchObject({
@@ -1696,15 +1696,30 @@ describe("db write safety", () => {
     });
 
     const rows = await testDb.pool.query(`
-      select transaction_id
+      select transaction_id,
+             is_active as "isActive",
+             inactive_reason as "inactiveReason"
       from transactions
       where platform_account_id = ${page.id}
       order by transaction_id asc
     `);
 
-    expect(rows.rows.map((row) => row.transaction_id)).toEqual([
-      "keep-me",
-      "outside-window",
+    expect(rows.rows).toEqual([
+      {
+        transaction_id: "drop-me",
+        isActive: false,
+        inactiveReason: "missing_from_sync_window",
+      },
+      {
+        transaction_id: "keep-me",
+        isActive: true,
+        inactiveReason: null,
+      },
+      {
+        transaction_id: "outside-window",
+        isActive: true,
+        inactiveReason: null,
+      },
     ]);
   });
 
@@ -1769,14 +1784,30 @@ describe("db write safety", () => {
     });
 
     const rows = await testDb.pool.query(`
-      select transaction_id
+      select transaction_id,
+             is_active as "isActive",
+             inactive_reason as "inactiveReason"
       from transactions
       where platform_account_id = ${page.id}
       order by transaction_id asc
     `);
 
-    expect(rows.rows.map((row) => row.transaction_id)).toEqual([
-      "outside-window",
+    expect(rows.rows).toEqual([
+      {
+        transaction_id: "drop-1",
+        isActive: false,
+        inactiveReason: "missing_from_sync_window",
+      },
+      {
+        transaction_id: "drop-2",
+        isActive: false,
+        inactiveReason: "missing_from_sync_window",
+      },
+      {
+        transaction_id: "outside-window",
+        isActive: true,
+        inactiveReason: null,
+      },
     ]);
   });
 

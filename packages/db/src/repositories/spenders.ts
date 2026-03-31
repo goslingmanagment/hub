@@ -86,6 +86,7 @@ export async function rebuildSpenderDailyFacts(
            now()
     from transactions t
     where t.platform_account_id = ${platformAccountId}
+      and t.is_active = true
       and t.fan_id is not null
       and t.canonical_type in (${spenderTransactionTypeSql})
       ${fromClause}

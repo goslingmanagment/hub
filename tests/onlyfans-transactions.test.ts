@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
-  deleteTransactionsMissingFromWindow: vi.fn(),
+  retireTransactionsMissingFromWindow: vi.fn(),
   getCheckpoint: vi.fn(),
   getOldestPendingTransactionAt: vi.fn(),
   mergePageMetadata: vi.fn(),
@@ -208,7 +208,7 @@ describe("syncOnlyFansTransactions", () => {
     sharedMocks.persistRawPayload.mockResolvedValue(undefined);
     sharedMocks.retentionDate.mockReturnValue(new Date("2026-09-10T00:00:00.000Z"));
 
-    dbMocks.deleteTransactionsMissingFromWindow.mockResolvedValue(undefined);
+    dbMocks.retireTransactionsMissingFromWindow.mockResolvedValue(undefined);
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
     dbMocks.mergePageMetadata.mockResolvedValue(null);
     dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);
@@ -719,7 +719,7 @@ describe("syncOnlyFansTransactions", () => {
       budget: new SyncChunkBudget(10, 60_000),
     });
 
-    expect(dbMocks.deleteTransactionsMissingFromWindow).toHaveBeenCalledWith(
+    expect(dbMocks.retireTransactionsMissingFromWindow).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         platformAccountId: 1,
@@ -758,7 +758,7 @@ describe("syncOnlyFansTransactions", () => {
       budget: new SyncChunkBudget(10, 60_000),
     });
 
-    expect(dbMocks.deleteTransactionsMissingFromWindow).toHaveBeenCalledWith(
+    expect(dbMocks.retireTransactionsMissingFromWindow).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         platformAccountId: 1,
@@ -796,7 +796,7 @@ describe("syncOnlyFansTransactions", () => {
       budget: new SyncChunkBudget(10, 60_000),
     });
 
-    expect(dbMocks.deleteTransactionsMissingFromWindow).toHaveBeenCalledWith(
+    expect(dbMocks.retireTransactionsMissingFromWindow).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         platformAccountId: 1,
@@ -862,7 +862,7 @@ describe("syncOnlyFansTransactions", () => {
 
     expect(resumedAdapter.getTransactionsPage.mock.calls[0]![2].cursor).toBe("tx-cursor-1");
     expect(resumedResult.satisfied).toBe(true);
-    expect(dbMocks.deleteTransactionsMissingFromWindow).toHaveBeenLastCalledWith(
+    expect(dbMocks.retireTransactionsMissingFromWindow).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.objectContaining({
         cleanupMode: "keep_set",
@@ -918,7 +918,7 @@ describe("syncOnlyFansTransactions", () => {
 
     expect(resumedAdapter.getChargebacksPage.mock.calls[0]![2].cursor).toBe("cb-cursor-1");
     expect(resumedResult.satisfied).toBe(true);
-    expect(dbMocks.deleteTransactionsMissingFromWindow).toHaveBeenLastCalledWith(
+    expect(dbMocks.retireTransactionsMissingFromWindow).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.objectContaining({
         cleanupMode: "keep_set",

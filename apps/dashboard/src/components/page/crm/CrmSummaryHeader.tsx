@@ -14,9 +14,38 @@ function getCrmHeaderMessage(summary: CrmSummaryResponse) {
     return "Conversation history updates are paused for this page.";
   }
 
+  const messages: string[] = [];
+
   if (summary.coverage.pendingMessageBackfillCount > 0) {
     const count = summary.coverage.pendingMessageBackfillCount;
-    return `${count} ${count === 1 ? "conversation is" : "conversations are"} still loading. Previews will fill in automatically.`;
+    messages.push(
+      `${count} ${count === 1 ? "conversation is" : "conversations are"} still loading. Previews will fill in automatically.`,
+    );
+  }
+
+  if (summary.coverage.partialWindowConversationCount > 0) {
+    const count = summary.coverage.partialWindowConversationCount;
+    messages.push(
+      `${count} ${count === 1 ? "conversation preview is" : "conversation previews are"} capped to the latest 25 stored messages.`,
+    );
+  }
+
+  if (summary.coverage.excludedConversationCount > 0) {
+    const count = summary.coverage.excludedConversationCount;
+    messages.push(
+      `${count} ${count === 1 ? "conversation is" : "conversations are"} excluded from message sync.`,
+    );
+  }
+
+  if (summary.coverage.unresolvedConversationCount > 0) {
+    const count = summary.coverage.unresolvedConversationCount;
+    messages.push(
+      `${count} ${count === 1 ? "conversation needs" : "conversations need"} fan identity resolution before previews can load.`,
+    );
+  }
+
+  if (messages.length > 0) {
+    return messages.join(" ");
   }
 
   if (summary.coverage.previewReadyConversationCount === 0) {
@@ -28,6 +57,9 @@ function getCrmHeaderMessage(summary: CrmSummaryResponse) {
 
 export function CrmSummaryHeader({ summary }: CrmSummaryHeaderProps) {
   const hasIncompleteData = summary.coverage.pendingMessageBackfillCount > 0 ||
+    summary.coverage.partialWindowConversationCount > 0 ||
+    summary.coverage.excludedConversationCount > 0 ||
+    summary.coverage.unresolvedConversationCount > 0 ||
     summary.coverage.previewReadyConversationCount === 0;
   const syncMode = getSyncUxDisplayMode(summary.messageSyncUx, "crm_header", {
     hasIncompleteData,

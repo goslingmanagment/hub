@@ -14,8 +14,11 @@ interface ChatPreviewPanelProps {
 const PREVIEW_LOADING_STATES = new Set(["syncing", "catching_up", "retrying", "setup"]);
 
 function getEmptyPreviewCopy(data: CrmConversationPreviewResponse) {
-  const previewIncomplete = !data.conversation.messageBackfillComplete ||
+  const previewLoading = data.conversation.messageCoverageStatus === "pending_backfill" ||
     PREVIEW_LOADING_STATES.has(data.messageSyncUx.state);
+  const previewCapped = data.conversation.messageCoverageStatus === "partial_window";
+  const previewExcluded = data.conversation.messageSyncEligibility === "excluded";
+  const unresolvedIdentity = data.conversation.messageSyncEligibility === "unresolved_identity";
 
   if (data.messageSyncUx.requiresAction) {
     return {
@@ -38,7 +41,28 @@ function getEmptyPreviewCopy(data: CrmConversationPreviewResponse) {
     };
   }
 
-  if (previewIncomplete) {
+  if (previewExcluded) {
+    return {
+      headline: "Conversation preview is unavailable for this fan.",
+      detail: "This conversation is excluded from message sync on this page.",
+    };
+  }
+
+  if (unresolvedIdentity) {
+    return {
+      headline: "Conversation preview is waiting on fan identity resolution.",
+      detail: "Once the fan is matched, message backfill can continue for this conversation.",
+    };
+  }
+
+  if (previewCapped) {
+    return {
+      headline: "Conversation preview is capped to the latest 25 stored messages.",
+      detail: "Older messages are not available locally for this conversation.",
+    };
+  }
+
+  if (previewLoading) {
     return {
       headline: "Conversation history is still loading.",
       detail: "This preview will fill in automatically as more messages arrive.",
@@ -52,7 +76,7 @@ function getEmptyPreviewCopy(data: CrmConversationPreviewResponse) {
 }
 
 function getPreviewFooterText(data: CrmConversationPreviewResponse) {
-  const previewIncomplete = !data.conversation.messageBackfillComplete ||
+  const previewLoading = data.conversation.messageCoverageStatus === "pending_backfill" ||
     PREVIEW_LOADING_STATES.has(data.messageSyncUx.state);
 
   if (data.messageSyncUx.requiresAction) {
@@ -67,7 +91,19 @@ function getPreviewFooterText(data: CrmConversationPreviewResponse) {
     return "Preview may be outdated while message updates recover.";
   }
 
-  if (previewIncomplete) {
+  if (data.conversation.messageSyncEligibility === "excluded") {
+    return "Preview unavailable because this conversation is excluded from message sync.";
+  }
+
+  if (data.conversation.messageSyncEligibility === "unresolved_identity") {
+    return "Preview unavailable until the fan identity for this conversation is resolved.";
+  }
+
+  if (data.conversation.messageCoverageStatus === "partial_window") {
+    return "Preview is capped to the latest 25 stored messages for this conversation.";
+  }
+
+  if (previewLoading) {
     return "Preview may be incomplete while conversation history loads.";
   }
 

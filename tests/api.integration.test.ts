@@ -74,6 +74,8 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
     modelId: lilyModel.id,
     label: "lily1",
   });
+  await storeFanslySession(testDb.db, lanaPage.id, "encrypted-lana-session", 1);
+  await storeFanslySession(testDb.db, lilyPage.id, "encrypted-lily-session", 1);
 
   await updatePageMetadata(testDb.db, lanaPage.id, {
     platformAccountIdValue: "acct-lana",
@@ -454,7 +456,7 @@ async function seedCrmApiFixture(input: {
 
   await finalizePageDmConversationMessageSync(input.testDb.db, {
     conversationId: conversation.id,
-    messageBackfillComplete: true,
+    messageCoverageStatus: "complete",
     lastMessageSyncAt: new Date("2026-03-17T11:45:00.000Z"),
   });
 
@@ -937,7 +939,7 @@ async function seedSyncMonitorScenario(
   ]);
   await finalizePageDmConversationMessageSync(testDb.db, {
     conversationId: completedConversation.id,
-    messageBackfillComplete: true,
+    messageCoverageStatus: "complete",
     lastMessageSyncAt: completedSyncAt,
   });
 

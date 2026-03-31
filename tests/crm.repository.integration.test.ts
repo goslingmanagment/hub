@@ -1034,7 +1034,7 @@ describe("crm repository integration", () => {
 
     await finalizePageDmConversationMessageSync(testDb.db, {
       conversationId: conversation.id,
-      messageBackfillComplete: true,
+      messageCoverageStatus: "complete",
       lastMessageSyncAt: new Date("2026-03-17T13:30:00.000Z"),
     });
 

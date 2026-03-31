@@ -4,6 +4,17 @@ import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
 
+function formatPageMetric(metric: {
+  value: number | null;
+  available: boolean;
+}, label: string) {
+  if (!metric.available || typeof metric.value !== "number") {
+    return `${label} N/A`;
+  }
+
+  return `${metric.value.toLocaleString()} ${label}`;
+}
+
 export function CredentialsTab() {
   const { data: connections, isLoading } = useAdminConnections();
   const [selectedConnection, setSelectedConnection] = useState<CredentialsModalConnection | null>(null);
@@ -43,8 +54,10 @@ export function CredentialsTab() {
                   </div>
                   <div className="mt-0.5 text-xs text-text-muted">
                     @{conn.username ?? conn.displayName ?? "unknown"}
-                    <> &middot; {conn.subscriberCount} subs</>
-                    {conn.platform === "fansly" && <> &middot; {conn.followerCount} followers</>}
+                    <> &middot; {formatPageMetric(conn.subscriberCount, "subs")}</>
+                    {conn.platform === "fansly" && (
+                      <> &middot; {formatPageMetric(conn.followerCount, "followers")}</>
+                    )}
                   </div>
                   {syncMode === "exception" && (
                     <div className="mt-2 text-xs text-danger">

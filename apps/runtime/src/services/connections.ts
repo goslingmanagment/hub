@@ -32,6 +32,13 @@ export type ConnectionStatus =
 
 const STALE_THRESHOLD_HOURS = 9;
 
+function serializePageMetric(value: number | null | undefined) {
+  return {
+    value: value ?? null,
+    available: value !== null && value !== undefined,
+  };
+}
+
 function assertVerifiedAccountIdentity(
   pageLabel: string,
   expectedPlatformAccountId: string | null,
@@ -124,10 +131,7 @@ export async function listConnectionStatuses(
 
   return pages.map((page) => {
     const latestRun = runsByPageId.get(page.id) ?? null;
-
-    // Pages always have credentials if they exist in the system via the onboarding flow,
-    // but we check lastVerifiedAt as a proxy for "credentials exist"
-    const hasCredentials = true; // If page exists, it was onboarded with credentials
+    const hasCredentials = page.hasCredentials;
 
     const connectionStatus = classifyConnectionStatus(
       hasCredentials,
@@ -147,8 +151,8 @@ export async function listConnectionStatuses(
       lastLightSyncAt: page.lastLightSyncAt?.toISOString() ?? null,
       lastFollowerSyncAt: page.lastFollowerSyncAt?.toISOString() ?? null,
       lastSyncError: latestRun?.errorSummary ?? null,
-      subscriberCount: page.subscriberCount,
-      followerCount: page.followerCount,
+      subscriberCount: serializePageMetric(page.subscriberCount),
+      followerCount: serializePageMetric(page.followerCount),
       proxyUrl: page.proxyUrl ?? null,
       proxyHasAuth: page.proxyHasAuth ?? false,
       syncUx: syncByPageId.get(page.id) ?? buildPageSyncUx([]),

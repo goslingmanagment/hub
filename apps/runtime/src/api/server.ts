@@ -222,14 +222,21 @@ function toNumber(value: number | string | bigint) {
   return typeof value === "number" ? value : Number(value);
 }
 
+function serializePageMetric(value: number | null) {
+  return {
+    value,
+    available: value !== null,
+  };
+}
+
 function serializeAssignedPage(page: {
   id: number;
   label: string;
   platform: Platform;
   username: string | null;
   displayName: string | null;
-  followerCount: number;
-  subscriberCount: number;
+  followerCount: number | null;
+  subscriberCount: number | null;
   lastLightSyncAt: Date | string | null;
   lastFollowerSyncAt: Date | string | null;
   modelSlug: string;
@@ -241,8 +248,8 @@ function serializeAssignedPage(page: {
     platform: page.platform,
     username: page.username,
     displayName: page.displayName,
-    followerCount: page.followerCount,
-    subscriberCount: page.subscriberCount,
+    followerCount: serializePageMetric(page.followerCount),
+    subscriberCount: serializePageMetric(page.subscriberCount),
     lastLightSyncAt: serializeNullableTimestamp(page.lastLightSyncAt),
     lastFollowerSyncAt: serializeNullableTimestamp(page.lastFollowerSyncAt),
     modelSlug: page.modelSlug,
@@ -986,8 +993,8 @@ export async function buildApiServer(appContext: AppContext) {
           modelSlug: p.modelSlug,
           modelName: p.modelName,
           username: p.username,
-          subscriberCount: p.subscriberCount,
-          followerCount: p.followerCount,
+          subscriberCount: serializePageMetric(p.subscriberCount),
+          followerCount: serializePageMetric(p.followerCount),
           revenueTodayMills: millsToNumber(pageTotalsToday.get(p.id) ?? 0n),
           revenue7dMills: millsToNumber(pageTotals7d.get(p.id) ?? 0n),
           revenue30dMills: millsToNumber(pageTotals30d.get(p.id) ?? 0n),

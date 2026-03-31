@@ -15,6 +15,12 @@ import { CreatePageModal } from "./CreatePageModal.js";
 import { EditPageModal } from "./EditPageModal.js";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
 
+function formatPageMetric(metric: AssignedPage["subscriberCount"]) {
+  return metric.available && typeof metric.value === "number"
+    ? metric.value.toLocaleString()
+    : "N/A";
+}
+
 export function PagesTab() {
   const { data: pages, isLoading: pagesLoading } = useAdminPages();
   const { data: models } = useAdminModels();
@@ -151,8 +157,8 @@ function PageRow({
       <td className="px-4 py-3 text-sm text-text-secondary">
         @{page.username ?? page.displayName ?? "unknown"}
       </td>
-      <td className="px-4 py-3 text-sm text-text-secondary">{page.subscriberCount}</td>
-      <td className="px-4 py-3 text-sm text-text-secondary">{page.followerCount}</td>
+      <td className="px-4 py-3 text-sm text-text-secondary">{formatPageMetric(page.subscriberCount)}</td>
+      <td className="px-4 py-3 text-sm text-text-secondary">{formatPageMetric(page.followerCount)}</td>
       <td className="px-4 py-3 text-sm text-text-secondary">
         {page.lastLightSyncAt ? formatRelativeTime(page.lastLightSyncAt) : "\u2014"}
       </td>

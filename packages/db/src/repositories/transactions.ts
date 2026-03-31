@@ -69,6 +69,9 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     receiverId: input.receiverId ?? null,
     occurredAt: input.occurredAt,
     sourceUpdatedAt: input.sourceUpdatedAt ?? null,
+    isActive: true,
+    inactiveReason: null,
+    inactivatedAt: null,
   };
   const updateSet = {
     ...insertValues,
@@ -144,6 +147,7 @@ export async function rebuildRevenueRollups(
       from transactions t
       join platform_accounts pa on pa.id = t.platform_account_id
       where t.platform_account_id = ${platformAccountId}
+        and t.is_active = true
         and t.canonical_type in (${reportableTransactionTypeSql})
         ${fromClause}
       group by 1, 2, 3, 4
@@ -299,7 +303,7 @@ export async function getRevenueBreakdown(
   }));
 }
 
-export async function deleteTransactionsMissingFromWindow(
+export async function retireTransactionsMissingFromWindow(
   db: Database,
   input: {
     platformAccountId: number;
@@ -313,6 +317,7 @@ export async function deleteTransactionsMissingFromWindow(
     eq(transactions.platformAccountId, input.platformAccountId),
     gte(transactions.occurredAt, input.from),
     lt(transactions.occurredAt, input.to),
+    eq(transactions.isActive, true),
   ];
 
   if (input.cleanupMode === "keep_set") {
@@ -323,8 +328,17 @@ export async function deleteTransactionsMissingFromWindow(
     clauses.push(notInArray(transactions.transactionId, keepTransactionIds));
   }
 
-  await db.delete(transactions).where(and(...clauses));
+  await db
+    .update(transactions)
+    .set({
+      isActive: false,
+      inactiveReason: "missing_from_sync_window",
+      inactivatedAt: new Date(),
+    })
+    .where(and(...clauses));
 }
+
+export const deleteTransactionsMissingFromWindow = retireTransactionsMissingFromWindow;
 
 export async function getOldestPendingTransactionAt(
   db: Database,
@@ -334,6 +348,7 @@ export async function getOldestPendingTransactionAt(
     select min(occurred_at) as oldest_pending_at
     from transactions
     where platform_account_id = ${platformAccountId}
+      and is_active = true
       and transaction_state = 'pending'::transaction_state
   `);
 

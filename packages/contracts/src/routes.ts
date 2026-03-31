@@ -467,11 +467,19 @@ export const pageConversationMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).default(25),
 });
 
+const pageMetricSchema = z.object({
+  value: z.number().int().nullable(),
+  available: z.boolean(),
+});
+
+const messageCoverageStatusSchema = z.enum(["pending_backfill", "partial_window", "complete"]);
+const messageSyncEligibilitySchema = z.enum(["eligible", "excluded", "unresolved_identity"]);
+
 export const assignedPageSchema = pageRefSchema.extend({
   username: z.string().nullable(),
   displayName: z.string().nullable(),
-  followerCount: z.number().int(),
-  subscriberCount: z.number().int(),
+  followerCount: pageMetricSchema,
+  subscriberCount: pageMetricSchema,
   lastLightSyncAt: isoTimestamp.nullable(),
   lastFollowerSyncAt: isoTimestamp.nullable(),
 });
@@ -928,6 +936,9 @@ const crmFreshnessSchema = z.object({
 
 const crmCoverageSchema = z.object({
   pendingMessageBackfillCount: z.number().int(),
+  partialWindowConversationCount: z.number().int(),
+  excludedConversationCount: z.number().int(),
+  unresolvedConversationCount: z.number().int(),
   previewReadyConversationCount: z.number().int(),
 });
 
@@ -958,7 +969,9 @@ const crmConversationSummarySchema = z.object({
   unreadCount: z.number().int(),
   lastMessageAt: isoTimestamp.nullable(),
   lastMessagePreview: z.string().nullable(),
+  messageCoverageStatus: messageCoverageStatusSchema,
   messageBackfillComplete: z.boolean(),
+  messageSyncEligibility: messageSyncEligibilitySchema,
   storedMessageCount: z.number().int(),
   lastMessageSenderRole: z.enum(["fan", "model", "system", "unknown"]).nullable(),
 });
@@ -1041,7 +1054,10 @@ export const crmReactivationResponseSchema = z.object({
 const crmPreviewConversationSchema = z.object({
   platformConversationId: z.string(),
   storedMessageCount: z.number().int(),
+  messageCoverageStatus: messageCoverageStatusSchema,
   messageBackfillComplete: z.boolean(),
+  messageSyncEligibility: messageSyncEligibilitySchema,
+  messageSyncExcludedReason: z.string().nullable(),
   lastMessageSyncAt: isoTimestamp.nullable(),
   unreadCount: z.number().int(),
   lastMessageAt: isoTimestamp.nullable(),
@@ -1072,7 +1088,9 @@ const workboardConversationSchema = z.object({
   lastModelMessageAt: isoTimestamp.nullable(),
   lastMessagePreview: z.string().nullable(),
   storedMessageCount: z.number().int(),
+  messageCoverageStatus: messageCoverageStatusSchema,
   messageBackfillComplete: z.boolean(),
+  messageSyncEligibility: messageSyncEligibilitySchema,
 });
 
 const workboardSubscriberItemSchema = z.object({
@@ -1176,6 +1194,17 @@ export const pageConversationMessageItemSchema = z.object({
 export const pageConversationMessagesResponseSchema = z.object({
   page: assignedPageSchema,
   conversationId: z.string(),
+  conversation: z.object({
+    platformConversationId: z.string(),
+    storedMessageCount: z.number().int(),
+    messageCoverageStatus: messageCoverageStatusSchema,
+    messageBackfillComplete: z.boolean(),
+    messageSyncEligibility: messageSyncEligibilitySchema,
+    messageSyncExcludedReason: z.string().nullable(),
+    lastMessageSyncAt: isoTimestamp.nullable(),
+    unreadCount: z.number().int(),
+    lastMessageAt: isoTimestamp.nullable(),
+  }),
   messages: z.array(pageConversationMessageItemSchema),
 });
 
@@ -1226,8 +1255,8 @@ export const connectionItemSchema = z.object({
   lastLightSyncAt: isoTimestamp.nullable(),
   lastFollowerSyncAt: isoTimestamp.nullable(),
   lastSyncError: z.string().nullable(),
-  subscriberCount: z.number().int(),
-  followerCount: z.number().int(),
+  subscriberCount: pageMetricSchema,
+  followerCount: pageMetricSchema,
   proxyUrl: z.string().nullable(),
   proxyHasAuth: z.boolean(),
   syncUx: syncUxSummarySchema,
@@ -1267,8 +1296,8 @@ export const overviewResponseSchema = z.object({
     modelSlug: z.string(),
     modelName: z.string(),
     username: z.string().nullable(),
-    subscriberCount: z.number().int(),
-    followerCount: z.number().int(),
+    subscriberCount: pageMetricSchema,
+    followerCount: pageMetricSchema,
     revenueTodayMills: mills,
     revenue7dMills: mills,
     revenue30dMills: mills,
