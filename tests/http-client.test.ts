@@ -344,10 +344,10 @@ describe("shared http client helpers", () => {
     expect(buildProxyEgressKey({
       url: "socks5://proxy.example",
     })).toBe("socks5://proxy.example:1080");
-    expect(buildSyncPageExecuteGroupId("fansly", "socks5://proxy.example:1080", 42)).toBe(
+    expect(buildSyncPageExecuteGroupId("fansly", "socks5://proxy.example:1080")).toBe(
       "fansly:socks5://proxy.example:1080",
     );
-    expect(buildSyncPageExecuteGroupId("fansly", "direct", 42)).toBe("fansly:page:42");
+    expect(buildSyncPageExecuteGroupId("fansly", "direct")).toBe("fansly:direct");
   });
 
   it("dispatches requests through an HTTP proxy", async () => {

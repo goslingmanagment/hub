@@ -4597,6 +4597,17 @@ describe("api integration", () => {
         verified: true,
       });
 
+      const expectedStreams = [
+        "light",
+        "followers",
+        "transactions",
+        "subscribers",
+        "followers_reconcile",
+        "dm_conversations",
+        "dm_messages",
+        "top_spenders",
+      ] as const;
+
       await waitForCondition(async () => {
         const rows = await activeTestDb.pool.query<{
           stream: string;
@@ -4609,8 +4620,9 @@ describe("api integration", () => {
           order by sr.stream asc
         `);
 
-        return rows.rows.length >= 7
-          && rows.rows.every((row) => row.status === "success");
+        return rows.rows.length === expectedStreams.length
+          && rows.rows.every((row) => row.status === "success")
+          && expectedStreams.every((stream) => rows.rows.some((row) => row.stream === stream));
       }, 15_000);
 
       const syncRunRows = await activeTestDb.pool.query<{
@@ -4625,16 +4637,7 @@ describe("api integration", () => {
         order by sr.stream asc
       `);
 
-      expect(syncRunRows.rows.map((row) => row.stream)).toEqual([
-        "light",
-        "followers",
-        "transactions",
-        "subscribers",
-        "followers_reconcile",
-        "dm_conversations",
-        "dm_messages",
-        "top_spenders",
-      ]);
+      expect(syncRunRows.rows.map((row) => row.stream)).toEqual(expectedStreams);
       expect(syncRunRows.rows.every((row) => row.status === "success")).toBe(true);
       expect(syncRunRows.rows.every((row) => row.trigger === "onboarding")).toBe(true);
     } finally {
