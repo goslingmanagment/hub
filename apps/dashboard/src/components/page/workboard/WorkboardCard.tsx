@@ -1,4 +1,6 @@
+import { useState, type MouseEvent } from "react";
 import { Link } from "react-router";
+import { toast } from "sonner";
 import { TouchpointBadge } from "@/components/page/crm/TouchpointBadge";
 import { ChatPreviewPanel } from "@/components/page/crm/ChatPreviewPanel";
 import type { WorkboardCardVm } from "@/pages/workboard/viewModel";
@@ -45,6 +47,15 @@ function FanAvatar({ name }: { name: string }) {
   );
 }
 
+/* ── Recency color (metrics urgency) ─────────────────────────────── */
+
+function recencyColor(daysAgo: number | null): string {
+  if (daysAgo === null) return "text-text-muted";
+  if (daysAgo >= 7) return "text-red-400";
+  if (daysAgo >= 3) return "text-orange-400";
+  return "text-text-secondary";
+}
+
 /* ── Snooze buttons ──────────────────────────────────────────────── */
 
 interface SnoozeButtonsProps {
@@ -85,8 +96,35 @@ interface WorkboardCardProps {
 export function WorkboardCard({
   vm, pageLabel, isExpanded, onToggle, onSnooze, isSnoozePending,
 }: WorkboardCardProps) {
+  const [copied, setCopied] = useState(false);
   const platformConversationId = vm.platformConversationId;
   const canPreview = vm.canPreview && platformConversationId !== null;
+  const externalLinkLabel = vm.fanslyExternalKind === "chat" ? "Copy chat" : "Copy profile";
+  const externalLinkTitle = vm.fanslyExternalKind === "chat"
+    ? "Copy Fansly chat link"
+    : "Copy Fansly profile link";
+
+  async function handleCopyFanslyLink(event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+
+    if (!vm.fanslyExternalUrl) {
+      return;
+    }
+
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      toast.error("Clipboard is not available");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(vm.fanslyExternalUrl);
+      setCopied(true);
+      toast.success(vm.fanslyExternalKind === "chat" ? "Fansly chat link copied" : "Fansly profile link copied");
+      globalThis.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error(vm.fanslyExternalKind === "chat" ? "Failed to copy Fansly chat link" : "Failed to copy Fansly profile link");
+    }
+  }
 
   return (
     <div>
@@ -123,12 +161,12 @@ export function WorkboardCard({
         </div>
 
         {/* Row 2: Communication + spend */}
-        <div className="mt-1.5 text-[12px] text-text-muted">
-          Fan: {vm.lastFanMessageLabel ?? "never"}
+        <div className="mt-1.5 text-[13px] text-text-muted">
+          Fan: <span className="font-semibold text-text-secondary">{vm.lastFanMessageLabel ?? "never"}</span>
           <span className="mx-1.5 text-border">·</span>
-          Model: {vm.lastModelMessageLabel ?? "never"}
+          Model: <span className="font-semibold text-text-secondary">{vm.lastModelMessageLabel ?? "never"}</span>
           <span className="mx-1.5 text-border">·</span>
-          Spend: {vm.lastTransactionLabel ?? "never"}
+          Spend: <span className="font-semibold text-text-secondary">{vm.lastTransactionLabel ?? "never"}</span>
         </div>
 
         {/* Row 3: Subscription details + actions */}
@@ -157,6 +195,17 @@ export function WorkboardCard({
 
           <div className="flex items-center gap-2 shrink-0">
             <SnoozeButtons onSnooze={onSnooze} isPending={isSnoozePending} />
+            {vm.fanslyExternalUrl && (
+              <button
+                type="button"
+                onClick={handleCopyFanslyLink}
+                className="px-3 py-0.5 text-[11px] font-semibold rounded border border-border text-text-secondary hover:bg-hover transition-colors"
+                title={externalLinkTitle}
+                aria-label={externalLinkTitle}
+              >
+                {copied ? "Copied!" : externalLinkLabel}
+              </button>
+            )}
             <Link
               to={vm.profileHref}
               onClick={(e) => e.stopPropagation()}

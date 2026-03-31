@@ -1,6 +1,7 @@
 import type { WorkboardResponse } from "@agency_hub_core/contracts";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
-import { formatMills, formatRelativeTime, formatDate, daysRemaining } from "@/lib/format";
+import { resolveFanslyExternalLink, type FanslyExternalLinkKind } from "@/lib/platformUrls";
+import { formatMills, formatRelativeTime, formatRelativeTime, daysAgo, formatDate, daysRemaining } from "@/lib/format";
 
 type SubscriberItem = WorkboardResponse["subscribers"]["items"][number];
 type SpenderItem = WorkboardResponse["activeSpenders"]["items"][number];
@@ -39,6 +40,8 @@ export interface WorkboardSubscriberVm {
   fanSubLabel: string | null;
   platformConversationId: string | null;
   profileHref: string;
+  fanslyExternalUrl: string | null;
+  fanslyExternalKind: FanslyExternalLinkKind | null;
   ltvLabel: string;
   touchpointCode: string;
   touchpointLabel: string;
@@ -46,8 +49,11 @@ export interface WorkboardSubscriberVm {
   overdueDays: number;
   overdueSeverity: OverdueSeverity;
   lastFanMessageLabel: string | null;
+  lastFanMessageDaysAgo: number | null;
   lastModelMessageLabel: string | null;
+  lastModelMessageDaysAgo: number | null;
   lastTransactionLabel: string | null;
+  lastTransactionDaysAgo: number | null;
   expiryLabel: string;
   expiryRelativeLabel: string;
   autoRenew: boolean | null;
@@ -62,6 +68,10 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
   if (!fan) {
     return null;
   }
+  const fanslyExternalLink = resolveFanslyExternalLink({
+    platformConversationId: item.conversation.platformConversationId,
+    username: fan.username,
+  });
 
   return {
     kind: "subscriber" as const,
@@ -70,6 +80,8 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
     fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
     platformConversationId: item.conversation.platformConversationId,
     profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
+    fanslyExternalUrl: fanslyExternalLink?.url ?? null,
+    fanslyExternalKind: fanslyExternalLink?.kind ?? null,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
     touchpointCode: item.touchpoint.code,
     touchpointLabel: item.touchpoint.label,
@@ -79,11 +91,20 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
     lastFanMessageLabel: item.conversation.lastFanMessageAt
       ? formatRelativeTime(item.conversation.lastFanMessageAt)
       : null,
+    lastFanMessageDaysAgo: item.conversation.lastFanMessageAt
+      ? daysAgo(item.conversation.lastFanMessageAt)
+      : null,
     lastModelMessageLabel: item.conversation.lastModelMessageAt
       ? formatRelativeTime(item.conversation.lastModelMessageAt)
       : null,
+    lastModelMessageDaysAgo: item.conversation.lastModelMessageAt
+      ? daysAgo(item.conversation.lastModelMessageAt)
+      : null,
     lastTransactionLabel: item.lastTransactionAt
       ? formatRelativeTime(item.lastTransactionAt)
+      : null,
+    lastTransactionDaysAgo: item.lastTransactionAt
+      ? daysAgo(item.lastTransactionAt)
       : null,
     expiryLabel: formatDate(item.subscription.expiresAt),
     expiryRelativeLabel: `in ${daysRemaining(item.subscription.expiresAt)}d`,
@@ -106,13 +127,18 @@ export interface WorkboardSpenderVm {
   fanSubLabel: string | null;
   platformConversationId: string | null;
   profileHref: string;
+  fanslyExternalUrl: string | null;
+  fanslyExternalKind: FanslyExternalLinkKind | null;
   ltvLabel: string;
   silenceDays: number;
   overdueDays: number;
   overdueSeverity: OverdueSeverity;
   lastFanMessageLabel: string | null;
+  lastFanMessageDaysAgo: number | null;
   lastModelMessageLabel: string | null;
+  lastModelMessageDaysAgo: number | null;
   lastTransactionLabel: string | null;
+  lastTransactionDaysAgo: number | null;
   subscriptionStatus: "expired" | "never";
   subscriptionExpiresLabel: string | null;
   canPreview: boolean;
@@ -125,6 +151,10 @@ export function mapSpenderVm(pageLabel: string, item: SpenderItem): WorkboardSpe
   if (!fan) {
     return null;
   }
+  const fanslyExternalLink = resolveFanslyExternalLink({
+    platformConversationId: item.conversation.platformConversationId,
+    username: fan.username,
+  });
 
   return {
     kind: "spender" as const,
@@ -133,6 +163,8 @@ export function mapSpenderVm(pageLabel: string, item: SpenderItem): WorkboardSpe
     fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
     platformConversationId: item.conversation.platformConversationId,
     profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
+    fanslyExternalUrl: fanslyExternalLink?.url ?? null,
+    fanslyExternalKind: fanslyExternalLink?.kind ?? null,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
     silenceDays: item.silenceDays,
     overdueDays: item.overdueDays,
@@ -140,11 +172,20 @@ export function mapSpenderVm(pageLabel: string, item: SpenderItem): WorkboardSpe
     lastFanMessageLabel: item.conversation.lastFanMessageAt
       ? formatRelativeTime(item.conversation.lastFanMessageAt)
       : null,
+    lastFanMessageDaysAgo: item.conversation.lastFanMessageAt
+      ? daysAgo(item.conversation.lastFanMessageAt)
+      : null,
     lastModelMessageLabel: item.conversation.lastModelMessageAt
       ? formatRelativeTime(item.conversation.lastModelMessageAt)
       : null,
+    lastModelMessageDaysAgo: item.conversation.lastModelMessageAt
+      ? daysAgo(item.conversation.lastModelMessageAt)
+      : null,
     lastTransactionLabel: item.lastTransactionAt
       ? formatRelativeTime(item.lastTransactionAt)
+      : null,
+    lastTransactionDaysAgo: item.lastTransactionAt
+      ? daysAgo(item.lastTransactionAt)
       : null,
     subscriptionStatus: item.subscription.status,
     subscriptionExpiresLabel: item.subscription.expiresAt
