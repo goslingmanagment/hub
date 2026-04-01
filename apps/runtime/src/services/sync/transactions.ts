@@ -439,6 +439,7 @@ async function syncTransactionsBackfill(
     provider: "fansly",
     phase: "transactions",
     snapshotEnd: new Date().toISOString(),
+    providerReportedTotal: null,
     newestSeenAt: null,
     dirtyFrom: null,
     processedTransactions: 0,
@@ -544,6 +545,7 @@ async function syncTransactionsBackfill(
 
       const nextState: FanslyTransactionBackfillState = {
         ...state,
+        providerReportedTotal: state.providerReportedTotal ?? page.total ?? null,
         offset: state.offset + page.items.length,
         transactionPages: state.transactionPages + 1,
         processedTransactions: state.processedTransactions + page.items.length,

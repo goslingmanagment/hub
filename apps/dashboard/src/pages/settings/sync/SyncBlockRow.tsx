@@ -4,9 +4,9 @@ import {
   getBlockLabel,
   getBlockStateLabel,
   getBlockProgressFillClass,
+  getBlockProgressBarMode,
   formatBlockSummary,
   formatBlockProgressCaption,
-  shouldShowBlockProgressBar,
 } from "./syncBlockDisplay.js";
 
 export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
@@ -15,6 +15,7 @@ export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
   const summary = formatBlockSummary(block);
   const isNA = block.state === "not_available";
   const progressCaption = formatBlockProgressCaption(block);
+  const progressBarMode = getBlockProgressBarMode(block);
 
   return (
     <div className="grid grid-cols-[9rem_1fr] gap-x-3 py-1 items-baseline">
@@ -26,18 +27,30 @@ export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
         <span className={`text-xs ${isNA ? "text-text-muted" : tone.text}`}>
           {summary}
         </span>
-        {shouldShowBlockProgressBar(block) && block.progress && block.progress.total != null && block.progress.total > 0 && (
+        {progressBarMode !== "hidden" && block.progress && (
           <div className="flex items-center gap-2 basis-full mt-0.5">
             <div className="h-1.5 flex-1 max-w-[180px] rounded-full bg-hover-alt overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all ${getBlockProgressFillClass(block)}`}
-                style={{
-                  width: `${Math.min(100, block.progress.percent ?? (block.progress.current / block.progress.total) * 100)}%`,
-                }}
-              />
+              {progressBarMode === "determinate"
+                ? (
+                  <div
+                    className={`h-full rounded-full transition-all ${getBlockProgressFillClass(block)}`}
+                    style={{
+                      width: `${Math.min(100, block.progress.percent ?? (
+                        block.progress.total && block.progress.total > 0
+                          ? (block.progress.current / block.progress.total) * 100
+                          : 0
+                      ))}%`,
+                    }}
+                  />
+                )
+                : (
+                  <div
+                    className={`h-full w-[35%] rounded-full animate-pulse ${getBlockProgressFillClass(block)}`}
+                  />
+                )}
             </div>
             <span className="text-[11px] text-text-muted">
-              {progressCaption ?? `${block.progress.current.toLocaleString()} / ${block.progress.total.toLocaleString()}`}
+              {progressCaption ?? block.progress.label}
             </span>
           </div>
         )}

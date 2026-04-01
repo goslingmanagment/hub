@@ -548,13 +548,19 @@ function buildTransactionsProgress(row: SyncMonitorStreamRow): SyncMonitorProgre
     return null;
   }
 
-  const current = backfill.processedTransactions + backfill.processedChargebacks;
+  const total = typeof backfill.providerReportedTotal === "number"
+    ? Math.max(backfill.providerReportedTotal, 0)
+    : null;
+  const current = clampProgress(
+    backfill.processedTransactions + backfill.processedChargebacks,
+    total,
+  );
   return {
-    label: `${current.toLocaleString()} items backfilled`,
+    label: labelWithTotal(current, total, "items", " backfilled"),
     current,
-    total: null,
+    total,
     unit: "items",
-    percent: null,
+    percent: percent(current, total),
   };
 }
 

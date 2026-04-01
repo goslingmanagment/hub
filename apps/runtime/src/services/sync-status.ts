@@ -15,6 +15,13 @@ import {
 import { buildProxyEgressKey } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import {
+  parseDmConversationCursorState,
+  parseFollowersCursorState,
+  parseFollowersReconcileCursorState,
+  parseSubscribersCursorState,
+} from "./sync/cursor-state.ts";
+import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
 export const SYNC_DOMAIN_BLOCKS = [
   "connection",
@@ -170,6 +177,14 @@ function percent(current: number, total: number | null) {
   }
 
   return Math.max(0, Math.min(100, (current / total) * 100));
+}
+
+function clampProgress(current: number, total: number | null) {
+  if (total === null) {
+    return Math.max(0, current);
+  }
+
+  return Math.max(0, Math.min(current, total));
 }
 
 function latestIso(values: Array<Date | null | undefined>) {
@@ -569,6 +584,122 @@ function buildProgressFromPayload(
   monitorRow: SyncMonitorStreamRow | null,
 ): SyncDomainProgress | null {
   const payload = task.progress ?? {};
+
+  if (monitorRow) {
+    const checkpointRevision = monitorRow.requestSeq ?? monitorRow.appliedSeq;
+    const completed = task.status === "idle" && task.requestSeq === task.appliedSeq;
+
+    if (task.stream === "subscribers") {
+      const state = parseSubscribersCursorState(monitorRow.checkpointState, checkpointRevision);
+      if (state) {
+        const total = state.providerReportedTotal ?? (completed ? monitorRow.subscriberCount : null);
+        const current = completed && total !== null ? total : clampProgress(state.offset, total);
+        return {
+          label: total !== null
+            ? `${current.toLocaleString()} / ${total.toLocaleString()} subscribers`
+            : `${current.toLocaleString()} subscribers`,
+          current,
+          total,
+          unit: "subscribers",
+          percent: percent(current, total),
+          percentValid: total !== null && total > 0,
+          details: {
+            ...payload,
+            ...state,
+          },
+        };
+      }
+    }
+
+    if (task.stream === "followers") {
+      const state = parseFollowersCursorState(monitorRow.checkpointState, checkpointRevision);
+      if (state) {
+        const total = state.sourceFollowerCount;
+        const current = completed ? total : clampProgress(state.offset, total);
+        return {
+          label: `${current.toLocaleString()} / ${total.toLocaleString()} followers`,
+          current,
+          total,
+          unit: "followers",
+          percent: percent(current, total),
+          percentValid: total > 0,
+          details: {
+            ...payload,
+            ...state,
+          },
+        };
+      }
+    }
+
+    if (task.stream === "followers_reconcile") {
+      const state = parseFollowersReconcileCursorState(monitorRow.checkpointState, checkpointRevision);
+      if (state) {
+        const total = state.sourceFollowerCount;
+        const current = completed ? total : clampProgress(state.offset, total);
+        return {
+          label: `${current.toLocaleString()} / ${total.toLocaleString()} followers`,
+          current,
+          total,
+          unit: "followers",
+          percent: percent(current, total),
+          percentValid: total > 0,
+          details: {
+            ...payload,
+            ...state,
+          },
+        };
+      }
+    }
+
+    if (task.stream === "dm_conversations") {
+      const state = parseDmConversationCursorState(monitorRow.checkpointState);
+      if (state) {
+        const total = state.providerReportedTotal ?? (completed ? monitorRow.dmConversationCount : null);
+        const current = completed && total !== null ? total : clampProgress(state.offset, total);
+        return {
+          label: total !== null
+            ? `${current.toLocaleString()} / ${total.toLocaleString()} conversations`
+            : `${current.toLocaleString()} conversations`,
+          current,
+          total,
+          unit: "conversations",
+          percent: percent(current, total),
+          percentValid: total !== null && total > 0,
+          details: {
+            ...payload,
+            ...state,
+          },
+        };
+      }
+    }
+
+    if (task.stream === "transactions") {
+      const backfill = parseTransactionBackfillState(monitorRow.checkpointState);
+      if (backfill) {
+        const total = typeof backfill.providerReportedTotal === "number"
+          ? Math.max(backfill.providerReportedTotal, 0)
+          : null;
+        const current = clampProgress(
+          backfill.processedTransactions + backfill.processedChargebacks,
+          total,
+        );
+        return {
+          label: total !== null
+            ? `${current.toLocaleString()} / ${total.toLocaleString()} items backfilled`
+            : `${current.toLocaleString()} items backfilled`,
+          current,
+          total,
+          unit: "items",
+          percent: percent(current, total),
+          percentValid: total !== null && total > 0,
+          details: {
+            ...payload,
+            ...backfill,
+          },
+        };
+      }
+    }
+  }
 
   if (typeof payload.pageCount === "number" && typeof payload.offset === "number") {
     const total = Math.max(payload.pageCount, 0);

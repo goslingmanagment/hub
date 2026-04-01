@@ -240,7 +240,9 @@ export function getDependencyWaitDetail(item: SyncReasonCarrier): string | null 
 }
 
 function hasOpaqueAudienceFollowerProgress(block: SyncBlockStatus): boolean {
-  return block.block === "audience" && block.progress?.unit === "followers";
+  return block.block === "audience" &&
+    block.progress?.unit === "followers" &&
+    (block.progress.total == null || block.progress.total <= 0);
 }
 
 function hasCompletedMessagesLiveProgress(block: SyncBlockStatus): boolean {
@@ -319,36 +321,49 @@ export function getBlockProgressFillClass(block: SyncBlockStatus): string {
   return "bg-accent";
 }
 
-export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
-  if (!block.progress || block.progress.total == null || block.progress.total <= 0) {
-    return false;
+export function getBlockProgressBarMode(block: SyncBlockStatus): "hidden" | "determinate" | "indeterminate" {
+  if (!block.progress) {
+    return "hidden";
   }
-
   if (!["syncing", "backfilling", "scheduled", "retrying", "delayed"].includes(block.state)) {
-    return false;
+    return "hidden";
   }
 
   if (block.state === "delayed" && block.block !== "messages_history") {
-    return false;
+    return "hidden";
   }
 
   if (hasOpaqueAudienceFollowerProgress(block)) {
-    return false;
+    return "hidden";
   }
 
   if (hasCompletedMessagesLiveProgress(block)) {
-    return false;
+    return "hidden";
   }
 
   if (
     isHealthyQueueWaitingBlock(block) &&
     block.progressRole === "supporting" &&
+    block.progress.total != null &&
+    block.progress.total > 0 &&
     block.progress.current >= block.progress.total
   ) {
-    return false;
+    return "hidden";
   }
 
-  return true;
+  if (block.progress.total != null && block.progress.total > 0) {
+    return "determinate";
+  }
+
+  if (block.progress.label && ["syncing", "backfilling", "retrying"].includes(block.state)) {
+    return "indeterminate";
+  }
+
+  return "hidden";
+}
+
+export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
+  return getBlockProgressBarMode(block) !== "hidden";
 }
 
 export function formatBlockSummary(block: SyncBlockStatus): string {

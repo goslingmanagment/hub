@@ -3,6 +3,7 @@ type TransactionBackfillBase = {
   completed: false;
   provider: "fansly" | "onlyfans";
   snapshotEnd: string;
+  providerReportedTotal?: number | null;
   newestSeenAt: string | null;
   dirtyFrom: string | null;
   processedTransactions: number;
@@ -59,6 +60,14 @@ function asNonNegativeInt(value: unknown) {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+function asNullableNonNegativeInt(value: unknown) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return asNonNegativeInt(value);
+}
+
 function asBoolean(value: unknown) {
   return typeof value === "boolean" ? value : null;
 }
@@ -75,6 +84,7 @@ export function parseTransactionBackfillState(value: unknown): TransactionBackfi
 
   const provider = state.provider;
   const snapshotEnd = asIsoString(state.snapshotEnd);
+  const providerReportedTotal = asNullableNonNegativeInt(state.providerReportedTotal);
   const newestSeenAt = asNullableIsoString(state.newestSeenAt);
   const dirtyFrom = asNullableIsoString(state.dirtyFrom);
   const processedTransactions = asNonNegativeInt(state.processedTransactions);
@@ -106,6 +116,7 @@ export function parseTransactionBackfillState(value: unknown): TransactionBackfi
       provider,
       phase: "transactions",
       snapshotEnd,
+      providerReportedTotal,
       newestSeenAt,
       dirtyFrom,
       processedTransactions,
@@ -139,6 +150,7 @@ export function parseTransactionBackfillState(value: unknown): TransactionBackfi
       provider,
       phase: state.phase,
       snapshotEnd,
+      providerReportedTotal,
       newestSeenAt,
       dirtyFrom,
       processedTransactions,
