@@ -267,7 +267,7 @@ describe("syncTransactions", () => {
     }));
     expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
       code: "after_ineffective",
-      severity: "error",
+      severity: "warn",
       details: expect.objectContaining({
         earlyStoppedBeyondBoundary: true,
         olderThanBoundaryPages: 2,

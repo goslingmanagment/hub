@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   formatBlockSummary,
+  formatBlockProgressCaption,
   formatSubstreamStateLabel,
   getBlockStateLabel,
+  getBlockProgressFillClass,
   getBlockTone,
   getDependencyWaitDetail,
   getSubstreamTone,
@@ -455,5 +457,48 @@ describe("sync block display", () => {
     expect(getBlockStateLabel(block)).toBe("Queued");
     expect(getBlockTone(block).text).toBe("text-text-secondary");
     expect(shouldShowBlockProgressBar(block)).toBe(true);
+  });
+
+  it("shows catch-up progress for delayed message history", () => {
+    const block = {
+      block: "messages_history",
+      state: "delayed",
+      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      progress: {
+        label: "203 / 3,669 conversations ready, 4 lagging",
+        current: 203,
+        total: 3669,
+        unit: "conversations",
+        percent: 5.53,
+        details: {
+          laggingConversationCount: 4,
+        },
+      },
+      progressStream: "dm_messages",
+      progressRole: "primary",
+      error: null,
+      statusReason: {
+        code: "history_incomplete",
+        summary: "Conversation history is still catching up.",
+        waitingFor: null,
+      },
+      primaryFresh: false,
+      needsAttention: true,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: {
+        readyConversationCount: 203,
+        eligibleConversationCount: 3669,
+      },
+      connectionStatus: null,
+      substreams: [],
+    } as never;
+
+    expect(shouldShowBlockProgressBar(block)).toBe(true);
+    expect(getBlockProgressFillClass(block)).toBe("bg-warning-dark");
+    expect(formatBlockProgressCaption(block)).toBe(
+      "message history · 203 / 3,669 ready · 3,466 left · 4 lagging",
+    );
   });
 });

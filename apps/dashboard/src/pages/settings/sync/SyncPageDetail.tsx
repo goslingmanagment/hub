@@ -48,8 +48,16 @@ function BlockDetailCard({
   }
 
   const summary = formatBlockSummary(block);
-  const statusSummary = getReasonSummary(block);
   const dependencyWait = isDependencyWait(block);
+  const statusSummary = getReasonSummary(block) ??
+    (block.state === "delayed"
+      ? formatBlockSummary(block)
+      : block.state === "failed"
+        ? `${label} needs attention`
+        : null);
+  const statusTitle = dependencyWait
+    ? "Waiting for prerequisite syncs"
+    : statusSummary ?? (block.state === "failed" ? `${label} needs attention` : "Sync is delayed");
   const queueWaiting = block.statusReason?.code === "queue_waiting";
   const hasStatusNotice = dependencyWait || block.state === "failed" || block.state === "delayed";
   const hasSubstreams = block.substreams.length > 1;
@@ -95,7 +103,7 @@ function BlockDetailCard({
       {hasStatusNotice && (
         <div className={`mt-3 rounded-lg border px-3 py-2.5 space-y-1 ${statusTone}`}>
           <p className="text-xs font-medium">
-            {dependencyWait ? "Waiting for prerequisite syncs" : statusSummary}
+            {statusTitle}
           </p>
           {dependencyWait && dependencyDetail && (
             <p className="text-[11px] text-text-secondary">

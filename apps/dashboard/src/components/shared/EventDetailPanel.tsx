@@ -6,10 +6,32 @@ export const SEVERITY_STYLES: Record<string, string> = {
   error: "bg-[#fee2e2] text-[#991b1b]",
 };
 
+function isLegacyBenignAfterFilterAnomaly(input: {
+  eventCode?: string | null;
+  severity: string;
+  details?: Record<string, unknown> | null;
+}) {
+  return input.eventCode === "after_ineffective" &&
+    input.severity === "error" &&
+    input.details?.earlyStoppedBeyondBoundary === true;
+}
+
+export function getEventDisplaySeverity(input: {
+  eventCode?: string | null;
+  severity: string;
+  details?: Record<string, unknown> | null;
+}) {
+  return isLegacyBenignAfterFilterAnomaly(input) ? "warn" : input.severity;
+}
+
 const RECOMMENDATION_MAP: Record<string, { text: string; color: string }> = {
   checkpoint_stalled: {
     text: "Page has no new data since last sync. Usually means the page is inactive. No action needed.",
     color: "border-[#9ca3af]",
+  },
+  after_ineffective: {
+    text: "The provider ignored the lower-bound filter and older transactions were rescanned. Sync handled it automatically; investigate only if the scan window keeps growing.",
+    color: "border-[#f59e0b]",
   },
   auth_failed: {
     text: "Session token expired or invalid. Update credentials in page settings.",
@@ -38,6 +60,10 @@ const DEFAULT_RECOMMENDATION = {
   color: "border-[#9ca3af]",
 };
 
+export function getEventRecommendation(eventCode?: string | null) {
+  return (eventCode ? RECOMMENDATION_MAP[eventCode] : undefined) ?? DEFAULT_RECOMMENDATION;
+}
+
 interface EventDetailPanelProps {
   message?: string | null;
   syncRunId?: number | string | null;
@@ -52,7 +78,7 @@ export function EventDetailPanel({
   eventCode,
   details,
 }: EventDetailPanelProps) {
-  const rec = (eventCode ? RECOMMENDATION_MAP[eventCode] : undefined) ?? DEFAULT_RECOMMENDATION;
+  const rec = getEventRecommendation(eventCode);
 
   return (
     <div className="px-6 py-4 bg-hover-alt/40 space-y-3">

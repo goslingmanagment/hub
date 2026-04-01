@@ -490,6 +490,93 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Subscribers stopped making progress and need the worker to recover.");
   });
 
+  it("uses delayed copy instead of failed wording on sync overview cards", () => {
+    const overview = buildSyncOverview();
+    overview.pages[0]!.blocks.messages_history = {
+      ...overview.pages[0]!.blocks.messages_history,
+      state: "delayed",
+      statusReason: null,
+      primaryFresh: false,
+      needsAttention: true,
+    };
+    queryMocks.useSyncOverview.mockReturnValue({
+      data: overview,
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
+
+    expect((html.match(/Sync is delayed/g) ?? [])).toHaveLength(2);
+    expect(html).not.toContain("messages_history needs attention");
+  });
+
+  it("fills delayed sync detail notices when the backend has no explicit summary", () => {
+    const overview = buildSyncOverview();
+    overview.pages[0]!.blocks.messages_history = {
+      ...overview.pages[0]!.blocks.messages_history,
+      state: "delayed",
+      statusReason: null,
+      primaryFresh: false,
+      needsAttention: true,
+    };
+    queryMocks.usePageSyncBlocks.mockReturnValue({
+      data: {
+        generatedAt: "2026-03-24T12:00:00.000Z",
+        page: overview.pages[0],
+      },
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync&page=lana"]);
+
+    expect((html.match(/Sync is delayed/g) ?? [])).toHaveLength(2);
+  });
+
+  it("renders catch-up progress for delayed message history detail", () => {
+    const overview = buildSyncOverview();
+    overview.pages[0]!.blocks.messages_history = {
+      ...overview.pages[0]!.blocks.messages_history,
+      state: "delayed",
+      statusReason: {
+        code: "history_incomplete",
+        summary: "Conversation history is still catching up.",
+        waitingFor: null,
+      },
+      primaryFresh: false,
+      needsAttention: true,
+      progress: {
+        label: "203 / 3,669 conversations ready, 4 lagging",
+        current: 203,
+        total: 3669,
+        unit: "conversations",
+        percent: 5.53,
+        details: {
+          laggingConversationCount: 4,
+        },
+      },
+      progressStream: "dm_messages",
+      progressRole: "primary",
+      metrics: {
+        readyConversationCount: 203,
+        eligibleConversationCount: 3669,
+        laggingConversationCount: 4,
+      },
+    };
+    queryMocks.usePageSyncBlocks.mockReturnValue({
+      data: {
+        generatedAt: "2026-03-24T12:00:00.000Z",
+        page: overview.pages[0],
+      },
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync&page=lana"]);
+
+    expect(html).toContain("203 / 3,669 ready");
+    expect(html).toContain("3,466 left");
+    expect(html).toContain("4 lagging");
+  });
+
   it("renders fresh queue waits as healthy while message history backfill is running", () => {
     const overview = buildSyncOverview();
     overview.pages[0]!.blocks.financials = {

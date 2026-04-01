@@ -5,7 +5,14 @@ import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { SyncBlockRow } from "./SyncBlockRow.js";
 import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
-import { getBlockOrder, getReasonSummary, isDependencyWait, needsVisualAttention } from "./syncBlockDisplay.js";
+import {
+  formatBlockSummary,
+  getBlockLabel,
+  getBlockOrder,
+  getReasonSummary,
+  isDependencyWait,
+  needsVisualAttention,
+} from "./syncBlockDisplay.js";
 
 function PageErrorBar({ page }: { page: SyncBlocksPage }) {
   if (page.diagnosis) {
@@ -35,15 +42,29 @@ function PageErrorBar({ page }: { page: SyncBlocksPage }) {
     );
   }
 
+  const failedBlock = attentionBlocks.find((block) => block.state === "failed");
+  const tone = failedBlock
+    ? {
+      container: "mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5",
+      text: "text-danger",
+    }
+    : {
+      container: "mt-3 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5",
+      text: "text-warning-dark",
+    };
+
   return (
-    <div className="mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5">
+    <div className={tone.container}>
       {attentionBlocks.map((b) => (
         <div
           key={b.block}
           className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
         >
-          <span className="text-danger font-medium">
-            {getReasonSummary(b) ?? `${b.block} needs attention`}
+          <span className={`${tone.text} font-medium`}>
+            {getReasonSummary(b) ??
+              (b.state === "delayed"
+                ? formatBlockSummary(b)
+                : `${getBlockLabel(b.block)} needs attention`)}
           </span>
         </div>
       ))}

@@ -42,6 +42,18 @@ function isRecent(iso: string | null) {
   return iso ? Date.now() - new Date(iso).getTime() < 86_400_000 : false;
 }
 
+function getPageExceptionMessage(
+  kind: NonNullable<ReturnType<typeof getSyncUxExceptionKind>>,
+) {
+  switch (kind) {
+    case "off":
+      return "Data updates paused \u2014 check sync settings";
+    case "attention":
+      return "Data may be incomplete \u2014 check sync settings";
+    default:
+      return null;
+  }
+}
 
 export function PageDetailPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
@@ -148,6 +160,7 @@ export function PageDetailPage() {
   const exceptionKind = getSyncUxExceptionKind(page.syncUx);
   const syncTone = getSyncUxTone(page.syncUx.state);
   const isOwner = auth?.user.role === "owner";
+  const pageExceptionMessage = exceptionKind ? getPageExceptionMessage(exceptionKind) : null;
 
   function breakdownAmount(canonicalType: string): number {
     if (!selectedRevenue?.breakdown) return 0;
@@ -192,10 +205,10 @@ export function PageDetailPage() {
         <p className="text-sm text-text-muted">
           @{page.username ?? "unknown"} &middot; Model: {page.modelName}
         </p>
-        {syncMode === "exception" && exceptionKind && exceptionKind !== "credentials" && (
+        {syncMode === "exception" && exceptionKind && exceptionKind !== "credentials" && pageExceptionMessage && (
           <div className={`mt-3 flex flex-wrap items-center gap-2 rounded-xl border px-4 py-3 text-sm ${syncTone.panel}`}>
             <span className={`font-medium ${syncTone.text}`}>
-              Data updates paused &mdash; check sync settings
+              {pageExceptionMessage}
             </span>
             {isOwner && (
               <Link to={buildSettingsRoute("sync")} className="font-semibold text-accent hover:underline">

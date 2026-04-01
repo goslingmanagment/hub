@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import { useAdminLogs } from "@/api/queries";
 import { FilterButtons } from "@/components/shared/FilterButtons";
-import { EventDetailPanel, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
+import { EventDetailPanel, getEventDisplaySeverity, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatRelativeTime } from "@/lib/format";
 
@@ -79,6 +79,12 @@ export function LogPage() {
             {items.map((log, idx) => {
               const rowId = log.id != null ? String(log.id) : `${idx}`;
               const isExpanded = expandedId === rowId;
+              const eventCode = resolveEventCode(log.details, log.eventType);
+              const displaySeverity = getEventDisplaySeverity({
+                eventCode,
+                severity: log.severity,
+                details: log.details,
+              });
 
               return (
                 <Fragment key={rowId}>
@@ -97,9 +103,9 @@ export function LogPage() {
                     </td>
                     <td className="px-4 py-3">
                       <span
-                        className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_STYLES[log.severity] ?? SEVERITY_STYLES.info}`}
+                        className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_STYLES[displaySeverity] ?? SEVERITY_STYLES.info}`}
                       >
-                        {log.severity}
+                        {displaySeverity}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-sm text-text-secondary">
@@ -115,7 +121,7 @@ export function LogPage() {
                         <EventDetailPanel
                           message={log.message}
                           syncRunId={log.syncRunId}
-                          eventCode={resolveEventCode(log.details, log.eventType)}
+                          eventCode={eventCode}
                           severity={log.severity}
                           details={log.details}
                         />

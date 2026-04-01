@@ -198,6 +198,10 @@ describe("sync status service", () => {
 
     expect(snapshot.pages[0]?.blocks.messages_history).toMatchObject({
       state: "delayed",
+      statusReason: {
+        code: "history_incomplete",
+        summary: "Conversation history is still catching up.",
+      },
       progress: expect.objectContaining({
         current: 3,
         total: 10,
@@ -208,7 +212,7 @@ describe("sync status service", () => {
         laggingConversationCount: 2,
       }),
     });
-    expect(snapshot.pages[0]?.syncUx.state).toBe("attention");
+    expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");
   });
 
   it("surfaces an auth blocker as failed connection sync and requires action", async () => {
@@ -332,6 +336,7 @@ describe("sync status service", () => {
       },
       error: null,
     });
+    expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");
   });
 
   it("keeps financials in catching-up mode when only top spenders enrichment is running", async () => {

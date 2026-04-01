@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useSearchParams } from "react-router";
 import { useAdminSyncRunDetail } from "@/api/queries";
+import { getEventDisplaySeverity } from "@/components/shared/EventDetailPanel";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import type { SyncRunDetailResponse } from "@agency_hub_core/contracts";
@@ -9,6 +10,10 @@ function formatRunState(state: string) {
   return state
     .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function resolveEventCode(details: Record<string, unknown> | null, fallback: string | null) {
+  return typeof details?.code === "string" ? details.code : fallback;
 }
 
 export function SyncStatusPage() {
@@ -102,13 +107,24 @@ export function SyncStatusPage() {
             </thead>
             <tbody>
               {data.events.map((event) => (
-                <tr key={event.id} className="border-t border-border">
-                  <td className="px-4 py-3 text-sm text-text-muted">{formatRelativeTime(event.emittedAt)}</td>
-                  <td className="px-4 py-3 text-sm text-text-primary">{event.stream}</td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">{event.severity}</td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">{event.eventType}</td>
-                  <td className="px-4 py-3 text-sm text-text-secondary">{event.message}</td>
-                </tr>
+                (() => {
+                  const eventCode = resolveEventCode(event.details, event.eventType);
+                  const displaySeverity = getEventDisplaySeverity({
+                    eventCode,
+                    severity: event.severity,
+                    details: event.details,
+                  });
+
+                  return (
+                    <tr key={event.id} className="border-t border-border">
+                      <td className="px-4 py-3 text-sm text-text-muted">{formatRelativeTime(event.emittedAt)}</td>
+                      <td className="px-4 py-3 text-sm text-text-primary">{event.stream}</td>
+                      <td className="px-4 py-3 text-sm text-text-secondary">{displaySeverity}</td>
+                      <td className="px-4 py-3 text-sm text-text-secondary">{event.eventType}</td>
+                      <td className="px-4 py-3 text-sm text-text-secondary">{event.message}</td>
+                    </tr>
+                  );
+                })()
               ))}
             </tbody>
           </table>

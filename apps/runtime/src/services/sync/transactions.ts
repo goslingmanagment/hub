@@ -388,9 +388,10 @@ async function syncTransactionsIncremental(
       )
     )
   ) {
+    const severity = earlyStoppedBeyondBoundary ? "warn" : "error";
     await input.telemetry.addAnomaly({
       code: "after_ineffective",
-      severity: "error",
+      severity,
       message: "The lower-bound transaction filter behaved ineffectively and scanned materially old data",
       details: {
         after: after.toISOString(),

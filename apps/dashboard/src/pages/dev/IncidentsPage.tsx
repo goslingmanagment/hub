@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import { useAdminIncidents } from "@/api/queries";
-import { EventDetailPanel, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
+import { EventDetailPanel, getEventDisplaySeverity, SEVERITY_STYLES } from "@/components/shared/EventDetailPanel";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatRelativeTime } from "@/lib/format";
 
@@ -31,6 +31,24 @@ export function IncidentsPage() {
 
   const summary = data.summary ?? [];
   const items = data.items ?? [];
+  const displaySummary = summary.reduce<Array<{ code: string; severity: string; count: number }>>((acc, item) => {
+    const displaySeverity = getEventDisplaySeverity({
+      eventCode: item.code,
+      severity: item.severity,
+      details: null,
+    });
+    const existing = acc.find((entry) => entry.code === item.code && entry.severity === displaySeverity);
+    if (existing) {
+      existing.count += item.count;
+    } else {
+      acc.push({
+        code: item.code,
+        severity: displaySeverity,
+        count: item.count,
+      });
+    }
+    return acc;
+  }, []);
 
   return (
     <div>
@@ -40,13 +58,13 @@ export function IncidentsPage() {
       </div>
 
       {/* Summary cards */}
-      {summary.length > 0 && (
+      {displaySummary.length > 0 && (
         <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-3 lg:grid-cols-4">
-          {summary.map((s) => {
+          {displaySummary.map((s) => {
             const isActive = codeFilter === s.code;
             return (
               <button
-                key={s.code}
+                key={`${s.code}:${s.severity}`}
                 type="button"
                 onClick={() => setCodeFilter(isActive ? undefined : s.code)}
                 className={`rounded-xl border p-4 text-left transition-colors ${
@@ -116,6 +134,12 @@ export function IncidentsPage() {
             {items.map((item, idx) => {
               const rowId = item.id != null ? String(item.id) : `${idx}`;
               const isExpanded = expandedId === rowId;
+              const eventCode = resolveEventCode(item.details, item.eventType);
+              const displaySeverity = getEventDisplaySeverity({
+                eventCode,
+                severity: item.severity,
+                details: item.details,
+              });
 
               return (
                 <Fragment key={rowId}>
@@ -137,9 +161,9 @@ export function IncidentsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <span
-                        className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_STYLES[item.severity] ?? SEVERITY_STYLES.info}`}
+                        className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_STYLES[displaySeverity] ?? SEVERITY_STYLES.info}`}
                       >
-                        {item.severity}
+                        {displaySeverity}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-sm text-text-secondary max-w-xs truncate">
@@ -152,7 +176,7 @@ export function IncidentsPage() {
                         <EventDetailPanel
                           message={item.message}
                           syncRunId={item.syncRunId}
-                          eventCode={resolveEventCode(item.details, item.eventType)}
+                          eventCode={eventCode}
                           severity={item.severity}
                           details={item.details}
                         />

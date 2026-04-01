@@ -262,6 +262,26 @@ function buildStatusReason(
   };
 }
 
+function buildDelayedDomainReason(input: {
+  block: SyncDomainBlockKey;
+  state: SyncDomainBlockState;
+  statusReason: SyncStatusReason | null;
+  messagesHistoryComplete: boolean;
+}): SyncStatusReason | null {
+  if (input.statusReason || input.state !== "delayed") {
+    return input.statusReason;
+  }
+
+  if (input.block === "messages_history" && !input.messagesHistoryComplete) {
+    return buildStatusReason(
+      "history_incomplete",
+      "Conversation history is still catching up.",
+    );
+  }
+
+  return null;
+}
+
 function buildTaskError(
   task: SyncTaskRow,
   statusReason: SyncStatusReason | null,
@@ -361,6 +381,15 @@ export function mapDomainBlockToSyncUx(block: SyncDomainBlockStatus): SyncUxSumm
         requiresAction: reasonCode === "credentials_invalid",
       });
     case "delayed":
+      if (reasonCode === "history_incomplete" || reasonCode === "unmet_dependency") {
+        return summary("catching_up", {
+          label: "Catching up",
+          headline: "Sync is catching up",
+          detail: reasonSummary ?? "Historical data is still being filled in.",
+          progressLabel,
+          updatedAt,
+        });
+      }
       return summary("attention", {
         label: "Delayed",
         headline: "Sync is delayed",
@@ -932,7 +961,12 @@ function deriveDomainState(
     supportingTasks.find((task) => task.statusReason !== null) ??
     null;
   const activeReasonTask = primaryReasonTask ?? supportingReasonTask;
-  const statusReason = activeReasonTask?.statusReason ?? null;
+  const statusReason = buildDelayedDomainReason({
+    block,
+    state,
+    statusReason: activeReasonTask?.statusReason ?? null,
+    messagesHistoryComplete,
+  });
   const errorTask = state === "failed" || state === "retrying"
     ? primaryTasks.find((task) => task.error !== null) ?? supportingTasks.find((task) => task.error !== null) ?? null
     : null;

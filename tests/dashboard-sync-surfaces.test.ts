@@ -293,7 +293,7 @@ describe("dashboard sync product surfaces", () => {
     expect(html).not.toContain("Loading...");
   });
 
-  it("shows page detail exceptions with generic sync copy", () => {
+  it("shows page detail attention with incomplete-data copy", () => {
     const overview = buildOverviewPage(buildSyncUx({
       state: "attention",
       label: "Needs attention",
@@ -316,10 +316,37 @@ describe("dashboard sync product surfaces", () => {
       overview.pages,
     );
 
-    expect(html).toContain("Data updates paused");
+    expect(html).toContain("Data may be incomplete");
     expect(html).toContain("check sync settings");
     expect(html).toContain("href=\"/settings?tab=sync\"");
     expect(html).not.toContain("Sync needs attention");
+  });
+
+  it("hides non-blocking catching-up sync states on page detail", () => {
+    const overview = buildOverviewPage(buildSyncUx({
+      state: "catching_up",
+      label: "Catching up",
+      headline: "Sync is catching up",
+      detail: "Conversation history is still catching up.",
+    }));
+    queryMocks.useOverview.mockReturnValue({
+      data: overview,
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(
+      createElement(Routes, undefined,
+        createElement(Route, {
+          path: "/pages/:pageLabel",
+          element: createElement(PageDetailPage),
+        }),
+      ),
+      ["/pages/lana"],
+      overview.pages,
+    );
+
+    expect(html).not.toContain("Data may be incomplete");
+    expect(html).not.toContain("Open Sync Settings");
   });
 
   it("suppresses credentials exceptions on page detail", () => {

@@ -1947,25 +1947,32 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     const { severity, limit } = request.query;
+    const normalizedSeverity = sql<string>`CASE
+      WHEN e.details->>'code' = 'after_ineffective'
+        AND e.severity = 'error'
+        AND e.details->>'earlyStoppedBeyondBoundary' = 'true'
+      THEN 'warn'
+      ELSE e.severity
+    END`;
 
     const rows = severity
       ? (await appContext.db.execute(sql`
           SELECT e.id, e.sync_run_id as "syncRunId",
                  e.provider, e.stream, e.event_type as "eventType",
-                 e.severity, e.message, e.details,
+                 ${normalizedSeverity} as "severity", e.message, e.details,
                  e.emitted_at as "emittedAt",
                  pa.label as "pageLabel"
           FROM sync_run_events e
           INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
           INNER JOIN pages pa ON pa.id = e.platform_account_id
-          WHERE e.severity = ${severity}
+          WHERE ${normalizedSeverity} = ${severity}
           ORDER BY e.emitted_at DESC
           LIMIT ${limit}
         `)).rows
       : (await appContext.db.execute(sql`
           SELECT e.id, e.sync_run_id as "syncRunId",
                  e.provider, e.stream, e.event_type as "eventType",
-                 e.severity, e.message, e.details,
+                 ${normalizedSeverity} as "severity", e.message, e.details,
                  e.emitted_at as "emittedAt",
                  pa.label as "pageLabel"
           FROM sync_run_events e
@@ -2073,15 +2080,22 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     const { severity, code, limit } = request.query;
+    const normalizedSeverity = sql<string>`CASE
+      WHEN e.details->>'code' = 'after_ineffective'
+        AND e.severity = 'error'
+        AND e.details->>'earlyStoppedBeyondBoundary' = 'true'
+      THEN 'warn'
+      ELSE e.severity
+    END`;
 
     let condition = sql`(e.severity IN ('warn', 'error') OR e.event_type = 'anomaly')`;
-    if (severity) condition = sql`${condition} AND e.severity = ${severity}`;
+    if (severity) condition = sql`${condition} AND ${normalizedSeverity} = ${severity}`;
     if (code) condition = sql`${condition} AND e.details->>'code' = ${code}`;
 
     const items = (await appContext.db.execute(sql`
       SELECT e.id, e.sync_run_id as "syncRunId",
              e.provider, e.stream, e.event_type as "eventType",
-             e.severity, e.message, e.details,
+             ${normalizedSeverity} as "severity", e.message, e.details,
              e.emitted_at as "emittedAt",
              pa.label as "pageLabel"
       FROM sync_run_events e
@@ -2104,11 +2118,11 @@ export async function buildApiServer(appContext: AppContext) {
     }));
 
     const summary = (await appContext.db.execute(sql`
-      SELECT e.details->>'code' as "code", e.severity, count(*)::int as "count"
+      SELECT e.details->>'code' as "code", ${normalizedSeverity} as "severity", count(*)::int as "count"
       FROM sync_run_events e
       WHERE (e.severity IN ('warn', 'error') OR e.event_type = 'anomaly')
         AND e.emitted_at > now() - interval '7 days'
-      GROUP BY e.details->>'code', e.severity
+      GROUP BY e.details->>'code', ${normalizedSeverity}
       ORDER BY count DESC
       LIMIT 20
     `)).rows.map((r: any) => ({

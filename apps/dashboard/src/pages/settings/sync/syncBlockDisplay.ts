@@ -156,6 +156,14 @@ function getProgressStreamLabel(stream: string | null): string | null {
   return PROGRESS_STREAM_LABELS[stream] ?? getStreamLabel(stream);
 }
 
+function getProgressDetailNumber(
+  details: Record<string, unknown> | null | undefined,
+  key: string,
+): number | null {
+  const value = details?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export function formatCadence(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const mins = Math.round(seconds / 60);
@@ -283,6 +291,17 @@ export function formatBlockProgressCaption(block: SyncBlockStatus): string | nul
   if (!block.progress) return null;
 
   const source = getProgressStreamLabel(block.progressStream);
+  if (block.block === "messages_history" && block.progress.total != null && block.progress.total > 0) {
+    const remaining = Math.max(0, block.progress.total - block.progress.current);
+    const lagging = getProgressDetailNumber(block.progress.details, "laggingConversationCount");
+    const counts = [
+      `${block.progress.current.toLocaleString()} / ${block.progress.total.toLocaleString()} ready`,
+      `${remaining.toLocaleString()} left`,
+      lagging && lagging > 0 ? `${lagging.toLocaleString()} lagging` : null,
+    ].filter(Boolean).join(" · ");
+    return source ? `${source} · ${counts}` : counts;
+  }
+
   const counts = block.progress.total != null && block.progress.total > 0
     ? `${block.progress.current.toLocaleString()} / ${block.progress.total.toLocaleString()} ${block.progress.unit}`
     : block.progress.label;
@@ -291,7 +310,13 @@ export function formatBlockProgressCaption(block: SyncBlockStatus): string | nul
 }
 
 export function getBlockProgressFillClass(block: SyncBlockStatus): string {
-  return isHealthyQueueWaitingBlock(block) ? "bg-green" : "bg-accent";
+  if (isHealthyQueueWaitingBlock(block)) {
+    return "bg-green";
+  }
+  if (block.state === "delayed") {
+    return "bg-warning-dark";
+  }
+  return "bg-accent";
 }
 
 export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
@@ -299,7 +324,11 @@ export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
     return false;
   }
 
-  if (!["syncing", "backfilling", "scheduled", "retrying"].includes(block.state)) {
+  if (!["syncing", "backfilling", "scheduled", "retrying", "delayed"].includes(block.state)) {
+    return false;
+  }
+
+  if (block.state === "delayed" && block.block !== "messages_history") {
     return false;
   }
 
