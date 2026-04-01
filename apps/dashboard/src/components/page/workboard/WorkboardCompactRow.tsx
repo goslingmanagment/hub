@@ -35,6 +35,10 @@ export function WorkboardCompactRow({
 }: WorkboardCompactRowProps) {
   const [copied, setCopied] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const externalLinkLabel = vm.fanslyExternalKind === "profile" ? "Профиль" : "Чат";
+  const externalLinkTitle = vm.fanslyExternalKind === "profile"
+    ? "Скопировать ссылку на профиль Fansly"
+    : "Скопировать ссылку на чат Fansly";
 
   async function handleCopyFanslyLink(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
@@ -169,8 +173,10 @@ export function WorkboardCompactRow({
               type="button"
               onClick={handleCopyFanslyLink}
               className="px-1.5 py-0.5 text-[10px] font-medium rounded border border-border text-text-secondary hover:bg-hover transition-colors"
+              title={externalLinkTitle}
+              aria-label={externalLinkTitle}
             >
-              {copied ? "Скопировано!" : "Чат"}
+              {copied ? "Скопировано!" : externalLinkLabel}
             </button>
           )}
           <Link
