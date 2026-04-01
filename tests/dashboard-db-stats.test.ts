@@ -19,14 +19,13 @@ describe("DbStatsPage", () => {
     queryMocks.useAdminDbStats.mockReset();
   });
 
-  it("labels the short migration hash column accurately", () => {
+  it("renders migration names from schema_migrations", () => {
     queryMocks.useAdminDbStats.mockReturnValue({
       data: {
         tables: [],
         migrations: [{
-          id: 24,
-          hash: "1234567890abcdef1234567890abcdef",
-          createdAt: "2026-03-22T12:00:00.000Z",
+          name: "20260322_add_sync_rollups.sql",
+          appliedAt: "2026-03-22T12:00:00.000Z",
         }],
       },
       isLoading: false,
@@ -34,9 +33,8 @@ describe("DbStatsPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("Hash Prefix");
-    expect(html).not.toContain(">Name<");
-    expect(html).toContain("1234567890abcdef");
-    expect(html).toContain("1234567890abcdef1234567890abcdef");
+    expect(html).toContain("Migration");
+    expect(html).toContain("Applied");
+    expect(html).toContain("20260322_add_sync_rollups.sql");
   });
 });

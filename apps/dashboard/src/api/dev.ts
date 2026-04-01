@@ -35,9 +35,8 @@ export interface AdminDbTableStat {
 }
 
 export interface AdminDbMigration {
-  id: number | null;
-  hash: string | null;
-  createdAt: string | null;
+  name: string | null;
+  appliedAt: string | null;
 }
 
 export interface AdminDbStatsResponse {
@@ -106,4 +105,3 @@ export function useAdminIncidents(params: { severity?: string; code?: string; li
     refetchInterval: 30_000,
   });
 }
-

@@ -9625,9 +9625,8 @@ export interface paths {
                                 indexBytes: number;
                             }[];
                             migrations: {
-                                id: number;
-                                hash: string;
-                                createdAt: string;
+                                name: string;
+                                appliedAt: string;
                             }[];
                         };
                     };
@@ -10346,4 +10345,3 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export type operations = Record<string, never>;
-

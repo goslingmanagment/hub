@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { createDb, createFanslyPage, createModel, createPool, storeFanslySession } from "@agency_hub_core/db";
 import { createLogger, encryptJson, type FanslySessionBundle } from "@agency_hub_core/shared";
+import type { PoolClient } from "pg";
 import { GenericContainer } from "testcontainers";
 
 import { acquireTestPrerequisite } from "./prerequisites.ts";
@@ -114,41 +115,47 @@ export async function applyTestMigrations(
     through?: string;
   },
 ) {
-  await pool.query(`
-    create table if not exists schema_migrations (
-      id text primary key,
-      applied_at timestamptz not null default now()
-    )
-  `);
+  const client = await pool.connect();
 
-  const migrationsDir = path.resolve("packages/db/migrations");
-  const files = (await readdir(migrationsDir))
-    .filter((file) => file.endsWith(".sql"))
-    .sort();
+  try {
+    await client.query(`
+      create table if not exists schema_migrations (
+        id text primary key,
+        applied_at timestamptz not null default now()
+      )
+    `);
 
-  if (input?.from && !files.includes(input.from)) {
-    throw new Error(`Migration "${input.from}" was not found`);
-  }
-  if (input?.through && !files.includes(input.through)) {
-    throw new Error(`Migration "${input.through}" was not found`);
-  }
+    const migrationsDir = path.resolve("packages/db/migrations");
+    const files = (await readdir(migrationsDir))
+      .filter((file) => file.endsWith(".sql"))
+      .sort();
 
-  const selected = files.filter((file) => (
-    (input?.from ? file >= input.from : true) &&
-    (input?.through ? file <= input.through : true)
-  ));
-
-  for (const file of selected) {
-    const migration = await readFile(path.join(migrationsDir, file), "utf8");
-    await pool.query("begin");
-    try {
-      await pool.query(migration);
-      await pool.query("insert into schema_migrations (id) values ($1)", [file]);
-      await pool.query("commit");
-    } catch (error) {
-      await pool.query("rollback");
-      throw error;
+    if (input?.from && !files.includes(input.from)) {
+      throw new Error(`Migration "${input.from}" was not found`);
     }
+    if (input?.through && !files.includes(input.through)) {
+      throw new Error(`Migration "${input.through}" was not found`);
+    }
+
+    const selected = files.filter((file) => (
+      (input?.from ? file >= input.from : true) &&
+      (input?.through ? file <= input.through : true)
+    ));
+
+    for (const file of selected) {
+      const migration = await readFile(path.join(migrationsDir, file), "utf8");
+      await client.query("begin");
+      try {
+        await client.query(migration);
+        await client.query("insert into schema_migrations (id) values ($1)", [file]);
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      }
+    }
+  } finally {
+    (client as PoolClient).release();
   }
 }
 

@@ -1981,9 +1981,8 @@ export const adminDbTableStatSchema = z.object({
 });
 
 export const adminDbMigrationSchema = z.object({
-  id: intId,
-  hash: z.string(),
-  createdAt: isoTimestamp,
+  name: z.string(),
+  appliedAt: isoTimestamp,
 });
 
 export const adminDbStatsResponseSchema = z.object({

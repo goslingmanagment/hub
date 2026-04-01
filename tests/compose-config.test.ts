@@ -29,13 +29,15 @@ describe("compose config", () => {
       const api = getServiceBlock(text, "api");
       const worker = getServiceBlock(text, "worker");
 
-      expect(migrator).toContain('command: ["pnpm", "db:migrate"]');
+      expect(migrator).toContain('command: ["node", "packages/db/dist/migrate.js"]');
       expect(migrator).toContain("postgres:");
       expect(migrator).toContain("condition: service_healthy");
 
+      expect(api).toContain('command: ["node", "apps/runtime/dist/startup.js", "api"]');
       expect(api).toContain("migrator:");
       expect(api).toContain("condition: service_completed_successfully");
 
+      expect(worker).toContain('command: ["node", "apps/runtime/dist/startup.js", "worker"]');
       expect(worker).toContain("migrator:");
       expect(worker).toContain("condition: service_completed_successfully");
     });

@@ -23,7 +23,13 @@ const fanHydrationMocks = vi.hoisted(() => ({
   hydrateFans: vi.fn(),
 }));
 
-vi.mock("@agency_hub_core/db", () => dbMocks);
+vi.mock("@agency_hub_core/db", async () => {
+  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  return {
+    ...actual,
+    ...dbMocks,
+  };
+});
 vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
 vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
   const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync/fan-hydration.ts")>(

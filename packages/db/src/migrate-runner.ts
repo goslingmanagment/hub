@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { loadConfig } from "@agency_hub_core/shared";
-import type { QueryResult } from "pg";
+import type { PoolClient, QueryResult } from "pg";
 
 import { createPool } from "./client.ts";
 import { resolveMigrationFiles } from "./migrations-dir.ts";
@@ -30,6 +30,21 @@ function assertUniqueMigrationPrefixes(files: string[]) {
 type MigrationDb = {
   query: (text: string, params?: unknown[]) => Promise<QueryResult>;
 };
+
+async function withMigrationClient<T>(
+  databaseUrl: string,
+  run: (db: MigrationDb) => Promise<T>,
+) {
+  const pool = createPool(databaseUrl);
+  const client = await pool.connect();
+
+  try {
+    return await run(client);
+  } finally {
+    (client as PoolClient).release();
+    await pool.end();
+  }
+}
 
 export async function runMigrations(input?: {
   databaseUrl?: string;
@@ -78,11 +93,5 @@ export async function runMigrations(input?: {
   }
 
   const config = loadConfig();
-  const pool = createPool(input?.databaseUrl ?? config.databaseUrl);
-
-  try {
-    await migrate(pool);
-  } finally {
-    await pool.end();
-  }
+  await withMigrationClient(input?.databaseUrl ?? config.databaseUrl, migrate);
 }

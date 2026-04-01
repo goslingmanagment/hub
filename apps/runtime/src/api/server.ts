@@ -2058,14 +2058,13 @@ export async function buildApiServer(appContext: AppContext) {
     let migrations: any[] = [];
     try {
       const migrationRows = (await appContext.db.execute(sql`
-        SELECT id, hash, created_at::bigint as "createdAtMs"
-        FROM drizzle.__drizzle_migrations
-        ORDER BY created_at ASC
+        SELECT id as "name", applied_at as "appliedAt"
+        FROM schema_migrations
+        ORDER BY applied_at ASC, id ASC
       `)).rows;
       migrations = migrationRows.map((r: any) => ({
-        id: toNumber(r.id),
-        hash: r.hash,
-        createdAt: serializeEpochMillisecondsTimestamp(r.createdAtMs),
+        name: r.name,
+        appliedAt: serializeTimestamp(r.appliedAt),
       }));
     } catch {
       // migrations table may not exist

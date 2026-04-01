@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PageSyncLeaseLostError } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 const dbMocks = vi.hoisted(() => ({
@@ -29,6 +30,7 @@ const telemetryMocks = vi.hoisted(() => ({
     metadata: Record<string, unknown>;
     recordRunStarted: ReturnType<typeof vi.fn>;
     recordWorkerHeartbeat: ReturnType<typeof vi.fn>;
+    recordSkipped: ReturnType<typeof vi.fn>;
     finish: ReturnType<typeof vi.fn>;
   }>,
 }));
@@ -56,6 +58,7 @@ vi.mock("../apps/runtime/src/services/sync/observability.ts", () => ({
     readonly metadata: Record<string, unknown>;
     readonly recordRunStarted = vi.fn(async () => undefined);
     readonly recordWorkerHeartbeat = vi.fn(async () => undefined);
+    readonly recordSkipped = vi.fn(async () => undefined);
     readonly finish = vi.fn(async () => undefined);
 
     constructor(_app: unknown, metadata: Record<string, unknown>) {
@@ -388,6 +391,32 @@ describe("sync executor", () => {
     expect(result).toMatchObject({
       kind: "blocked",
       platformAccountId: 55,
+      needsContinuation: false,
+    });
+  });
+
+  it("treats lease loss as a skipped idle result without retrying or blocking", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new PageSyncLeaseLostError(),
+    );
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(telemetryMocks.instances[0]?.recordSkipped).toHaveBeenCalledWith("Page sync lease lost");
+    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "idle",
+      platformAccountId: 55,
+      stream: null,
+      runId: 777,
       needsContinuation: false,
     });
   });

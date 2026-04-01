@@ -1,4 +1,5 @@
 import {
+  assertOwnedPageSyncLease,
   getCheckpoint,
   getOldestPendingTransactionAt,
   recordRunningPageSyncProgress,
@@ -7,6 +8,7 @@ import {
   upsertCheckpoint,
   upsertCheckpointProgress,
   upsertTransaction,
+  withOwnedPageSyncTransaction,
 } from "@agency_hub_core/db";
 import {
   FANSLY_MAPPER_VERSION,
@@ -77,8 +79,10 @@ async function flushFanslyDirtyRange(
     return;
   }
 
-  await rebuildSpenderProjections(app.db, platformAccountId, dirtyFrom);
-  await rebuildRevenueRollups(app.db, platformAccountId, dirtyFrom);
+  await withOwnedPageSyncTransaction(app.db, async (db) => {
+    await rebuildSpenderProjections(db, platformAccountId, dirtyFrom);
+    await rebuildRevenueRollups(db, platformAccountId, dirtyFrom);
+  });
 }
 
 async function recordUnknownFanslyTransactionType(
@@ -177,6 +181,7 @@ async function syncTransactionsIncremental(
   let providerReportedTotal: number | null = null;
 
   while (true) {
+    await assertOwnedPageSyncLease(app.db);
     const page = await app.adapter.getTransactionsPage(
       input.requestContext,
       { after, limit: 100, offset },
@@ -256,9 +261,9 @@ async function syncTransactionsIncremental(
   for (const item of collectedItems) {
     await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
   }
-  await app.db.transaction(async (tx) => {
+  await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
     const fanMap = await hydrateFans(app, {
-      db: tx as typeof app.db,
+      db: dbTx,
       platformAccountId: input.platformAccountId,
       requestContext: input.requestContext,
       platformUserIds: collectedItems
@@ -282,7 +287,7 @@ async function syncTransactionsIncremental(
         ? calculateGrossMillsFromNet(creatorNetAmountMills, commissionRate)
         : sourceAmountMills;
 
-      await upsertTransaction(tx as typeof app.db, {
+      await upsertTransaction(dbTx, {
         platformAccountId: input.platformAccountId,
         fanId,
         transactionId: item.transactionId,
@@ -308,12 +313,12 @@ async function syncTransactionsIncremental(
     }
 
     if (oldestSeenAt) {
-      await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId, oldestSeenAt);
-      await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId, oldestSeenAt);
+      await rebuildSpenderProjections(dbTx, input.platformAccountId, oldestSeenAt);
+      await rebuildRevenueRollups(dbTx, input.platformAccountId, oldestSeenAt);
     }
 
     if (newestSeenAt) {
-      checkpointAfter = await upsertCheckpoint(tx as typeof app.db, {
+      checkpointAfter = await upsertCheckpoint(dbTx, {
         platformAccountId: input.platformAccountId,
         stream: "transactions",
         cursorTimestamp: newestSeenAt,
@@ -522,6 +527,7 @@ async function syncTransactionsBackfill(
 
   try {
     while (true) {
+      await assertOwnedPageSyncLease(app.db);
       const page = await app.adapter.getTransactionsPage(
         input.requestContext,
         {
@@ -595,8 +601,7 @@ async function syncTransactionsBackfill(
         await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
       }
 
-      await app.db.transaction(async (tx) => {
-        const dbTx = tx as typeof app.db;
+      await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
         const fanMap = await hydrateFans(app, {
           db: dbTx,
           platformAccountId: input.platformAccountId,

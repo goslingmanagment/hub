@@ -1,4 +1,5 @@
 import {
+  assertOwnedPageSyncLease,
   getCheckpoint,
   getOldestPendingTransactionAt,
   mergePageMetadata,
@@ -10,6 +11,7 @@ import {
   upsertFanPages,
   upsertFans,
   upsertTransaction,
+  withOwnedPageSyncTransaction,
 } from "@agency_hub_core/db";
 import {
   ONLYMONSTER_MAPPER_VERSION,
@@ -218,8 +220,10 @@ async function persistOnlyFansBackfillLowerBound(
   platformAccountId: number,
   lowerBound: Date,
 ) {
-  await mergePageMetadata(app.db, platformAccountId, {
-    [ONLYFANS_TRANSACTION_BACKFILL_LOWER_BOUND_METADATA_KEY]: lowerBound.toISOString(),
+  await withOwnedPageSyncTransaction(app.db, async (db) => {
+    await mergePageMetadata(db, platformAccountId, {
+      [ONLYFANS_TRANSACTION_BACKFILL_LOWER_BOUND_METADATA_KEY]: lowerBound.toISOString(),
+    });
   });
 }
 
@@ -296,8 +300,10 @@ async function flushOnlyFansDirtyRange(
     return;
   }
 
-  await rebuildSpenderProjections(app.db, platformAccountId, dirtyFrom);
-  await rebuildRevenueRollups(app.db, platformAccountId, dirtyFrom);
+  await withOwnedPageSyncTransaction(app.db, async (db) => {
+    await rebuildSpenderProjections(db, platformAccountId, dirtyFrom);
+    await rebuildRevenueRollups(db, platformAccountId, dirtyFrom);
+  });
 }
 
 async function flushAndClearOnlyFansDirtyRange(
@@ -757,6 +763,7 @@ async function syncOnlyFansTransactionsIncremental(
 
   try {
     while (state.phase === "transactions") {
+      await assertOwnedPageSyncLease(app.db);
       const transactionCursor = state.cursor;
       const page = await app.onlyFansAdapter.getTransactionsPage(
         input.requestContext,
@@ -832,8 +839,7 @@ async function syncOnlyFansTransactionsIncremental(
         await recordUnknownOnlyFansTransactionType(app, input, item.type, seenUnknownRawTypes);
       }
 
-      await app.db.transaction(async (tx) => {
-        const dbTx = tx as typeof app.db;
+      await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
         await upsertOnlyFansIncrementalTransactionsPage(dbTx, {
           platformAccountId: input.platformAccountId,
           commissionRate: input.commissionRate,
@@ -879,6 +885,7 @@ async function syncOnlyFansTransactionsIncremental(
     }
 
     while (true) {
+      await assertOwnedPageSyncLease(app.db);
       const chargebackCursor = state.cursor;
       const page = await app.onlyFansAdapter.getChargebacksPage(
         input.requestContext,
@@ -950,8 +957,7 @@ async function syncOnlyFansTransactionsIncremental(
         keepTransactionIds: nextKeepTransactionIds,
       });
 
-      await app.db.transaction(async (tx) => {
-        const dbTx = tx as typeof app.db;
+      await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
         await upsertOnlyFansIncrementalChargebacksPage(dbTx, {
           platformAccountId: input.platformAccountId,
           commissionRate: input.commissionRate,
@@ -1009,20 +1015,20 @@ async function syncOnlyFansTransactionsIncremental(
   }
 
   let checkpointAfter = null;
-  await app.db.transaction(async (tx) => {
+  await withOwnedPageSyncTransaction(app.db, async (tx) => {
     cleanupApplied = true;
-    await retireTransactionsMissingFromWindow(tx as typeof app.db, {
+    await retireTransactionsMissingFromWindow(tx, {
       platformAccountId: input.platformAccountId,
       from: start,
       to: end,
       cleanupMode: sourceTransactionIds.size > 0 ? "keep_set" : "authoritative_empty",
       keepTransactionIds: Array.from(sourceTransactionIds),
     });
-    await rebuildSpenderProjections(tx as typeof app.db, input.platformAccountId, start);
-    await rebuildRevenueRollups(tx as typeof app.db, input.platformAccountId, start);
+    await rebuildSpenderProjections(tx, input.platformAccountId, start);
+    await rebuildRevenueRollups(tx, input.platformAccountId, start);
 
     if (newestSeenAt) {
-      checkpointAfter = await upsertCheckpoint(tx as typeof app.db, {
+      checkpointAfter = await upsertCheckpoint(tx, {
         platformAccountId: input.platformAccountId,
         stream: "transactions",
         cursorTimestamp: newestSeenAt,
@@ -1336,6 +1342,7 @@ async function syncOnlyFansTransactionsBackfill(
 
   try {
     while (true) {
+      await assertOwnedPageSyncLease(app.db);
       if (state.phase === "transactions") {
         const pageResult = await fetchOnlyFansBackfillTransactionsPage(
           app,
@@ -1454,8 +1461,7 @@ async function syncOnlyFansTransactionsBackfill(
           await recordUnknownOnlyFansTransactionType(app, input, item.type, seenUnknownRawTypes);
         }
 
-        await app.db.transaction(async (tx) => {
-          const dbTx = tx as typeof app.db;
+        await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
           const fans = await upsertFans(dbTx, buildOnlyFansFanInputs(fanPlatformIds));
           const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
           await upsertFanPages(dbTx, fans.map((fan) => ({
@@ -1662,8 +1668,7 @@ async function syncOnlyFansTransactionsBackfill(
         emptyWindowCount: nextState.emptyWindowCount,
       });
 
-      await app.db.transaction(async (tx) => {
-        const dbTx = tx as typeof app.db;
+      await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
         const fans = await upsertFans(dbTx, buildOnlyFansFanInputs(fanPlatformIds));
         const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
         await upsertFanPages(dbTx, fans.map((fan) => ({

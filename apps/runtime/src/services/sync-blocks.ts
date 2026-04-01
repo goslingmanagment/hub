@@ -514,28 +514,32 @@ export async function resetSyncBlock(
     pageId: stored.page.id,
     now,
   });
-  await deleteCheckpoints(app.db, {
-    platformAccountId: stored.page.id,
-    streams: tasks,
-  });
+  const requests = await app.db.transaction(async (tx) => {
+    const dbTx = tx as typeof app.db;
 
-  if (input.block === "messages_history") {
-    await resetPageDmSyncState(app.db, stored.page.id);
-  }
-  if (input.block === "financials") {
-    await deletePageTopSpenders(app.db, stored.page.id);
-  }
+    await resetPageSync(dbTx, {
+      pageId: stored.page.id,
+      streams: tasks,
+      now,
+    });
+    await deleteCheckpoints(dbTx, {
+      platformAccountId: stored.page.id,
+      streams: tasks,
+    });
 
-  await resetPageSync(app.db, {
-    pageId: stored.page.id,
-    streams: tasks,
-    now,
-  });
-  const requests = await requestPageSyncRows(app.db, {
-    pageId: stored.page.id,
-    streams: tasks,
-    source: "reset",
-    now,
+    if (input.block === "messages_history") {
+      await resetPageDmSyncState(dbTx, stored.page.id);
+    }
+    if (input.block === "financials") {
+      await deletePageTopSpenders(dbTx, stored.page.id);
+    }
+
+    return requestPageSyncRows(dbTx, {
+      pageId: stored.page.id,
+      streams: tasks,
+      source: "reset",
+      now,
+    });
   });
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,

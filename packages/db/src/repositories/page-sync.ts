@@ -1565,12 +1565,6 @@ export async function resetPageSync(
 
   const now = input.now ?? new Date();
   await db.execute(sql`
-    delete from ${pageSyncCursors}
-    where page_id = ${input.pageId}
-      and stream = any(${streamArraySql(input.streams)})
-  `);
-
-  await db.execute(sql`
     update ${pageSyncStates}
     set leased_seq = null,
         retry_kind = null,

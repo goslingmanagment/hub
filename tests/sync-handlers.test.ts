@@ -60,6 +60,7 @@ const sharedMocks = vi.hoisted(() => ({
 
 const fanHydrationMocks = vi.hoisted(() => ({
   hydrateFans: vi.fn(),
+  lookupHydratedFans: vi.fn(),
   upsertHydratedFansForPage: vi.fn(),
 }));
 
@@ -83,6 +84,7 @@ vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
   return {
     ...actual,
     hydrateFans: fanHydrationMocks.hydrateFans,
+    lookupHydratedFans: fanHydrationMocks.lookupHydratedFans,
     upsertHydratedFansForPage: fanHydrationMocks.upsertHydratedFansForPage,
   };
 });
@@ -187,6 +189,7 @@ describe("sync executor handlers", () => {
     sharedMocks.persistRawPayload.mockReset();
     sharedMocks.refreshPageMetadata.mockReset();
     fanHydrationMocks.hydrateFans.mockReset();
+    fanHydrationMocks.lookupHydratedFans.mockReset();
     fanHydrationMocks.upsertHydratedFansForPage.mockReset();
     transactionMocks.syncTransactions.mockReset();
 
@@ -216,6 +219,7 @@ describe("sync executor handlers", () => {
     dbMocks.upsertPageDmConversation.mockResolvedValue(undefined);
     dbMocks.upsertPageDmMessages.mockResolvedValue(undefined);
     dbMocks.upsertPageTopSpenders.mockResolvedValue(undefined);
+    dbMocks.upsertFans.mockResolvedValue([]);
     dbMocks.upsertPageFollows.mockResolvedValue(undefined);
     dbMocks.upsertPageSubscriptions.mockResolvedValue(undefined);
     dbMocks.refreshFanPageFollowerState.mockResolvedValue(undefined);
@@ -238,6 +242,34 @@ describe("sync executor handlers", () => {
     sharedMocks.trimFanslyMessagingGroupsPayload.mockReset();
     sharedMocks.trimFanslyMessagingGroupsPayload.mockImplementation((value: unknown) => value);
     fanHydrationMocks.hydrateFans.mockResolvedValue(new Map());
+    fanHydrationMocks.lookupHydratedFans.mockImplementation(async (
+      app: { adapter?: { getAccountsByIdsPage?: ((requestContext: unknown, ids: string[]) => Promise<{ parsed: Array<{ id: string; username: string | null; displayName: string | null; createdAt?: number | null }> }>) | undefined } },
+      input: {
+        requestContext: unknown;
+        platformUserIds: string[];
+      },
+    ) => {
+      const uniqueIds = Array.from(new Set(input.platformUserIds.filter(Boolean)));
+
+      if (typeof app.adapter?.getAccountsByIdsPage === "function") {
+        const response = await app.adapter.getAccountsByIdsPage(input.requestContext, uniqueIds);
+        const accounts = response.parsed;
+        return {
+          accounts,
+          fallbackIds: uniqueIds.filter((id) => !accounts.some((account) => account.id === id)),
+        };
+      }
+
+      return {
+        accounts: uniqueIds.map((id) => ({
+          id,
+          username: id,
+          displayName: id,
+          createdAt: 1_770_000_000_000,
+        })),
+        fallbackIds: [],
+      };
+    });
     fanHydrationMocks.upsertHydratedFansForPage.mockImplementation(async (
       db: object,
       input: {
@@ -967,7 +999,16 @@ describe("sync executor handlers", () => {
     } as never;
 
     dbMocks.getCheckpoint.mockResolvedValue(null);
-    fanHydrationMocks.hydrateFans.mockResolvedValue(new Map([["fan-1", 91]]));
+    fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
+      accounts: [{
+        id: "fan-1",
+        username: "fan_1",
+        displayName: "Fan 1",
+        createdAt: 1_770_000_000_000,
+      }],
+      fallbackIds: [],
+    });
+    dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
 
     const result = await executeSubscribersChunk(app, {
       pageContext: {
@@ -1624,7 +1665,7 @@ describe("sync executor handlers", () => {
     } as never);
 
     expect(result.satisfied).toBe(true);
-    expect(dbMocks.upsertFans).not.toHaveBeenCalled();
+    expect(dbMocks.upsertFans).toHaveBeenCalledWith(db, []);
     expect(dbMocks.upsertFanPages).not.toHaveBeenCalled();
     expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith(db, expect.objectContaining({
       platformAccountId: 55,

@@ -1,4 +1,5 @@
 import {
+  assertOwnedPageSyncLease,
   countRecentTerminalDmMessageConversationFailureStreak,
   countActivePageFollows,
   deactivatePageFollowsByGeneration,
@@ -25,8 +26,10 @@ import {
   upsertFans,
   upsertPageFollows,
   upsertPageSubscriptions,
+  withOwnedPageSyncTransaction,
   refreshFanPageFollowerState,
   refreshFanPageSubscriberState,
+  type DmSenderRole,
   type MessageCoverageStatus,
   type PageSyncLease,
   type UpsertFanPageInput,
@@ -37,6 +40,7 @@ import {
   FANSLY_MAPPER_VERSION,
   FanslyApiError,
   mapFanslySubscriptionStatus,
+  type FanslyAccount,
 } from "@agency_hub_core/fansly";
 import {
   buildFanslyDmConversationMetadata,
@@ -92,7 +96,7 @@ import {
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
 } from "./shared.ts";
-import { hydrateFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
+import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
 
 type ExecutorRequestContext = {
@@ -577,26 +581,28 @@ async function upsertTopSpendersWindow(
       }]
       : []
   ));
-  const fans = fanInputs.length > 0
-    ? await upsertFans(app.db, fanInputs)
-    : [];
-  const fanIdByPlatformUserId = new Map(
-    fans.map((fan) => [fan.platformUserId, fan.id] satisfies [string, number]),
-  );
+  await withOwnedPageSyncTransaction(app.db, async (db) => {
+    const fans = fanInputs.length > 0
+      ? await upsertFans(db, fanInputs)
+      : [];
+    const fanIdByPlatformUserId = new Map(
+      fans.map((fan) => [fan.platformUserId, fan.id] satisfies [string, number]),
+    );
 
-  await upsertPageTopSpenders(app.db, validItems.map((item) => ({
-    platformAccountId: input.platformAccountId,
-    sourceIdentityKey: item.sourceIdentityKey,
-    correlationAccountId: item.correlationAccountId,
-    accountId: item.accountId,
-    fanId: item.correlationAccountId
-      ? (fanIdByPlatformUserId.get(item.correlationAccountId) ?? null)
-      : null,
-    grossAmountMills: BigInt(Math.trunc(item.totalGross)),
-    creatorNetAmountMills: BigInt(Math.trunc(item.totalNet)),
-    sourceWindowStartedAt: input.windowStartedAt,
-    sourceWindowEndedAt: input.windowEndedAt,
-  })));
+    await upsertPageTopSpenders(db, validItems.map((item) => ({
+      platformAccountId: input.platformAccountId,
+      sourceIdentityKey: item.sourceIdentityKey,
+      correlationAccountId: item.correlationAccountId,
+      accountId: item.accountId,
+      fanId: item.correlationAccountId
+        ? (fanIdByPlatformUserId.get(item.correlationAccountId) ?? null)
+        : null,
+      grossAmountMills: BigInt(Math.trunc(item.totalGross)),
+      creatorNetAmountMills: BigInt(Math.trunc(item.totalNet)),
+      sourceWindowStartedAt: input.windowStartedAt,
+      sourceWindowEndedAt: input.windowEndedAt,
+    })));
+  });
 
   return validItems.length;
 }
@@ -608,9 +614,11 @@ export async function executeLightChunk(
   await input.telemetry.recordPhaseStarted("page_metadata");
   if (input.pageContext.platform === "fansly") {
     const account = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
-    await updatePageSyncTimestampCache(app.db, {
-      pageId: input.pageContext.page.id,
-      syncType: "light",
+    await withOwnedPageSyncTransaction(app.db, async (db) => {
+      await updatePageSyncTimestampCache(db, {
+        pageId: input.pageContext.page.id,
+        syncType: "light",
+      });
     });
 
     return {
@@ -624,9 +632,11 @@ export async function executeLightChunk(
   }
 
   const account = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
-  await updatePageSyncTimestampCache(app.db, {
-    pageId: input.pageContext.page.id,
-    syncType: "light",
+  await withOwnedPageSyncTransaction(app.db, async (db) => {
+    await updatePageSyncTimestampCache(db, {
+      pageId: input.pageContext.page.id,
+      syncType: "light",
+    });
   });
 
   return {
@@ -686,6 +696,7 @@ export async function executeTopSpendersChunk(
 
   const processPendingWindows = async () => {
     while (state.pendingWindows.length > 0) {
+      await assertOwnedPageSyncLease(app.db);
       const currentWindow: TopSpendersCursorWindow = state.pendingWindows[0]!;
       const windowStartedAt = new Date(currentWindow.startedAt);
       const windowEndedAt = new Date(currentWindow.endedAt);
@@ -854,6 +865,7 @@ export async function executeTopSpendersChunk(
     startedAt: steadyStateWindowStartedAt.toISOString(),
     endedAt: steadyStateWindowEndedAt.toISOString(),
   } satisfies TopSpendersCursorWindow;
+  await assertOwnedPageSyncLease(app.db);
   const response = await app.adapter.getEarningsAccountsPage(requestContext, {
     after: steadyStateWindowStartedAt,
     before: steadyStateWindowEndedAt,
@@ -1049,6 +1061,7 @@ export async function executeSubscribersChunk(
   let processedThisChunk = 0;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+    await assertOwnedPageSyncLease(app.db);
     const page = await app.adapter.getSubscribersPage(
       requestContext,
       { limit: 100, offset: state.offset, status: "3,4" },
@@ -1087,61 +1100,69 @@ export async function executeSubscribersChunk(
       }
     }
 
-    const fanMap = await hydrateFans(app, {
-      platformAccountId: input.pageContext.page.id,
+    const hydratedFans = await lookupHydratedFans(app, {
       requestContext,
       platformUserIds: page.items.map((item) => item.subscriberId),
       telemetry: input.telemetry,
     });
+    const nextState = page.done
+      ? state
+      : {
+        ...state,
+        offset: state.offset + 100,
+      };
+    const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+      const fanMap = await upsertHydratedFansForPage(dbTx, {
+        platformAccountId: input.pageContext.page.id,
+        accounts: hydratedFans.accounts,
+        fallbackIds: hydratedFans.fallbackIds,
+      });
 
-    const subscriptionInputs: UpsertPageSubscriptionInput[] = [];
-    const fanPageInputs: UpsertFanPageInput[] = [];
-    for (const item of page.items) {
-      const fanId = fanMap.get(item.subscriberId);
-      if (!fanId) {
-        continue;
+      const subscriptionInputs: UpsertPageSubscriptionInput[] = [];
+      const fanPageInputs: UpsertFanPageInput[] = [];
+      for (const item of page.items) {
+        const fanId = fanMap.get(item.subscriberId);
+        if (!fanId) {
+          continue;
+        }
+
+        const sourceCreatedAt = item.createdAt ? new Date(item.createdAt) : null;
+        const endsAt = item.endsAt ? new Date(item.endsAt) : null;
+        const autoRenew = item.autoRenew === null ? null : item.autoRenew === 1;
+        const canonicalStatus = mapFanslySubscriptionStatus(item.status);
+        subscriptionInputs.push({
+          platformSubscriptionId: item.id,
+          platformAccountId: input.pageContext.page.id,
+          fanId,
+          platformHistoryId: item.historyId,
+          subscriptionTierId: item.subscriptionTierId,
+          subscriptionTierName: item.subscriptionTierName,
+          subscriptionTierColor: item.subscriptionTierColor,
+          planId: item.planId,
+          rawStatus: item.status,
+          canonicalStatus,
+          priceMills: toMills(item.price),
+          renewPriceMills: toMills(item.renewPrice),
+          autoRenew,
+          billingCycleDays: item.billingCycle,
+          durationDays: item.duration,
+          renewDate: item.renewDate ? new Date(item.renewDate) : null,
+          sourceCreatedAt,
+          sourceUpdatedAt: item.updatedAt ? new Date(item.updatedAt) : null,
+          endsAt,
+          lastSeenGeneration: state.generation,
+        });
+        fanPageInputs.push({
+          fanId,
+          platformAccountId: input.pageContext.page.id,
+          isSubscriber: true,
+          subscriberSince: sourceCreatedAt,
+          subscriptionExpiresAt: endsAt,
+          autoRenew,
+        });
       }
 
-      const sourceCreatedAt = item.createdAt ? new Date(item.createdAt) : null;
-      const endsAt = item.endsAt ? new Date(item.endsAt) : null;
-      const autoRenew = item.autoRenew === null ? null : item.autoRenew === 1;
-      const canonicalStatus = mapFanslySubscriptionStatus(item.status);
-      subscriptionInputs.push({
-        platformSubscriptionId: item.id,
-        platformAccountId: input.pageContext.page.id,
-        fanId,
-        platformHistoryId: item.historyId,
-        subscriptionTierId: item.subscriptionTierId,
-        subscriptionTierName: item.subscriptionTierName,
-        subscriptionTierColor: item.subscriptionTierColor,
-        planId: item.planId,
-        rawStatus: item.status,
-        canonicalStatus,
-        priceMills: toMills(item.price),
-        renewPriceMills: toMills(item.renewPrice),
-        autoRenew,
-        billingCycleDays: item.billingCycle,
-        durationDays: item.duration,
-        renewDate: item.renewDate ? new Date(item.renewDate) : null,
-        sourceCreatedAt,
-        sourceUpdatedAt: item.updatedAt ? new Date(item.updatedAt) : null,
-        endsAt,
-        lastSeenGeneration: state.generation,
-      });
-      fanPageInputs.push({
-        fanId,
-        platformAccountId: input.pageContext.page.id,
-        isSubscriber: true,
-        subscriberSince: sourceCreatedAt,
-        subscriptionExpiresAt: endsAt,
-        autoRenew,
-      });
-    }
-    processedThisChunk += subscriptionInputs.length;
-
-    if (page.done) {
-      const completedCheckpoint = await app.db.transaction(async (tx) => {
-        const dbTx = tx as typeof app.db;
+      if (page.done) {
         await upsertPageSubscriptions(dbTx, subscriptionInputs);
         await upsertFanPages(dbTx, fanPageInputs);
         await deactivatePageSubscriptionsByGeneration(dbTx, {
@@ -1150,14 +1171,34 @@ export async function executeSubscribersChunk(
         });
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
-        return upsertCheckpoint(dbTx, {
+        return {
+          kind: "complete" as const,
+          checkpoint: await upsertCheckpoint(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "subscribers",
+            state,
+            lastSuccessfulRunId: input.syncRunId,
+          }),
+          processedThisPage: subscriptionInputs.length,
+        };
+      }
+
+      await upsertPageSubscriptions(dbTx, subscriptionInputs);
+      await upsertFanPages(dbTx, fanPageInputs);
+      return {
+        kind: "progress" as const,
+        checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "subscribers",
-          state,
-          lastSuccessfulRunId: input.syncRunId,
-        });
-      });
-      await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(completedCheckpoint));
+          state: nextState,
+        }),
+        processedThisPage: subscriptionInputs.length,
+      };
+    });
+    processedThisChunk += pageWrite.processedThisPage;
+
+    if (pageWrite.kind === "complete") {
+      await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(pageWrite.checkpoint));
       return {
         satisfied: true,
         yieldReason: null,
@@ -1170,18 +1211,8 @@ export async function executeSubscribersChunk(
       } satisfies StreamChunkResult;
     }
 
-    await upsertPageSubscriptions(app.db, subscriptionInputs);
-    await upsertFanPages(app.db, fanPageInputs);
-    state = {
-      ...state,
-      offset: state.offset + 100,
-    };
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "subscribers",
-      state,
-    });
-    await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(progressCheckpoint));
+    state = nextState;
+    await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(pageWrite.checkpoint));
 
     if (input.budget.shouldYield()) {
       return {
@@ -1255,6 +1286,7 @@ export async function executeFollowersChunk(
   let sawKnownCheckpoint = false;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+    await assertOwnedPageSyncLease(app.db);
     const page = await app.adapter.getFollowersPage(
       requestContext,
       getFanslyPlatformAccountIdValue(input.pageContext),
@@ -1283,46 +1315,53 @@ export async function executeFollowersChunk(
       action: "inserting followers raw payload",
     });
 
-    const fanMap = await upsertHydratedFansForPage(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      accounts: page.accounts,
-    });
-
     let reachedBoundary = false;
-    const followInputs: UpsertPageFollowInput[] = [];
-    const fanPageInputs: UpsertFanPageInput[] = [];
-    for (const follower of page.items) {
-      if (state.knownFollowId && follower.id === state.knownFollowId) {
-        sawKnownCheckpoint = true;
-        reachedBoundary = true;
-        break;
+    const newestFollowId = state.newestFollowId ?? state.knownFollowId;
+    const nextState = page.done
+      ? state
+      : {
+        ...state,
+        offset: state.offset + 100,
+      };
+    const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+      const fanMap = await upsertHydratedFansForPage(dbTx, {
+        platformAccountId: input.pageContext.page.id,
+        accounts: page.accounts,
+      });
+
+      const followInputs: UpsertPageFollowInput[] = [];
+      const fanPageInputs: UpsertFanPageInput[] = [];
+      let pageSawKnownCheckpoint = false;
+      let pageReachedBoundary = false;
+
+      for (const follower of page.items) {
+        if (state.knownFollowId && follower.id === state.knownFollowId) {
+          pageSawKnownCheckpoint = true;
+          pageReachedBoundary = true;
+          break;
+        }
+
+        const fanId = fanMap.get(follower.followerId);
+        if (!fanId) {
+          continue;
+        }
+
+        const followedAt = fanslyFollowIdToDate(follower.id);
+        followInputs.push({
+          platformAccountId: input.pageContext.page.id,
+          fanId,
+          platformFollowId: follower.id,
+          followedAt,
+        });
+        fanPageInputs.push({
+          fanId,
+          platformAccountId: input.pageContext.page.id,
+          isFollower: true,
+          followerSince: followedAt,
+        });
       }
 
-      const fanId = fanMap.get(follower.followerId);
-      if (!fanId) {
-        continue;
-      }
-
-      const followedAt = fanslyFollowIdToDate(follower.id);
-      followInputs.push({
-        platformAccountId: input.pageContext.page.id,
-        fanId,
-        platformFollowId: follower.id,
-        followedAt,
-      });
-      fanPageInputs.push({
-        fanId,
-        platformAccountId: input.pageContext.page.id,
-        isFollower: true,
-        followerSince: followedAt,
-      });
-    }
-    processedThisChunk += followInputs.length;
-
-    if (reachedBoundary || page.done) {
-      const newestFollowId = state.newestFollowId ?? state.knownFollowId;
-      const completedCheckpoint = await app.db.transaction(async (tx) => {
-        const dbTx = tx as typeof app.db;
+      if (pageReachedBoundary || page.done) {
         await upsertPageFollows(dbTx, followInputs);
         await upsertFanPages(dbTx, fanPageInputs);
         await rebuildFollowerRollups(dbTx, input.pageContext.page.id, state.sourceFollowerCount);
@@ -1330,15 +1369,40 @@ export async function executeFollowersChunk(
           pageId: input.pageContext.page.id,
           syncType: "followers",
         });
-        return upsertCheckpoint(dbTx, {
+        return {
+          kind: "complete" as const,
+          checkpoint: await upsertCheckpoint(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "followers",
+            cursorText: newestFollowId,
+            state,
+            lastSuccessfulRunId: input.syncRunId,
+          }),
+          processedThisPage: followInputs.length,
+          sawKnownCheckpoint: pageSawKnownCheckpoint,
+          reachedBoundary: pageReachedBoundary,
+        };
+      }
+
+      await upsertPageFollows(dbTx, followInputs);
+      await upsertFanPages(dbTx, fanPageInputs);
+      return {
+        kind: "progress" as const,
+        checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "followers",
-          cursorText: newestFollowId,
-          state,
-          lastSuccessfulRunId: input.syncRunId,
-        });
-      });
-      await input.telemetry.recordCheckpointAdvanced("followers", summarizeCheckpoint(completedCheckpoint));
+          state: nextState,
+        }),
+        processedThisPage: followInputs.length,
+        sawKnownCheckpoint: pageSawKnownCheckpoint,
+        reachedBoundary: pageReachedBoundary,
+      };
+    });
+    processedThisChunk += pageWrite.processedThisPage;
+    sawKnownCheckpoint ||= pageWrite.sawKnownCheckpoint;
+
+    if (pageWrite.kind === "complete") {
+      await input.telemetry.recordCheckpointAdvanced("followers", summarizeCheckpoint(pageWrite.checkpoint));
 
       const activeFollowerCount = await countActivePageFollows(app.db, input.pageContext.page.id);
       if (
@@ -1361,18 +1425,8 @@ export async function executeFollowersChunk(
       } satisfies StreamChunkResult;
     }
 
-    await upsertPageFollows(app.db, followInputs);
-    await upsertFanPages(app.db, fanPageInputs);
-    state = {
-      ...state,
-      offset: state.offset + 100,
-    };
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "followers",
-      state,
-    });
-    await input.telemetry.recordCheckpointAdvanced("followers", summarizeCheckpoint(progressCheckpoint));
+    state = nextState;
+    await input.telemetry.recordCheckpointAdvanced("followers", summarizeCheckpoint(pageWrite.checkpoint));
 
     if (input.budget.shouldYield()) {
       return {
@@ -1448,6 +1502,7 @@ export async function executeFollowersReconcileChunk(
   let processedThisChunk = 0;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+    await assertOwnedPageSyncLease(app.db);
     const page = await app.adapter.getFollowersPage(
       requestContext,
       getFanslyPlatformAccountIdValue(input.pageContext),
@@ -1475,39 +1530,43 @@ export async function executeFollowersReconcileChunk(
       action: "inserting followers raw payload",
     });
 
-    const fanMap = await upsertHydratedFansForPage(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      accounts: page.accounts,
-    });
+    const nextState = page.done
+      ? state
+      : {
+        ...state,
+        offset: state.offset + 100,
+      };
+    const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+      const fanMap = await upsertHydratedFansForPage(dbTx, {
+        platformAccountId: input.pageContext.page.id,
+        accounts: page.accounts,
+      });
 
-    const followInputs: UpsertPageFollowInput[] = [];
-    const fanPageInputs: UpsertFanPageInput[] = [];
-    for (const follower of page.items) {
-      const fanId = fanMap.get(follower.followerId);
-      if (!fanId) {
-        continue;
+      const followInputs: UpsertPageFollowInput[] = [];
+      const fanPageInputs: UpsertFanPageInput[] = [];
+      for (const follower of page.items) {
+        const fanId = fanMap.get(follower.followerId);
+        if (!fanId) {
+          continue;
+        }
+
+        const followedAt = fanslyFollowIdToDate(follower.id);
+        followInputs.push({
+          platformAccountId: input.pageContext.page.id,
+          fanId,
+          platformFollowId: follower.id,
+          followedAt,
+          lastSeenGeneration: state.generation,
+        });
+        fanPageInputs.push({
+          fanId,
+          platformAccountId: input.pageContext.page.id,
+          isFollower: true,
+          followerSince: followedAt,
+        });
       }
 
-      const followedAt = fanslyFollowIdToDate(follower.id);
-      followInputs.push({
-        platformAccountId: input.pageContext.page.id,
-        fanId,
-        platformFollowId: follower.id,
-        followedAt,
-        lastSeenGeneration: state.generation,
-      });
-      fanPageInputs.push({
-        fanId,
-        platformAccountId: input.pageContext.page.id,
-        isFollower: true,
-        followerSince: followedAt,
-      });
-    }
-    processedThisChunk += followInputs.length;
-
-    if (page.done) {
-      const completedCheckpoint = await app.db.transaction(async (tx) => {
-        const dbTx = tx as typeof app.db;
+      if (page.done) {
         await upsertPageFollows(dbTx, followInputs);
         await upsertFanPages(dbTx, fanPageInputs);
         await deactivatePageFollowsByGeneration(dbTx, {
@@ -1520,16 +1579,36 @@ export async function executeFollowersReconcileChunk(
           pageId: input.pageContext.page.id,
           syncType: "followers",
         });
-        return upsertCheckpoint(dbTx, {
+        return {
+          kind: "complete" as const,
+          checkpoint: await upsertCheckpoint(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "followers_reconcile",
+            state,
+            lastSuccessfulRunId: input.syncRunId,
+          }),
+          processedThisPage: followInputs.length,
+        };
+      }
+
+      await upsertPageFollows(dbTx, followInputs);
+      await upsertFanPages(dbTx, fanPageInputs);
+      return {
+        kind: "progress" as const,
+        checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "followers_reconcile",
-          state,
-          lastSuccessfulRunId: input.syncRunId,
-        });
-      });
+          state: nextState,
+        }),
+        processedThisPage: followInputs.length,
+      };
+    });
+    processedThisChunk += pageWrite.processedThisPage;
+
+    if (pageWrite.kind === "complete") {
       await input.telemetry.recordCheckpointAdvanced(
         "followers_reconcile",
-        summarizeCheckpoint(completedCheckpoint),
+        summarizeCheckpoint(pageWrite.checkpoint),
       );
       return {
         satisfied: true,
@@ -1543,20 +1622,10 @@ export async function executeFollowersReconcileChunk(
       } satisfies StreamChunkResult;
     }
 
-    await upsertPageFollows(app.db, followInputs);
-    await upsertFanPages(app.db, fanPageInputs);
-    state = {
-      ...state,
-      offset: state.offset + 100,
-    };
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "followers_reconcile",
-      state,
-    });
+    state = nextState;
     await input.telemetry.recordCheckpointAdvanced(
       "followers_reconcile",
-      summarizeCheckpoint(progressCheckpoint),
+      summarizeCheckpoint(pageWrite.checkpoint),
     );
 
     if (input.budget.shouldYield()) {
@@ -1639,6 +1708,7 @@ export async function executeDmConversationsChunk(
   let repairedHeads = 0;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+    await assertOwnedPageSyncLease(app.db);
     const page = await app.adapter.getMessagingGroupsPage(requestContext, {
       limit: 100,
       offset: state.offset,
@@ -1677,6 +1747,35 @@ export async function executeDmConversationsChunk(
       ]),
     );
     let unchangedPage = true;
+    const hydratedAccountsById = new Map<string, FanslyAccount>();
+    const fallbackPartnerIds = new Set<string>();
+    const conversationWrites: Array<{
+      existingFanId: number | null;
+      partnerPlatformUserId: string | null;
+      partnerUsername: string | null;
+      partnerDisplayName: string | null;
+      conversationFlags: number;
+      unreadCount: number;
+      subscriptionTierId: string | null;
+      lastMessageId: string | null;
+      lastUnreadMessageId: string | null;
+      lastMessageAt: Date | null;
+      lastMessageSenderId: string | null;
+      lastMessageSenderRole: DmSenderRole;
+      lastMessagePreview: string | null;
+      lastFanMessageAt: Date | null;
+      lastModelMessageAt: Date | null;
+      storedMessageCount: number;
+      newestStoredMessageId: string | null;
+      oldestStoredMessageId: string | null;
+      messageCoverageStatus: MessageCoverageStatus;
+      messageBackfillComplete: boolean;
+      lastMessageSyncAt: Date | null;
+      isVisible: boolean;
+      lastSeenGeneration: number;
+      metadata: Record<string, unknown>;
+      platformConversationId: string;
+    }> = [];
 
     for (const conversation of page.items) {
       const existing = existingByGroupId.get(conversation.groupId) ?? null;
@@ -1731,21 +1830,18 @@ export async function executeDmConversationsChunk(
         existing?.partnerDisplayName ??
         null;
 
-      let fanId: number | null = partnerMissingFromAggregationAccounts
-        ? existing?.fanId ?? null
-        : null;
       if (partnerPlatformUserId && !partnerMissingFromAggregationAccounts) {
-        const fanMap = await upsertHydratedFansForPage(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          accounts: [{
+        if (partnerSnapshot) {
+          hydratedAccountsById.set(partnerPlatformUserId, {
             id: partnerPlatformUserId,
             username: partnerUsername,
             displayName: partnerDisplayName,
-            createdAt: partnerSnapshot?.createdAt,
-            notes: partnerSnapshot?.notes,
-          }],
-        });
-        fanId = fanMap.get(partnerPlatformUserId) ?? null;
+            createdAt: partnerSnapshot.createdAt,
+            notes: partnerSnapshot.notes,
+          });
+        } else {
+          fallbackPartnerIds.add(partnerPlatformUserId);
+        }
       }
 
       let headMessage = group?.lastMessage ?? detail?.parsed.lastMessage ?? null;
@@ -1840,7 +1936,6 @@ export async function executeDmConversationsChunk(
         !existing ||
         existing.lastMessageId !== (conversation.lastMessageId ?? null) ||
         existing.unreadCount !== conversation.unreadCount ||
-        existing.fanId !== fanId ||
         !existing.isVisible ||
         hasUnresolvedIdentityMetadata(existing?.metadata) !== hasUnresolvedIdentityMetadata(metadata) ||
         getFanslyDmMessageSyncExcludedReason(existing?.metadata) !==
@@ -1849,9 +1944,10 @@ export async function executeDmConversationsChunk(
         unchangedPage = false;
       }
 
-      await upsertPageDmConversation(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        fanId,
+      conversationWrites.push({
+        existingFanId: partnerMissingFromAggregationAccounts
+          ? (existing?.fanId ?? null)
+          : null,
         platformConversationId: conversation.groupId,
         partnerPlatformUserId,
         partnerUsername,
@@ -1879,34 +1975,91 @@ export async function executeDmConversationsChunk(
         lastSeenGeneration: state.generation,
         metadata,
       });
-      processedConversations += 1;
     }
+    processedConversations += conversationWrites.length;
 
-    state = {
+    const nextState = {
       ...state,
       unchangedPageStreak: unchangedPage ? state.unchangedPageStreak + 1 : 0,
+      offset: page.done ? state.offset : state.offset + 100,
     };
+    const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+      const fanMap = await upsertHydratedFansForPage(dbTx, {
+        platformAccountId: input.pageContext.page.id,
+        accounts: [...hydratedAccountsById.values()],
+        fallbackIds: [...fallbackPartnerIds],
+      });
 
-    if (page.done) {
-      await markPageDmConversationsInvisibleByGeneration(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        generation: state.generation,
-      });
-      const completedState = {
-        version: 1,
-        generation: state.generation,
-        lastFullSweepCompletedAt: new Date().toISOString(),
+      for (const conversationWrite of conversationWrites) {
+        const fanId = conversationWrite.partnerPlatformUserId && conversationWrite.existingFanId === null
+          ? (fanMap.get(conversationWrite.partnerPlatformUserId) ?? null)
+          : conversationWrite.existingFanId;
+        await upsertPageDmConversation(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          fanId,
+          platformConversationId: conversationWrite.platformConversationId,
+          partnerPlatformUserId: conversationWrite.partnerPlatformUserId,
+          partnerUsername: conversationWrite.partnerUsername,
+          partnerDisplayName: conversationWrite.partnerDisplayName,
+          conversationFlags: conversationWrite.conversationFlags,
+          unreadCount: conversationWrite.unreadCount,
+          subscriptionTierId: conversationWrite.subscriptionTierId,
+          lastMessageId: conversationWrite.lastMessageId,
+          lastUnreadMessageId: conversationWrite.lastUnreadMessageId,
+          lastMessageAt: conversationWrite.lastMessageAt,
+          lastMessageSenderId: conversationWrite.lastMessageSenderId,
+          lastMessageSenderRole: conversationWrite.lastMessageSenderRole,
+          lastMessagePreview: conversationWrite.lastMessagePreview,
+          lastFanMessageAt: conversationWrite.lastFanMessageAt,
+          lastModelMessageAt: conversationWrite.lastModelMessageAt,
+          storedMessageCount: conversationWrite.storedMessageCount,
+          newestStoredMessageId: conversationWrite.newestStoredMessageId,
+          oldestStoredMessageId: conversationWrite.oldestStoredMessageId,
+          messageCoverageStatus: conversationWrite.messageCoverageStatus,
+          messageBackfillComplete: conversationWrite.messageBackfillComplete,
+          lastMessageSyncAt: conversationWrite.lastMessageSyncAt,
+          isVisible: conversationWrite.isVisible,
+          lastSeenGeneration: conversationWrite.lastSeenGeneration,
+          metadata: conversationWrite.metadata,
+        });
+      }
+
+      if (page.done) {
+        await markPageDmConversationsInvisibleByGeneration(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          generation: state.generation,
+        });
+        const completedState = {
+          version: 1,
+          generation: state.generation,
+          lastFullSweepCompletedAt: new Date().toISOString(),
+        };
+        return {
+          kind: "complete" as const,
+          checkpoint: await upsertCheckpoint(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "dm_conversations",
+            state: completedState,
+            lastSuccessfulRunId: input.syncRunId,
+          }),
+        };
+      }
+
+      return {
+        kind: "progress" as const,
+        checkpoint: await upsertCheckpointProgress(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "dm_conversations",
+          state: nextState,
+        }),
       };
-      const completedCheckpoint = await upsertCheckpoint(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "dm_conversations",
-        state: completedState,
-        lastSuccessfulRunId: input.syncRunId,
-      });
-      await input.telemetry.recordCheckpointAdvanced(
-        "dm_conversations",
-        summarizeCheckpoint(completedCheckpoint),
-      );
+    });
+    await input.telemetry.recordCheckpointAdvanced(
+      "dm_conversations",
+      summarizeCheckpoint(pageWrite.checkpoint),
+    );
+
+    if (pageWrite.kind === "complete") {
       return {
         satisfied: true,
         yieldReason: null,
@@ -1922,19 +2075,7 @@ export async function executeDmConversationsChunk(
       } satisfies StreamChunkResult;
     }
 
-    state = {
-      ...state,
-      offset: state.offset + 100,
-    };
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "dm_conversations",
-      state,
-    });
-    await input.telemetry.recordCheckpointAdvanced(
-      "dm_conversations",
-      summarizeCheckpoint(progressCheckpoint),
-    );
+    state = nextState;
   }
 
   return {
@@ -2015,6 +2156,7 @@ export async function executeDmMessagesChunk(
 
   try {
     conversationLoop: while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+      await assertOwnedPageSyncLease(app.db);
       let conversation = state.currentConversationId
         ? await getPageDmConversationById(app.db, state.currentConversationId)
         : null;
@@ -2084,19 +2226,21 @@ export async function executeDmMessagesChunk(
       const currentMode = state.currentMode;
       let collectedThisConversation = 0;
       while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
-        dmMessagesRequestObserver.recordConversationTouched(conversation.id);
+        const currentConversation = conversation;
+        await assertOwnedPageSyncLease(app.db);
+        dmMessagesRequestObserver.recordConversationTouched(currentConversation.id);
 
         let page;
         try {
           page = await app.adapter.getMessagesPage(requestContext, {
-            groupId: conversation.platformConversationId,
+            groupId: currentConversation.platformConversationId,
             limit: 25,
             before: state.currentBeforeMessageId,
           });
         } catch (error) {
           if (
             !isTerminalFanslyServerError(error) ||
-            !conversation.partnerPlatformUserId
+            !currentConversation.partnerPlatformUserId
           ) {
             throw error;
           }
@@ -2105,7 +2249,7 @@ export async function executeDmMessagesChunk(
             app.db,
             {
               platformAccountId: input.pageContext.page.id,
-              platformConversationId: conversation.platformConversationId,
+              platformConversationId: currentConversation.platformConversationId,
             },
           );
           if (failureStreak < DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD) {
@@ -2119,49 +2263,56 @@ export async function executeDmMessagesChunk(
           const resolution = await probeFanslyAccountResolution(
             app,
             requestContext,
-            conversation.partnerPlatformUserId,
+            currentConversation.partnerPlatformUserId,
           );
           if (resolution !== "unresolved") {
             throw error;
           }
 
-          await upsertPageDmConversation(app.db, {
-            platformAccountId: conversation.platformAccountId,
-            fanId: conversation.fanId,
-            platformConversationId: conversation.platformConversationId,
-            partnerPlatformUserId: conversation.partnerPlatformUserId,
-            partnerUsername: conversation.partnerUsername,
-            partnerDisplayName: conversation.partnerDisplayName,
-            conversationFlags: conversation.conversationFlags,
-            unreadCount: conversation.unreadCount,
-            subscriptionTierId: conversation.subscriptionTierId,
-            lastMessageId: conversation.lastMessageId,
-            lastUnreadMessageId: conversation.lastUnreadMessageId,
-            lastMessageAt: conversation.lastMessageAt,
-            lastMessageSenderId: conversation.lastMessageSenderId,
-            lastMessageSenderRole: conversation.lastMessageSenderRole,
-            lastMessagePreview: conversation.lastMessagePreview,
-            lastFanMessageAt: conversation.lastFanMessageAt,
-            lastModelMessageAt: conversation.lastModelMessageAt,
-            storedMessageCount: conversation.storedMessageCount,
-            newestStoredMessageId: conversation.newestStoredMessageId,
-            oldestStoredMessageId: conversation.oldestStoredMessageId,
-            messageCoverageStatus: conversation.messageCoverageStatus,
-            messageBackfillComplete: conversation.messageBackfillComplete,
-            lastMessageSyncAt: conversation.lastMessageSyncAt,
-            isVisible: conversation.isVisible,
-            lastSeenGeneration: conversation.lastSeenGeneration,
-            metadata: {
-              ...conversation.metadata,
-              [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
-                FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-            },
+          const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+            await upsertPageDmConversation(dbTx, {
+              platformAccountId: currentConversation.platformAccountId,
+              fanId: currentConversation.fanId,
+              platformConversationId: currentConversation.platformConversationId,
+              partnerPlatformUserId: currentConversation.partnerPlatformUserId,
+              partnerUsername: currentConversation.partnerUsername,
+              partnerDisplayName: currentConversation.partnerDisplayName,
+              conversationFlags: currentConversation.conversationFlags,
+              unreadCount: currentConversation.unreadCount,
+              subscriptionTierId: currentConversation.subscriptionTierId,
+              lastMessageId: currentConversation.lastMessageId,
+              lastUnreadMessageId: currentConversation.lastUnreadMessageId,
+              lastMessageAt: currentConversation.lastMessageAt,
+              lastMessageSenderId: currentConversation.lastMessageSenderId,
+              lastMessageSenderRole: currentConversation.lastMessageSenderRole,
+              lastMessagePreview: currentConversation.lastMessagePreview,
+              lastFanMessageAt: currentConversation.lastFanMessageAt,
+              lastModelMessageAt: currentConversation.lastModelMessageAt,
+              storedMessageCount: currentConversation.storedMessageCount,
+              newestStoredMessageId: currentConversation.newestStoredMessageId,
+              oldestStoredMessageId: currentConversation.oldestStoredMessageId,
+              messageCoverageStatus: currentConversation.messageCoverageStatus,
+              messageBackfillComplete: currentConversation.messageBackfillComplete,
+              lastMessageSyncAt: currentConversation.lastMessageSyncAt,
+              isVisible: currentConversation.isVisible,
+              lastSeenGeneration: currentConversation.lastSeenGeneration,
+              metadata: {
+                ...currentConversation.metadata,
+                [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+                  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+              },
+            });
+            return upsertCheckpointProgress(dbTx, {
+              platformAccountId: input.pageContext.page.id,
+              stream: "dm_messages",
+              state: emptyDmMessagesCursorState(),
+            });
           });
           await input.telemetry.addNote(
             "Excluded DM conversation after repeated 5xx because partner account is unresolvable",
             {
-              groupId: conversation.platformConversationId,
-              partnerPlatformUserId: conversation.partnerPlatformUserId,
+              groupId: currentConversation.platformConversationId,
+              partnerPlatformUserId: currentConversation.partnerPlatformUserId,
               failureStreak,
               exclusionReason:
                 FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
@@ -2169,11 +2320,6 @@ export async function executeDmMessagesChunk(
           );
 
           state = emptyDmMessagesCursorState();
-          const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-            platformAccountId: input.pageContext.page.id,
-            stream: "dm_messages",
-            state,
-          });
           await input.telemetry.recordCheckpointAdvanced(
             "dm_messages",
             summarizeCheckpoint(progressCheckpoint),
@@ -2181,12 +2327,12 @@ export async function executeDmMessagesChunk(
           continue conversationLoop;
         }
         const existingIds = await getExistingPageDmMessageIds(app.db, {
-          conversationId: conversation.id,
+          conversationId: currentConversation.id,
           platformMessageIds: page.items.map((message) => message.id),
         });
         const overlapFound = page.items.some((message) => existingIds.has(message.id));
 
-        const normalizedMessages = [];
+        const normalizedMessages: Parameters<typeof upsertPageDmMessages>[1] = [];
         for (const message of page.items) {
           const createdAt = await normalizeDmTimestampWithAnomaly(input.telemetry, {
             context: "dm_messages:message",
@@ -2204,7 +2350,7 @@ export async function executeDmMessagesChunk(
             senderRole: resolveDmSenderRole(
               message.senderId ?? null,
               pageAccountId,
-              conversation.partnerPlatformUserId,
+              currentConversation.partnerPlatformUserId,
             ),
             createdAt,
             content: message.content ?? "",
@@ -2216,17 +2362,17 @@ export async function executeDmMessagesChunk(
             inReplyToRootMessageId: message.inReplyToRoot ?? null,
           });
         }
-        await upsertPageDmMessages(app.db, normalizedMessages);
-        collectedThisConversation += normalizedMessages
+        const insertedMessageCount = normalizedMessages
           .filter((message) => !existingIds.has(message.platformMessageId))
           .length;
+        collectedThisConversation += insertedMessageCount;
         processedMessages += normalizedMessages.length;
 
         const oldestMessageId = page.items.at(-1)?.id ?? null;
         const providerHistoryExhausted = page.done || !oldestMessageId;
         const hitWindowCap =
           currentMode === "backfill" &&
-          (conversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_MESSAGE_HISTORY_LIMIT;
+          (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_MESSAGE_HISTORY_LIMIT;
         const shouldComplete = currentMode === "incremental"
           ? overlapFound || providerHistoryExhausted
           : overlapFound || providerHistoryExhausted || hitWindowCap;
@@ -2237,26 +2383,33 @@ export async function executeDmMessagesChunk(
           }
           const messageCoverageStatus = resolveDmConversationCoverageStatus({
             currentMode,
-            existingStatus: conversation.messageCoverageStatus,
+            existingStatus: currentConversation.messageCoverageStatus,
             overlapFound,
             providerHistoryExhausted,
             hitWindowCap,
           });
-          const finalized = await finalizePageDmConversationMessageSync(app.db, {
-            conversationId: conversation.id,
-            messageCoverageStatus,
+          const finalized = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+            await upsertPageDmMessages(dbTx, normalizedMessages);
+            const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
+              conversationId: currentConversation.id,
+              messageCoverageStatus,
+            });
+            const progressCheckpoint = await upsertCheckpointProgress(dbTx, {
+              platformAccountId: input.pageContext.page.id,
+              stream: "dm_messages",
+              state: emptyDmMessagesCursorState(),
+            });
+            return {
+              finalizedConversation,
+              progressCheckpoint,
+            };
           });
-          conversation = finalized.conversation;
+          conversation = finalized.finalizedConversation.conversation;
           completedConversations += 1;
           state = emptyDmMessagesCursorState();
-          const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-            platformAccountId: input.pageContext.page.id,
-            stream: "dm_messages",
-            state,
-          });
           await input.telemetry.recordCheckpointAdvanced(
             "dm_messages",
-            summarizeCheckpoint(progressCheckpoint),
+            summarizeCheckpoint(finalized.progressCheckpoint),
           );
           break;
         }
@@ -2265,10 +2418,13 @@ export async function executeDmMessagesChunk(
           ...state,
           currentBeforeMessageId: oldestMessageId,
         };
-        const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          stream: "dm_messages",
-          state,
+        const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+          await upsertPageDmMessages(dbTx, normalizedMessages);
+          return upsertCheckpointProgress(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "dm_messages",
+            state,
+          });
         });
         await input.telemetry.recordCheckpointAdvanced(
           "dm_messages",

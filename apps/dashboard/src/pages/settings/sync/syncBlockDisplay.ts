@@ -242,7 +242,11 @@ export function getDependencyWaitDetail(item: SyncReasonCarrier): string | null 
 function hasOpaqueAudienceFollowerProgress(block: SyncBlockStatus): boolean {
   return block.block === "audience" &&
     block.progress?.unit === "followers" &&
-    (block.progress.total == null || block.progress.total <= 0);
+    (
+      block.progress.total == null ||
+      block.progress.total <= 0 ||
+      block.progress.current >= block.progress.total
+    );
 }
 
 function hasCompletedMessagesLiveProgress(block: SyncBlockStatus): boolean {

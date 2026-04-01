@@ -90,7 +90,7 @@ export function DbStatsPage() {
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
-              {["Hash Prefix", "Hash", "Applied"].map((col) => (
+              {["Migration", "Applied"].map((col) => (
                 <th
                   key={col}
                   className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted"
@@ -103,24 +103,21 @@ export function DbStatsPage() {
           <tbody>
             {migrations.length === 0 && (
               <tr>
-                <td colSpan={3} className="px-4 py-8 text-center text-sm text-text-muted">
+                <td colSpan={2} className="px-4 py-8 text-center text-sm text-text-muted">
                   No migrations found.
                 </td>
               </tr>
             )}
-            {migrations.map((m, idx) => (
+            {migrations.map((m) => (
               <tr
-                key={m.id ?? idx}
+                key={m.name ?? "unknown-migration"}
                 className="border-t border-border transition-colors hover:bg-hover"
               >
                 <td className="px-4 py-3 text-sm text-text-primary font-medium font-mono">
-                  {m.hash ? m.hash.slice(0, 16) : `#${m.id ?? idx}`}
-                </td>
-                <td className="px-4 py-3 text-sm text-text-muted font-mono">
-                  {m.hash ?? "\u2014"}
+                  {m.name ?? "\u2014"}
                 </td>
                 <td className="px-4 py-3 text-sm text-text-secondary">
-                  {m.createdAt ? formatDateTime(m.createdAt) : "\u2014"}
+                  {m.appliedAt ? formatDateTime(m.appliedAt) : "\u2014"}
                 </td>
               </tr>
             ))}

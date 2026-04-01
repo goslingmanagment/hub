@@ -20,7 +20,13 @@ const sharedMocks = vi.hoisted(() => ({
   retentionDate: vi.fn(() => new Date("2026-09-10T00:00:00.000Z")),
 }));
 
-vi.mock("@agency_hub_core/db", () => dbMocks);
+vi.mock("@agency_hub_core/db", async () => {
+  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  return {
+    ...actual,
+    ...dbMocks,
+  };
+});
 vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";

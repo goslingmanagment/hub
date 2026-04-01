@@ -9,6 +9,7 @@ import {
   findPageById,
   heartbeatPageSyncLease,
   listRunnablePageSync,
+  PageSyncLeaseLostError,
   retryPageSync,
   runWithPageSyncExecutionContext,
   startSyncRun,
@@ -459,6 +460,18 @@ export async function executeNextSyncPageChunk(
     const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
     return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "yielded", continuationPriority);
   } catch (error) {
+    if (error instanceof PageSyncLeaseLostError) {
+      await telemetry.recordSkipped("Page sync lease lost");
+      return {
+        kind: "idle",
+        platformAccountId,
+        stream: null,
+        runId: run.id,
+        needsContinuation: false,
+        continuationPriority: null,
+      };
+    }
+
     const failure = normalizeSyncError(error, {
       endpoint: taskLease.stream,
       action: `executing ${taskLease.stream} sync chunk`,

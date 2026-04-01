@@ -462,8 +462,11 @@ describe("sync blocks service", () => {
       { stream: "dm_messages", requestedSeq: 4 },
     ]);
     queueMocks.sendSyncPageWakeup.mockResolvedValue("job-1");
+    const db = {
+      transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+    };
 
-    const response = await resetSyncBlock({ db: {} } as never, {
+    const response = await resetSyncBlock({ db } as never, {
       send: vi.fn(),
     } as never, {
       pageLabel: "lana",
@@ -477,6 +480,7 @@ describe("sync blocks service", () => {
       block: "messages_history",
       requests: [{ stream: "dm_messages", requestedSeq: 4 }],
     });
+    expect(db.transaction).toHaveBeenCalledTimes(1);
     expect(dbMocks.deleteCheckpoints).toHaveBeenCalledWith(expect.anything(), {
       platformAccountId: 7,
       streams: ["dm_messages"],

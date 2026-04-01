@@ -19,7 +19,7 @@ services:
   migrator:
     build: .
     image: agency_hub_core/runtime:local
-    command: ["pnpm", "db:migrate"]
+    command: ["node", "packages/db/dist/migrate.js"]
     env_file: .env.docker
     volumes:
       - ./.sessions:/app/.sessions:ro
@@ -31,7 +31,7 @@ services:
   api:
     build: .
     image: agency_hub_core/runtime:local
-    command: ["pnpm", "api"]
+    command: ["node", "apps/runtime/dist/startup.js", "api"]
     ports:
       - "3000:3000"
     env_file: .env.docker
@@ -46,6 +46,7 @@ services:
 
   worker:
     image: agency_hub_core/runtime:local
+    command: ["node", "apps/runtime/dist/startup.js", "worker"]
     env_file: .env.docker
     volumes:
       - ./.sessions:/app/.sessions:ro
