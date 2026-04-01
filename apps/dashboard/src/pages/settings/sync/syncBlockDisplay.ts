@@ -115,12 +115,28 @@ const BLOCK_ORDER: SyncBlockKey[] = [
   "messages_history",
 ];
 
-export function getBlockTone(state: SyncBlockState): BlockTone {
-  return BLOCK_STATE_TONES[state];
+function isHealthyQueueWaitingBlock(block: SyncBlockStatus): boolean {
+  return block.state === "scheduled" && isQueueWaiting(block) && block.primaryFresh;
 }
 
-export function getBlockStateLabel(state: SyncBlockState): string {
-  return BLOCK_STATE_LABELS[state];
+function isHealthyQueueWaitingSubstream(substream: SyncBlockSubstream): boolean {
+  return substream.state === "scheduled" && isQueueWaiting(substream) && substream.isFresh;
+}
+
+function getDisplayBlockState(blockOrState: SyncBlockStatus | SyncBlockState): SyncBlockState {
+  if (typeof blockOrState === "string") {
+    return blockOrState;
+  }
+
+  return isHealthyQueueWaitingBlock(blockOrState) ? "up_to_date" : blockOrState.state;
+}
+
+export function getBlockTone(blockOrState: SyncBlockStatus | SyncBlockState): BlockTone {
+  return BLOCK_STATE_TONES[getDisplayBlockState(blockOrState)];
+}
+
+export function getBlockStateLabel(blockOrState: SyncBlockStatus | SyncBlockState): string {
+  return BLOCK_STATE_LABELS[getDisplayBlockState(blockOrState)];
 }
 
 export function getBlockLabel(block: SyncBlockKey): string {
@@ -274,6 +290,10 @@ export function formatBlockProgressCaption(block: SyncBlockStatus): string | nul
   return source ? `${source} \u00b7 ${counts}` : counts;
 }
 
+export function getBlockProgressFillClass(block: SyncBlockStatus): string {
+  return isHealthyQueueWaitingBlock(block) ? "bg-green" : "bg-accent";
+}
+
 export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
   if (!block.progress || block.progress.total == null || block.progress.total <= 0) {
     return false;
@@ -288,6 +308,14 @@ export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
   }
 
   if (hasCompletedMessagesLiveProgress(block)) {
+    return false;
+  }
+
+  if (
+    isHealthyQueueWaitingBlock(block) &&
+    block.progressRole === "supporting" &&
+    block.progress.current >= block.progress.total
+  ) {
     return false;
   }
 
@@ -354,6 +382,14 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
       return "Queued too long with no active sync making progress";
     }
     return getReasonSummary(block) ?? "Sync is delayed";
+  }
+
+  if (isHealthyQueueWaitingBlock(block)) {
+    const waitingOn = getWaitingStreams(block);
+    if (waitingOn.length === 1) {
+      return `Up to date \u00b7 waiting for ${getStreamLabel(waitingOn[0])} to finish`;
+    }
+    return "Up to date \u00b7 queued behind active sync work";
   }
 
   if (block.state === "scheduled" && isQueueWaiting(block)) {
@@ -475,6 +511,9 @@ const BLOCK_METRIC_KEYS: Partial<Record<SyncBlockKey, readonly string[]>> = {
 };
 
 export function getSubstreamTone(substream: SyncBlockSubstream): BlockTone {
+  if (isHealthyQueueWaitingSubstream(substream)) {
+    return BLOCK_STATE_TONES.up_to_date;
+  }
   if (isDependencyWait(substream)) {
     return BLOCK_STATE_TONES.scheduled;
   }
@@ -512,6 +551,13 @@ export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string
 
   if (substream.state === "scheduled") {
     if (code === "queue_waiting") {
+      if (isHealthyQueueWaitingSubstream(substream)) {
+        const waitingOn = getWaitingStreams(substream);
+        if (waitingOn.length === 1) {
+          return `Up to date \u00b7 waiting for ${getStreamLabel(waitingOn[0])}`;
+        }
+        return "Up to date \u00b7 queued behind active sync work";
+      }
       const waitingOn = getWaitingStreams(substream);
       if (waitingOn.length === 1) {
         return `Waiting \u00b7 ${getStreamLabel(waitingOn[0])}`;

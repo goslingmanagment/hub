@@ -332,6 +332,14 @@ function summary(state: SyncUxSummary["state"], input: {
   };
 }
 
+function isHealthyQueueWaitingBlock(block: SyncDomainBlockStatus) {
+  return block.state === "scheduled" && block.statusReason?.code === "queue_waiting" && block.primaryFresh;
+}
+
+function isHealthyDisplayBlock(block: SyncDomainBlockStatus) {
+  return block.state === "up_to_date" || isHealthyQueueWaitingBlock(block);
+}
+
 export function mapDomainBlockToSyncUx(block: SyncDomainBlockStatus): SyncUxSummary {
   const updatedAt = latestIso(block.tasks.map((task) => (
     task.lastProgressAt ? new Date(task.lastProgressAt) : task.lastSuccessAt ? new Date(task.lastSuccessAt) : null
@@ -377,6 +385,15 @@ export function mapDomainBlockToSyncUx(block: SyncDomainBlockStatus): SyncUxSumm
         updatedAt,
       });
     case "scheduled":
+      if (reasonCode === "queue_waiting" && block.primaryFresh) {
+        return summary("healthy", {
+          label: "Up to date",
+          headline: "Up to date",
+          detail: "Current data is up to date while another sync continues in the background.",
+          progressLabel,
+          updatedAt,
+        });
+      }
       return summary("catching_up", {
         label: "Queued",
         headline: "Queued to continue",
@@ -461,14 +478,22 @@ function buildPageSyncUx(blocks: SyncDomainBlockStatus[]) {
     return mapDomainBlockToSyncUx(delayed);
   }
 
-  const syncing = supportedBlocks.find((block) => block.state === "syncing");
-  if (syncing) {
-    return mapDomainBlockToSyncUx(syncing);
-  }
+  const activeBlock = supportedBlocks.find((block) => block.state === "syncing" || block.state === "backfilling");
+  if (activeBlock) {
+    const otherBlocksHealthy = supportedBlocks
+      .filter((block) => block !== activeBlock)
+      .every(isHealthyDisplayBlock);
+    if (otherBlocksHealthy) {
+      return summary("syncing", {
+        label: "Syncing",
+        headline: "Syncing now",
+        detail: "Background sync is actively processing queued work.",
+        progressLabel: activeBlock.progress?.label ?? null,
+        updatedAt: mapDomainBlockToSyncUx(activeBlock).updatedAt,
+      });
+    }
 
-  const backfilling = supportedBlocks.find((block) => block.state === "backfilling");
-  if (backfilling) {
-    return mapDomainBlockToSyncUx(backfilling);
+    return mapDomainBlockToSyncUx(activeBlock);
   }
 
   const retrying = supportedBlocks.find((block) => block.state === "retrying");

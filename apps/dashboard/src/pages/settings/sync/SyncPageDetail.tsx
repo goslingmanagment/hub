@@ -10,6 +10,7 @@ import {
   getBlockLabel,
   formatBlockSummary,
   formatBlockProgressCaption,
+  getBlockProgressFillClass,
   formatCadence,
   formatNextTime,
   getDependencyWaitDetail,
@@ -37,7 +38,7 @@ function BlockDetailCard({
       <div className="rounded-xl border border-border bg-card px-5 py-4">
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold text-text-muted">{label}</span>
-          <SyncBlockBadge state={block.state} />
+          <SyncBlockBadge block={block} />
         </div>
         <p className="mt-1 text-xs text-text-muted">
           Not available on this platform
@@ -65,11 +66,11 @@ function BlockDetailCard({
       {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <span className="text-sm font-semibold text-text-primary">{label}</span>
-        <SyncBlockBadge state={block.state} />
+        <SyncBlockBadge block={block} />
       </div>
 
       {/* Summary */}
-      <p className={`mt-2 text-xs ${getBlockTone(block.state).text}`}>
+      <p className={`mt-2 text-xs ${getBlockTone(block).text}`}>
         {summary}
       </p>
 
@@ -78,7 +79,7 @@ function BlockDetailCard({
         <div className="mt-2 flex items-center gap-2">
           <div className="h-1.5 flex-1 max-w-[240px] rounded-full bg-hover-alt overflow-hidden">
             <div
-              className="h-full rounded-full bg-accent transition-all"
+              className={`h-full rounded-full transition-all ${getBlockProgressFillClass(block)}`}
               style={{
                 width: `${Math.min(100, block.progress.percent ?? (block.progress.current / block.progress.total) * 100)}%`,
               }}

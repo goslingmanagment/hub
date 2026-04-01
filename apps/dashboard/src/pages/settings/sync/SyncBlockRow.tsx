@@ -3,13 +3,14 @@ import {
   getBlockTone,
   getBlockLabel,
   getBlockStateLabel,
+  getBlockProgressFillClass,
   formatBlockSummary,
   formatBlockProgressCaption,
   shouldShowBlockProgressBar,
 } from "./syncBlockDisplay.js";
 
 export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
-  const tone = getBlockTone(block.state);
+  const tone = getBlockTone(block);
   const label = getBlockLabel(block.block);
   const summary = formatBlockSummary(block);
   const isNA = block.state === "not_available";
@@ -29,7 +30,7 @@ export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
           <div className="flex items-center gap-2 basis-full mt-0.5">
             <div className="h-1.5 flex-1 max-w-[180px] rounded-full bg-hover-alt overflow-hidden">
               <div
-                className="h-full rounded-full bg-accent transition-all"
+                className={`h-full rounded-full transition-all ${getBlockProgressFillClass(block)}`}
                 style={{
                   width: `${Math.min(100, block.progress.percent ?? (block.progress.current / block.progress.total) * 100)}%`,
                 }}
@@ -45,9 +46,9 @@ export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
   );
 }
 
-export function SyncBlockBadge({ state }: { state: SyncBlockStatus["state"] }) {
-  const tone = getBlockTone(state);
-  const label = getBlockStateLabel(state);
+export function SyncBlockBadge({ block }: { block: SyncBlockStatus }) {
+  const tone = getBlockTone(block);
+  const label = getBlockStateLabel(block);
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${tone.badge}`}

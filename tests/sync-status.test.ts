@@ -392,6 +392,10 @@ describe("sync status service", () => {
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listSyncTaskRows.mockResolvedValue([
       buildTaskRow({
+        task: "light",
+        lastSuccessAt: new Date("2026-03-24T11:50:00.000Z"),
+      }),
+      buildTaskRow({
         task: "transactions",
         status: "queued",
         desiredGeneration: 2,
@@ -428,7 +432,7 @@ describe("sync status service", () => {
     });
   });
 
-  it("keeps queued work neutral when a sibling page is actively using the same queue group", async () => {
+  it("treats fresh queue waits as healthy when a sibling page is actively using the same queue group", async () => {
     dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage(),
@@ -484,7 +488,92 @@ describe("sync status service", () => {
         waitingFor: ["dm_messages"],
       }),
     });
-    expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");
+    expect(snapshot.pages[0]?.syncUx.state).toBe("healthy");
+  });
+
+  it("keeps page sync UX blue while history backfill runs and fresh siblings wait in queue", async () => {
+    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listSyncTaskRows.mockResolvedValue([
+      buildTaskRow({
+        task: "light",
+        lastSuccessAt: new Date("2026-03-24T11:50:00.000Z"),
+      }),
+      buildTaskRow({
+        task: "transactions",
+        status: "queued",
+        desiredGeneration: 2,
+        appliedGeneration: 1,
+        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
+        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+      }),
+      buildTaskRow({
+        task: "subscribers",
+        status: "queued",
+        desiredGeneration: 2,
+        appliedGeneration: 1,
+        lastSuccessAt: new Date("2026-03-24T11:54:00.000Z"),
+        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+      }),
+      buildTaskRow({
+        task: "followers",
+        status: "queued",
+        desiredGeneration: 2,
+        appliedGeneration: 1,
+        lastSuccessAt: new Date("2026-03-24T11:54:00.000Z"),
+        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+      }),
+      buildTaskRow({
+        task: "dm_conversations",
+        status: "queued",
+        desiredGeneration: 2,
+        appliedGeneration: 1,
+        lastSuccessAt: new Date("2026-03-24T11:54:00.000Z"),
+        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+      }),
+      buildTaskRow({
+        task: "dm_messages",
+        status: "running",
+        desiredGeneration: 1,
+        appliedGeneration: 0,
+        currentWorkClass: "history",
+        lastSuccessAt: null,
+        lastStartedAt: new Date("2026-03-24T11:58:00.000Z"),
+        lastProgressAt: new Date("2026-03-24T11:59:00.000Z"),
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+      buildMonitorRow({ stream: "subscribers" }),
+      buildMonitorRow({ stream: "followers" }),
+      buildMonitorRow({ stream: "dm_conversations" }),
+      buildMonitorRow({
+        stream: "dm_messages",
+        dmEligibleConversationCount: 3669,
+        dmBackfillCompleteConversationCount: 203,
+        dmLaggingConversationCount: 3466,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.financials.statusReason).toMatchObject({
+      code: "queue_waiting",
+    });
+    expect(snapshot.pages[0]?.blocks.audience.statusReason).toMatchObject({
+      code: "queue_waiting",
+    });
+    expect(snapshot.pages[0]?.blocks.connection.state).toBe("up_to_date");
+    expect(snapshot.pages[0]?.blocks.financials.state).toBe("scheduled");
+    expect(snapshot.pages[0]?.blocks.audience.state).toBe("scheduled");
+    expect(snapshot.pages[0]?.blocks.messages_live.state).toBe("scheduled");
+    expect(snapshot.pages[0]?.blocks.messages_history.state).toBe("backfilling");
+    expect(snapshot.pages[0]?.syncUx.state).toBe("syncing");
   });
 
   it("still marks queue waits as delayed when active siblings are in another queue group", async () => {

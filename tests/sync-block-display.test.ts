@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   formatBlockSummary,
   formatSubstreamStateLabel,
+  getBlockStateLabel,
+  getBlockTone,
   getDependencyWaitDetail,
+  getSubstreamTone,
   needsVisualAttention,
   shouldShowBlockProgressBar,
 } from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
@@ -360,20 +363,27 @@ describe("sync block display", () => {
   });
 
   it("describes expected queue waits without warning copy", () => {
-    expect(formatBlockSummary({
+    const block = {
       block: "financials",
       state: "scheduled",
       lastSuccessAt: "2026-03-24T11:55:00.000Z",
-      progress: null,
-      progressStream: null,
-      progressRole: null,
+      progress: {
+        label: "15 / 15 months",
+        current: 15,
+        total: 15,
+        unit: "months",
+        percent: 100,
+        details: {},
+      },
+      progressStream: "top_spenders",
+      progressRole: "supporting",
       error: null,
       statusReason: {
         code: "queue_waiting",
         summary: "Queued - will start after current sync completes.",
         waitingFor: ["dm_messages"],
       },
-      primaryFresh: false,
+      primaryFresh: true,
       needsAttention: false,
       nextDueAt: null,
       nextRetryAt: null,
@@ -381,9 +391,14 @@ describe("sync block display", () => {
       metrics: {},
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Queued — message history is running");
+    } as never;
 
-    expect(formatSubstreamStateLabel({
+    expect(formatBlockSummary(block)).toBe("Up to date · waiting for message history to finish");
+    expect(getBlockStateLabel(block)).toBe("Up to date");
+    expect(getBlockTone(block).text).toBe("text-green");
+    expect(shouldShowBlockProgressBar(block)).toBe(false);
+
+    const substream = {
       stream: "transactions",
       role: "primary",
       state: "scheduled",
@@ -399,6 +414,46 @@ describe("sync block display", () => {
         waitingFor: ["dm_messages"],
       },
       error: null,
-    } as never)).toBe("Waiting · message history");
+    } as never;
+
+    expect(formatSubstreamStateLabel(substream)).toBe("Up to date · waiting for message history");
+    expect(getSubstreamTone(substream).text).toBe("text-green");
+  });
+
+  it("keeps non-fresh queue waits neutral and visible", () => {
+    const block = {
+      block: "audience",
+      state: "scheduled",
+      lastSuccessAt: null,
+      progress: {
+        label: "14 / 15 months",
+        current: 14,
+        total: 15,
+        unit: "months",
+        percent: 93.33,
+        details: {},
+      },
+      progressStream: "followers_reconcile",
+      progressRole: "supporting",
+      error: null,
+      statusReason: {
+        code: "queue_waiting",
+        summary: "Queued - will start after current sync completes.",
+        waitingFor: ["dm_messages"],
+      },
+      primaryFresh: false,
+      needsAttention: false,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: {},
+      connectionStatus: null,
+      substreams: [],
+    } as never;
+
+    expect(formatBlockSummary(block)).toBe("Queued — message history is running");
+    expect(getBlockStateLabel(block)).toBe("Queued");
+    expect(getBlockTone(block).text).toBe("text-text-secondary");
+    expect(shouldShowBlockProgressBar(block)).toBe(true);
   });
 });

@@ -135,6 +135,23 @@ function buildSyncBlock(
     connectionStatus: "connected" | "not_connected" | "error" | null;
     metrics: Record<string, unknown>;
     state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
+    progress: {
+      label: string;
+      current: number;
+      total: number | null;
+      unit: string;
+      percent: number | null;
+      details: Record<string, unknown>;
+    } | null;
+    progressStream: string | null;
+    progressRole: "primary" | "supporting" | null;
+    statusReason: {
+      code: string | null;
+      summary: string | null;
+      waitingFor: string[] | null;
+    } | null;
+    primaryFresh: boolean;
+    needsAttention: boolean;
   }> = {},
 ) {
   return {
@@ -471,6 +488,75 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("Sync needs attention");
     expect(html).toContain("Subscribers stopped making progress and need the worker to recover.");
+  });
+
+  it("renders fresh queue waits as healthy while message history backfill is running", () => {
+    const overview = buildSyncOverview();
+    overview.pages[0]!.blocks.financials = {
+      ...overview.pages[0]!.blocks.financials,
+      state: "scheduled",
+      primaryFresh: true,
+      statusReason: {
+        code: "queue_waiting",
+        summary: "Queued - will start after current sync completes.",
+        waitingFor: ["dm_messages"],
+      },
+      progress: {
+        label: "15 / 15 months",
+        current: 15,
+        total: 15,
+        unit: "months",
+        percent: 100,
+        details: {},
+      },
+      progressStream: "top_spenders",
+      progressRole: "supporting",
+    };
+    overview.pages[0]!.blocks.audience = {
+      ...overview.pages[0]!.blocks.audience,
+      state: "scheduled",
+      primaryFresh: true,
+      statusReason: {
+        code: "queue_waiting",
+        summary: "Queued - will start after current sync completes.",
+        waitingFor: ["dm_messages"],
+      },
+    };
+    overview.pages[0]!.blocks.messages_live = {
+      ...overview.pages[0]!.blocks.messages_live,
+      state: "scheduled",
+      primaryFresh: true,
+      statusReason: {
+        code: "queue_waiting",
+        summary: "Queued - will start after current sync completes.",
+        waitingFor: ["dm_messages"],
+      },
+    };
+    overview.pages[0]!.blocks.messages_history = {
+      ...overview.pages[0]!.blocks.messages_history,
+      state: "backfilling",
+      primaryFresh: false,
+      progress: {
+        label: "203 / 3,669 conversations",
+        current: 203,
+        total: 3669,
+        unit: "conversations",
+        percent: 5.53,
+        details: {},
+      },
+      progressStream: "dm_messages",
+      progressRole: "primary",
+    };
+    queryMocks.useSyncOverview.mockReturnValue({
+      data: overview,
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
+
+    expect(html).toContain("Up to date · waiting for message history to finish");
+    expect(html).not.toContain("Queued — message history is running");
+    expect(html).toContain("Backfilling… 203/3,669 conversations");
   });
 
   it("shows Workboard in page breadcrumbs for both canonical and legacy routes", () => {
