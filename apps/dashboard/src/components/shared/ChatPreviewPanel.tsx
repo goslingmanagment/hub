@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import type { CrmConversationPreviewResponse } from "@agency_hub_core/contracts";
 import { useCrmConversationPreview } from "@/api/queries";
@@ -115,6 +116,26 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
     isError,
     isLoading,
   } = useCrmConversationPreview(pageLabel, platformConversationId, { limit });
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const hasAutoScrolledRef = useRef(false);
+
+  useEffect(() => {
+    hasAutoScrolledRef.current = false;
+  }, [platformConversationId]);
+
+  useEffect(() => {
+    if (!data || data.messages.length === 0 || hasAutoScrolledRef.current) {
+      return;
+    }
+
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
+    hasAutoScrolledRef.current = true;
+  }, [platformConversationId, data?.messages.length]);
 
   if (isLoading) {
     return (
@@ -147,7 +168,7 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
 
   return (
     <div className="bg-hover/50 px-6 py-4 space-y-2">
-      <div className="flex flex-col gap-1.5 max-h-[320px] overflow-y-auto">
+      <div ref={messagesContainerRef} className="flex flex-col gap-1.5 max-h-[320px] overflow-y-auto">
         {data.messages.map((msg: CrmConversationPreviewResponse["messages"][number]) => {
           const isModel = msg.senderRole === "model";
           return (
