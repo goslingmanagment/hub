@@ -6751,6 +6751,85 @@ describe("api integration", () => {
     });
   });
 
+  it("blocks chatter API keys from workboard read and write routes", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-30T12:00:00.000Z"));
+
+    const workboardPage = await createFanslyPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-workboard-api-key",
+    });
+    await updatePageMetadata(testDb.db, workboardPage.id, {
+      platformAccountIdValue: "acct-lana-workboard-api-key",
+      username: "lana_workboard_api_key",
+      displayName: "Lana Workboard API Key",
+      followerCount: 0,
+      subscriberCount: 2,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    const seeded = await seedWorkboardApiFixture({
+      testDb,
+      pageId: workboardPage.id,
+    });
+
+    const appContext = createTestAppContext(testDb);
+    await assignPageToUser(appContext, {
+      username: "anton",
+      pageLabel: "lana-workboard-api-key",
+    }, { source: "cli" });
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton",
+    }, { source: "cli" });
+
+    const workboard = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-workboard-api-key/workboard",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(workboard.statusCode).toBe(403);
+    expect(workboard.json()).toMatchObject({
+      message: "Dashboard routes require a cookie session",
+    });
+
+    const snooze = await server.inject({
+      method: "POST",
+      url: "/api/v1/pages/lana-workboard-api-key/workboard/snooze",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+      payload: {
+        fanId: seeded.snoozedSubscriber.id,
+        days: 7,
+      },
+    });
+    expect(snooze.statusCode).toBe(403);
+    expect(snooze.json()).toMatchObject({
+      message: "Dashboard routes require a cookie session",
+    });
+
+    const unsnooze = await server.inject({
+      method: "DELETE",
+      url: `/api/v1/pages/lana-workboard-api-key/workboard/snooze/${seeded.snoozedSubscriber.id}`,
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(unsnooze.statusCode).toBe(403);
+    expect(unsnooze.json()).toMatchObject({
+      message: "Dashboard routes require a cookie session",
+    });
+  });
+
   it("enforces CRM page access and rejects non-Fansly pages", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
@@ -6835,6 +6914,54 @@ describe("api integration", () => {
     });
     expect(apiKeyMessages.statusCode).toBe(403);
     expect(apiKeyMessages.json()).toMatchObject({
+      message: "Dashboard routes require a cookie session",
+    });
+
+    const apiKeySummary = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/summary",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(apiKeySummary.statusCode).toBe(403);
+    expect(apiKeySummary.json()).toMatchObject({
+      message: "Dashboard routes require a cookie session",
+    });
+
+    const apiKeyRetention = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/retention?limit=10&offset=0",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(apiKeyRetention.statusCode).toBe(403);
+    expect(apiKeyRetention.json()).toMatchObject({
+      message: "Dashboard routes require a cookie session",
+    });
+
+    const apiKeyReactivation = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/reactivation?limit=10&offset=0",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(apiKeyReactivation.statusCode).toBe(403);
+    expect(apiKeyReactivation.json()).toMatchObject({
+      message: "Dashboard routes require a cookie session",
+    });
+
+    const apiKeyPreview = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/conversations/crm-conv-001/preview?limit=3",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(apiKeyPreview.statusCode).toBe(403);
+    expect(apiKeyPreview.json()).toMatchObject({
       message: "Dashboard routes require a cookie session",
     });
   });

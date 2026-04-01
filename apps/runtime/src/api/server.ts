@@ -716,6 +716,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.crmSummary,
   }, async (request) => {
     const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
     return getCrmSummaryReport(appContext, principal, request.params.pageLabel);
   });
 
@@ -723,6 +724,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.crmRetention,
   }, async (request) => {
     const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
     return getCrmRetentionReport(appContext, principal, request.params.pageLabel, request.query);
   });
 
@@ -730,6 +732,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.crmReactivation,
   }, async (request) => {
     const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
     return getCrmReactivationReport(appContext, principal, request.params.pageLabel, request.query);
   });
 
@@ -737,6 +740,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.crmConversationPreview,
   }, async (request) => {
     const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
     return getCrmConversationPreviewReport(appContext, principal, request.params, request.query);
   });
 
@@ -753,6 +757,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.workboard,
   }, async (request) => {
     const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
     return getWorkboardReport(appContext, principal, request.params.pageLabel);
   });
 
@@ -760,6 +765,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.workboardSnooze,
   }, async (request) => {
     const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
     return snoozeWorkboardFanReport(appContext, principal, request.params.pageLabel, request.body);
   });
 
@@ -767,6 +773,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.workboardUnsnooze,
   }, async (request) => {
     const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
     return unsnoozeWorkboardFanReport(appContext, principal, request.params.pageLabel, request.params.fanId);
   });
 
