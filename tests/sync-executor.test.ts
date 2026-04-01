@@ -535,6 +535,36 @@ describe("sync executor", () => {
     );
   });
 
+  it("treats chunk errors as skipped when the lease was fenced before the error surfaced", async () => {
+    vi.useFakeTimers();
+
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.heartbeatPageSyncLease.mockRejectedValueOnce(new Error("db unavailable"));
+    handlerMocks.executeStreamChunk.mockImplementation(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+      throw new Error("upstream failed after fence");
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(result).toMatchObject({
+      kind: "idle",
+      platformAccountId: 55,
+      stream: null,
+      runId: 777,
+      needsContinuation: false,
+    });
+    expect(telemetryMocks.instances[0]?.recordSkipped).toHaveBeenCalledWith("Page sync lease lost");
+    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+  });
+
   it("executor workers fetch with groupConcurrency and ignore active groups", async () => {
     vi.useFakeTimers();
 

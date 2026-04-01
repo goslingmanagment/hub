@@ -472,6 +472,17 @@ export async function executeNextSyncPageChunk(
         continuationPriority: null,
       };
     }
+    if (leaseFenced) {
+      await telemetry.recordSkipped("Page sync lease lost");
+      return {
+        kind: "idle",
+        platformAccountId,
+        stream: null,
+        runId: run.id,
+        needsContinuation: false,
+        continuationPriority: null,
+      };
+    }
 
     const failure = normalizeSyncError(error, {
       endpoint: taskLease.stream,
