@@ -102,6 +102,9 @@ export function FanProfilePage() {
     );
     return entry?.creatorNetAmountMills ?? 0;
   }
+  const totalSpent = spenderPeriod === "lifetime"
+    ? (spenderDetail?.metrics.lifetime.scopeCreatorNetAmountMills ?? 0)
+    : (spenderDetail?.metrics.window?.creatorNetAmountMills ?? 0);
 
   const txItems = txData?.items ?? [];
   const txTotal = txData?.total ?? 0;
@@ -132,7 +135,7 @@ export function FanProfilePage() {
   const stats = [
     {
       label: "Total Spent",
-      value: formatUsdFromMills(page?.totalCreatorNetMills ?? 0),
+      value: formatUsdFromMills(totalSpent),
       accent: true,
     },
     {
