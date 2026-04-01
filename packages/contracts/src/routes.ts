@@ -1128,11 +1128,12 @@ const workboardSpenderItemSchema = z.object({
     displayName: z.string().nullable(),
   }),
   ltv: z.object({ creatorNetAmountMills: mills }),
+  segment: z.enum(["active", "inactive"]),
   overdueDays: z.number().int(),
   silenceDays: z.number().int(),
   conversation: workboardConversationSchema,
   subscription: z.object({
-    status: z.enum(["expired", "never"]),
+    status: z.enum(["active", "expired", "never"]),
     expiresAt: isoTimestamp.nullable(),
   }),
   lastTransactionAt: isoTimestamp.nullable(),

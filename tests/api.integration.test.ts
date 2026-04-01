@@ -536,6 +536,7 @@ async function seedWorkboardApiFixture(input: {
     snoozedSubscriber,
     activeSpender,
     inactiveSpender,
+    microSpender,
     deletedSubscriber,
     deletedActiveSpender,
     deletedInactiveSpender,
@@ -563,6 +564,12 @@ async function seedWorkboardApiFixture(input: {
       platformUserId: "wb-api-inactive-spender",
       username: "wb_api_inactive_spender",
       displayName: "WB API Inactive Spender",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-api-micro-spender",
+      username: "wb_api_micro_spender",
+      displayName: "WB API Micro Spender",
     },
     {
       platform: "fansly",
@@ -685,6 +692,19 @@ async function seedWorkboardApiFixture(input: {
     creatorNetAmountMills: 145000n,
     occurredAt: new Date("2026-02-05T12:00:00.000Z"),
   });
+  await upsertTransaction(input.testDb.db, {
+    platformAccountId: input.pageId,
+    fanId: microSpender.id,
+    transactionId: "wb-api-micro-tip",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 100n,
+    sourceDestinationAmountMills: 100n,
+    creatorNetAmountMills: 100n,
+    occurredAt: new Date("2026-03-24T12:00:00.000Z"),
+  });
 
   await recalculateFanPageSpend(input.testDb.db, input.pageId);
 
@@ -693,6 +713,7 @@ async function seedWorkboardApiFixture(input: {
     snoozedSubscriber,
     activeSpender,
     inactiveSpender,
+    microSpender,
     deletedSubscriber,
     deletedActiveSpender,
     deletedInactiveSpender,
@@ -6644,7 +6665,7 @@ describe("api integration", () => {
     expect(beforeSnooze.json()).toMatchObject({
       subscribers: { total: 2 },
       activeSpenders: { total: 1 },
-      inactiveSpenders: { total: 1 },
+      inactiveSpenders: { total: 3 },
       snoozed: { total: 0 },
     });
     expect(beforeSnooze.json().subscribers.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
@@ -6656,6 +6677,11 @@ describe("api integration", () => {
     expect(beforeSnooze.json().inactiveSpenders.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
       seeded.deletedInactiveSpender.id,
     );
+    expect(beforeSnooze.json().inactiveSpenders.items.map((item: { fanId: number }) => item.fanId).sort()).toEqual([
+      seeded.activeSpender.id,
+      seeded.inactiveSpender.id,
+      seeded.microSpender.id,
+    ].sort());
     const beforeSnoozeSubscriber = beforeSnooze.json().subscribers.items.find(
       (item: { fanId: number }) => item.fanId === seeded.visibleSubscriber.id,
     );
@@ -6703,8 +6729,12 @@ describe("api integration", () => {
         items: [expect.objectContaining({ fanId: seeded.activeSpender.id })],
       },
       inactiveSpenders: {
-        total: 1,
-        items: [expect.objectContaining({ fanId: seeded.inactiveSpender.id })],
+        total: 3,
+        items: expect.arrayContaining([
+          expect.objectContaining({ fanId: seeded.activeSpender.id, segment: "active" }),
+          expect.objectContaining({ fanId: seeded.inactiveSpender.id, segment: "inactive" }),
+          expect.objectContaining({ fanId: seeded.microSpender.id, segment: "active" }),
+        ]),
       },
       snoozed: {
         total: 1,
@@ -6732,7 +6762,7 @@ describe("api integration", () => {
     expect(afterUnsnooze.json()).toMatchObject({
       subscribers: { total: 2 },
       activeSpenders: { total: 1 },
-      inactiveSpenders: { total: 1 },
+      inactiveSpenders: { total: 3 },
       snoozed: { total: 0 },
     });
   });

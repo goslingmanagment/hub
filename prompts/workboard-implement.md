@@ -8,7 +8,7 @@ Replace the CRM page (Retention + Reactivation tabs that nobody uses) with a Wor
 
 1. **Subscribers** — active subscribers with unhandled touchpoints. Touchpoint system already exists in `retentionBaseQuery` in `packages/db/src/repositories/crm.ts` — reuse it.
 2. **Active spenders** — LTV >= $100, no active sub, last spend within 30 days, no contact in 7+ days.
-3. **Inactive spenders** — LTV >= $100, no active sub, last spend over 30 days ago, no contact in 14+ days.
+3. **All spenders** — every spender from `$0.10+` creator net on the page, including fans with an active subscription; rows may be active/inactive by spend recency and may or may not currently be overdue.
 
 Fan cards with key info (name, LTV, last fan/model message timestamps, last spend, sub status, overdue days). Click card → expand inline chat preview (last 25 messages). Snooze buttons (7/14/30 days) on each card. Cards tinted yellow/red by overdue severity.
 

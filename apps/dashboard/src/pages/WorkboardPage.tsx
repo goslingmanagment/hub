@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, Navigate } from "react-router";
+import type { WorkboardResponse } from "@agency_hub_core/contracts";
 import { useWorkboard, useWorkboardSnooze, useWorkboardUnsnooze } from "@/api/queries";
 import { ApiError } from "@/api/client";
 import { WorkboardCard } from "@/components/page/workboard/WorkboardCard";
@@ -24,13 +25,20 @@ type ViewMode = "cards" | "compact";
 const TAB_LABELS: Record<Tab, string> = {
   subscribers: "Подписчики",
   activeSpenders: "Активные спендеры",
-  inactiveSpenders: "Неактивные спендеры",
+  inactiveSpenders: "Все спендеры",
 };
 
 const TABS: Tab[] = ["subscribers", "activeSpenders", "inactiveSpenders"];
 
 function isPresent<T>(value: T | null | undefined): value is T {
   return value != null;
+}
+
+function isActionableSpender(item: WorkboardResponse["activeSpenders"]["items"][number]) {
+  if (item.subscription.status === "active") {
+    return false;
+  }
+  return item.segment === "active" ? item.silenceDays >= 7 : item.silenceDays >= 14;
 }
 
 /* ── Priority lane helpers ──────────────────────────────────────── */
@@ -240,14 +248,14 @@ export function WorkboardPage() {
 
   const activeSpenderVms = useMemo(
     () => data?.activeSpenders.items
-      .map((item) => mapSpenderVm(resolvedPageLabel, item, "activeSpenders"))
+      .map((item) => mapSpenderVm(resolvedPageLabel, item))
       .filter(isPresent) ?? [],
     [data?.activeSpenders.items, resolvedPageLabel],
   );
 
   const inactiveSpenderVms = useMemo(
     () => data?.inactiveSpenders.items
-      .map((item) => mapSpenderVm(resolvedPageLabel, item, "inactiveSpenders"))
+      .map((item) => mapSpenderVm(resolvedPageLabel, item))
       .filter(isPresent) ?? [],
     [data?.inactiveSpenders.items, resolvedPageLabel],
   );
@@ -263,13 +271,14 @@ export function WorkboardPage() {
     inactiveSpenders: data?.inactiveSpenders.total ?? 0,
   };
 
-  const totalOverdue = tabCounts.subscribers + tabCounts.activeSpenders + tabCounts.inactiveSpenders;
+  const totalOverdue = (data?.subscribers.total ?? 0)
+    + (data?.inactiveSpenders.items.filter(isActionableSpender).length ?? 0);
   const hiddenCounts: Record<Tab, number> = {
     subscribers: Math.max(0, (data?.subscribers.items.length ?? 0) - subscriberVms.length),
     activeSpenders: Math.max(0, (data?.activeSpenders.items.length ?? 0) - activeSpenderVms.length),
     inactiveSpenders: Math.max(0, (data?.inactiveSpenders.items.length ?? 0) - inactiveSpenderVms.length),
   };
-  const totalHidden = hiddenCounts.subscribers + hiddenCounts.activeSpenders + hiddenCounts.inactiveSpenders;
+  const totalHidden = hiddenCounts.subscribers + hiddenCounts.inactiveSpenders;
 
   // Build priority lanes for current tab
   const currentLanes: PriorityLane<WorkboardCardVm>[] = useMemo(() => {

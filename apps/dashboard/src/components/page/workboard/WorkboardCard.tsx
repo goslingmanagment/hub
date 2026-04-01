@@ -207,9 +207,11 @@ export function WorkboardCard({
               </>
             ) : (
               <span>
-                {vm.subscriptionStatus === "expired"
-                  ? `Подписка истекла${vm.subscriptionExpiresLabel ? ` (${vm.subscriptionExpiresLabel})` : ""}`
-                  : "Не подписывался"}
+                {vm.subscriptionStatus === "active"
+                  ? `Подписка активна${vm.subscriptionExpiresLabel ? ` до ${vm.subscriptionExpiresLabel}` : ""}`
+                  : vm.subscriptionStatus === "expired"
+                    ? `Подписка истекла${vm.subscriptionExpiresLabel ? ` (${vm.subscriptionExpiresLabel})` : ""}`
+                    : "Не подписывался"}
               </span>
             )}
           </div>

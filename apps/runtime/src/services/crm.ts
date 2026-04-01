@@ -25,7 +25,7 @@ import {
   listCrmRetention,
   listWorkboardSubscribers,
   listWorkboardActiveSpenders,
-  listWorkboardInactiveSpenders,
+  listWorkboardAllSpenders,
   listWorkboardSnoozed,
   snoozeWorkboardFan,
   unsnoozeWorkboardFan,
@@ -37,6 +37,9 @@ import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { buildCrmMessageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSnapshot, mapDomainBlockToSyncUx } from "./sync-status.ts";
+
+type WorkboardSpenderSegment = WorkboardResponse["activeSpenders"]["items"][number]["segment"];
+type WorkboardSpenderRow = Awaited<ReturnType<typeof listWorkboardActiveSpenders>>[number];
 
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
@@ -428,7 +431,7 @@ export async function getPageConversationMessagesReport(
 // Workboard
 // ---------------------------------------------------------------------------
 
-function serializeSpenderItem(row: Awaited<ReturnType<typeof listWorkboardActiveSpenders>>[number]) {
+function serializeSpenderItem(row: WorkboardSpenderRow, segment: WorkboardSpenderSegment) {
   return {
     fanId: row.fanId,
     fan: {
@@ -438,6 +441,7 @@ function serializeSpenderItem(row: Awaited<ReturnType<typeof listWorkboardActive
       displayName: row.displayName,
     },
     ltv: { creatorNetAmountMills: millsToNumber(row.creatorNetAmountMills) },
+    segment,
     overdueDays: row.overdueDays,
     silenceDays: row.silenceDays,
     conversation: {
@@ -458,16 +462,30 @@ function serializeSpenderItem(row: Awaited<ReturnType<typeof listWorkboardActive
   };
 }
 
+function resolveWorkboardSpenderSegment(
+  row: Pick<WorkboardSpenderRow, "lastTransactionAt">,
+  now: Date,
+): WorkboardSpenderSegment {
+  if (!row.lastTransactionAt) {
+    return "inactive";
+  }
+
+  return row.lastTransactionAt.getTime() > now.getTime() - 30 * 24 * 60 * 60 * 1000
+    ? "active"
+    : "inactive";
+}
+
 export async function getWorkboardReport(
   app: AppContext,
   principal: AuthPrincipal,
   pageLabel: string,
 ): Promise<WorkboardResponse> {
   const page = await resolveCrmPage(app, principal, pageLabel);
-  const [subscribers, activeSpenders, inactiveSpenders, snoozed] = await Promise.all([
-    listWorkboardSubscribers(app.db, { platformAccountId: page.id }),
-    listWorkboardActiveSpenders(app.db, { platformAccountId: page.id }),
-    listWorkboardInactiveSpenders(app.db, { platformAccountId: page.id }),
+  const now = new Date();
+  const [subscribers, activeSpenders, allSpenders, snoozed] = await Promise.all([
+    listWorkboardSubscribers(app.db, { platformAccountId: page.id, now }),
+    listWorkboardActiveSpenders(app.db, { platformAccountId: page.id, now }),
+    listWorkboardAllSpenders(app.db, { platformAccountId: page.id, now }),
     listWorkboardSnoozed(app.db, { platformAccountId: page.id }),
   ]);
 
@@ -511,11 +529,11 @@ export async function getWorkboardReport(
     },
     activeSpenders: {
       total: activeSpenders.length,
-      items: activeSpenders.map(serializeSpenderItem),
+      items: activeSpenders.map((row) => serializeSpenderItem(row, "active")),
     },
     inactiveSpenders: {
-      total: inactiveSpenders.length,
-      items: inactiveSpenders.map(serializeSpenderItem),
+      total: allSpenders.length,
+      items: allSpenders.map((row) => serializeSpenderItem(row, resolveWorkboardSpenderSegment(row, now))),
     },
     snoozed: {
       total: snoozed.length,

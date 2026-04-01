@@ -94,7 +94,11 @@ export function WorkboardCompactRow({
           )
         ) : (
           <span className="text-text-muted text-[10px]">
-            {vm.subscriptionStatus === "expired" ? "Истекла" : "Не было"}
+            {vm.subscriptionStatus === "active"
+              ? "Активна"
+              : vm.subscriptionStatus === "expired"
+                ? "Истекла"
+                : "Не было"}
           </span>
         )}
       </td>

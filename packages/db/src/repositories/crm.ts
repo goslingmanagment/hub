@@ -2023,7 +2023,7 @@ export interface WorkboardSpenderRow {
   messageCoverageStatus: MessageCoverageStatus;
   messageBackfillComplete: boolean;
   messageSyncEligibility: MessageSyncEligibility;
-  subscriptionStatus: "expired" | "never";
+  subscriptionStatus: "active" | "expired" | "never";
   subscriptionExpiresAt: Date | null;
   lastTransactionAt: Date | null;
 }
@@ -2031,18 +2031,37 @@ export interface WorkboardSpenderRow {
 function spenderBaseQuery(
   input: { platformAccountId: number; now?: Date },
   opts: {
-    recentSpend: boolean;
-    rhythmDays: number;
+    recentSpend: boolean | null;
+    rhythmDays: number | null;
+    minimumSpendMills?: number;
+    actionableOnly?: boolean;
+    excludeSubscribers?: boolean;
   },
 ) {
   const now = input.now ?? new Date();
   const nowSql = sql`${now}::timestamptz`;
   const nowPlus21Days = sql`${now}::timestamptz + interval '21 days'`;
-  const contactThreshold = sql`${now}::timestamptz - (${opts.rhythmDays} || ' days')::interval`;
-
-  const spendWindow = opts.recentSpend
-    ? sql`and slp.last_transaction_at > ${nowSql} - interval '30 days'`
-    : sql`and (slp.last_transaction_at is null or slp.last_transaction_at <= ${nowSql} - interval '30 days')`;
+  const minimumSpendMills = opts.minimumSpendMills ?? 100000;
+  const spendWindow = opts.recentSpend === null
+    ? sql``
+    : opts.recentSpend
+      ? sql`and slp.last_transaction_at > ${nowSql} - interval '30 days'`
+      : sql`and (slp.last_transaction_at is null or slp.last_transaction_at <= ${nowSql} - interval '30 days')`;
+  const excludeSubscribers = opts.excludeSubscribers ?? true;
+  const subscriberExclusion = excludeSubscribers
+    ? sql`
+        and not coalesce(fp.is_subscriber, false)
+        and not exists (
+          select 1 from retention_due rd where rd.fan_id = slp.fan_id
+        )
+      `
+    : sql``;
+  const contactFilter = opts.actionableOnly !== false && opts.rhythmDays !== null
+    ? sql`
+        where last_contact_at is null
+           or last_contact_at < ${sql`${now}::timestamptz - (${opts.rhythmDays} || ' days')::interval`}
+      `
+    : sql``;
 
   return sql`
     with primary_conversation as (
@@ -2077,6 +2096,7 @@ function spenderBaseQuery(
              f.display_name as display_name,
              slp.creator_net_amount_mills as creator_net_amount_mills,
              slp.last_transaction_at as last_transaction_at,
+             coalesce(fp.is_subscriber, false) as is_subscriber,
              fp.subscription_expires_at as subscription_expires_at,
              pc.platform_conversation_id as platform_conversation_id,
              pc.last_fan_message_at as last_fan_message_at,
@@ -2108,16 +2128,13 @@ function spenderBaseQuery(
         on pc.platform_account_id = slp.platform_account_id
        and pc.fan_id = slp.fan_id
       where slp.platform_account_id = ${input.platformAccountId}
-        and slp.creator_net_amount_mills >= 100000
-        and not coalesce(fp.is_subscriber, false)
+        and slp.creator_net_amount_mills >= ${minimumSpendMills}
         and ${hasVisibleFanIdentitySql({
           pageAlias: sql.raw("fp.page_alias"),
           username: sql.raw("f.username"),
           displayName: sql.raw("f.display_name"),
         })}
-        and not exists (
-          select 1 from retention_due rd where rd.fan_id = slp.fan_id
-        )
+        ${subscriberExclusion}
         ${spendWindow}
         ${workboardSnoozeExclusionSql(input.platformAccountId, sql.raw("slp.fan_id"))}
     ),
@@ -2130,12 +2147,12 @@ function spenderBaseQuery(
                )::int
              end as silence_days,
              case
+               when is_subscriber and coalesce(subscription_expires_at > ${nowSql}, false) then 'active'
                when subscription_expires_at is not null then 'expired'
                else 'never'
              end as subscription_status
       from candidate_rows
-      where last_contact_at is null
-         or last_contact_at < ${contactThreshold}
+      ${contactFilter}
     )
   `;
 }
@@ -2183,7 +2200,7 @@ function normalizeSpenderRows(rows: Array<{
       fanId: normalizeNumber(row.fanId, "fanId"),
       metadata: normalizeNullableJsonRecord(row.conversationMetadata) ?? {},
     }),
-    subscriptionStatus: row.subscriptionStatus as "expired" | "never",
+    subscriptionStatus: row.subscriptionStatus as "active" | "expired" | "never",
     subscriptionExpiresAt: parseTimestamp(row.subscriptionExpiresAt),
     lastTransactionAt: parseTimestamp(row.lastTransactionAt),
   }));
@@ -2279,6 +2296,76 @@ export async function listWorkboardInactiveSpenders(
            creator_net_amount_mills as "creatorNetAmountMills",
            silence_days as "silenceDays",
            greatest(0, silence_days - 14) as "overdueDays",
+           platform_conversation_id as "platformConversationId",
+           last_fan_message_at as "lastFanMessageAt",
+           last_model_message_at as "lastModelMessageAt",
+           last_message_preview as "lastMessagePreview",
+           stored_message_count as "storedMessageCount",
+           message_coverage_status as "messageCoverageStatus",
+           message_backfill_complete as "messageBackfillComplete",
+           conversation_metadata as "conversationMetadata",
+           subscription_status as "subscriptionStatus",
+           subscription_expires_at as "subscriptionExpiresAt",
+           last_transaction_at as "lastTransactionAt"
+    from filtered
+    order by creator_net_amount_mills desc, fan_id asc
+  `);
+
+  return normalizeSpenderRows(result.rows);
+}
+
+export async function listWorkboardAllSpenders(
+  db: Database,
+  input: { platformAccountId: number; now?: Date },
+): Promise<WorkboardSpenderRow[]> {
+  const now = input.now ?? new Date();
+  const nowSql = sql`${now}::timestamptz`;
+  const base = spenderBaseQuery(input, {
+    recentSpend: null,
+    rhythmDays: null,
+    minimumSpendMills: 100,
+    actionableOnly: false,
+    excludeSubscribers: false,
+  });
+
+  const result = await db.execute<{
+    fanId: NumericValue;
+    platformUserId: string;
+    pageAlias: string | null;
+    username: string | null;
+    displayName: string | null;
+    creatorNetAmountMills: NumericValue;
+    silenceDays: NumericValue;
+    overdueDays: NumericValue;
+    platformConversationId: string | null;
+    lastFanMessageAt: TimestampValue;
+    lastModelMessageAt: TimestampValue;
+    lastMessagePreview: string | null;
+    storedMessageCount: NumericValue;
+    messageCoverageStatus: MessageCoverageStatus;
+    messageBackfillComplete: boolean;
+    conversationMetadata: unknown;
+    subscriptionStatus: string;
+    subscriptionExpiresAt: TimestampValue;
+    lastTransactionAt: TimestampValue;
+  }>(sql`
+    ${base}
+    select fan_id as "fanId",
+           platform_user_id as "platformUserId",
+           page_alias as "pageAlias",
+           username as "username",
+           display_name as "displayName",
+           creator_net_amount_mills as "creatorNetAmountMills",
+           silence_days as "silenceDays",
+           greatest(
+             0,
+             case
+               when last_transaction_at is not null
+                 and last_transaction_at > ${nowSql} - interval '30 days'
+                 then silence_days - 7
+               else silence_days - 14
+             end
+           ) as "overdueDays",
            platform_conversation_id as "platformConversationId",
            last_fan_message_at as "lastFanMessageAt",
            last_model_message_at as "lastModelMessageAt",

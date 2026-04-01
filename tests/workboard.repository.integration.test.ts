@@ -3,8 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createFanslyPage,
   createModel,
+  listWorkboardAllSpenders,
   listWorkboardActiveSpenders,
-  listWorkboardInactiveSpenders,
   listWorkboardSnoozed,
   listWorkboardSubscribers,
   recalculateFanPageSpend,
@@ -40,6 +40,7 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
     snoozedSubscriber,
     activeSpender,
     inactiveSpender,
+    microSpender,
     deletedSubscriber,
     deletedActiveSpender,
     deletedInactiveSpender,
@@ -67,6 +68,12 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
       platformUserId: "wb-inactive-spender",
       username: "wb_inactive_spender",
       displayName: "WB Inactive Spender",
+    },
+    {
+      platform: "fansly",
+      platformUserId: "wb-micro-spender",
+      username: "wb_micro_spender",
+      displayName: "WB Micro Spender",
     },
     {
       platform: "fansly",
@@ -140,6 +147,11 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
     pageAlias: "Inactive Spender Alias",
   });
   await upsertFanPage(testDb.db, {
+    fanId: microSpender.id,
+    platformAccountId: pageId,
+    pageAlias: "Micro Spender Alias",
+  });
+  await upsertFanPage(testDb.db, {
     fanId: deletedActiveSpender.id,
     platformAccountId: pageId,
   });
@@ -200,6 +212,19 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
     creatorNetAmountMills: 145000n,
     occurredAt: new Date("2026-02-05T12:00:00.000Z"),
   });
+  await upsertTransaction(testDb.db, {
+    platformAccountId: pageId,
+    fanId: microSpender.id,
+    transactionId: "wb-micro-tip",
+    rawType: 20001,
+    canonicalType: "tip",
+    transactionState: "posted",
+    rawStatus: 2,
+    grossAmountMills: 100n,
+    sourceDestinationAmountMills: 100n,
+    creatorNetAmountMills: 100n,
+    occurredAt: new Date("2026-03-24T12:00:00.000Z"),
+  });
 
   await recalculateFanPageSpend(testDb.db, pageId);
 
@@ -208,6 +233,7 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
     snoozedSubscriber,
     activeSpender,
     inactiveSpender,
+    microSpender,
     deletedSubscriber,
     deletedActiveSpender,
     deletedInactiveSpender,
@@ -256,10 +282,10 @@ describe("workboard repository integration", () => {
       days: 30,
     });
 
-    const [subscribers, activeSpenders, inactiveSpenders, snoozed] = await Promise.all([
+    const [subscribers, activeSpenders, allSpenders, snoozed] = await Promise.all([
       listWorkboardSubscribers(testDb.db, { platformAccountId: page.id, now }),
       listWorkboardActiveSpenders(testDb.db, { platformAccountId: page.id, now }),
-      listWorkboardInactiveSpenders(testDb.db, { platformAccountId: page.id, now }),
+      listWorkboardAllSpenders(testDb.db, { platformAccountId: page.id, now }),
       listWorkboardSnoozed(testDb.db, { platformAccountId: page.id }),
     ]);
 
@@ -268,12 +294,18 @@ describe("workboard repository integration", () => {
     expect(subscribers[0]?.pageAlias).toBe("Subscriber Visible Alias");
     expect(activeSpenders.map((row) => row.fanId)).toEqual([seeded.activeSpender.id]);
     expect(activeSpenders[0]?.pageAlias).toBe("Active Spender Alias");
-    expect(inactiveSpenders.map((row) => row.fanId)).toEqual([seeded.inactiveSpender.id]);
-    expect(inactiveSpenders[0]?.pageAlias).toBe("Inactive Spender Alias");
+    expect(allSpenders.map((row) => row.fanId)).toEqual([
+      seeded.inactiveSpender.id,
+      seeded.activeSpender.id,
+      seeded.microSpender.id,
+    ]);
+    expect(allSpenders[0]?.pageAlias).toBe("Inactive Spender Alias");
+    expect(allSpenders[1]?.pageAlias).toBe("Active Spender Alias");
+    expect(allSpenders[2]?.pageAlias).toBe("Micro Spender Alias");
     expect(snoozed.map((row) => row.fanId)).toEqual([seeded.snoozedSubscriber.id]);
     expect(snoozed[0]?.pageAlias).toBe("Subscriber Snoozed Alias");
     expect(activeSpenders.map((row) => row.fanId)).not.toContain(seeded.deletedActiveSpender.id);
-    expect(inactiveSpenders.map((row) => row.fanId)).not.toContain(seeded.deletedInactiveSpender.id);
+    expect(allSpenders.map((row) => row.fanId)).not.toContain(seeded.deletedInactiveSpender.id);
     expect(snoozed.map((row) => row.fanId)).not.toContain(seeded.deletedSubscriber.id);
   });
 

@@ -8,7 +8,6 @@ type SubscriberItem = WorkboardResponse["subscribers"]["items"][number];
 type SpenderItem = WorkboardResponse["activeSpenders"]["items"][number];
 type SnoozedItem = WorkboardResponse["snoozed"]["items"][number];
 type WorkboardFan = SubscriberItem["fan"] | SpenderItem["fan"] | SnoozedItem["fan"];
-type SpenderSegment = "activeSpenders" | "inactiveSpenders";
 
 function resolveVisibleWorkboardFan(fan: WorkboardFan) {
   const resolved = resolveFanLabelForScope({
@@ -54,7 +53,7 @@ export interface WorkboardSubscriberVm extends WorkboardBaseVm {
 
 export interface WorkboardSpenderVm extends WorkboardBaseVm {
   kind: "spender";
-  subscriptionStatus: "expired" | "never";
+  subscriptionStatus: "active" | "expired" | "never";
   subscriptionExpiresLabel: string | null;
 }
 
@@ -123,7 +122,6 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
 export function mapSpenderVm(
   pageLabel: string,
   item: SpenderItem,
-  segment: SpenderSegment,
 ): WorkboardSpenderVm | null {
   const baseVm = buildBaseVm(pageLabel, item);
   if (!baseVm) {
@@ -133,7 +131,7 @@ export function mapSpenderVm(
   return {
     ...baseVm,
     kind: "spender",
-    whyNowLabel: segment === "activeSpenders"
+    whyNowLabel: item.segment === "active"
       ? `Активный спендер, не писали ${item.silenceDays}д`
       : `Неактивный спендер, не писали ${item.silenceDays}д`,
     subscriptionStatus: item.subscription.status,
@@ -165,4 +163,3 @@ export function mapSnoozedVm(item: SnoozedItem): WorkboardSnoozedVm | null {
     snoozedUntilLabel: formatDate(item.snoozedUntil),
   };
 }
-

@@ -250,6 +250,146 @@ describe("WorkboardPage", () => {
     expect(html).not.toContain("Deleted user");
   });
 
+  it("counts unique actionable fans when the spender tab includes the full spender pool", () => {
+    queryMocks.useWorkboard.mockReturnValue({
+      data: {
+        subscribers: {
+          total: 1,
+          items: [{
+            fanId: 101,
+            fan: {
+              platformUserId: "subscriber-101",
+              pageAlias: "Subscriber One",
+              username: "subscriber_one",
+              displayName: "Subscriber One",
+            },
+            ltv: { creatorNetAmountMills: 3117560 },
+            touchpoint: {
+              code: "7d",
+              label: "7d",
+              isSoft: false,
+              dueAt: "2026-03-30T12:00:00.000Z",
+            },
+            overdueDays: 1,
+            conversation: {
+              platformConversationId: null,
+              lastFanMessageAt: null,
+              lastModelMessageAt: null,
+              lastMessagePreview: null,
+              storedMessageCount: 0,
+              messageBackfillComplete: false,
+            },
+            subscription: {
+              expiresAt: "2026-04-05T12:00:00.000Z",
+              autoRenew: false,
+              tierName: "VIP",
+              subscriberSince: "2026-03-01T12:00:00.000Z",
+            },
+            lastTransactionAt: null,
+          }],
+        },
+        activeSpenders: {
+          total: 1,
+          items: [{
+            fanId: 201,
+            fan: {
+              platformUserId: "spender-201",
+              pageAlias: "Active Spender",
+              username: "active_spender",
+              displayName: "Active Spender",
+            },
+            ltv: { creatorNetAmountMills: 200000 },
+            segment: "active",
+            overdueDays: 2,
+            silenceDays: 9,
+            conversation: {
+              platformConversationId: null,
+              lastFanMessageAt: null,
+              lastModelMessageAt: null,
+              lastMessagePreview: null,
+              storedMessageCount: 0,
+              messageBackfillComplete: false,
+            },
+            subscription: {
+              status: "never",
+              expiresAt: null,
+            },
+            lastTransactionAt: "2026-03-25T12:00:00.000Z",
+          }],
+        },
+        inactiveSpenders: {
+          total: 2,
+          items: [
+            {
+              fanId: 201,
+              fan: {
+                platformUserId: "spender-201",
+                pageAlias: "Active Spender",
+                username: "active_spender",
+                displayName: "Active Spender",
+              },
+              ltv: { creatorNetAmountMills: 200000 },
+              segment: "active",
+              overdueDays: 2,
+              silenceDays: 9,
+              conversation: {
+                platformConversationId: null,
+                lastFanMessageAt: null,
+                lastModelMessageAt: null,
+                lastMessagePreview: null,
+                storedMessageCount: 0,
+                messageBackfillComplete: false,
+              },
+              subscription: {
+                status: "never",
+                expiresAt: null,
+              },
+              lastTransactionAt: "2026-03-25T12:00:00.000Z",
+            },
+            {
+              fanId: 202,
+              fan: {
+                platformUserId: "spender-202",
+                pageAlias: "Inactive Spender",
+                username: "inactive_spender",
+                displayName: "Inactive Spender",
+              },
+              ltv: { creatorNetAmountMills: 150000 },
+              segment: "inactive",
+              overdueDays: 5,
+              silenceDays: 19,
+              conversation: {
+                platformConversationId: null,
+                lastFanMessageAt: null,
+                lastModelMessageAt: null,
+                lastMessagePreview: null,
+                storedMessageCount: 0,
+                messageBackfillComplete: false,
+              },
+              subscription: {
+                status: "expired",
+                expiresAt: "2026-02-01T12:00:00.000Z",
+              },
+              lastTransactionAt: "2026-02-10T12:00:00.000Z",
+            },
+          ],
+        },
+        snoozed: {
+          total: 0,
+          items: [],
+        },
+      },
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    });
+
+    const html = renderPage();
+
+    expect(html).toContain("Ожидают внимания: 3");
+    expect(html).toContain("Все спендеры");
+  });
+
   it("uses the canonical workboard route for legacy CRM aliases", () => {
     expect(resolveLegacyWorkboardRedirect("lana")).toBe("/pages/lana/workboard");
     expect(resolveLegacyWorkboardRedirect(undefined)).toBe("/");
