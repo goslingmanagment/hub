@@ -334,11 +334,11 @@ describe("sync block display", () => {
       needsAttention: true,
       statusReason: {
         code: "queue_delayed",
-        summary: "Sync work has been queued longer than expected.",
+        summary: "Queued too long with no active sync making progress.",
         waitingFor: null,
       },
       error: null,
-    } as never)).toBe("Delayed · queued too long");
+    } as never)).toBe("Delayed · queue stalled");
 
     expect(formatSubstreamStateLabel({
       stream: "followers_reconcile",
@@ -357,5 +357,48 @@ describe("sync block display", () => {
       },
       error: null,
     } as never)).toBe("Waiting · followers");
+  });
+
+  it("describes expected queue waits without warning copy", () => {
+    expect(formatBlockSummary({
+      block: "financials",
+      state: "scheduled",
+      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      progress: null,
+      progressStream: null,
+      progressRole: null,
+      error: null,
+      statusReason: {
+        code: "queue_waiting",
+        summary: "Queued - will start after current sync completes.",
+        waitingFor: ["dm_messages"],
+      },
+      primaryFresh: false,
+      needsAttention: false,
+      nextDueAt: null,
+      nextRetryAt: null,
+      intervals: [],
+      metrics: {},
+      connectionStatus: null,
+      substreams: [],
+    } as never)).toBe("Queued — message history is running");
+
+    expect(formatSubstreamStateLabel({
+      stream: "transactions",
+      role: "primary",
+      state: "scheduled",
+      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      nextDueAt: "2026-03-24T12:55:00.000Z",
+      nextRetryAt: null,
+      cadenceSeconds: 3600,
+      isFresh: true,
+      needsAttention: false,
+      statusReason: {
+        code: "queue_waiting",
+        summary: "Queued - will start after current sync completes.",
+        waitingFor: ["dm_messages"],
+      },
+      error: null,
+    } as never)).toBe("Waiting · message history");
   });
 });

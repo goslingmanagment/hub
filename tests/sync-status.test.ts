@@ -131,6 +131,26 @@ function buildMonitorRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildVisiblePage(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 7,
+    label: "lana",
+    platform: "fansly",
+    username: "lana_page",
+    displayName: "Lana",
+    followerCount: 9,
+    subscriberCount: 4,
+    lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+    lastFollowerSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+    modelSlug: "lana",
+    modelName: "Lana",
+    hasCredentials: true,
+    proxyUrl: null,
+    proxyHasAuth: false,
+    ...overrides,
+  };
+}
+
 describe("sync status service", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -316,22 +336,7 @@ describe("sync status service", () => {
 
   it("keeps financials in catching-up mode when only top spenders enrichment is running", async () => {
     dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      username: "lana_page",
-      displayName: "Lana",
-      followerCount: 9,
-      subscriberCount: 4,
-      lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-      lastFollowerSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-      modelSlug: "lana",
-      modelName: "Lana",
-      hasCredentials: true,
-      proxyUrl: null,
-      proxyHasAuth: false,
-    }]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listSyncTaskRows.mockResolvedValue([
       buildTaskRow({
         task: "transactions",
@@ -384,22 +389,7 @@ describe("sync status service", () => {
 
   it("surfaces queue-delayed runtime problems on primary financial streams", async () => {
     dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      username: "lana_page",
-      displayName: "Lana",
-      followerCount: 9,
-      subscriberCount: 4,
-      lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-      lastFollowerSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-      modelSlug: "lana",
-      modelName: "Lana",
-      hasCredentials: true,
-      proxyUrl: null,
-      proxyHasAuth: false,
-    }]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listSyncTaskRows.mockResolvedValue([
       buildTaskRow({
         task: "transactions",
@@ -407,7 +397,7 @@ describe("sync status service", () => {
         desiredGeneration: 2,
         appliedGeneration: 1,
         lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
-        lastRequestedAt: new Date("2026-03-24T11:49:00.000Z"),
+        lastRequestedAt: new Date("2026-03-24T11:40:00.000Z"),
       }),
       buildTaskRow({
         task: "top_spenders",
@@ -427,7 +417,7 @@ describe("sync status service", () => {
     expect(snapshot.pages[0]?.blocks.financials.state).toBe("delayed");
     expect(snapshot.pages[0]?.blocks.financials.statusReason).toMatchObject({
       code: "queue_delayed",
-      summary: "Sync work has been queued longer than expected.",
+      summary: "Queued too long with no active sync making progress.",
     });
     expect(snapshot.pages[0]?.blocks.financials.substreams[0]).toMatchObject({
       stream: "transactions",
@@ -435,6 +425,160 @@ describe("sync status service", () => {
       statusReason: expect.objectContaining({
         code: "queue_delayed",
       }),
+    });
+  });
+
+  it("keeps queued work neutral when a sibling page is actively using the same queue group", async () => {
+    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([
+      buildVisiblePage(),
+      buildVisiblePage({
+        id: 8,
+        label: "lana-alt",
+        username: "lana_alt",
+      }),
+    ]);
+    dbMocks.listSyncTaskRows.mockResolvedValue([
+      buildTaskRow({
+        task: "transactions",
+        status: "queued",
+        desiredGeneration: 2,
+        appliedGeneration: 1,
+        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
+        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+      }),
+      buildTaskRow({
+        platformAccountId: 8,
+        task: "dm_messages",
+        status: "running",
+        desiredGeneration: 1,
+        appliedGeneration: 0,
+        currentWorkClass: "history",
+        lastSuccessAt: null,
+        lastStartedAt: new Date("2026-03-24T11:58:00.000Z"),
+        lastProgressAt: new Date("2026-03-24T11:59:00.000Z"),
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.financials.state).toBe("scheduled");
+    expect(snapshot.pages[0]?.blocks.financials.statusReason).toMatchObject({
+      code: "queue_waiting",
+      summary: "Queued - will start after current sync completes.",
+      waitingFor: ["dm_messages"],
+    });
+    expect(snapshot.pages[0]?.blocks.financials.substreams[0]).toMatchObject({
+      stream: "transactions",
+      state: "scheduled",
+      needsAttention: false,
+      statusReason: expect.objectContaining({
+        code: "queue_waiting",
+        waitingFor: ["dm_messages"],
+      }),
+    });
+    expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");
+  });
+
+  it("still marks queue waits as delayed when active siblings are in another queue group", async () => {
+    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([
+      buildVisiblePage(),
+      buildVisiblePage({
+        id: 8,
+        label: "lana-proxy",
+        username: "lana_proxy",
+        proxyUrl: "http://127.0.0.1:18080",
+      }),
+    ]);
+    dbMocks.listSyncTaskRows.mockResolvedValue([
+      buildTaskRow({
+        task: "transactions",
+        status: "queued",
+        desiredGeneration: 2,
+        appliedGeneration: 1,
+        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
+        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+      }),
+      buildTaskRow({
+        platformAccountId: 8,
+        task: "dm_messages",
+        status: "running",
+        desiredGeneration: 1,
+        appliedGeneration: 0,
+        currentWorkClass: "history",
+        lastSuccessAt: null,
+        lastStartedAt: new Date("2026-03-24T11:58:00.000Z"),
+        lastProgressAt: new Date("2026-03-24T11:59:00.000Z"),
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.financials.state).toBe("delayed");
+    expect(snapshot.pages[0]?.blocks.financials.statusReason).toMatchObject({
+      code: "queue_delayed",
+    });
+  });
+
+  it("does not treat stalled sibling work as an active queue owner", async () => {
+    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([
+      buildVisiblePage(),
+      buildVisiblePage({
+        id: 8,
+        label: "lana-alt",
+        username: "lana_alt",
+      }),
+    ]);
+    dbMocks.listSyncTaskRows.mockResolvedValue([
+      buildTaskRow({
+        task: "transactions",
+        status: "queued",
+        desiredGeneration: 2,
+        appliedGeneration: 1,
+        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
+        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+      }),
+      buildTaskRow({
+        platformAccountId: 8,
+        task: "dm_messages",
+        status: "running",
+        desiredGeneration: 1,
+        appliedGeneration: 0,
+        currentWorkClass: "history",
+        lastSuccessAt: null,
+        lastStartedAt: new Date("2026-03-24T11:20:00.000Z"),
+        lastProgressAt: new Date("2026-03-24T11:00:00.000Z"),
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "transactions" }),
+      buildMonitorRow({ stream: "top_spenders" }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.financials.state).toBe("delayed");
+    expect(snapshot.pages[0]?.blocks.financials.statusReason).toMatchObject({
+      code: "queue_delayed",
     });
   });
 });

@@ -12,6 +12,7 @@ import {
   type SyncV2Domain,
   type SyncV2Task,
 } from "@agency_hub_core/db";
+import { buildProxyEgressKey } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 
@@ -82,6 +83,10 @@ export interface SyncTaskReadStatus {
     consecutiveFailures: number;
   } | null;
 }
+
+type QueueContext = {
+  activeSiblingStreams: SyncV2Task[];
+};
 
 export interface SyncDomainBlockStatus {
   block: SyncDomainBlockKey;
@@ -211,6 +216,31 @@ function parseDependencyWaitingFor(summary: string | null | undefined): string[]
     .filter(Boolean);
 
   return waitingFor.length > 0 ? waitingFor : null;
+}
+
+function buildRuntimeGroupId(page: {
+  platform: "fansly" | "onlyfans";
+  proxyUrl: string | null;
+}) {
+  return `${page.platform}:${buildProxyEgressKey(page.proxyUrl ? { url: page.proxyUrl } : null)}`;
+}
+
+function hasActiveProgress(task: SyncTaskRow, now: Date) {
+  if (task.status !== "running") {
+    return false;
+  }
+
+  const policy = TASK_POLICY[task.task];
+  const lastActiveAt = task.lastProgressAt ?? task.lastStartedAt;
+  if (!lastActiveAt) {
+    return false;
+  }
+
+  return (now.getTime() - lastActiveAt.getTime()) <= policy.progressStallThresholdMs;
+}
+
+function sortTasksByPolicyOrder(tasks: Iterable<SyncV2Task>) {
+  return [...new Set(tasks)].sort((left, right) => TASK_POLICY[left].taskIndex - TASK_POLICY[right].taskIndex);
 }
 
 function buildStatusReason(
@@ -350,7 +380,9 @@ export function mapDomainBlockToSyncUx(block: SyncDomainBlockStatus): SyncUxSumm
       return summary("catching_up", {
         label: "Queued",
         headline: "Queued to continue",
-        detail: "Sync work is queued and within the normal wait budget.",
+        detail: reasonCode === "queue_waiting"
+          ? "Queued behind another sync that is actively making progress."
+          : "Sync work is queued and within the normal wait budget.",
         progressLabel,
         updatedAt,
       });
@@ -586,6 +618,7 @@ function deriveTaskState(
   task: SyncTaskRow,
   monitorRow: SyncMonitorStreamRow | null,
   now: Date,
+  queueContext?: QueueContext,
 ): SyncTaskReadStatus {
   const policy = TASK_POLICY[task.task];
   const queueAgeSeconds = task.desiredGeneration > task.appliedGeneration && task.lastRequestedAt
@@ -637,9 +670,19 @@ function deriveTaskState(
       state = "backfilling";
     }
   } else if (task.desiredGeneration > task.appliedGeneration || task.status === "queued") {
-    if (queueDelayed) {
+    if ((queueContext?.activeSiblingStreams.length ?? 0) > 0) {
+      state = "scheduled";
+      statusReason = buildStatusReason(
+        "queue_waiting",
+        "Queued - will start after current sync completes.",
+        queueContext?.activeSiblingStreams ?? null,
+      );
+    } else if (queueDelayed) {
       state = "delayed";
-      statusReason = buildStatusReason("queue_delayed", "Sync work has been queued longer than expected.");
+      statusReason = buildStatusReason(
+        "queue_delayed",
+        "Queued too long with no active sync making progress.",
+      );
     } else {
       state = "scheduled";
     }
@@ -939,20 +982,29 @@ export async function getSyncStatusSnapshot(
   },
 ): Promise<SyncStatusSnapshot> {
   const now = input?.now ?? new Date();
-  const pages = await listVisiblePages(app.db, input?.pageIds);
-  const scopedPages = input?.pageLabel
-    ? pages.filter((page) => page.label === input.pageLabel)
-    : pages;
-  const pageIds = scopedPages.map((page) => page.id);
-  if (pageIds.length === 0) {
+  const allVisiblePages = await listVisiblePages(app.db);
+  const scopedPages = (() => {
+    const pageIds = input?.pageIds ? new Set(input.pageIds) : null;
+    return allVisiblePages.filter((page) => {
+      if (pageIds && !pageIds.has(page.id)) {
+        return false;
+      }
+      if (input?.pageLabel && page.label !== input.pageLabel) {
+        return false;
+      }
+      return true;
+    });
+  })();
+  const scopedPageIds = scopedPages.map((page) => page.id);
+  if (scopedPageIds.length === 0) {
     return {
       generatedAt: now.toISOString(),
       pages: [],
     };
   }
 
-  if (input?.pageIds || input?.pageLabel || pageIds.length === 1) {
-    await Promise.all(pageIds.map((pageId) => ensureSyncTaskRows(app.db, {
+  if (input?.pageIds || input?.pageLabel || scopedPageIds.length === 1) {
+    await Promise.all(scopedPageIds.map((pageId) => ensureSyncTaskRows(app.db, {
       platformAccountId: pageId,
       now,
     })));
@@ -963,15 +1015,37 @@ export async function getSyncStatusSnapshot(
   const [taskRows, monitorRows] = await Promise.all([
     listSyncTaskRows(app.db),
     listSyncMonitorStreamRows(app.db, {
-      pageIds,
+      pageIds: scopedPageIds,
       windowStart: new Date(now.getTime() - 24 * 60 * 60 * 1000),
       streams: [...getSyncTasksForPlatform("fansly")],
     }),
   ]);
 
+  const visiblePageIds = new Set(allVisiblePages.map((page) => page.id));
+  const pagesById = new Map(allVisiblePages.map((page) => [page.id, page] as const));
+  const runtimeGroupByPageId = new Map(
+    allVisiblePages.map((page) => [page.id, buildRuntimeGroupId(page)] as const),
+  );
+  const activeStreamsByGroupId = new Map<string, Set<SyncV2Task>>();
+  for (const taskRow of taskRows) {
+    if (!visiblePageIds.has(taskRow.platformAccountId) || !hasActiveProgress(taskRow, now)) {
+      continue;
+    }
+
+    const page = pagesById.get(taskRow.platformAccountId);
+    if (!page) {
+      continue;
+    }
+
+    const groupId = runtimeGroupByPageId.get(page.id) ?? buildRuntimeGroupId(page);
+    const current = activeStreamsByGroupId.get(groupId) ?? new Set<SyncV2Task>();
+    current.add(taskRow.task);
+    activeStreamsByGroupId.set(groupId, current);
+  }
+
   const taskRowsByPageTask = new Map(
     taskRows
-      .filter((row) => pageIds.includes(row.platformAccountId))
+      .filter((row) => scopedPageIds.includes(row.platformAccountId))
       .map((row) => [`${row.platformAccountId}:${row.task}`, row] as const),
   );
   const monitorRowsByPageTask = new Map(
@@ -1025,7 +1099,12 @@ export async function getSyncStatusSnapshot(
               updatedAt: now,
             } satisfies SyncTaskRow;
 
-            return deriveTaskState(effectiveTaskRow, monitorRow, now);
+            const groupId = runtimeGroupByPageId.get(page.id) ?? buildRuntimeGroupId(page);
+            const activeSiblingStreams = sortTasksByPolicyOrder(activeStreamsByGroupId.get(groupId) ?? []);
+
+            return deriveTaskState(effectiveTaskRow, monitorRow, now, {
+              activeSiblingStreams,
+            });
           });
         const domainMonitorRows = monitorRows.filter((row) =>
           row.pageId === page.id &&

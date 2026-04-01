@@ -270,6 +270,86 @@ describe("sync blocks service", () => {
     ]);
   });
 
+  it("suppresses page-level worker diagnostics while another non-connection block is actively syncing", async () => {
+    syncStatusMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-24T12:00:00.000Z",
+      pages: [buildSnapshotPage({
+        blocks: {
+          connection: buildBlock({ block: "connection", connectionStatus: "connected" }),
+          financials: buildBlock({
+            block: "financials",
+            state: "delayed",
+            primaryFresh: false,
+            needsAttention: true,
+            statusReason: {
+              code: "queue_delayed",
+              summary: "Queued too long with no active sync making progress.",
+              waitingFor: null,
+            },
+          }),
+          audience: buildBlock({ block: "audience", state: "scheduled", primaryFresh: false }),
+          messages_live: buildBlock({ block: "messages_live", state: "scheduled", primaryFresh: false }),
+          messages_history: buildBlock({
+            block: "messages_history",
+            state: "backfilling",
+            primaryFresh: false,
+            progress: {
+              label: "82 / 3,004 conversations",
+              current: 82,
+              total: 3004,
+              unit: "conversations",
+              percent: 2.73,
+              percentValid: true,
+              details: {},
+            },
+          }),
+        },
+      })],
+    });
+
+    const overview = await getSyncBlocksOverview({} as never, {
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(overview.pages[0]?.diagnosis).toBeNull();
+    expect(overview.diagnosis).toBeNull();
+  });
+
+  it("surfaces page-level worker diagnostics when queue delay has no active or fresh sibling blocks", async () => {
+    syncStatusMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-24T12:00:00.000Z",
+      pages: [buildSnapshotPage({
+        blocks: {
+          connection: buildBlock({ block: "connection", connectionStatus: "connected" }),
+          financials: buildBlock({
+            block: "financials",
+            state: "delayed",
+            primaryFresh: false,
+            needsAttention: true,
+            statusReason: {
+              code: "queue_delayed",
+              summary: "Queued too long with no active sync making progress.",
+              waitingFor: null,
+            },
+          }),
+          audience: buildBlock({ block: "audience", state: "scheduled", primaryFresh: false }),
+          messages_live: buildBlock({ block: "messages_live", state: "scheduled", primaryFresh: false }),
+          messages_history: buildBlock({ block: "messages_history", state: "scheduled", primaryFresh: false }),
+        },
+      })],
+    });
+
+    const overview = await getSyncBlocksOverview({} as never, {
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(overview.pages[0]?.diagnosis).toMatchObject({
+      code: "worker_offline",
+      severity: "warning",
+      detail: "Queued too long with no active sync making progress.",
+    });
+  });
+
   it("triggers the financials domain through the v2 task request path", async () => {
     dbMocks.findPageByLabel.mockResolvedValue({
       page: {

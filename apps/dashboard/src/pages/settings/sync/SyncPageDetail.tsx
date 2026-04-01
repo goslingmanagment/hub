@@ -49,11 +49,14 @@ function BlockDetailCard({
   const summary = formatBlockSummary(block);
   const statusSummary = getReasonSummary(block);
   const dependencyWait = isDependencyWait(block);
-  const hasStatusNotice = dependencyWait || Boolean(statusSummary);
+  const queueWaiting = block.statusReason?.code === "queue_waiting";
+  const hasStatusNotice = dependencyWait || block.state === "failed" || block.state === "delayed";
   const hasSubstreams = block.substreams.length > 1;
   const dependencyDetail = getDependencyWaitDetail(block);
   const progressCaption = formatBlockProgressCaption(block);
-  const statusTone = block.state === "failed"
+  const statusTone = dependencyWait || queueWaiting
+    ? "border-border bg-hover-alt text-text-secondary"
+    : block.state === "failed"
     ? "border-danger/20 bg-danger/[0.04] text-danger"
     : "border-warning/25 bg-warning/10 text-warning-dark";
 

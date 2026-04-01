@@ -245,13 +245,18 @@ function diagnosisForPage(page: SyncStatusPage): SyncDiagnosis | null {
     };
   }
 
+  const nonConnectionBlocks = blocks.filter((block) => block.block !== "connection");
+  const hasHealthyPrimaryData = nonConnectionBlocks.some((block) => block.primaryFresh);
+  const hasActiveSyncWork = nonConnectionBlocks.some((block) =>
+    block.state === "syncing" || block.state === "backfilling" || block.state === "retrying"
+  );
   const queuedTooLong = blocks.find((block) => block.needsAttention && block.statusReason?.code === "queue_delayed");
-  if (queuedTooLong) {
+  if (queuedTooLong && !hasHealthyPrimaryData && !hasActiveSyncWork) {
     return {
       code: "worker_offline",
       severity: "warning",
       headline: "Sync is delayed",
-      detail: queuedTooLong.statusReason?.summary ?? "Queued sync work is waiting longer than expected.",
+      detail: queuedTooLong.statusReason?.summary ?? "Queued sync work is stalled with no active progress.",
       actionKind: "worker",
     };
   }

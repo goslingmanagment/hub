@@ -178,6 +178,16 @@ function formatDependencyList(streams: string[]): string {
   return streams.map((stream) => getStreamLabel(stream)).join(", ");
 }
 
+function getWaitingStreams(item: SyncReasonCarrier): string[] {
+  if (item.statusReason?.waitingFor && item.statusReason.waitingFor.length > 0) {
+    return item.statusReason.waitingFor;
+  }
+  if (item.statusReason?.code === "unmet_dependency") {
+    return parseDependencyWait(getReasonSummary(item));
+  }
+  return [];
+}
+
 function getReasonCode(item: SyncReasonCarrier): string | null {
   return item.statusReason?.code ?? item.error?.code ?? null;
 }
@@ -187,11 +197,15 @@ export function getReasonSummary(item: SyncReasonCarrier): string | null {
 }
 
 function getDependencyStreams(item: SyncReasonCarrier): string[] {
-  return item.statusReason?.waitingFor ?? parseDependencyWait(getReasonSummary(item));
+  return getWaitingStreams(item);
 }
 
 export function isDependencyWait(item: SyncReasonCarrier): boolean {
   return getReasonCode(item) === "unmet_dependency";
+}
+
+function isQueueWaiting(item: SyncReasonCarrier): boolean {
+  return getReasonCode(item) === "queue_waiting";
 }
 
 export function getDependencyWaitDetail(item: SyncReasonCarrier): string | null {
@@ -336,7 +350,18 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
       }
       return "Waiting for prerequisite syncs to finish first";
     }
+    if (getReasonCode(block) === "queue_delayed") {
+      return "Queued too long with no active sync making progress";
+    }
     return getReasonSummary(block) ?? "Sync is delayed";
+  }
+
+  if (block.state === "scheduled" && isQueueWaiting(block)) {
+    const waitingOn = getWaitingStreams(block);
+    if (waitingOn.length === 1) {
+      return `Queued \u2014 ${getStreamLabel(waitingOn[0])} is running`;
+    }
+    return "Queued \u2014 will start after current sync completes";
   }
 
   const supportingProgressSummary = formatSupportingProgressSummary(block);
@@ -474,7 +499,7 @@ export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string
       return detail ? `Waiting \u00b7 ${detail}` : "Waiting";
     }
     if (code === "queue_delayed") {
-      return "Delayed \u00b7 queued too long";
+      return "Delayed \u00b7 queue stalled";
     }
     if (code === "progress_stalled") {
       return "Stalled \u00b7 no progress";
@@ -486,6 +511,13 @@ export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string
   }
 
   if (substream.state === "scheduled") {
+    if (code === "queue_waiting") {
+      const waitingOn = getWaitingStreams(substream);
+      if (waitingOn.length === 1) {
+        return `Waiting \u00b7 ${getStreamLabel(waitingOn[0])}`;
+      }
+      return "Waiting";
+    }
     return "Queued";
   }
 
