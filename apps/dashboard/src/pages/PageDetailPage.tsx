@@ -327,6 +327,7 @@ export function PageDetailPage() {
       {activeTab === "spenders" && (
         <PageSpendersSection
           spenders={spenders}
+          spenderPeriod={spenderPeriod}
           spendersOffset={spendersOffset}
           onPageChange={setSpendersOffset}
           onOpenFanProfile={openFanProfile}
@@ -572,13 +573,15 @@ function PageTransactionsSection({
   );
 }
 
-function PageSpendersSection({
+export function PageSpendersSection({
   spenders,
+  spenderPeriod,
   spendersOffset,
   onPageChange,
   onOpenFanProfile,
 }: {
   spenders: SpenderListResponse | undefined;
+  spenderPeriod: "today" | "7d" | "30d" | "lifetime";
   spendersOffset: number;
   onPageChange: (offset: number) => void;
   onOpenFanProfile: (platformUserId: string, fanLabel: string) => void;
@@ -610,6 +613,12 @@ function PageSpendersSection({
           )}
           {(spenders?.items ?? []).map((item, index) => {
             const windowMetrics = item.metrics.window;
+            const spent = spenderPeriod === "lifetime"
+              ? item.metrics.lifetime.scopeCreatorNetAmountMills
+              : (windowMetrics?.creatorNetAmountMills ?? 0);
+            const transactionCount = spenderPeriod === "lifetime"
+              ? null
+              : (windowMetrics?.transactionCount ?? 0);
             const fanLabel = resolveFanLabelForScope(item.fan, "page");
 
             return (
@@ -630,10 +639,10 @@ function PageSpendersSection({
                   )}
                 </td>
                 <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
-                  {formatUsdFromMills(windowMetrics?.creatorNetAmountMills ?? 0)}
+                  {formatUsdFromMills(spent)}
                 </td>
                 <td className="px-4 py-3 text-right text-sm text-text-secondary tabular-nums">
-                  {windowMetrics?.transactionCount ?? 0}
+                  {transactionCount ?? "\u2014"}
                 </td>
               </tr>
             );

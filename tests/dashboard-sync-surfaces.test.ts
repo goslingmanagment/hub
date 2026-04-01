@@ -24,7 +24,7 @@ vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
 import { CrmSummaryHeader } from "../apps/dashboard/src/components/page/crm/CrmSummaryHeader.tsx";
 import { OverviewPage } from "../apps/dashboard/src/pages/OverviewPage.tsx";
-import { PageDetailPage } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
+import { PageDetailPage, PageSpendersSection } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
 
 type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
 type DashboardPage = DashboardShellValue["pages"][number];
@@ -453,6 +453,42 @@ describe("dashboard sync product surfaces", () => {
     }, {
       enabled: true,
     });
+  });
+
+  it("renders all-time page spenders from lifetime metrics instead of zeroing window values", () => {
+    const html = renderToStaticMarkup(createElement(PageSpendersSection, {
+      spenders: {
+        total: 1,
+        items: [{
+          fan: {
+            platform: "fansly",
+            platformUserId: "fan-001",
+            username: "buyer",
+            displayName: "Buyer One",
+            pageAlias: null,
+          },
+          metrics: {
+            window: null,
+            lifetime: {
+              scopeGrossAmountMills: 1234,
+              scopeCreatorNetAmountMills: 1234,
+              platformGrossAmountMills: 1234,
+              platformCreatorNetAmountMills: 1234,
+            },
+            comparison: null,
+          },
+        }],
+        limit: 50,
+        offset: 0,
+      },
+      spenderPeriod: "lifetime",
+      spendersOffset: 0,
+      onPageChange: () => undefined,
+      onOpenFanProfile: () => undefined,
+    }));
+
+    expect(html).toContain("$1.23");
+    expect(html).toContain(">—</td>");
   });
 
   it("uses CRM coverage language instead of generic sync chrome", () => {
