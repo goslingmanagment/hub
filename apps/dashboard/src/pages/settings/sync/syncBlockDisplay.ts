@@ -356,8 +356,8 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
 
   if (block.block === "connection") {
     if (block.connectionStatus === "connected") {
-      const checked = block.lastSuccessAt
-        ? `checked ${formatRelativeTime(block.lastSuccessAt)}`
+      const checked = block.succeededAt
+        ? `checked ${formatRelativeTime(block.succeededAt)}`
         : "";
       return `Connected${checked ? ` \u00b7 ${checked}` : ""}`;
     }
@@ -371,8 +371,8 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
   }
 
   if (block.state === "paused") {
-    const last = block.lastSuccessAt
-      ? `paused \u00b7 last synced ${formatRelativeTime(block.lastSuccessAt)}`
+    const last = block.succeededAt
+      ? `paused \u00b7 last synced ${formatRelativeTime(block.succeededAt)}`
       : "Paused";
     return last;
   }
@@ -504,8 +504,8 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
   }
 
   const metricCount = getMetricCount(block);
-  const updated = block.lastSuccessAt
-    ? `Updated ${formatRelativeTime(block.lastSuccessAt)}`
+  const updated = block.succeededAt
+    ? `Updated ${formatRelativeTime(block.succeededAt)}`
     : "Never synced";
   return metricCount ? `${updated} \u00b7 ${metricCount}` : updated;
 }

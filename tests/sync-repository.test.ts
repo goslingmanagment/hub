@@ -6,16 +6,14 @@ import {
   ensureSyncProviderRateLimitProfile,
   getSyncRun,
   hasRecentTerminalProxyFailure,
-  listRunnableSyncPages,
-  listRunnableSyncStreamStatesForPage,
+  listPageSyncStates,
+  listRunnablePageSync,
   listRecentSyncRuns,
   listRunningSyncRuns,
-  listSyncStreamStateRows,
   listSyncRequestAttempts,
   listSyncRunEvents,
-  rebalanceSyncStreamPriorities,
   reserveSyncProviderRateLimit,
-  resolveSyncRequestPriority,
+  resolvePageSyncPriority,
 } from "../packages/db/src/repositories/sync.ts";
 
 function extractQueryParams(query: {
@@ -304,47 +302,22 @@ describe("sync repository timestamp normalization", () => {
     expect(computeSyncStreamSlotOffsetSeconds(42, "light")).not.toBe(
       computeSyncStreamSlotOffsetSeconds(42, "followers"),
     );
-    expect(resolveSyncRequestPriority("transactions", "scheduled")).toBeGreaterThan(
-      resolveSyncRequestPriority("top_spenders", "scheduled"),
+    expect(resolvePageSyncPriority("transactions", "scheduled")).toBeGreaterThan(
+      resolvePageSyncPriority("top_spenders", "scheduled"),
     );
-    expect(resolveSyncRequestPriority("top_spenders", "manual")).toBeGreaterThan(
-      resolveSyncRequestPriority("subscribers", "manual"),
+    expect(resolvePageSyncPriority("top_spenders", "manual")).toBeGreaterThan(
+      resolvePageSyncPriority("subscribers", "manual"),
     );
-    expect(resolveSyncRequestPriority("followers", "scheduled")).toBeGreaterThan(
-      resolveSyncRequestPriority("dm_conversations", "scheduled"),
+    expect(resolvePageSyncPriority("followers", "scheduled")).toBeGreaterThan(
+      resolvePageSyncPriority("dm_conversations", "scheduled"),
     );
-    expect(resolveSyncRequestPriority("followers", "manual")).toBeGreaterThan(
-      resolveSyncRequestPriority("dm_messages", "manual"),
+    expect(resolvePageSyncPriority("followers", "manual")).toBeGreaterThan(
+      resolvePageSyncPriority("dm_messages", "manual"),
     );
-    expect(resolveSyncRequestPriority("followers_reconcile", "anomaly")).toBe(44);
-    expect(resolveSyncRequestPriority("light", "manual")).toBeGreaterThan(
-      resolveSyncRequestPriority("light", "scheduled"),
+    expect(resolvePageSyncPriority("followers_reconcile", "anomaly")).toBe(44);
+    expect(resolvePageSyncPriority("light", "manual")).toBeGreaterThan(
+      resolvePageSyncPriority("light", "scheduled"),
     );
-  });
-
-  it("rebalances existing stream-state priorities using pending reasons without touching revisions", async () => {
-    const execute = vi.fn().mockResolvedValue({ rows: [] });
-    const db = { execute } as never;
-    const now = new Date("2026-03-24T12:00:00.000Z");
-
-    await rebalanceSyncStreamPriorities(db, {
-      platformAccountId: 55,
-      now,
-    });
-
-    const query = execute.mock.calls[0]?.[0];
-    const sqlText = extractSqlText(query);
-    const params = extractQueryParams(query);
-
-    expect(sqlText).toContain("update sync_state");
-    expect(sqlText).toContain("set base_priority =");
-    expect(sqlText).toContain("case task");
-    expect(sqlText).toContain("effective_priority = case");
-    expect(sqlText).toContain("pending_reason");
-    expect(sqlText).not.toContain("desired_revision =");
-    expect(sqlText).not.toContain("satisfied_revision =");
-    expect(params).toContain(55);
-    expect(params).toContain(now);
   });
 
   it("reserves shared provider rate-limit rows at the latest available slot", async () => {
@@ -458,21 +431,18 @@ describe("sync repository timestamp normalization", () => {
     ]));
   });
 
-  it("guards dm streams behind the required dependency streams in runnable-page selection", async () => {
+  it("reads runnable sync pages from the canonical page_sync_states table", async () => {
     const execute = vi.fn().mockResolvedValue({ rows: [] });
     const db = { execute } as never;
     const now = new Date("2026-03-24T12:00:00.000Z");
 
-    await listRunnableSyncPages(db, now);
-    await listRunnableSyncStreamStatesForPage(db, 55, now);
+    await listRunnablePageSync(db, now);
 
-    const pageQuery = execute.mock.calls[0]?.[0];
-    const streamQuery = execute.mock.calls[1]?.[0];
-    const dependencyClause = "ARRAY['light', 'top_spenders', 'transactions', 'subscribers', 'followers']::sync_task[]";
+    const query = execute.mock.calls[0]?.[0];
 
-    expect(extractSqlText(pageQuery)).toContain(dependencyClause);
-    expect(extractSqlText(streamQuery)).toContain(dependencyClause);
-    expect(extractQueryParams(streamQuery)).toEqual(expect.arrayContaining([55, now]));
+    expect(extractSqlText(query)).toContain('with runnable_streams as (');
+    expect(extractSqlText(query)).toContain('select st.page_id as "pageId"');
+    expect(extractQueryParams(query)).toContain(now);
   });
 
   it("sorts rate-limit locks deterministically before taking row locks", async () => {
@@ -518,15 +488,15 @@ describe("sync repository timestamp normalization", () => {
   it("parameterizes runtime stream filters instead of interpolating them into SQL", async () => {
     const execute = vi.fn().mockResolvedValue({ rows: [] });
     const db = { execute } as never;
-    const injected = "light'::sync_stream[]); drop table sync_state; --";
+    const injected = "light'::sync_stream[]); drop table page_sync_states; --";
 
-    await listSyncStreamStateRows(db, {
-      platformAccountId: 55,
+    await listPageSyncStates(db, {
+      pageId: 55,
       streams: [injected as never],
     });
 
     const query = execute.mock.calls[0]?.[0];
-    expect(extractSqlText(query)).not.toContain("drop table sync_state");
+    expect(extractSqlText(query)).not.toContain("drop table page_sync_states");
     expect(extractQueryParams(query)).toEqual(expect.arrayContaining([
       55,
       injected,

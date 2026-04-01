@@ -1,14 +1,14 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
-  ensureSyncTaskRows,
+  ensurePageSyncStates,
   findPageByLabel,
+  listPageSyncStates,
   listPlatformAccounts,
-  listSyncTaskRows,
-  requestSyncTaskGenerations,
-  resolveSyncTaskPriority,
-  type SyncControlStream,
-  type SyncRequestReason,
+  requestPageSync as requestPageSyncRows,
+  resolvePageSyncPriority,
+  type SyncRequestSource,
+  type SyncStream,
 } from "@agency_hub_core/db";
 import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
@@ -16,15 +16,15 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../bootstrap.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
 
-export interface RequestedSyncRevision {
-  stream: SyncControlStream;
-  desiredRevision: number;
+export interface RequestedSyncRequest {
+  stream: SyncStream;
+  requestedSeq: number;
 }
 
 export function resolveStreamsForScope(
   platform: "fansly" | "onlyfans",
   scope: SyncTriggerScope,
-): SyncControlStream[] {
+): SyncStream[] {
   if (scope === "light") {
     return platform === "fansly"
       ? ["light"]
@@ -71,7 +71,7 @@ export async function requestPageSync(
   input: {
     pageLabel: string;
     scope: SyncTriggerScope;
-    reason: SyncRequestReason;
+    reason: SyncRequestSource;
     onlyFansTransactionsStart?: Date | null;
   },
 ) {
@@ -82,34 +82,29 @@ export async function requestPageSync(
 
   const streams = resolveStreamsForScope(storedPage.page.platform, input.scope);
   const now = new Date();
-  await ensureSyncTaskRows(app.db, {
-    platformAccountId: storedPage.page.id,
+  await ensurePageSyncStates(app.db, {
+    pageId: storedPage.page.id,
     onboarding: input.reason === "onboarding",
     now,
   });
 
-  const requestPayloadByTask = input.onlyFansTransactionsStart
+  const requestPayloadByStream = input.onlyFansTransactionsStart
     ? {
       transactions: {
         onlyFansTransactionsStart: input.onlyFansTransactionsStart.toISOString(),
       },
     }
     : undefined;
-  const requestedRevisions = await requestSyncTaskGenerations(app.db, {
-    platformAccountId: storedPage.page.id,
-    tasks: streams,
+  const requests = await requestPageSyncRows(app.db, {
+    pageId: storedPage.page.id,
+    streams,
     source: input.reason,
-    requestPayloadByTask,
-    requestedByActor: "manual_api",
+    requestPayloadByStream,
     now,
   });
-  const revisions = requestedRevisions.map((revision) => ({
-    stream: revision.task,
-    desiredRevision: revision.desiredGeneration,
-  })) satisfies RequestedSyncRevision[];
 
   const priority = streams.reduce((current, stream) => {
-    return Math.max(current, resolveSyncTaskPriority(stream, input.reason));
+    return Math.max(current, resolvePageSyncPriority(stream, input.reason));
   }, 0);
   const wakeupId = await sendSyncPageWakeup(boss, {
     platformAccountId: storedPage.page.id,
@@ -121,7 +116,7 @@ export async function requestPageSync(
   return {
     page: storedPage.page,
     wakeupId,
-    revisions,
+    requests,
   };
 }
 
@@ -130,13 +125,13 @@ export async function requestAllPagesSync(
   boss: Pick<PgBoss, "send">,
   input: {
     scope: SyncTriggerScope;
-    reason: SyncRequestReason;
+    reason: SyncRequestSource;
   },
 ) {
   const pages = await listPlatformAccounts(app.db);
   const results = [] as Array<{
     pageLabel: string;
-    revisions: RequestedSyncRevision[];
+    requests: RequestedSyncRequest[];
   }>;
 
   for (const page of pages) {
@@ -147,18 +142,18 @@ export async function requestAllPagesSync(
     });
     results.push({
       pageLabel: page.label,
-      revisions: request.revisions,
+      requests: request.requests,
     });
   }
 
   return results;
 }
 
-export async function waitForRequestedSyncRevisions(
+export async function waitForRequestedSyncRequests(
   app: AppContext,
   input: {
-    platformAccountId: number;
-    revisions: RequestedSyncRevision[];
+    pageId: number;
+    requests: RequestedSyncRequest[];
     timeoutMs?: number;
     pollMs?: number;
   },
@@ -168,30 +163,30 @@ export async function waitForRequestedSyncRevisions(
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const rows = await listSyncTaskRows(app.db, {
-      platformAccountId: input.platformAccountId,
-      tasks: input.revisions.map((revision) => revision.stream),
+    const rows = await listPageSyncStates(app.db, {
+      pageId: input.pageId,
+      streams: input.requests.map((request) => request.stream),
     });
-    const byTask = new Map(rows.map((row) => [row.task, row] as const));
-    const unsatisfied = input.revisions.filter((revision) => {
-      const row = byTask.get(revision.stream);
+    const byStream = new Map(rows.map((row) => [row.stream, row] as const));
+    const unsatisfied = input.requests.filter((request) => {
+      const row = byStream.get(request.stream);
       if (!row) {
         return true;
       }
 
-      if (row.status === "blocked" && row.blockerType === "auth") {
-        throw new Error(`Sync for stream "${revision.stream}" is blocked by auth`);
+      if (row.status === "blocked" && row.blockerKind === "auth") {
+        throw new Error(`Sync for stream "${request.stream}" is blocked by auth`);
       }
 
-      if (row.status === "blocked" && row.appliedGeneration < revision.desiredRevision) {
-        throw new Error(`Sync for stream "${revision.stream}" is blocked`);
+      if (row.status === "blocked" && row.appliedSeq < request.requestedSeq) {
+        throw new Error(`Sync for stream "${request.stream}" is blocked`);
       }
 
-      if (row.status === "paused" && row.appliedGeneration < revision.desiredRevision) {
-        throw new Error(`Sync for stream "${revision.stream}" is paused`);
+      if (row.status === "paused" && row.appliedSeq < request.requestedSeq) {
+        throw new Error(`Sync for stream "${request.stream}" is paused`);
       }
 
-      return row.appliedGeneration < revision.desiredRevision;
+      return row.appliedSeq < request.requestedSeq;
     });
 
     if (unsatisfied.length === 0) {
@@ -201,5 +196,5 @@ export async function waitForRequestedSyncRevisions(
     await delay(pollMs);
   }
 
-  throw new Error("Timed out waiting for requested sync revisions to converge");
+  throw new Error("Timed out waiting for requested sync requests to converge");
 }

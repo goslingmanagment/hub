@@ -3,16 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 const dbMocks = vi.hoisted(() => ({
-  acquireNextSyncTaskLeaseForPage: vi.fn(),
-  blockSyncTaskGeneration: vi.fn(),
-  completeSyncTaskGeneration: vi.fn(),
-  ensureSyncTaskRows: vi.fn(),
-  failSyncTaskGeneration: vi.fn(),
+  acquirePageSyncLease: vi.fn(),
+  blockPageSync: vi.fn(),
+  completePageSync: vi.fn(),
+  ensurePageSyncStates: vi.fn(),
+  retryPageSync: vi.fn(),
   findPageById: vi.fn(),
-  heartbeatSyncTaskLease: vi.fn(),
-  listRunnableSyncPagesV2: vi.fn(),
+  heartbeatPageSyncLease: vi.fn(),
+  listRunnablePageSync: vi.fn(),
   startSyncRun: vi.fn(),
-  yieldSyncTaskGeneration: vi.fn(),
+  yieldPageSync: vi.fn(),
 }));
 
 const handlerMocks = vi.hoisted(() => ({
@@ -77,41 +77,41 @@ import {
 
 describe("sync executor", () => {
   const taskLease = {
-    platformAccountId: 55,
-    task: "followers",
-    status: "queued",
-    desiredGeneration: 3,
-    runningGeneration: 3,
-    appliedGeneration: 2,
-    scheduleIntervalSeconds: 43_200,
+    pageId: 55,
+    stream: "followers",
+    status: "pending",
+    requestSeq: 3,
+    leasedSeq: 3,
+    appliedSeq: 2,
+    cadenceSeconds: 43_200,
     slotOffsetSeconds: 10,
     lastScheduledSlot: 40000,
-    lastRequestedAt: new Date("2026-03-14T12:00:00.000Z"),
+    requestedAt: new Date("2026-03-14T12:00:00.000Z"),
     requestPayload: null,
-    retryClass: null,
+    retryKind: null,
     retryAt: null,
-    blockerType: null,
+    blockerKind: null,
     blockerCode: null,
-    blockerReason: null,
-    blockedSince: null,
-    currentPhase: null,
-    currentWorkClass: "live",
-    progressPayload: {},
+    blockerMessage: null,
+    blockedAt: null,
+    phase: null,
+    workClass: "live",
+    progress: {},
     leaseOwner: "worker-1",
     leaseToken: "lease-1",
     leaseHeartbeatAt: new Date("2026-03-14T12:00:00.000Z"),
     leaseExpiresAt: new Date("2026-03-14T12:02:00.000Z"),
-    lastEnqueuedAt: null,
-    lastStartedAt: null,
-    lastProgressAt: null,
-    lastFinishedAt: null,
-    lastSuccessAt: null,
-    lastFailureAt: null,
+    enqueuedAt: null,
+    startedAt: null,
+    progressedAt: null,
+    finishedAt: null,
+    succeededAt: null,
+    failedAt: null,
     consecutiveFailures: 0,
     lastErrorCode: null,
     lastErrorSummary: null,
     operationId: 99,
-    operationSource: "manual",
+    requestSource: "manual",
     platform: "fansly",
     proxyUrl: "socks5://proxy.example",
     createdAt: new Date("2026-03-14T12:00:00.000Z"),
@@ -136,11 +136,11 @@ describe("sync executor", () => {
       id: 777,
       startedAt: new Date("2026-03-14T12:00:00.000Z"),
     });
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
-    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValue(null);
-    dbMocks.blockSyncTaskGeneration.mockResolvedValue(true);
-    dbMocks.completeSyncTaskGeneration.mockResolvedValue(true);
-    dbMocks.failSyncTaskGeneration.mockResolvedValue(true);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.acquirePageSyncLease.mockResolvedValue(null);
+    dbMocks.blockPageSync.mockResolvedValue(true);
+    dbMocks.completePageSync.mockResolvedValue(true);
+    dbMocks.retryPageSync.mockResolvedValue(true);
     dbMocks.findPageById.mockResolvedValue({
       page: {
         id: 55,
@@ -151,9 +151,9 @@ describe("sync executor", () => {
         url: "socks5://proxy.example",
       },
     });
-    dbMocks.heartbeatSyncTaskLease.mockResolvedValue(true);
-    dbMocks.listRunnableSyncPagesV2.mockResolvedValue([]);
-    dbMocks.yieldSyncTaskGeneration.mockResolvedValue(true);
+    dbMocks.heartbeatPageSyncLease.mockResolvedValue(true);
+    dbMocks.listRunnablePageSync.mockResolvedValue([]);
+    dbMocks.yieldPageSync.mockResolvedValue(true);
     handlerMocks.resolveExecutorPageContext.mockResolvedValue({
       platform: "fansly",
       page: {
@@ -178,10 +178,10 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
 
-    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
-    dbMocks.listRunnableSyncPagesV2.mockResolvedValueOnce([
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([
       {
-        platformAccountId: 55,
+        pageId: 55,
         platform: "fansly",
         priority: 45,
         requestedAt: new Date("2026-03-14T12:00:00.000Z"),
@@ -202,11 +202,11 @@ describe("sync executor", () => {
       },
     });
 
-    expect(dbMocks.ensureSyncTaskRows).toHaveBeenCalledWith({}, { platformAccountId: 55 });
-    expect(dbMocks.yieldSyncTaskGeneration).toHaveBeenCalledWith({}, expect.objectContaining({
-      platformAccountId: 55,
-      task: "followers",
-      generation: 3,
+    expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { pageId: 55 });
+    expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      requestSeq: 3,
       leaseToken: "lease-1",
     }));
     expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
@@ -239,10 +239,10 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
 
-    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
-    dbMocks.listRunnableSyncPagesV2.mockResolvedValueOnce([
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([
       {
-        platformAccountId: 55,
+        pageId: 55,
         platform: "fansly",
         priority: 45,
         requestedAt: new Date("2026-03-14T12:00:00.000Z"),
@@ -280,12 +280,12 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
 
-    dbMocks.acquireNextSyncTaskLeaseForPage
+    dbMocks.acquirePageSyncLease
       .mockResolvedValueOnce(taskLease)
       .mockResolvedValueOnce(taskLease);
-    dbMocks.listRunnableSyncPagesV2
+    dbMocks.listRunnablePageSync
       .mockResolvedValueOnce([{
-        platformAccountId: 55,
+        pageId: 55,
         platform: "fansly",
         priority: 45,
         requestedAt: new Date("2026-03-14T12:00:00.000Z"),
@@ -313,8 +313,8 @@ describe("sync executor", () => {
 
     expect(boss.send).toHaveBeenCalledTimes(1);
     expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(2);
-    expect(dbMocks.yieldSyncTaskGeneration).toHaveBeenCalledTimes(1);
-    expect(dbMocks.completeSyncTaskGeneration).toHaveBeenCalledTimes(1);
+    expect(dbMocks.yieldPageSync).toHaveBeenCalledTimes(1);
+    expect(dbMocks.completePageSync).toHaveBeenCalledTimes(1);
     expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
     expect(result).toMatchObject({
       kind: "success",
@@ -336,9 +336,9 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
 
-    dbMocks.acquireNextSyncTaskLeaseForPage.mockImplementation(async () => taskLease);
-    dbMocks.listRunnableSyncPagesV2.mockResolvedValue([{
-      platformAccountId: 55,
+    dbMocks.acquirePageSyncLease.mockImplementation(async () => taskLease);
+    dbMocks.listRunnablePageSync.mockResolvedValue([{
+      pageId: 55,
       platform: "fansly",
       priority: 45,
       requestedAt: new Date("2026-03-14T12:00:00.000Z"),
@@ -368,7 +368,7 @@ describe("sync executor", () => {
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
 
-    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
     handlerMocks.executeStreamChunk.mockRejectedValue(
       new FanslyApiError("expired session", 401),
     );
@@ -376,16 +376,17 @@ describe("sync executor", () => {
     const result = await executeNextSyncPageChunk(app, 55);
 
     expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledTimes(1);
-    expect(dbMocks.blockSyncTaskGeneration).toHaveBeenCalledWith({}, expect.objectContaining({
-      platformAccountId: 55,
-      task: "followers",
-      generation: 3,
-      blockerType: "auth",
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      requestSeq: 3,
+      leaseToken: "lease-1",
+      blockerKind: "auth",
       blockerCode: "credentials_invalid",
-      blockerReason: "expired session",
+      blockerMessage: "expired session",
     }));
     expect(result).toMatchObject({
-      kind: "auth_failed",
+      kind: "blocked",
       platformAccountId: 55,
       needsContinuation: false,
     });
@@ -397,8 +398,8 @@ describe("sync executor", () => {
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
 
-    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
-    dbMocks.listRunnableSyncPagesV2.mockResolvedValueOnce([]);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
     handlerMocks.resolveExecutorPageContext.mockRejectedValue(
       new Error("No encryption key configured for version 1"),
     );
@@ -408,18 +409,16 @@ describe("sync executor", () => {
     expect(dbMocks.startSyncRun).toHaveBeenCalledWith({}, {
       platformAccountId: 55,
       stream: "followers",
-      task: "followers",
-      operationId: 99,
       generation: 3,
       leaseToken: "lease-1",
       trigger: "manual",
     });
-    expect(dbMocks.failSyncTaskGeneration).toHaveBeenCalledWith({}, expect.objectContaining({
-      platformAccountId: 55,
-      task: "followers",
-      generation: 3,
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      requestSeq: 3,
       leaseToken: "lease-1",
-      retryClass: "transient_network",
+      retryKind: "transient_network",
     }));
     expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledWith(app, expect.objectContaining({
       platformAccountId: 55,
@@ -439,7 +438,6 @@ describe("sync executor", () => {
     );
     expect(result).toMatchObject({
       kind: "failed",
-      platformAccountId: 55,
       runId: 777,
       needsContinuation: false,
     });
@@ -453,7 +451,7 @@ describe("sync executor", () => {
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
 
-    dbMocks.acquireNextSyncTaskLeaseForPage.mockResolvedValueOnce(taskLease);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
     handlerMocks.executeStreamChunk.mockImplementation(async () => {
       await vi.advanceTimersByTimeAsync(31_000);
       return {
@@ -465,7 +463,7 @@ describe("sync executor", () => {
     await executeNextSyncPageChunk(app, 55);
 
     expect(telemetryMocks.instances[0]?.recordWorkerHeartbeat).toHaveBeenCalledTimes(1);
-    expect(dbMocks.heartbeatSyncTaskLease).toHaveBeenCalledTimes(1);
+    expect(dbMocks.heartbeatPageSyncLease).toHaveBeenCalledTimes(1);
   });
 
   it("executor workers fetch with groupConcurrency and ignore active groups", async () => {
@@ -519,7 +517,7 @@ describe("sync executor", () => {
       touch: vi.fn(async () => {}),
     };
 
-    dbMocks.acquireNextSyncTaskLeaseForPage
+    dbMocks.acquirePageSyncLease
       .mockResolvedValueOnce(taskLease)
       .mockResolvedValueOnce(null);
     handlerMocks.executeStreamChunk.mockImplementation(async () => {

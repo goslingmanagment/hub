@@ -19,9 +19,9 @@ import {
   models,
   pageFollows,
   pageSubscriptions,
-  platformAccounts,
-  platformAccountCredentials,
-  platformAccountProxies,
+  pages,
+  pageCredentials,
+  egressEndpoints,
   spenderLifetimePage,
   transactions,
 } from "../schema.ts";
@@ -37,7 +37,7 @@ function applyPageScope<T>(clauses: T[], pageIds?: number[]) {
     if (pageIds.length === 0) {
       return { scoped: true, clauses };
     }
-    clauses.push(inArray(platformAccounts.id, pageIds) as T);
+    clauses.push(inArray(pages.id, pageIds) as T);
   }
 
   return { scoped: false, clauses };
@@ -45,22 +45,22 @@ function applyPageScope<T>(clauses: T[], pageIds?: number[]) {
 
 export async function findPageSummaryByLabel(db: Database, label: string) {
   const [row] = await db.select({
-    id: platformAccounts.id,
-    label: platformAccounts.label,
-    platform: platformAccounts.platform,
-    username: platformAccounts.username,
-    displayName: platformAccounts.displayName,
-    followerCount: platformAccounts.followerCount,
-    subscriberCount: platformAccounts.subscriberCount,
-    lastLightSyncAt: platformAccounts.lastLightSyncAt,
-    lastFollowerSyncAt: platformAccounts.lastFollowerSyncAt,
+    id: pages.id,
+    label: pages.label,
+    platform: pages.platform,
+    username: pages.username,
+    displayName: pages.displayName,
+    followerCount: pages.followerCount,
+    subscriberCount: pages.subscriberCount,
+    lastLightSyncAt: pages.lastLightSyncAt,
+    lastFollowerSyncAt: pages.lastFollowerSyncAt,
     modelSlug: models.slug,
     modelName: models.name,
-    hasCredentials: sql<boolean>`${platformAccountCredentials.id} is not null`,
-  }).from(platformAccounts)
-    .innerJoin(models, eq(models.id, platformAccounts.modelId))
-    .leftJoin(platformAccountCredentials, eq(platformAccountCredentials.platformAccountId, platformAccounts.id))
-    .where(eq(platformAccounts.label, label));
+    hasCredentials: sql<boolean>`${pageCredentials.id} is not null`,
+  }).from(pages)
+    .innerJoin(models, eq(models.id, pages.modelId))
+    .leftJoin(pageCredentials, eq(pageCredentials.platformAccountId, pages.id))
+    .where(eq(pages.label, label));
 
   return row ?? null;
 }
@@ -73,26 +73,26 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
   }
 
   return db.select({
-    id: platformAccounts.id,
-    label: platformAccounts.label,
-    platform: platformAccounts.platform,
-    username: platformAccounts.username,
-    displayName: platformAccounts.displayName,
-    followerCount: platformAccounts.followerCount,
-    subscriberCount: platformAccounts.subscriberCount,
-    lastLightSyncAt: platformAccounts.lastLightSyncAt,
-    lastFollowerSyncAt: platformAccounts.lastFollowerSyncAt,
+    id: pages.id,
+    label: pages.label,
+    platform: pages.platform,
+    username: pages.username,
+    displayName: pages.displayName,
+    followerCount: pages.followerCount,
+    subscriberCount: pages.subscriberCount,
+    lastLightSyncAt: pages.lastLightSyncAt,
+    lastFollowerSyncAt: pages.lastFollowerSyncAt,
     modelSlug: models.slug,
     modelName: models.name,
-    hasCredentials: sql<boolean>`${platformAccountCredentials.id} is not null`,
-    proxyUrl: platformAccountProxies.url,
-    proxyHasAuth: sql<boolean>`${platformAccountProxies.encryptedAuth} is not null`,
-  }).from(platformAccounts)
-    .innerJoin(models, eq(models.id, platformAccounts.modelId))
-    .leftJoin(platformAccountCredentials, eq(platformAccountCredentials.platformAccountId, platformAccounts.id))
-    .leftJoin(platformAccountProxies, eq(platformAccountProxies.platformAccountId, platformAccounts.id))
+    hasCredentials: sql<boolean>`${pageCredentials.id} is not null`,
+    proxyUrl: egressEndpoints.url,
+    proxyHasAuth: sql<boolean>`${egressEndpoints.encryptedAuth} is not null`,
+  }).from(pages)
+    .innerJoin(models, eq(models.id, pages.modelId))
+    .leftJoin(pageCredentials, eq(pageCredentials.platformAccountId, pages.id))
+    .leftJoin(egressEndpoints, eq(egressEndpoints.platformAccountId, pages.id))
     .where(clauses.length > 0 ? and(...clauses) : undefined)
-    .orderBy(models.slug, platformAccounts.label);
+    .orderBy(models.slug, pages.label);
 }
 
 export async function listVisibleModels(db: Database, pageIds?: number[]) {
@@ -102,16 +102,16 @@ export async function listVisibleModels(db: Database, pageIds?: number[]) {
 
   const clauses: Array<any> = [];
   if (pageIds !== undefined) {
-    clauses.push(inArray(platformAccounts.id, pageIds));
+    clauses.push(inArray(pages.id, pageIds));
   }
 
   return db.select({
     id: models.id,
     slug: models.slug,
     name: models.name,
-    pageCount: sql<number>`count(${platformAccounts.id})::int`,
+    pageCount: sql<number>`count(${pages.id})::int`,
   }).from(models)
-    .innerJoin(platformAccounts, eq(platformAccounts.modelId, models.id))
+    .innerJoin(pages, eq(pages.modelId, models.id))
     .where(clauses.length > 0 ? and(...clauses) : undefined)
     .groupBy(models.id, models.slug, models.name)
     .orderBy(models.slug);
@@ -124,16 +124,16 @@ export async function findVisibleModel(db: Database, modelSlug: string, pageIds?
 
   const clauses = [eq(models.slug, modelSlug)];
   if (pageIds !== undefined) {
-    clauses.push(inArray(platformAccounts.id, pageIds));
+    clauses.push(inArray(pages.id, pageIds));
   }
 
   const [row] = await db.select({
     id: models.id,
     slug: models.slug,
     name: models.name,
-    pageCount: sql<number>`count(${platformAccounts.id})::int`,
+    pageCount: sql<number>`count(${pages.id})::int`,
   }).from(models)
-    .innerJoin(platformAccounts, eq(platformAccounts.modelId, models.id))
+    .innerJoin(pages, eq(pages.modelId, models.id))
     .where(and(...clauses))
     .groupBy(models.id, models.slug, models.name);
 
@@ -239,18 +239,18 @@ export async function getRevenuePageTotals(
   }
 
   return db.select({
-    pageId: platformAccounts.id,
-    pageLabel: platformAccounts.label,
+    pageId: pages.id,
+    pageLabel: pages.label,
     modelId: models.id,
     modelSlug: models.slug,
     modelName: models.name,
     netEarningsMills: sql<bigint>`coalesce(sum(${dailyRevenue.creatorNetAmountMills}), 0)::bigint`,
   }).from(dailyRevenue)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, dailyRevenue.platformAccountId))
-    .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .innerJoin(pages, eq(pages.id, dailyRevenue.platformAccountId))
+    .innerJoin(models, eq(models.id, pages.modelId))
     .where(and(...clauses))
-    .groupBy(platformAccounts.id, platformAccounts.label, models.id, models.slug, models.name)
-    .orderBy(models.slug, platformAccounts.label);
+    .groupBy(pages.id, pages.label, models.id, models.slug, models.name)
+    .orderBy(models.slug, pages.label);
 }
 
 export async function getRevenueBreakdownForScope(
@@ -707,8 +707,8 @@ export async function findFanOnPage(db: Database, pageId: number, platformUserId
     username: fans.username,
     displayName: fans.displayName,
     createdAtExternal: fans.createdAtExternal,
-    pageId: platformAccounts.id,
-    pageLabel: platformAccounts.label,
+    pageId: pages.id,
+    pageLabel: pages.label,
     modelSlug: models.slug,
     modelName: models.name,
     totalCreatorNetMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
@@ -722,8 +722,8 @@ export async function findFanOnPage(db: Database, pageId: number, platformUserId
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
-    .innerJoin(platformAccounts, eq(platformAccounts.id, fanPages.platformAccountId))
-    .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .innerJoin(pages, eq(pages.id, fanPages.platformAccountId))
+    .innerJoin(models, eq(models.id, pages.modelId))
     .leftJoin(spenderLifetimePage, and(
       eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
       eq(spenderLifetimePage.fanId, fanPages.fanId),
@@ -756,8 +756,8 @@ export async function listFanPageContexts(
     username: fans.username,
     displayName: fans.displayName,
     createdAtExternal: fans.createdAtExternal,
-    pageId: platformAccounts.id,
-    pageLabel: platformAccounts.label,
+    pageId: pages.id,
+    pageLabel: pages.label,
     modelSlug: models.slug,
     modelName: models.name,
     totalCreatorNetMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
@@ -772,14 +772,14 @@ export async function listFanPageContexts(
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
-    .innerJoin(platformAccounts, eq(platformAccounts.id, fanPages.platformAccountId))
-    .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .innerJoin(pages, eq(pages.id, fanPages.platformAccountId))
+    .innerJoin(models, eq(models.id, pages.modelId))
     .leftJoin(spenderLifetimePage, and(
       eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
       eq(spenderLifetimePage.fanId, fanPages.fanId),
     ))
     .where(and(...clauses))
-    .orderBy(models.slug, platformAccounts.label);
+    .orderBy(models.slug, pages.label);
 }
 
 export async function countDistinctFansForPages(db: Database, pageIds: number[]) {
@@ -861,7 +861,7 @@ export async function listTransactionsForScope(
   }
 
   if (input.pageLabel) {
-    clauses.push(eq(platformAccounts.label, input.pageLabel));
+    clauses.push(eq(pages.label, input.pageLabel));
   }
 
   const sortColumn = input.sortBy === "grossAmountMills"
@@ -874,7 +874,7 @@ export async function listTransactionsForScope(
   const [countRow] = await db.select({
     total: sql<number>`count(*)::int`,
   }).from(transactions)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, transactions.platformAccountId))
+    .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
     .where(and(...clauses));
 
   const items = await db.select({
@@ -893,10 +893,10 @@ export async function listTransactionsForScope(
     fanPlatformUserId: fans.platformUserId,
     fanUsername: fans.username,
     fanDisplayName: fans.displayName,
-    pageLabel: platformAccounts.label,
-    platform: platformAccounts.platform,
+    pageLabel: pages.label,
+    platform: pages.platform,
   }).from(transactions)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, transactions.platformAccountId))
+    .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
     .leftJoin(fans, eq(fans.id, transactions.fanId))
     .where(and(...clauses))
     .orderBy(sortFn(sortColumn), desc(transactions.id))
@@ -967,7 +967,7 @@ export async function listFanTransactionsCrossPage(
   const [countRow] = await db.select({
     total: sql<number>`count(*)::int`,
   }).from(transactions)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, transactions.platformAccountId))
+    .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
     .where(and(...clauses));
 
   const items = await db.select({
@@ -980,10 +980,10 @@ export async function listFanTransactionsCrossPage(
     netAmountMills: transactions.creatorNetAmountMills,
     occurredAt: transactions.occurredAt,
     sourceUpdatedAt: transactions.sourceUpdatedAt,
-    pageLabel: platformAccounts.label,
-    platform: platformAccounts.platform,
+    pageLabel: pages.label,
+    platform: pages.platform,
   }).from(transactions)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, transactions.platformAccountId))
+    .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
     .where(and(...clauses))
     .orderBy(desc(transactions.occurredAt), desc(transactions.id))
     .limit(input.limit)
@@ -1005,7 +1005,7 @@ export async function getPlatformTotalSpendForFan(
 ) {
   const clauses = [
     eq(spenderLifetimePage.fanId, input.fanId),
-    eq(platformAccounts.platform, input.platform),
+    eq(pages.platform, input.platform),
   ];
 
   if (input.pageIds !== undefined) {
@@ -1018,7 +1018,7 @@ export async function getPlatformTotalSpendForFan(
   const [row] = await db.select({
     total: sql<bigint>`coalesce(sum(${spenderLifetimePage.creatorNetAmountMills}), 0)::bigint`,
   }).from(spenderLifetimePage)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, spenderLifetimePage.platformAccountId))
+    .innerJoin(pages, eq(pages.id, spenderLifetimePage.platformAccountId))
     .where(and(...clauses));
 
   return row?.total ?? 0n;

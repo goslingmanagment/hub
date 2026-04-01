@@ -1,18 +1,16 @@
 CREATE TYPE "public"."dm_message_coverage_status" AS ENUM('pending_backfill', 'partial_window', 'complete');
 CREATE TYPE "public"."dm_sender_role" AS ENUM('fan', 'model', 'system', 'unknown');
 CREATE TYPE "public"."fan_flag" AS ENUM('whale', 'vip', 'risky');
-CREATE TYPE "public"."notification_incident_kind" AS ENUM('auth_failed', 'proxy_failed', 'stream_failed_threshold');
+CREATE TYPE "public"."notification_incident_kind" AS ENUM('auth_blocked', 'proxy_failed', 'stream_failed_threshold');
 CREATE TYPE "public"."notification_incident_status" AS ENUM('open', 'resolved');
 CREATE TYPE "public"."platform" AS ENUM('fansly', 'onlyfans');
+CREATE TYPE "public"."page_sync_status" AS ENUM('idle', 'pending', 'running', 'retrying', 'blocked', 'paused');
 CREATE TYPE "public"."sync_event_severity" AS ENUM('info', 'warn', 'error');
-CREATE TYPE "public"."sync_operation_source" AS ENUM('scheduled', 'manual', 'onboarding', 'recovery', 'anomaly', 'reset');
-CREATE TYPE "public"."sync_request_attempt_state" AS ENUM('started', 'success', 'retry', 'failed');
-CREATE TYPE "public"."sync_request_failure_kind" AS ENUM('timeout', 'transport', 'http', 'provider');
-CREATE TYPE "public"."sync_request_reason" AS ENUM('scheduled', 'manual', 'onboarding', 'recovery', 'anomaly');
-CREATE TYPE "public"."sync_run_status" AS ENUM('running', 'success', 'partial', 'failed', 'skipped');
-CREATE TYPE "public"."sync_stream" AS ENUM('light', 'followers', 'transactions', 'top_spenders', 'subscribers', 'dm_conversations', 'dm_messages', 'cleanup', 'followers_reconcile');
-CREATE TYPE "public"."sync_task" AS ENUM('light', 'followers', 'transactions', 'top_spenders', 'subscribers', 'dm_conversations', 'dm_messages', 'followers_reconcile', 'cleanup');
-CREATE TYPE "public"."sync_task_status" AS ENUM('idle', 'queued', 'running', 'retry_wait', 'blocked', 'paused', 'active', 'auth_failed', 'disabled');
+CREATE TYPE "public"."sync_http_attempt_state" AS ENUM('started', 'success', 'retry', 'failed');
+CREATE TYPE "public"."sync_http_failure_kind" AS ENUM('timeout', 'transport', 'http', 'provider');
+CREATE TYPE "public"."sync_request_source" AS ENUM('scheduled', 'manual', 'onboarding', 'recovery', 'anomaly', 'reset');
+CREATE TYPE "public"."sync_run_outcome" AS ENUM('running', 'succeeded', 'partial', 'failed', 'skipped');
+CREATE TYPE "public"."sync_stream" AS ENUM('light', 'followers', 'transactions', 'top_spenders', 'subscribers', 'dm_conversations', 'dm_messages', 'followers_reconcile');
 CREATE TYPE "public"."sync_work_class" AS ENUM('live', 'history', 'maintenance');
 CREATE TYPE "public"."transaction_inactive_reason" AS ENUM('missing_from_sync_window');
 CREATE TYPE "public"."transaction_state" AS ENUM('pending', 'posted', 'unknown');
@@ -404,20 +402,23 @@ CREATE TABLE "projection_watermarks" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 
-CREATE TABLE "rate_limit_buckets" (
+CREATE TABLE "sync_rate_limits" (
 	"provider" "platform" NOT NULL,
 	"scope" text NOT NULL,
 	"egress_key" text NOT NULL,
 	"min_spacing_ms" integer NOT NULL,
 	"next_available_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "rate_limit_buckets_pkey" PRIMARY KEY("provider","scope","egress_key")
+	CONSTRAINT "sync_rate_limits_pkey" PRIMARY KEY("provider","scope","egress_key")
 );
 
-CREATE TABLE "raw_payloads" (
+CREATE TABLE "sync_raw_payloads" (
 	"id" bigserial PRIMARY KEY NOT NULL,
-	"platform_account_id" bigint NOT NULL,
+	"page_id" bigint NOT NULL,
 	"sync_run_id" bigint,
+	"stream" "sync_stream",
+	"request_seq" bigint,
+	"source" "sync_request_source",
 	"endpoint" text NOT NULL,
 	"request_params" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"response_payload" jsonb NOT NULL,
@@ -429,33 +430,32 @@ CREATE TABLE "raw_payloads" (
 	"retain_until" timestamp with time zone NOT NULL
 );
 
-CREATE TABLE "sync_cursors" (
-	"platform_account_id" bigint NOT NULL,
-	"task" "sync_task" NOT NULL,
+CREATE TABLE "page_sync_cursors" (
+	"page_id" bigint NOT NULL,
+	"stream" "sync_stream" NOT NULL,
 	"cursor_text" text,
 	"cursor_timestamp" timestamp with time zone,
-	"cursor_generation" bigint,
+	"cursor_seq" bigint,
 	"state" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"last_successful_run_id" bigint,
-	"last_successful_at" timestamp with time zone,
-	CONSTRAINT "sync_cursors_pkey" PRIMARY KEY("platform_account_id","task")
+	"last_succeeded_run_id" bigint,
+	"last_succeeded_at" timestamp with time zone,
+	CONSTRAINT "page_sync_cursors_pkey" PRIMARY KEY("page_id","stream")
 );
 
 CREATE TABLE "sync_http_attempts" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"sync_run_id" bigint NOT NULL,
-	"platform_account_id" bigint NOT NULL,
-	"operation_id" bigint,
-	"task" "sync_task",
-	"generation" bigint,
+	"page_id" bigint NOT NULL,
+	"request_seq" bigint,
+	"source" "sync_request_source",
 	"provider" "platform" NOT NULL,
 	"stream" "sync_stream" NOT NULL,
 	"operation" text NOT NULL,
 	"logical_request_id" text NOT NULL,
 	"attempt_number" integer NOT NULL,
-	"state" "sync_request_attempt_state" NOT NULL,
-	"failure_kind" "sync_request_failure_kind",
+	"state" "sync_http_attempt_state" NOT NULL,
+	"failure_kind" "sync_http_failure_kind",
 	"http_status" integer,
 	"retry_delay_ms" integer,
 	"duration_ms" integer,
@@ -466,26 +466,12 @@ CREATE TABLE "sync_http_attempts" (
 	"finished_at" timestamp with time zone
 );
 
-CREATE TABLE "sync_requests" (
-	"id" bigserial PRIMARY KEY NOT NULL,
-	"platform_account_id" bigint NOT NULL,
-	"task" "sync_task" NOT NULL,
-	"generation" bigint NOT NULL,
-	"source" "sync_operation_source" NOT NULL,
-	"requested_by_actor" text,
-	"requested_by_user_id" bigint,
-	"request_payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
-	"requested_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "sync_requests_account_task_generation_uniq" UNIQUE("platform_account_id","task","generation")
-);
-
 CREATE TABLE "sync_run_events" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"sync_run_id" bigint NOT NULL,
-	"platform_account_id" bigint NOT NULL,
-	"operation_id" bigint,
-	"task" "sync_task",
-	"generation" bigint,
+	"page_id" bigint NOT NULL,
+	"request_seq" bigint,
+	"source" "sync_request_source",
 	"lease_token" text,
 	"provider" "platform" NOT NULL,
 	"stream" "sync_stream" NOT NULL,
@@ -498,58 +484,47 @@ CREATE TABLE "sync_run_events" (
 
 CREATE TABLE "sync_runs" (
 	"id" bigserial PRIMARY KEY NOT NULL,
-	"platform_account_id" bigint NOT NULL,
-	"operation_id" bigint,
-	"task" "sync_task",
-	"generation" bigint,
+	"page_id" bigint NOT NULL,
+	"request_seq" bigint,
+	"leased_seq" bigint,
+	"source" "sync_request_source",
 	"lease_token" text,
 	"stream" "sync_stream" NOT NULL,
-	"trigger" text NOT NULL,
-	"status" "sync_run_status" NOT NULL,
+	"outcome" "sync_run_outcome" NOT NULL,
 	"error_summary" text,
 	"stats" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"started_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"finished_at" timestamp with time zone
 );
 
-CREATE TABLE "sync_state" (
-	"platform_account_id" bigint NOT NULL,
-	"task" "sync_task" NOT NULL,
-	"status" "sync_task_status" DEFAULT 'idle' NOT NULL,
-	"desired_generation" bigint DEFAULT 0 NOT NULL,
-	"running_generation" bigint,
-	"applied_generation" bigint DEFAULT 0 NOT NULL,
-	"schedule_interval_seconds" integer DEFAULT 0 NOT NULL,
+CREATE TABLE "page_sync_states" (
+	"page_id" bigint NOT NULL,
+	"stream" "sync_stream" NOT NULL,
+	"status" "page_sync_status" DEFAULT 'idle' NOT NULL,
+	"request_seq" bigint DEFAULT 0 NOT NULL,
+	"leased_seq" bigint,
+	"applied_seq" bigint DEFAULT 0 NOT NULL,
+	"request_source" "sync_request_source",
+	"request_payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"requested_at" timestamp with time zone,
+	"enqueued_at" timestamp with time zone,
+	"started_at" timestamp with time zone,
+	"progressed_at" timestamp with time zone,
+	"finished_at" timestamp with time zone,
+	"succeeded_at" timestamp with time zone,
+	"failed_at" timestamp with time zone,
+	"retry_kind" text,
+	"retry_at" timestamp with time zone,
+	"blocker_kind" text,
+	"blocker_code" text,
+	"blocker_message" text,
+	"blocked_at" timestamp with time zone,
+	"phase" text,
+	"work_class" "sync_work_class",
+	"progress" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"cadence_seconds" integer NOT NULL,
 	"slot_offset_seconds" integer NOT NULL,
 	"last_scheduled_slot" bigint DEFAULT -1 NOT NULL,
-	"next_due_at" timestamp with time zone,
-	"base_priority" integer,
-	"effective_priority" integer,
-	"pending_reason" "sync_request_reason",
-	"desired_revision" bigint,
-	"satisfied_revision" bigint,
-	"desired_at" timestamp with time zone,
-	"request_payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
-	"cadence_seconds" integer,
-	"backoff_until" timestamp with time zone,
-	"last_succeeded_at" timestamp with time zone,
-	"last_failed_at" timestamp with time zone,
-	"last_requested_at" timestamp with time zone,
-	"last_enqueued_at" timestamp with time zone,
-	"last_started_at" timestamp with time zone,
-	"last_progress_at" timestamp with time zone,
-	"last_finished_at" timestamp with time zone,
-	"last_success_at" timestamp with time zone,
-	"last_failure_at" timestamp with time zone,
-	"retry_class" text,
-	"retry_at" timestamp with time zone,
-	"blocker_type" text,
-	"blocker_code" text,
-	"blocker_reason" text,
-	"blocked_since" timestamp with time zone,
-	"current_phase" text,
-	"current_work_class" "sync_work_class",
-	"progress_payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"lease_owner" text,
 	"lease_token" text,
 	"lease_heartbeat_at" timestamp with time zone,
@@ -559,7 +534,7 @@ CREATE TABLE "sync_state" (
 	"last_error_summary" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "sync_state_pkey" PRIMARY KEY("platform_account_id","task")
+	CONSTRAINT "page_sync_states_pkey" PRIMARY KEY("page_id","stream")
 );
 
 CREATE TABLE "telegram_delivery_attempts" (
@@ -686,21 +661,16 @@ ALTER TABLE "page_subscriptions" ADD CONSTRAINT "page_subscriptions_platform_acc
 ALTER TABLE "page_subscriptions" ADD CONSTRAINT "page_subscriptions_fan_id_fans_id_fk" FOREIGN KEY ("fan_id") REFERENCES "public"."fans"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "pages" ADD CONSTRAINT "pages_model_id_models_id_fk" FOREIGN KEY ("model_id") REFERENCES "public"."models"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "projection_watermarks" ADD CONSTRAINT "projection_watermarks_platform_account_id_pages_id_fk" FOREIGN KEY ("platform_account_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "raw_payloads" ADD CONSTRAINT "raw_payloads_platform_account_id_pages_id_fk" FOREIGN KEY ("platform_account_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "raw_payloads" ADD CONSTRAINT "raw_payloads_sync_run_id_sync_runs_id_fk" FOREIGN KEY ("sync_run_id") REFERENCES "public"."sync_runs"("id") ON DELETE set null ON UPDATE no action;
-ALTER TABLE "sync_cursors" ADD CONSTRAINT "sync_cursors_platform_account_id_pages_id_fk" FOREIGN KEY ("platform_account_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "sync_cursors" ADD CONSTRAINT "sync_cursors_last_successful_run_id_sync_runs_id_fk" FOREIGN KEY ("last_successful_run_id") REFERENCES "public"."sync_runs"("id") ON DELETE set null ON UPDATE no action;
+ALTER TABLE "sync_raw_payloads" ADD CONSTRAINT "sync_raw_payloads_page_id_pages_id_fk" FOREIGN KEY ("page_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "sync_raw_payloads" ADD CONSTRAINT "sync_raw_payloads_sync_run_id_sync_runs_id_fk" FOREIGN KEY ("sync_run_id") REFERENCES "public"."sync_runs"("id") ON DELETE set null ON UPDATE no action;
+ALTER TABLE "page_sync_cursors" ADD CONSTRAINT "page_sync_cursors_page_id_pages_id_fk" FOREIGN KEY ("page_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "page_sync_cursors" ADD CONSTRAINT "page_sync_cursors_last_succeeded_run_id_sync_runs_id_fk" FOREIGN KEY ("last_succeeded_run_id") REFERENCES "public"."sync_runs"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "sync_http_attempts" ADD CONSTRAINT "sync_http_attempts_sync_run_id_sync_runs_id_fk" FOREIGN KEY ("sync_run_id") REFERENCES "public"."sync_runs"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "sync_http_attempts" ADD CONSTRAINT "sync_http_attempts_platform_account_id_pages_id_fk" FOREIGN KEY ("platform_account_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "sync_http_attempts" ADD CONSTRAINT "sync_http_attempts_operation_id_sync_requests_id_fk" FOREIGN KEY ("operation_id") REFERENCES "public"."sync_requests"("id") ON DELETE set null ON UPDATE no action;
-ALTER TABLE "sync_requests" ADD CONSTRAINT "sync_requests_platform_account_id_pages_id_fk" FOREIGN KEY ("platform_account_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "sync_requests" ADD CONSTRAINT "sync_requests_requested_by_user_id_users_id_fk" FOREIGN KEY ("requested_by_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;
+ALTER TABLE "sync_http_attempts" ADD CONSTRAINT "sync_http_attempts_page_id_pages_id_fk" FOREIGN KEY ("page_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "sync_run_events" ADD CONSTRAINT "sync_run_events_sync_run_id_sync_runs_id_fk" FOREIGN KEY ("sync_run_id") REFERENCES "public"."sync_runs"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "sync_run_events" ADD CONSTRAINT "sync_run_events_platform_account_id_pages_id_fk" FOREIGN KEY ("platform_account_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "sync_run_events" ADD CONSTRAINT "sync_run_events_operation_id_sync_requests_id_fk" FOREIGN KEY ("operation_id") REFERENCES "public"."sync_requests"("id") ON DELETE set null ON UPDATE no action;
-ALTER TABLE "sync_runs" ADD CONSTRAINT "sync_runs_platform_account_id_pages_id_fk" FOREIGN KEY ("platform_account_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
-ALTER TABLE "sync_runs" ADD CONSTRAINT "sync_runs_operation_id_sync_requests_id_fk" FOREIGN KEY ("operation_id") REFERENCES "public"."sync_requests"("id") ON DELETE set null ON UPDATE no action;
-ALTER TABLE "sync_state" ADD CONSTRAINT "sync_state_platform_account_id_pages_id_fk" FOREIGN KEY ("platform_account_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "sync_run_events" ADD CONSTRAINT "sync_run_events_page_id_pages_id_fk" FOREIGN KEY ("page_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "sync_runs" ADD CONSTRAINT "sync_runs_page_id_pages_id_fk" FOREIGN KEY ("page_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "page_sync_states" ADD CONSTRAINT "page_sync_states_page_id_pages_id_fk" FOREIGN KEY ("page_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "telegram_delivery_attempts" ADD CONSTRAINT "telegram_delivery_attempts_notification_incident_id_notification_incidents_id_fk" FOREIGN KEY ("notification_incident_id") REFERENCES "public"."notification_incidents"("id") ON DELETE set null ON UPDATE no action;
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_platform_account_id_pages_id_fk" FOREIGN KEY ("platform_account_id") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_fan_id_fans_id_fk" FOREIGN KEY ("fan_id") REFERENCES "public"."fans"("id") ON DELETE set null ON UPDATE no action;
@@ -747,18 +717,17 @@ CREATE INDEX "page_subscriptions_account_idx" ON "page_subscriptions" USING btre
 CREATE INDEX "page_subscriptions_generation_idx" ON "page_subscriptions" USING btree ("platform_account_id","last_seen_generation");
 CREATE INDEX "page_subscriptions_current_idx" ON "page_subscriptions" USING btree ("platform_account_id","is_current","ends_at","id");
 CREATE INDEX "pages_model_idx" ON "pages" USING btree ("model_id");
-CREATE INDEX "raw_payloads_retain_idx" ON "raw_payloads" USING btree ("retain_until");
+CREATE INDEX "sync_raw_payloads_retain_idx" ON "sync_raw_payloads" USING btree ("retain_until");
 CREATE INDEX "sync_http_attempts_run_started_idx" ON "sync_http_attempts" USING btree ("sync_run_id","started_at");
 CREATE INDEX "sync_http_attempts_logical_idx" ON "sync_http_attempts" USING btree ("sync_run_id","logical_request_id","attempt_number");
 CREATE INDEX "sync_http_attempts_retention_idx" ON "sync_http_attempts" USING btree ("started_at");
-CREATE INDEX "sync_requests_account_requested_idx" ON "sync_requests" USING btree ("platform_account_id","requested_at");
 CREATE INDEX "sync_run_events_run_emitted_idx" ON "sync_run_events" USING btree ("sync_run_id","emitted_at");
 CREATE INDEX "sync_run_events_emitted_idx" ON "sync_run_events" USING btree ("emitted_at");
-CREATE INDEX "sync_runs_account_stream_idx" ON "sync_runs" USING btree ("platform_account_id","stream","started_at");
-CREATE INDEX "sync_state_freshness_idx" ON "sync_state" USING btree ("task","last_success_at");
-CREATE INDEX "sync_state_lease_idx" ON "sync_state" USING btree ("status","lease_expires_at");
-CREATE INDEX "sync_state_runnable_idx" ON "sync_state" USING btree ("status","retry_at","platform_account_id","task");
-CREATE INDEX "sync_state_schedule_idx" ON "sync_state" USING btree ("status","last_scheduled_slot","platform_account_id","task");
+CREATE INDEX "sync_runs_page_stream_idx" ON "sync_runs" USING btree ("page_id","stream","started_at");
+CREATE INDEX "page_sync_states_freshness_idx" ON "page_sync_states" USING btree ("stream","succeeded_at");
+CREATE INDEX "page_sync_states_lease_idx" ON "page_sync_states" USING btree ("status","lease_expires_at");
+CREATE INDEX "page_sync_states_runnable_idx" ON "page_sync_states" USING btree ("status","retry_at","page_id","stream");
+CREATE INDEX "page_sync_states_schedule_idx" ON "page_sync_states" USING btree ("status","last_scheduled_slot","page_id","stream");
 CREATE INDEX "telegram_delivery_attempts_kind_created_idx" ON "telegram_delivery_attempts" USING btree ("kind","created_at");
 CREATE INDEX "transactions_pending_boundary_idx" ON "transactions" USING btree ("platform_account_id","transaction_state","occurred_at");
 CREATE INDEX "transactions_account_occurred_idx" ON "transactions" USING btree ("platform_account_id","occurred_at");

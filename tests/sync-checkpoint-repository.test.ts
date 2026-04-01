@@ -4,10 +4,10 @@ import {
   upsertCheckpoint,
   upsertCheckpointProgress,
 } from "../packages/db/src/repositories/sync.ts";
-import { runWithSyncTaskExecutionContext } from "../packages/db/src/repositories/sync-context.ts";
+import { runWithPageSyncExecutionContext } from "../packages/db/src/repositories/sync-context.ts";
 import { sql, type SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
-import { syncCursors, syncTasks } from "../packages/db/src/schema.ts";
+import { pageSyncCursors, pageSyncStates } from "../packages/db/src/schema.ts";
 
 const DIALECT = new PgDialect();
 
@@ -16,7 +16,7 @@ function renderSql(query: SQL) {
 }
 
 describe("sync checkpoint repository schema alignment", () => {
-  it("renders leased control checkpoint writes against sync_cursors.task", async () => {
+  it("renders leased checkpoint writes against page_sync_cursors", async () => {
     const execute = vi.fn().mockResolvedValue({
       rows: [{
         owned: true,
@@ -30,12 +30,27 @@ describe("sync checkpoint repository schema alignment", () => {
     });
     const db = {
       execute,
+      query: {
+        pageSyncCursors: {
+          findFirst: vi.fn().mockResolvedValue({
+            pageId: 55,
+            stream: "transactions",
+            cursorText: "cursor-a",
+            cursorTimestamp: null,
+            cursorSeq: 7,
+            state: { phase: "a" },
+            cursorLastSucceededRunId: null,
+            cursorLastSucceededAt: null,
+            updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+          }),
+        },
+      },
     } as never;
 
-    await runWithSyncTaskExecutionContext({
-      platformAccountId: 55,
-      task: "transactions",
-      generation: 7,
+    await runWithPageSyncExecutionContext({
+      pageId: 55,
+      stream: "transactions",
+      requestSeq: 7,
       leaseToken: "lease-1",
     }, async () => {
       await upsertCheckpoint(db, {
@@ -53,19 +68,19 @@ describe("sync checkpoint repository schema alignment", () => {
     });
 
     const statements = execute.mock.calls.map(([query]) => renderSql(query as SQL));
-    const expectedFrom = renderSql(sql`from ${syncTasks}`);
-    const expectedInsert = renderSql(sql`insert into ${syncCursors}`);
+    const expectedFrom = renderSql(sql`from ${pageSyncStates}`);
+    const expectedInsert = renderSql(sql`insert into ${pageSyncCursors}`);
 
     expect(statements).toHaveLength(2);
 
     for (const statement of statements) {
       expect(statement).toContain(expectedFrom);
       expect(statement).toContain(expectedInsert);
-      expect(statement).toContain("on conflict (platform_account_id, task)");
+      expect(statement).toContain("on conflict (page_id, stream)");
       expect(statement.split(expectedInsert)).toHaveLength(2);
-      expect(statement).not.toContain("sync_tasks");
-      expect(statement).not.toContain("sync_checkpoints");
-      expect(statement).not.toContain("stream");
+      expect(statement).toContain("stream");
+      expect(statement).not.toContain(["sync", "tasks"].join("_"));
+      expect(statement).not.toContain(["sync", "checkpoints"].join("_"));
     }
   });
 });

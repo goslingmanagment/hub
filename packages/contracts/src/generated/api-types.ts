@@ -3118,6 +3118,8 @@ export interface paths {
                                     ltv: {
                                         creatorNetAmountMills: number;
                                     };
+                                    /** @enum {string} */
+                                    segment: "active" | "inactive";
                                     overdueDays: number;
                                     silenceDays: number;
                                     conversation: {
@@ -3134,7 +3136,7 @@ export interface paths {
                                     };
                                     subscription: {
                                         /** @enum {string} */
-                                        status: "expired" | "never";
+                                        status: "active" | "expired" | "never";
                                         expiresAt: string | null;
                                     };
                                     lastTransactionAt: string | null;
@@ -3153,6 +3155,8 @@ export interface paths {
                                     ltv: {
                                         creatorNetAmountMills: number;
                                     };
+                                    /** @enum {string} */
+                                    segment: "active" | "inactive";
                                     overdueDays: number;
                                     silenceDays: number;
                                     conversation: {
@@ -3169,7 +3173,7 @@ export interface paths {
                                     };
                                     subscription: {
                                         /** @enum {string} */
-                                        status: "expired" | "never";
+                                        status: "active" | "expired" | "never";
                                         expiresAt: string | null;
                                     };
                                     lastTransactionAt: string | null;
@@ -4598,10 +4602,10 @@ export interface paths {
                                 pages: number;
                                 streams: number;
                                 runningStreams: number;
-                                failedStreams: number;
+                                blockedStreams: number;
                                 stalledStreams: number;
                                 pendingStreams: number;
-                                backoffStreams: number;
+                                retryingStreams: number;
                                 counts: {
                                     fans: number;
                                     followers: number;
@@ -4669,19 +4673,19 @@ export interface paths {
                                 };
                                 summary: {
                                     runningStreams: number;
-                                    failedStreams: number;
+                                    blockedStreams: number;
                                     stalledStreams: number;
                                     pendingStreams: number;
-                                    backoffStreams: number;
+                                    retryingStreams: number;
                                 };
                                 streams: {
                                     /** @enum {string} */
                                     stream: "light" | "followers" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                     /** @enum {string} */
-                                    status: "running" | "idle" | "completed" | "failed" | "paused" | "auth_failed" | "disabled";
+                                    status: "idle" | "pending" | "running" | "retrying" | "blocked" | "paused";
                                     stalled: boolean;
                                     pending: boolean;
-                                    backoffUntil: string | null;
+                                    retryAt: string | null;
                                     progress: {
                                         label: string;
                                         current: number;
@@ -4727,8 +4731,8 @@ export interface paths {
                                         durationMs: number | null;
                                         errorSummary: string | null;
                                     } | null;
-                                    lastSuccessAt: string | null;
-                                    lastFailureAt: string | null;
+                                    succeededAt: string | null;
+                                    failedAt: string | null;
                                     lastErrorSummary: string | null;
                                     consecutiveFailures: number;
                                     syncUx: {
@@ -4857,7 +4861,7 @@ export interface paths {
                             /** @enum {string} */
                             platform: "fansly" | "onlyfans";
                             /** @enum {string} */
-                            stream: "light" | "followers" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile" | "cleanup";
+                            stream: "light" | "followers" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                             operation: string;
                             endpoint: string;
                             method: string;
@@ -4951,7 +4955,7 @@ export interface paths {
                             generatedAt: string;
                             diagnosis: {
                                 /** @enum {string} */
-                                code: "worker_offline" | "stalled_run" | "auth_failed";
+                                code: "worker_offline" | "stalled_run" | "auth_blocked";
                                 /** @enum {string} */
                                 severity: "warning" | "error";
                                 headline: string;
@@ -4969,7 +4973,7 @@ export interface paths {
                                 displayName: string | null;
                                 diagnosis: {
                                     /** @enum {string} */
-                                    code: "worker_offline" | "stalled_run" | "auth_failed";
+                                    code: "worker_offline" | "stalled_run" | "auth_blocked";
                                     /** @enum {string} */
                                     severity: "warning" | "error";
                                     headline: string;
@@ -4982,7 +4986,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -4999,7 +5003,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5027,7 +5031,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5042,7 +5046,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5052,7 +5056,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -5069,7 +5073,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5097,7 +5101,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5112,7 +5116,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5122,7 +5126,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -5139,7 +5143,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5167,7 +5171,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5182,7 +5186,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5192,7 +5196,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -5209,7 +5213,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5237,7 +5241,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5252,7 +5256,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5262,7 +5266,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -5279,7 +5283,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5307,7 +5311,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5322,7 +5326,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5406,7 +5410,7 @@ export interface paths {
                                 displayName: string | null;
                                 diagnosis: {
                                     /** @enum {string} */
-                                    code: "worker_offline" | "stalled_run" | "auth_failed";
+                                    code: "worker_offline" | "stalled_run" | "auth_blocked";
                                     /** @enum {string} */
                                     severity: "warning" | "error";
                                     headline: string;
@@ -5419,7 +5423,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -5436,7 +5440,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5464,7 +5468,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5479,7 +5483,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5489,7 +5493,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -5506,7 +5510,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5534,7 +5538,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5549,7 +5553,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5559,7 +5563,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -5576,7 +5580,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5604,7 +5608,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5619,7 +5623,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5629,7 +5633,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -5646,7 +5650,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5674,7 +5678,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5689,7 +5693,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5699,7 +5703,7 @@ export interface paths {
                                         block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                         /** @enum {string} */
                                         state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                        lastSuccessAt: string | null;
+                                        succeededAt: string | null;
                                         progress: {
                                             label: string;
                                             current: number;
@@ -5716,7 +5720,7 @@ export interface paths {
                                             stream: string | null;
                                             code: string | null;
                                             summary: string | null;
-                                            lastFailedAt: string | null;
+                                            failedAt: string | null;
                                             consecutiveFailures: number;
                                         } | null;
                                         statusReason: {
@@ -5744,7 +5748,7 @@ export interface paths {
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
                                             state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                            lastSuccessAt: string | null;
+                                            succeededAt: string | null;
                                             nextDueAt: string | null;
                                             nextRetryAt: string | null;
                                             cadenceSeconds: number;
@@ -5759,7 +5763,7 @@ export interface paths {
                                                 stream: string | null;
                                                 code: string | null;
                                                 summary: string | null;
-                                                lastFailedAt: string | null;
+                                                failedAt: string | null;
                                                 consecutiveFailures: number;
                                             } | null;
                                         }[];
@@ -5856,7 +5860,7 @@ export interface paths {
                                 displayName: string | null;
                                 diagnosis: {
                                     /** @enum {string} */
-                                    code: "worker_offline" | "stalled_run" | "auth_failed";
+                                    code: "worker_offline" | "stalled_run" | "auth_blocked";
                                     /** @enum {string} */
                                     severity: "warning" | "error";
                                     headline: string;
@@ -5869,7 +5873,7 @@ export interface paths {
                                 block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                                 /** @enum {string} */
                                 state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused" | "not_available";
-                                lastSuccessAt: string | null;
+                                succeededAt: string | null;
                                 progress: {
                                     label: string;
                                     current: number;
@@ -5886,7 +5890,7 @@ export interface paths {
                                     stream: string | null;
                                     code: string | null;
                                     summary: string | null;
-                                    lastFailedAt: string | null;
+                                    failedAt: string | null;
                                     consecutiveFailures: number;
                                 } | null;
                                 statusReason: {
@@ -5914,7 +5918,7 @@ export interface paths {
                                     role: "primary" | "supporting";
                                     /** @enum {string} */
                                     state: "not_started" | "scheduled" | "backfilling" | "up_to_date" | "syncing" | "retrying" | "delayed" | "failed" | "paused";
-                                    lastSuccessAt: string | null;
+                                    succeededAt: string | null;
                                     nextDueAt: string | null;
                                     nextRetryAt: string | null;
                                     cadenceSeconds: number;
@@ -5929,7 +5933,7 @@ export interface paths {
                                         stream: string | null;
                                         code: string | null;
                                         summary: string | null;
-                                        lastFailedAt: string | null;
+                                        failedAt: string | null;
                                         consecutiveFailures: number;
                                     } | null;
                                 }[];
@@ -7792,10 +7796,10 @@ export interface paths {
                             pageLabel: string;
                             /** @enum {string} */
                             block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
-                            revisions?: {
+                            requests?: {
                                 /** @enum {string} */
                                 stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
-                                desiredRevision: number;
+                                requestedSeq: number;
                             }[];
                         };
                     };
@@ -7914,10 +7918,10 @@ export interface paths {
                             pageLabel: string;
                             /** @enum {string} */
                             block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
-                            revisions?: {
+                            requests?: {
                                 /** @enum {string} */
                                 stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
-                                desiredRevision: number;
+                                requestedSeq: number;
                             }[];
                         };
                     };
@@ -8023,10 +8027,10 @@ export interface paths {
                             pageLabel: string;
                             /** @enum {string} */
                             block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
-                            revisions?: {
+                            requests?: {
                                 /** @enum {string} */
                                 stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
-                                desiredRevision: number;
+                                requestedSeq: number;
                             }[];
                         };
                     };
@@ -8132,10 +8136,10 @@ export interface paths {
                             pageLabel: string;
                             /** @enum {string} */
                             block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
-                            revisions?: {
+                            requests?: {
                                 /** @enum {string} */
                                 stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
-                                desiredRevision: number;
+                                requestedSeq: number;
                             }[];
                         };
                     };
@@ -9971,7 +9975,7 @@ export interface paths {
             parameters: {
                 query?: {
                     status?: "open" | "resolved";
-                    kind?: "auth_failed" | "proxy_failed" | "stream_failed_threshold";
+                    kind?: "auth_blocked" | "proxy_failed" | "stream_failed_threshold";
                     pageLabel?: string;
                     limit?: number;
                     offset?: number;
@@ -9993,7 +9997,7 @@ export interface paths {
                                 id: number;
                                 incidentKey: string;
                                 /** @enum {string} */
-                                kind: "auth_failed" | "proxy_failed" | "stream_failed_threshold";
+                                kind: "auth_blocked" | "proxy_failed" | "stream_failed_threshold";
                                 pageLabel: string;
                                 /** @enum {string} */
                                 platform: "fansly" | "onlyfans";

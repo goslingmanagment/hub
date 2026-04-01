@@ -1,15 +1,15 @@
 import {
   deleteCheckpoints,
   deletePageTopSpenders,
-  ensureSyncTaskRows,
+  ensurePageSyncStates,
   findPageByLabel,
-  pauseSyncTasks,
-  requestSyncTaskGenerations,
+  pausePageSync,
+  requestPageSync as requestPageSyncRows,
   resetPageDmSyncState,
-  resetSyncTasks,
-  resolveSyncTaskPriority,
-  resumeSyncTasks,
-  type SyncControlStream,
+  resetPageSync,
+  resolvePageSyncPriority,
+  resumePageSync,
+  type SyncStream,
 } from "@agency_hub_core/db";
 import { buildProxyEgressKey, type Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
@@ -45,22 +45,22 @@ type SyncBlockError = {
   stream: string | null;
   code: string | null;
   summary: string | null;
-  lastFailedAt: string | null;
+  failedAt: string | null;
   consecutiveFailures: number;
 };
 
 type SyncBlockStatusReason = SyncStatusReason;
 
 type SyncBlockInterval = {
-  stream: SyncControlStream;
+  stream: SyncStream;
   cadenceSeconds: number;
 };
 
 type SyncBlockSubstream = {
-  stream: SyncControlStream;
+  stream: SyncStream;
   role: SyncStreamRole;
   state: Exclude<SyncBlockState, "not_available">;
-  lastSuccessAt: string | null;
+  succeededAt: string | null;
   nextDueAt: string | null;
   nextRetryAt: string | null;
   cadenceSeconds: number;
@@ -73,7 +73,7 @@ type SyncBlockSubstream = {
 export type SyncDiagnosisCode =
   | "worker_offline"
   | "stalled_run"
-  | "auth_failed";
+  | "auth_blocked";
 
 export type SyncDiagnosisSeverity = "warning" | "error";
 
@@ -93,7 +93,7 @@ export type SyncDiagnosis = {
 export type SyncBlockStatus = {
   block: SyncBlockKey;
   state: SyncBlockState;
-  lastSuccessAt: string | null;
+  succeededAt: string | null;
   progress: SyncBlockProgress | null;
   progressStream: string | null;
   progressRole: SyncStreamRole | null;
@@ -138,7 +138,7 @@ type SyncMessagesBlockResponse = {
   block: SyncBlockStatus;
 };
 
-const BLOCK_TASKS: Record<SyncBlockKey, readonly SyncControlStream[]> = {
+const BLOCK_TASKS: Record<SyncBlockKey, readonly SyncStream[]> = {
   connection: ["light"],
   financials: ["transactions", "top_spenders"],
   audience: ["subscribers", "followers", "followers_reconcile"],
@@ -154,7 +154,7 @@ function supportedBlocksForPlatform(platform: Platform) {
 
 function blockTasksForPlatform(platform: Platform, block: SyncBlockKey) {
   if (!supportedBlocksForPlatform(platform).includes(block)) {
-    return [] as SyncControlStream[];
+    return [] as SyncStream[];
   }
 
   return [...BLOCK_TASKS[block]];
@@ -164,7 +164,7 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
   return {
     block: block.block,
     state: block.state,
-    lastSuccessAt: block.lastSuccessAt,
+    succeededAt: block.succeededAt,
     progress: block.progress
       ? {
         label: block.progress.label,
@@ -182,7 +182,7 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
         stream: block.error.stream,
         code: block.error.code,
         summary: block.error.summary,
-        lastFailedAt: block.error.lastFailedAt,
+        failedAt: block.error.failedAt,
         consecutiveFailures: block.error.consecutiveFailures,
       }
       : null,
@@ -201,7 +201,7 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
       stream: substream.stream,
       role: substream.role,
       state: substream.state,
-      lastSuccessAt: substream.lastSuccessAt,
+      succeededAt: substream.succeededAt,
       nextDueAt: substream.nextDueAt,
       nextRetryAt: substream.nextRetryAt,
       cadenceSeconds: substream.cadenceSeconds,
@@ -213,7 +213,7 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
           stream: substream.error.stream,
           code: substream.error.code,
           summary: substream.error.summary,
-          lastFailedAt: substream.error.lastFailedAt,
+          failedAt: substream.error.failedAt,
           consecutiveFailures: substream.error.consecutiveFailures,
         }
         : null,
@@ -226,7 +226,7 @@ function diagnosisForPage(page: SyncStatusPage): SyncDiagnosis | null {
   const authBlock = blocks.find((block) => block.needsAttention && block.statusReason?.code === "credentials_invalid");
   if (authBlock) {
     return {
-      code: "auth_failed",
+      code: "auth_blocked",
       severity: "error",
       headline: "Reconnect credentials",
       detail: authBlock.statusReason?.summary ?? "Credentials must be refreshed before sync can continue.",
@@ -297,12 +297,12 @@ async function enqueueBlockWakeup(
     platformAccountId: number;
     platform: Platform;
     proxyUrl: string | null;
-    tasks: SyncControlStream[];
+    tasks: SyncStream[];
     reason: "manual" | "reset";
   },
 ) {
   const priority = input.tasks.reduce((current, task) => {
-    return Math.max(current, resolveSyncTaskPriority(task, input.reason));
+    return Math.max(current, resolvePageSyncPriority(task, input.reason));
   }, 0);
 
   return sendSyncPageWakeup(boss, {
@@ -398,15 +398,14 @@ export async function triggerSyncBlock(
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
   }
 
-  await ensureSyncTaskRows(app.db, {
-    platformAccountId: stored.page.id,
+  await ensurePageSyncStates(app.db, {
+    pageId: stored.page.id,
     now,
   });
-  const requested = await requestSyncTaskGenerations(app.db, {
-    platformAccountId: stored.page.id,
-    tasks,
+  const requests = await requestPageSyncRows(app.db, {
+    pageId: stored.page.id,
+    streams: tasks,
     source: "manual",
-    requestedByActor: "sync_blocks",
     now,
   });
   await enqueueBlockWakeup(boss, {
@@ -422,9 +421,9 @@ export async function triggerSyncBlock(
     action: "trigger" as const,
     pageLabel: stored.page.label,
     block: input.block,
-    revisions: requested.map((revision) => ({
-      stream: revision.task,
-      desiredRevision: revision.desiredGeneration,
+    requests: requests.map((request) => ({
+      stream: request.stream,
+      requestedSeq: request.requestedSeq,
     })),
   };
 }
@@ -444,13 +443,13 @@ export async function pauseSyncBlock(
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
   }
 
-  await ensureSyncTaskRows(app.db, {
-    platformAccountId: stored.page.id,
+  await ensurePageSyncStates(app.db, {
+    pageId: stored.page.id,
     now,
   });
-  await pauseSyncTasks(app.db, {
-    platformAccountId: stored.page.id,
-    tasks,
+  await pausePageSync(app.db, {
+    pageId: stored.page.id,
+    streams: tasks,
     now,
   });
 
@@ -477,13 +476,13 @@ export async function resumeSyncBlock(
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
   }
 
-  await ensureSyncTaskRows(app.db, {
-    platformAccountId: stored.page.id,
+  await ensurePageSyncStates(app.db, {
+    pageId: stored.page.id,
     now,
   });
-  await resumeSyncTasks(app.db, {
-    platformAccountId: stored.page.id,
-    tasks,
+  await resumePageSync(app.db, {
+    pageId: stored.page.id,
+    streams: tasks,
     now,
   });
 
@@ -511,8 +510,8 @@ export async function resetSyncBlock(
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
   }
 
-  await ensureSyncTaskRows(app.db, {
-    platformAccountId: stored.page.id,
+  await ensurePageSyncStates(app.db, {
+    pageId: stored.page.id,
     now,
   });
   await deleteCheckpoints(app.db, {
@@ -527,16 +526,15 @@ export async function resetSyncBlock(
     await deletePageTopSpenders(app.db, stored.page.id);
   }
 
-  await resetSyncTasks(app.db, {
-    platformAccountId: stored.page.id,
-    tasks,
+  await resetPageSync(app.db, {
+    pageId: stored.page.id,
+    streams: tasks,
     now,
   });
-  const requested = await requestSyncTaskGenerations(app.db, {
-    platformAccountId: stored.page.id,
-    tasks,
+  const requests = await requestPageSyncRows(app.db, {
+    pageId: stored.page.id,
+    streams: tasks,
     source: "reset",
-    requestedByActor: "sync_blocks_reset",
     now,
   });
   await enqueueBlockWakeup(boss, {
@@ -552,9 +550,9 @@ export async function resetSyncBlock(
     action: "reset" as const,
     pageLabel: stored.page.label,
     block: input.block,
-    revisions: requested.map((revision) => ({
-      stream: revision.task,
-      desiredRevision: revision.desiredGeneration,
+    requests: requests.map((request) => ({
+      stream: request.stream,
+      requestedSeq: request.requestedSeq,
     })),
   };
 }

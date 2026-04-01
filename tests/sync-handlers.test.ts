@@ -21,9 +21,9 @@ const dbMocks = vi.hoisted(() => ({
   markPageDmConversationsInvisibleByGeneration: vi.fn(),
   rebuildFollowerRollups: vi.fn(),
   rebuildSubscriberRollups: vi.fn(),
-  requestSyncTaskGenerations: vi.fn(),
+  requestPageSync: vi.fn(),
   selectNextPageDmMessageSyncCandidate: vi.fn(),
-  updateLegacySyncTimestamp: vi.fn(),
+  updatePageSyncTimestampCache: vi.fn(),
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
   upsertPageDmConversation: vi.fn(),
@@ -210,7 +210,7 @@ describe("sync executor handlers", () => {
     dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValue(0);
     dbMocks.rebuildFollowerRollups.mockResolvedValue(undefined);
     dbMocks.rebuildSubscriberRollups.mockResolvedValue(undefined);
-    dbMocks.updateLegacySyncTimestamp.mockResolvedValue(undefined);
+    dbMocks.updatePageSyncTimestampCache.mockResolvedValue(undefined);
     dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValue(null);
     dbMocks.upsertFanPages.mockResolvedValue(undefined);
     dbMocks.upsertPageDmConversation.mockResolvedValue(undefined);
@@ -762,7 +762,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 5,
+        requestSeq: 5,
       },
       syncRunId: 100,
       telemetry: telemetry as never,
@@ -827,7 +827,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 3,
+        requestSeq: 3,
       },
       syncRunId: 101,
       telemetry: telemetry as never,
@@ -839,8 +839,8 @@ describe("sync executor handlers", () => {
     expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, expect.any(Array));
     expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, expect.any(Array));
     expect(dbMocks.rebuildFollowerRollups).toHaveBeenCalledWith(tx, 12, 1);
-    expect(dbMocks.updateLegacySyncTimestamp).toHaveBeenCalledWith(tx, {
-      platformAccountId: 12,
+    expect(dbMocks.updatePageSyncTimestampCache).toHaveBeenCalledWith(tx, {
+      pageId: 12,
       syncType: "followers",
     });
     expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
@@ -848,11 +848,10 @@ describe("sync executor handlers", () => {
       stream: "followers",
     }));
     expect(dbMocks.countActivePageFollows).toHaveBeenCalledWith(db, 12);
-    expect(dbMocks.requestSyncTaskGenerations).toHaveBeenCalledWith(db, {
-      platformAccountId: 12,
-      tasks: ["followers_reconcile"],
+    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(db, {
+      pageId: 12,
+      streams: ["followers_reconcile"],
       source: "anomaly",
-      requestedByActor: "executor_anomaly",
     });
   });
 
@@ -901,7 +900,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 4,
+        requestSeq: 4,
       },
       syncRunId: 102,
       telemetry: telemetry as never,
@@ -918,8 +917,8 @@ describe("sync executor handlers", () => {
     });
     expect(dbMocks.refreshFanPageFollowerState).toHaveBeenCalledWith(tx, 13);
     expect(dbMocks.rebuildFollowerRollups).toHaveBeenCalledWith(tx, 13, 0);
-    expect(dbMocks.updateLegacySyncTimestamp).toHaveBeenCalledWith(tx, {
-      platformAccountId: 13,
+    expect(dbMocks.updatePageSyncTimestampCache).toHaveBeenCalledWith(tx, {
+      pageId: 13,
       syncType: "followers",
     });
     expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
@@ -981,7 +980,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 6,
+        requestSeq: 6,
       },
       syncRunId: 103,
       telemetry: telemetry as never,
@@ -1036,7 +1035,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 7,
+        requestSeq: 7,
         requestPayload: {
           revision: 7,
           onlyFansTransactionsStart: "2026-03-01T00:00:00.000Z",
@@ -1085,7 +1084,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 7,
+        requestSeq: 7,
         requestPayload: null,
       },
       syncRunId: 201,
@@ -1157,7 +1156,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 42,
+        requestSeq: 42,
       },
       syncRunId: 900,
       telemetry: telemetry as never,
@@ -1297,7 +1296,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 999,
+        requestSeq: 999,
       },
       syncRunId: 901,
       telemetry: telemetry as never,
@@ -1440,7 +1439,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 1,
+        requestSeq: 1,
       },
       syncRunId: 902,
       telemetry: telemetry as never,
@@ -1574,7 +1573,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 1,
+        requestSeq: 1,
       },
       syncRunId: 904,
       telemetry: telemetry as never,
@@ -1718,7 +1717,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 1,
+        requestSeq: 1,
       },
       syncRunId: 905,
       telemetry: telemetry as never,
@@ -1837,7 +1836,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 1,
+        requestSeq: 1,
       },
       syncRunId: 9051,
       telemetry: telemetry as never,
@@ -1954,7 +1953,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 1,
+        requestSeq: 1,
       },
       syncRunId: 903,
       telemetry: telemetry as never,
@@ -2134,7 +2133,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 1,
+        requestSeq: 1,
       },
       syncRunId: 904,
       telemetry: telemetry as never,
@@ -2279,7 +2278,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 1,
+        requestSeq: 1,
       },
       syncRunId: 907,
       telemetry: telemetry as never,
@@ -2373,7 +2372,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 1,
+        requestSeq: 1,
       },
       syncRunId: 908,
       telemetry: telemetry as never,
@@ -2457,7 +2456,7 @@ describe("sync executor handlers", () => {
         proxy: null,
       },
       streamState: {
-        desiredRevision: 1,
+        requestSeq: 1,
       },
       syncRunId: 906,
       telemetry: telemetry as never,

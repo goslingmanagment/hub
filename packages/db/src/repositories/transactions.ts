@@ -13,7 +13,7 @@ import {
   dailyFollowers,
   dailyRevenue,
   dailySubscribers,
-  platformAccounts,
+  pages,
   transactions,
 } from "../schema.ts";
 
@@ -101,9 +101,9 @@ export async function rebuildRevenueRollups(
   const reportableTransactionTypeSql = transactionTypeListSql(reportableTransactionTypes);
   await db.transaction(async (tx) => {
     const [account] = await tx.select({
-      platform: platformAccounts.platform,
-    }).from(platformAccounts)
-      .where(eq(platformAccounts.id, platformAccountId));
+      platform: pages.platform,
+    }).from(pages)
+      .where(eq(pages.id, platformAccountId));
 
     if (!account) {
       return;

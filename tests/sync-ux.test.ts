@@ -14,7 +14,7 @@ describe("sync UX summaries", () => {
       status: "idle",
       stalled: false,
       pending: true,
-      backoffUntil: null,
+      retryAt: null,
       progress: {
         label: "128 messages saved",
       },
@@ -34,8 +34,8 @@ describe("sync UX summaries", () => {
         status: "partial",
         finishedAt: "2026-03-24T11:30:00.000Z",
       },
-      lastSuccessAt: "2026-03-24T10:00:00.000Z",
-      lastFailureAt: null,
+      succeededAt: "2026-03-24T10:00:00.000Z",
+      failedAt: null,
       lastErrorSummary: null,
       consecutiveFailures: 0,
     });
@@ -48,10 +48,10 @@ describe("sync UX summaries", () => {
   it("escalates auth failures to a reconnect action", () => {
     const summary = buildStreamSyncUx({
       stream: "followers",
-      status: "auth_failed",
+      status: "blocked",
       stalled: false,
       pending: true,
-      backoffUntil: null,
+      retryAt: null,
       progress: null,
       recentErrors: {
         total429s: 0,
@@ -69,8 +69,9 @@ describe("sync UX summaries", () => {
         status: "failed",
         finishedAt: "2026-03-24T11:30:00.000Z",
       },
-      lastSuccessAt: null,
-      lastFailureAt: "2026-03-24T11:30:00.000Z",
+      succeededAt: null,
+      failedAt: "2026-03-24T11:30:00.000Z",
+      blockerKind: "auth",
       lastErrorSummary: "401 unauthorized",
       consecutiveFailures: 1,
     });
@@ -200,10 +201,10 @@ describe("sync UX summaries", () => {
   it("keeps repeated non-429 failures in attention even when the provider is rate limited", () => {
     const summary = buildStreamSyncUx({
       stream: "followers",
-      status: "idle",
+      status: "retrying",
       stalled: false,
       pending: false,
-      backoffUntil: "2026-03-24T12:05:00.000Z",
+      retryAt: "2026-03-24T12:05:00.000Z",
       progress: null,
       recentErrors: {
         total429s: 1,
@@ -221,8 +222,8 @@ describe("sync UX summaries", () => {
         status: "failed",
         finishedAt: "2026-03-24T11:59:00.000Z",
       },
-      lastSuccessAt: "2026-03-24T10:00:00.000Z",
-      lastFailureAt: "2026-03-24T11:59:00.000Z",
+      succeededAt: "2026-03-24T10:00:00.000Z",
+      failedAt: "2026-03-24T11:59:00.000Z",
       lastErrorCode: "http_500",
       lastErrorSummary: "Followers sync failed",
       consecutiveFailures: 3,
@@ -235,10 +236,10 @@ describe("sync UX summaries", () => {
   it("keeps true 429 retry paths in retrying state", () => {
     const summary = buildStreamSyncUx({
       stream: "transactions",
-      status: "idle",
+      status: "retrying",
       stalled: false,
       pending: false,
-      backoffUntil: "2026-03-24T12:05:00.000Z",
+      retryAt: "2026-03-24T12:05:00.000Z",
       progress: null,
       recentErrors: {
         total429s: 3,
@@ -256,8 +257,8 @@ describe("sync UX summaries", () => {
         status: "failed",
         finishedAt: "2026-03-24T11:59:00.000Z",
       },
-      lastSuccessAt: "2026-03-24T10:00:00.000Z",
-      lastFailureAt: "2026-03-24T11:59:00.000Z",
+      succeededAt: "2026-03-24T10:00:00.000Z",
+      failedAt: "2026-03-24T11:59:00.000Z",
       lastErrorCode: "http_429",
       lastErrorSummary: "Rate limited",
       consecutiveFailures: 3,

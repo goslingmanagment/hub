@@ -12,8 +12,8 @@ import {
   fans,
   pageDmConversations,
   pageDmMessages,
-  syncCheckpoints,
-  syncStreamState,
+  pageSyncCursors,
+  pageSyncStates,
 } from "../schema.ts";
 
 type TimestampValue = Date | string | null | undefined;
@@ -754,22 +754,22 @@ export async function getCrmFreshnessCoverage(
   platformAccountId: number,
 ) {
   const [conversationState, messageState, conversationCheckpoint, coverage] = await Promise.all([
-    db.query.syncStreamState.findFirst({
+    db.query.pageSyncStates.findFirst({
       where: and(
-        eq(syncStreamState.platformAccountId, platformAccountId),
-        eq(syncStreamState.stream, "dm_conversations"),
+        eq(pageSyncStates.pageId, platformAccountId),
+        eq(pageSyncStates.stream, "dm_conversations"),
       ),
     }),
-    db.query.syncStreamState.findFirst({
+    db.query.pageSyncStates.findFirst({
       where: and(
-        eq(syncStreamState.platformAccountId, platformAccountId),
-        eq(syncStreamState.stream, "dm_messages"),
+        eq(pageSyncStates.pageId, platformAccountId),
+        eq(pageSyncStates.stream, "dm_messages"),
       ),
     }),
-    db.query.syncCheckpoints.findFirst({
+    db.query.pageSyncCursors.findFirst({
       where: and(
-        eq(syncCheckpoints.platformAccountId, platformAccountId),
-        eq(syncCheckpoints.stream, "dm_conversations"),
+        eq(pageSyncCursors.pageId, platformAccountId),
+        eq(pageSyncCursors.stream, "dm_conversations"),
       ),
     }),
     db.execute<{
@@ -814,9 +814,9 @@ export async function getCrmFreshnessCoverage(
 
   const checkpointState = conversationCheckpoint?.state as Record<string, unknown> | undefined;
   return {
-    lastConversationChunkSucceededAt: conversationState?.lastSucceededAt ?? null,
+    lastConversationChunkSucceededAt: conversationState?.succeededAt ?? null,
     lastConversationFullSweepAt: normalizeCheckpointTimestamp(checkpointState?.lastFullSweepCompletedAt),
-    lastMessageChunkSucceededAt: messageState?.lastSucceededAt ?? null,
+    lastMessageChunkSucceededAt: messageState?.succeededAt ?? null,
     pendingMessageBackfillCount: coverage.rows[0]?.pendingMessageBackfillCount ?? 0,
     partialWindowConversationCount: coverage.rows[0]?.partialWindowConversationCount ?? 0,
     excludedConversationCount: coverage.rows[0]?.excludedConversationCount ?? 0,

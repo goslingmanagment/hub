@@ -3,13 +3,12 @@ import type { SyncUxSummary } from "@agency_hub_core/contracts";
 type SyncUxState = SyncUxSummary["state"];
 
 type SyncMonitorStatus =
-  | "running"
   | "idle"
-  | "completed"
-  | "failed"
+  | "pending"
+  | "running"
+  | "retrying"
+  | "blocked"
   | "paused"
-  | "auth_failed"
-  | "disabled";
 
 type SyncMonitorRateHealthState = "healthy" | "warning" | "limited";
 
@@ -18,7 +17,7 @@ export interface SyncUxStreamLike {
   status: SyncMonitorStatus;
   stalled: boolean;
   pending: boolean;
-  backoffUntil: string | null;
+  retryAt: string | null;
   progress: { label: string } | null;
   recentErrors: {
     total429s: number;
@@ -39,9 +38,10 @@ export interface SyncUxStreamLike {
     status: "success" | "partial" | "failed" | "skipped";
     finishedAt: string;
   } | null;
-  lastSuccessAt: string | null;
-  lastFailureAt: string | null;
+  succeededAt: string | null;
+  failedAt: string | null;
   lastErrorCode?: string | null;
+  blockerKind?: string | null;
   lastErrorSummary: string | null;
   consecutiveFailures: number;
 }
@@ -113,12 +113,12 @@ function firstProgressLabel(values: Array<{ progressLabel: string | null }>) {
 export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
   const updatedAt = latestTimestamp([
     stream.activeRun?.lastActivityAt ?? null,
-    stream.lastFailureAt,
-    stream.lastSuccessAt,
+    stream.failedAt,
+    stream.succeededAt,
     stream.lastCompletion?.finishedAt ?? null,
   ]);
   const progressLabel = stream.progress?.label ?? null;
-  const hasSuccessfulSync = stream.lastSuccessAt !== null || stream.lastCompletion?.status === "success";
+  const hasSuccessfulSync = stream.succeededAt !== null || stream.lastCompletion?.status === "success";
   const hasCompletedRun = stream.lastCompletion !== null;
   const repeatedFailures = stream.consecutiveFailures >= 3 ||
     stream.recentErrors.failedRuns >= 3 ||
@@ -127,8 +127,7 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
   const hasNonRateLimitFailureEvidence = (
     stream.lastErrorCode !== null &&
     stream.lastErrorCode !== undefined &&
-    stream.lastErrorCode !== "http_429" &&
-    stream.lastErrorCode !== "auth_failed"
+    stream.lastErrorCode !== "http_429"
   ) || stream.recentErrors.total5xxs > 0;
 
   if (stream.status === "paused") {
@@ -140,16 +139,7 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
     });
   }
 
-  if (stream.status === "disabled") {
-    return buildSummary("off", {
-      label: "Disabled",
-      headline: "Sync is disabled",
-      detail: "This sync is disabled.",
-      updatedAt,
-    });
-  }
-
-  if (stream.status === "auth_failed") {
+  if (stream.status === "blocked" && stream.blockerKind === "auth") {
     return buildSummary("attention", {
       label: "Reconnect",
       headline: "Reconnect to resume sync",
@@ -157,6 +147,16 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
       progressLabel,
       updatedAt,
       requiresAction: true,
+    });
+  }
+
+  if (stream.status === "blocked") {
+    return buildSummary("attention", {
+      label: "Attention",
+      headline: "Sync needs attention",
+      detail: stream.lastErrorSummary ?? "This sync is blocked until the issue is cleared.",
+      progressLabel,
+      updatedAt,
     });
   }
 
@@ -180,14 +180,14 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
     });
   }
 
-  if (stream.backoffUntil) {
+  if (stream.retryAt) {
     if (repeatedFailures && (hasNonRateLimitFailureEvidence || !hasRateLimitFailureEvidence)) {
       return buildSummary("attention", {
         label: "Attention",
         headline: "Sync needs attention",
         detail: stream.lastErrorSummary ?? "Repeated sync failures are blocking progress.",
         progressLabel,
-        nextRetryAt: stream.backoffUntil,
+        nextRetryAt: stream.retryAt,
         updatedAt,
       });
     }
@@ -200,7 +200,7 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
         ? "Rate limits slowed this sync. It will resume automatically."
         : "A temporary sync issue occurred. It will retry automatically.",
       progressLabel,
-      nextRetryAt: stream.backoffUntil,
+      nextRetryAt: stream.retryAt,
       updatedAt,
     });
   }
@@ -311,7 +311,7 @@ export function buildPageSyncUx(items: SyncUxSummary[]): SyncUxSummary {
       : {
         label: "Off",
         headline: "Some syncs are off",
-        detail: `${pluralize(off.length, "sync")} are paused or disabled on this page.`,
+        detail: `${pluralize(off.length, "sync")} are paused on this page.`,
       });
   }
 
@@ -395,7 +395,7 @@ export function buildOverallSyncUx(items: SyncUxSummary[]): SyncUxSummary {
       : {
         label: "Off",
         headline: "Some syncs are off",
-        detail: `${pluralize(off.length, "page")} have paused or disabled syncs.`,
+        detail: `${pluralize(off.length, "page")} have paused syncs.`,
       });
   }
 
@@ -484,7 +484,7 @@ export function buildCrmMessageSyncUx(input: {
     return buildSummary("off", {
       label: "Off",
       headline: "Conversation history is off",
-      detail: "One or more conversation syncs are paused or disabled.",
+      detail: "One or more conversation syncs are paused.",
       nextRetryAt,
       updatedAt,
     });

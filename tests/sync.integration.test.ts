@@ -4,16 +4,14 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
-  ensureSyncTaskRows,
-  ensureSyncStreamStateRows,
+  ensurePageSyncStates,
   getCurrentSubscribers,
   getFollowersForPage,
-  listSyncStreamStateRows,
+  listPageSyncStates,
   pageFollows,
   pageSubscriptions,
-  requestSyncTaskGenerations,
-  requestSyncStreamRevisions,
-  resolveSyncTaskPriority,
+  requestPageSync as requestPageSyncRows,
+  resolvePageSyncPriority,
   resolveSyncRequestPriority,
   storeFanslySession,
   storePlatformCredentials,
@@ -26,7 +24,7 @@ import { PgBoss } from "pg-boss";
 
 import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
 import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.ts";
-import { requestPageSync, waitForRequestedSyncRevisions } from "../apps/runtime/src/services/sync-control.ts";
+import { requestPageSync, waitForRequestedSyncRequests } from "../apps/runtime/src/services/sync-control.ts";
 import { ensureSyncQueues, sendSyncPageWakeup, SYNC_PAGE_EXECUTE_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   resetIntegrationDatabase,
@@ -374,28 +372,25 @@ async function requestLightSync(
     proxyUrl?: string | null;
   },
 ) {
-  await ensureSyncTaskRows(app.db, {
-    platformAccountId: input.platformAccountId,
+  await ensurePageSyncStates(app.db, {
+    pageId: input.platformAccountId,
     now: new Date(),
   });
 
-  const generations = await requestSyncTaskGenerations(app.db, {
-    platformAccountId: input.platformAccountId,
-    tasks: ["light"],
+  const requests = await requestPageSyncRows(app.db, {
+    pageId: input.platformAccountId,
+    streams: ["light"],
     source: "manual",
   });
 
   await sendSyncPageWakeup(boss, {
     platformAccountId: input.platformAccountId,
-    priority: resolveSyncTaskPriority("light", "manual"),
+    priority: resolvePageSyncPriority("light", "manual"),
     provider: input.provider,
     egressKey: buildProxyEgressKey(input.proxyUrl ? { url: input.proxyUrl } : null),
   });
 
-  return generations.map((generation) => ({
-    stream: generation.task,
-    desiredRevision: generation.desiredGeneration,
-  }));
+  return requests;
 }
 
 describe("sync integration", () => {
@@ -456,7 +451,7 @@ describe("sync integration", () => {
       });
 
       expect(request.page.id).toBe(page.id);
-      expect(request.revisions).toHaveLength(1);
+      expect(request.requests).toHaveLength(1);
     } finally {
       await app.close();
     }
@@ -484,13 +479,13 @@ describe("sync integration", () => {
     });
     const now = new Date("2026-03-20T12:00:00.000Z");
 
-    await ensureSyncTaskRows(app.db, {
-      platformAccountId: page.id,
+    await ensurePageSyncStates(app.db, {
+      pageId: page.id,
       now,
     });
-    await requestSyncTaskGenerations(app.db, {
-      platformAccountId: page.id,
-      tasks: ["light"],
+    await requestPageSyncRows(app.db, {
+      pageId: page.id,
+      streams: ["light"],
       source: "manual",
       now,
     });
@@ -503,9 +498,9 @@ describe("sync integration", () => {
 
     expect(pages).toHaveLength(1);
     expect(pages[0]).toMatchObject({
-      platformAccountId: page.id,
+      pageId: page.id,
       platform: "fansly",
-      priority: resolveSyncTaskPriority("light", "manual"),
+      priority: resolvePageSyncPriority("light", "manual"),
       proxyUrl,
     });
     expect(pages[0]?.requestedAt?.toISOString()).toBe(now.toISOString());
@@ -514,22 +509,22 @@ describe("sync integration", () => {
       { platformAccountId: page.id },
       {
         singletonKey: String(page.id),
-        priority: resolveSyncTaskPriority("light", "manual"),
+        priority: resolvePageSyncPriority("light", "manual"),
         group: {
           id: buildSyncPageExecuteGroupId("fansly", buildProxyEgressKey({ url: proxyUrl })),
         },
       },
     );
 
-    const stateRows = await listSyncStreamStateRows(app.db, {
-      platformAccountId: page.id,
+    const stateRows = await listPageSyncStates(app.db, {
+      pageId: page.id,
       streams: ["light"],
     });
     expect(stateRows).toHaveLength(1);
-    expect(stateRows[0]?.lastEnqueuedAt?.toISOString()).toBe(now.toISOString());
+    expect(stateRows[0]?.enqueuedAt?.toISOString()).toBe(now.toISOString());
   });
 
-  it("converges a Fansly all-scope sync through sync_state and executor wakeups", async (context) => {
+  it("converges a Fansly all-scope sync through page sync state and executor wakeups", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -557,15 +552,15 @@ describe("sync integration", () => {
         reason: "manual",
       });
 
-      await waitForRequestedSyncRevisions(app, {
-        platformAccountId: page.id,
-        revisions: request.revisions,
+      await waitForRequestedSyncRequests(app, {
+        pageId: page.id,
+        requests: request.requests,
         timeoutMs: 20_000,
         pollMs: 100,
       });
 
-      const stateRows = await listSyncStreamStateRows(app.db, {
-        platformAccountId: page.id,
+      const stateRows = await listPageSyncStates(app.db, {
+        pageId: page.id,
       });
       expect(stateRows.map((row) => row.stream)).toEqual([
         "light",
@@ -577,7 +572,7 @@ describe("sync integration", () => {
         "dm_conversations",
         "dm_messages",
       ]);
-      expect(stateRows.every((row) => row.desiredRevision === row.satisfiedRevision)).toBe(true);
+      expect(stateRows.every((row) => row.requestSeq === row.appliedSeq)).toBe(true);
 
       const subscribers = await getCurrentSubscribers(app.db, page.id);
       const followers = await getFollowersForPage(app.db, page.id);
@@ -586,11 +581,11 @@ describe("sync integration", () => {
 
       const runRows = await testDb.db.select({
         stream: syncRuns.stream,
-        status: syncRuns.status,
+        status: syncRuns.outcome,
         startedAt: syncRuns.startedAt,
       }).from(syncRuns).orderBy(syncRuns.startedAt);
       expect(runRows).toHaveLength(8);
-      expect(runRows.every((row) => row.status === "success")).toBe(true);
+      expect(runRows.every((row) => row.status === "succeeded")).toBe(true);
       expect(runRows.map((row) => row.stream)).toEqual([
         "light",
         "transactions",
@@ -656,15 +651,15 @@ describe("sync integration", () => {
       });
 
       await Promise.all([
-        waitForRequestedSyncRevisions(app, {
-          platformAccountId: firstPage.id,
-          revisions: firstRevisions,
+        waitForRequestedSyncRequests(app, {
+          pageId: firstPage.id,
+          requests: firstRevisions,
           timeoutMs: 10_000,
           pollMs: 50,
         }),
-        waitForRequestedSyncRevisions(app, {
-          platformAccountId: secondPage.id,
-          revisions: secondRevisions,
+        waitForRequestedSyncRequests(app, {
+          pageId: secondPage.id,
+          requests: secondRevisions,
           timeoutMs: 10_000,
           pollMs: 50,
         }),
@@ -744,21 +739,21 @@ describe("sync integration", () => {
       });
 
       await Promise.all([
-        waitForRequestedSyncRevisions(app, {
-          platformAccountId: directFanslyPage.id,
-          revisions: directFanslyRevisions,
+        waitForRequestedSyncRequests(app, {
+          pageId: directFanslyPage.id,
+          requests: directFanslyRevisions,
           timeoutMs: 10_000,
           pollMs: 50,
         }),
-        waitForRequestedSyncRevisions(app, {
-          platformAccountId: proxiedFanslyPage.id,
-          revisions: proxiedFanslyRevisions,
+        waitForRequestedSyncRequests(app, {
+          pageId: proxiedFanslyPage.id,
+          requests: proxiedFanslyRevisions,
           timeoutMs: 10_000,
           pollMs: 50,
         }),
-        waitForRequestedSyncRevisions(app, {
-          platformAccountId: onlyFansPage.id,
-          revisions: onlyFansRevisions,
+        waitForRequestedSyncRequests(app, {
+          pageId: onlyFansPage.id,
+          requests: onlyFansRevisions,
           timeoutMs: 10_000,
           pollMs: 50,
         }),

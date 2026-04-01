@@ -3,15 +3,22 @@ import {
   listSyncMonitorRecentEvents,
   listSyncMonitorRecentRequests,
   listSyncMonitorStreamRows,
-  type SyncAuditStream,
-  type SyncControlStream,
+  type PageSyncStatus,
   type SyncMonitorRecentEventRow,
   type SyncMonitorStreamRow,
+  type SyncStream,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError } from "./errors.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
+import {
+  parseDmConversationCursorState,
+  parseDmMessagesCursorState,
+  parseFollowersCursorState,
+  parseFollowersReconcileCursorState,
+  parseSubscribersCursorState,
+} from "./sync/cursor-state.ts";
 import { buildOverallSyncUx, buildPageSyncUx, buildStreamSyncUx } from "./sync-ux.ts";
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 
@@ -22,7 +29,7 @@ const DEFAULT_REQUEST_LIMIT = 100;
 const MAX_REQUEST_LIMIT = 500;
 const STALLED_THRESHOLD_MS = 45_000;
 const RATE_LIMITED_LOOKBACK_MS = 15 * 60 * 1000;
-const LEGACY_SYNC_MONITOR_STREAMS = [
+const MONITORED_SYNC_STREAMS = [
   "light",
   "followers",
   "transactions",
@@ -30,30 +37,16 @@ const LEGACY_SYNC_MONITOR_STREAMS = [
   "dm_conversations",
   "dm_messages",
   "followers_reconcile",
-] as const satisfies readonly SyncControlStream[];
-const LEGACY_SYNC_REQUEST_STREAMS = [
-  ...LEGACY_SYNC_MONITOR_STREAMS,
-  "cleanup",
-] as const satisfies readonly SyncAuditStream[];
-type LegacySyncMonitorStream = typeof LEGACY_SYNC_MONITOR_STREAMS[number];
-type LegacySyncRequestStream = typeof LEGACY_SYNC_REQUEST_STREAMS[number];
+] as const satisfies readonly SyncStream[];
+const REQUEST_STREAMS = [
+  ...MONITORED_SYNC_STREAMS,
+] as const satisfies readonly SyncStream[];
 
-function isLegacySyncMonitorStream(stream: SyncControlStream): stream is LegacySyncMonitorStream {
-  return (LEGACY_SYNC_MONITOR_STREAMS as readonly string[]).includes(stream);
+function isRequestedStream(stream: SyncStream) {
+  return (REQUEST_STREAMS as readonly string[]).includes(stream);
 }
 
-function isLegacySyncRequestStream(stream: SyncAuditStream): stream is LegacySyncRequestStream {
-  return (LEGACY_SYNC_REQUEST_STREAMS as readonly string[]).includes(stream);
-}
-
-export type SyncMonitorStatus =
-  | "running"
-  | "idle"
-  | "completed"
-  | "failed"
-  | "paused"
-  | "auth_failed"
-  | "disabled";
+export type SyncMonitorStatus = PageSyncStatus;
 
 export type SyncMonitorRateHealthState = "healthy" | "warning" | "limited";
 
@@ -107,19 +100,19 @@ export interface SyncMonitorActiveRun {
 }
 
 export interface SyncMonitorStreamItem {
-  stream: SyncControlStream;
+  stream: SyncStream;
   status: SyncMonitorStatus;
   stalled: boolean;
   pending: boolean;
-  backoffUntil: string | null;
+  retryAt: string | null;
   progress: SyncMonitorProgress | null;
   recentRuns: SyncMonitorRecentRuns;
   recentErrors: SyncMonitorRecentErrors;
   rateHealth: SyncMonitorRateHealth;
   activeRun: SyncMonitorActiveRun | null;
   lastCompletion: SyncMonitorLastCompletion | null;
-  lastSuccessAt: string | null;
-  lastFailureAt: string | null;
+  succeededAt: string | null;
+  failedAt: string | null;
   lastErrorSummary: string | null;
   consecutiveFailures: number;
   syncUx: SyncUxSummary;
@@ -136,10 +129,10 @@ export interface SyncMonitorPageCounts {
 
 export interface SyncMonitorPageSummary {
   runningStreams: number;
-  failedStreams: number;
+  blockedStreams: number;
   stalledStreams: number;
   pendingStreams: number;
-  backoffStreams: number;
+  retryingStreams: number;
 }
 
 export interface SyncMonitorPageItem {
@@ -167,10 +160,10 @@ export interface SyncMonitorOverall {
   pages: number;
   streams: number;
   runningStreams: number;
-  failedStreams: number;
+  blockedStreams: number;
   stalledStreams: number;
   pendingStreams: number;
-  backoffStreams: number;
+  retryingStreams: number;
   counts: SyncMonitorPageCounts;
   recentRuns: SyncMonitorRecentRuns;
   recentErrors: SyncMonitorRecentErrors;
@@ -184,7 +177,7 @@ export interface SyncMonitorRecentEvent {
   pageId: number;
   pageLabel: string;
   platform: "fansly" | "onlyfans";
-  stream: SyncControlStream;
+  stream: SyncStream;
   eventType: string;
   severity: "info" | "warn" | "error";
   message: string;
@@ -196,7 +189,7 @@ export interface SyncMonitorRequestItem {
   timestamp: string;
   pageLabel: string;
   platform: "fansly" | "onlyfans";
-  stream: SyncAuditStream;
+  stream: SyncStream;
   operation: string;
   endpoint: string;
   method: string;
@@ -222,51 +215,6 @@ export interface SyncMonitorSnapshot {
   pages: SyncMonitorPageItem[];
   recentEvents: SyncMonitorRecentEvent[];
 }
-
-type SubscribersCheckpointState = {
-  revision: number;
-  generation: number;
-  offset: number;
-  pageCount: number;
-  providerReportedTotal: number | null;
-};
-
-type FollowersCheckpointState = {
-  revision: number;
-  knownFollowId: string | null;
-  newestFollowId: string | null;
-  offset: number;
-  pageCount: number;
-  sourceFollowerCount: number;
-};
-
-type FollowersReconcileCheckpointState = {
-  revision: number;
-  generation: number;
-  offset: number;
-  pageCount: number;
-  sourceFollowerCount: number;
-};
-
-type DmConversationCheckpointState = {
-  version: 1;
-  mode: "full_scan";
-  generation: number;
-  offset: number;
-  pageCount: number;
-  providerReportedTotal: number | null;
-  unchangedPageStreak: number;
-  fullSweepStartedAt: string;
-  lastFullSweepCompletedAt: string | null;
-};
-
-type DmMessagesCheckpointState = {
-  version: 1;
-  currentConversationId: number | null;
-  currentPlatformConversationId: string | null;
-  currentBeforeMessageId: string | null;
-  currentMode: "backfill" | "incremental" | null;
-};
 
 function iso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
@@ -330,204 +278,21 @@ function labelWithTotal(current: number, total: number | null, unit: string, suf
   return `${current.toLocaleString()}/${total.toLocaleString()} ${unit}${suffix}`.trim();
 }
 
-function parseSubscribersCheckpointState(
-  value: unknown,
-  revision: number | null,
-): SubscribersCheckpointState | null {
-  if (revision === null) {
-    return null;
-  }
-
-  const state = asRecord(value);
-  if (!state || asNumber(state.revision) !== revision) {
-    return null;
-  }
-
-  const generation = asNumber(state.generation);
-  const offset = asNumber(state.offset);
-  const pageCount = asNumber(state.pageCount);
-  const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
-  if (
-    generation === null ||
-    offset === null ||
-    pageCount === null ||
-    providerReportedTotal === undefined
-  ) {
-    return null;
-  }
-
-  return {
-    revision,
-    generation,
-    offset,
-    pageCount,
-    providerReportedTotal,
-  };
-}
-
-function parseFollowersCheckpointState(
-  value: unknown,
-  revision: number | null,
-): FollowersCheckpointState | null {
-  if (revision === null) {
-    return null;
-  }
-
-  const state = asRecord(value);
-  if (!state || asNumber(state.revision) !== revision) {
-    return null;
-  }
-
-  const offset = asNumber(state.offset);
-  const pageCount = asNumber(state.pageCount);
-  const sourceFollowerCount = asNumber(state.sourceFollowerCount);
-  const knownFollowId = asNullableString(state.knownFollowId);
-  const newestFollowId = asNullableString(state.newestFollowId);
-  if (
-    offset === null ||
-    pageCount === null ||
-    sourceFollowerCount === null ||
-    knownFollowId === undefined ||
-    newestFollowId === undefined
-  ) {
-    return null;
-  }
-
-  return {
-    revision,
-    knownFollowId,
-    newestFollowId,
-    offset,
-    pageCount,
-    sourceFollowerCount,
-  };
-}
-
-function parseFollowersReconcileCheckpointState(
-  value: unknown,
-  revision: number | null,
-): FollowersReconcileCheckpointState | null {
-  if (revision === null) {
-    return null;
-  }
-
-  const state = asRecord(value);
-  if (!state || asNumber(state.revision) !== revision) {
-    return null;
-  }
-
-  const generation = asNumber(state.generation);
-  const offset = asNumber(state.offset);
-  const pageCount = asNumber(state.pageCount);
-  const sourceFollowerCount = asNumber(state.sourceFollowerCount);
-  if (
-    generation === null ||
-    offset === null ||
-    pageCount === null ||
-    sourceFollowerCount === null
-  ) {
-    return null;
-  }
-
-  return {
-    revision,
-    generation,
-    offset,
-    pageCount,
-    sourceFollowerCount,
-  };
-}
-
-function parseDmConversationCheckpointState(value: unknown) {
-  const state = asRecord(value);
-  if (!state || asNumber(state.version) !== 1 || state.mode !== "full_scan") {
-    return null;
-  }
-
-  const generation = asNumber(state.generation);
-  const offset = asNumber(state.offset);
-  const pageCount = asNumber(state.pageCount);
-  const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
-  const unchangedPageStreak = asNumber(state.unchangedPageStreak);
-  const fullSweepStartedAt = asNullableString(state.fullSweepStartedAt);
-  const lastFullSweepCompletedAt = asNullableString(state.lastFullSweepCompletedAt);
-  if (
-    generation === null ||
-    offset === null ||
-    pageCount === null ||
-    providerReportedTotal === undefined ||
-    unchangedPageStreak === null ||
-    !fullSweepStartedAt
-  ) {
-    return null;
-  }
-
-  return {
-    version: 1 as const,
-    mode: "full_scan" as const,
-    generation,
-    offset,
-    pageCount,
-    providerReportedTotal,
-    unchangedPageStreak,
-    fullSweepStartedAt,
-    lastFullSweepCompletedAt,
-  } satisfies DmConversationCheckpointState;
-}
-
-function parseDmMessagesCheckpointState(value: unknown) {
-  const state = asRecord(value);
-  if (!state || asNumber(state.version) !== 1) {
-    return null;
-  }
-
-  const currentConversationId = state.currentConversationId === null
-    ? null
-    : asNumber(state.currentConversationId);
-  const currentPlatformConversationId = asNullableString(state.currentPlatformConversationId);
-  const currentBeforeMessageId = asNullableString(state.currentBeforeMessageId);
-  const currentMode = state.currentMode === "backfill" || state.currentMode === "incremental"
-    ? state.currentMode
-    : state.currentMode === null || state.currentMode === undefined
-      ? null
-      : undefined;
-
-  if (
-    currentConversationId === undefined ||
-    currentPlatformConversationId === undefined ||
-    currentBeforeMessageId === undefined ||
-    currentMode === undefined
-  ) {
-    return null;
-  }
-
-  return {
-    version: 1 as const,
-    currentConversationId,
-    currentPlatformConversationId,
-    currentBeforeMessageId,
-    currentMode,
-  } satisfies DmMessagesCheckpointState;
-}
-
 function isRunning(row: SyncMonitorStreamRow) {
   return row.runningRunId !== null;
 }
 
 function isPending(row: SyncMonitorStreamRow) {
-  if (row.targetStatus !== "active") {
+  if (row.requestSeq === null || row.appliedSeq === null) {
     return false;
   }
-  if (row.desiredRevision === null || row.satisfiedRevision === null) {
-    return false;
-  }
-  return row.desiredRevision > row.satisfiedRevision && !isRunning(row);
+  return row.requestSeq > row.appliedSeq && row.status === "pending" && !isRunning(row);
 }
 
-function isBackoff(row: SyncMonitorStreamRow, now: Date) {
-  return row.targetStatus === "active" &&
-    row.backoffUntil !== null &&
-    row.backoffUntil.getTime() > now.getTime();
+function isRetrying(row: SyncMonitorStreamRow, now: Date) {
+  return row.status === "retrying" &&
+    row.retryAt !== null &&
+    row.retryAt.getTime() > now.getTime();
 }
 
 function isStalled(row: SyncMonitorStreamRow, now: Date) {
@@ -537,38 +302,33 @@ function isStalled(row: SyncMonitorStreamRow, now: Date) {
   return now.getTime() - row.runningLastActivityAt.getTime() > STALLED_THRESHOLD_MS;
 }
 
-function lastSuccessAt(row: SyncMonitorStreamRow) {
-  return maxDate(row.checkpointLastSuccessfulAt, row.lastSucceededAt);
+function latestSuccessTimestamp(row: SyncMonitorStreamRow) {
+  return maxDate(row.cursorLastSucceededAt, row.succeededAt);
 }
 
-function lastFailureAt(row: SyncMonitorStreamRow) {
-  return row.lastFailedAt;
+function failedTimestamp(row: SyncMonitorStreamRow) {
+  return row.failedAt;
 }
 
 function statusFor(row: SyncMonitorStreamRow, now: Date): SyncMonitorStatus {
-  if (row.targetStatus === "paused" || row.targetStatus === "auth_failed" || row.targetStatus === "disabled") {
-    return row.targetStatus;
-  }
-
   if (isRunning(row)) {
     return "running";
   }
 
-  const successAt = lastSuccessAt(row);
-  const failureAt = lastFailureAt(row);
-  if (
-    failureAt &&
-    (!successAt || failureAt.getTime() > successAt.getTime() || row.lastCompletedStatus === "failed")
-  ) {
-    return "failed";
+  if (row.status === "retrying" && isRetrying(row, now)) {
+    return "retrying";
   }
 
-  if (successAt && !isPending(row) && !isBackoff(row, now)) {
-    return "completed";
+  if (row.status === "blocked") {
+    return "blocked";
   }
 
-  if (row.lastCompletedStatus === "failed") {
-    return "failed";
+  if (row.status === "paused") {
+    return "paused";
+  }
+
+  if (isPending(row)) {
+    return "pending";
   }
 
   return "idle";
@@ -661,16 +421,17 @@ function buildSubscribersProgress(
   row: SyncMonitorStreamRow,
   status: SyncMonitorStatus,
 ): SyncMonitorProgress | null {
-  const state = parseSubscribersCheckpointState(
+  const state = parseSubscribersCursorState(
     row.checkpointState,
-    row.desiredRevision ?? row.satisfiedRevision,
+    row.requestSeq ?? row.appliedSeq,
   );
   if (!state) {
     return null;
   }
 
-  const total = state.providerReportedTotal ?? (status === "completed" ? row.subscriberCount : null);
-  const current = status === "completed"
+  const completed = status === "idle" && row.requestSeq === row.appliedSeq;
+  const total = state.providerReportedTotal ?? (completed ? row.subscriberCount : null);
+  const current = completed
     ? (total ?? row.subscriberCount)
     : clampProgress(state.offset, total);
 
@@ -687,16 +448,17 @@ function buildFollowersProgress(
   row: SyncMonitorStreamRow,
   status: SyncMonitorStatus,
 ): SyncMonitorProgress | null {
-  const state = parseFollowersCheckpointState(
+  const state = parseFollowersCursorState(
     row.checkpointState,
-    row.desiredRevision ?? row.satisfiedRevision,
+    row.requestSeq ?? row.appliedSeq,
   );
   if (!state) {
     return null;
   }
 
   const total = state.sourceFollowerCount;
-  const current = status === "completed" ? total : clampProgress(state.offset, total);
+  const completed = status === "idle" && row.requestSeq === row.appliedSeq;
+  const current = completed ? total : clampProgress(state.offset, total);
 
   return {
     label: labelWithTotal(current, total, "followers"),
@@ -711,16 +473,17 @@ function buildFollowersReconcileProgress(
   row: SyncMonitorStreamRow,
   status: SyncMonitorStatus,
 ): SyncMonitorProgress | null {
-  const state = parseFollowersReconcileCheckpointState(
+  const state = parseFollowersReconcileCursorState(
     row.checkpointState,
-    row.desiredRevision ?? row.satisfiedRevision,
+    row.requestSeq ?? row.appliedSeq,
   );
   if (!state) {
     return null;
   }
 
   const total = state.sourceFollowerCount;
-  const current = status === "completed" ? total : clampProgress(state.offset, total);
+  const completed = status === "idle" && row.requestSeq === row.appliedSeq;
+  const current = completed ? total : clampProgress(state.offset, total);
 
   return {
     label: labelWithTotal(current, total, "followers"),
@@ -735,13 +498,14 @@ function buildDmConversationProgress(
   row: SyncMonitorStreamRow,
   status: SyncMonitorStatus,
 ): SyncMonitorProgress | null {
-  const state = parseDmConversationCheckpointState(row.checkpointState);
+  const state = parseDmConversationCursorState(row.checkpointState);
   if (!state) {
     return null;
   }
 
-  const total = state.providerReportedTotal ?? (status === "completed" ? row.dmConversationCount : null);
-  const current = status === "completed"
+  const completed = status === "idle" && row.requestSeq === row.appliedSeq;
+  const total = state.providerReportedTotal ?? (completed ? row.dmConversationCount : null);
+  const current = completed
     ? (total ?? row.dmConversationCount)
     : clampProgress(state.offset, total);
 
@@ -755,7 +519,7 @@ function buildDmConversationProgress(
 }
 
 function buildDmMessagesProgress(row: SyncMonitorStreamRow): SyncMonitorProgress | null {
-  const state = parseDmMessagesCheckpointState(row.checkpointState);
+  const state = parseDmMessagesCursorState(row.checkpointState);
   const total = row.dmEligibleConversationCount;
   const current = row.dmBackfillCompleteConversationCount;
   const lagging = row.dmLaggingConversationCount;
@@ -821,13 +585,13 @@ function streamItemFor(row: SyncMonitorStreamRow, now: Date): SyncMonitorStreamI
   const status = statusFor(row, now);
   const stalled = isStalled(row, now);
   const pending = isPending(row);
-  const backoffUntil = isBackoff(row, now) ? row.backoffUntil : null;
+  const retryAt = isRetrying(row, now) ? row.retryAt : null;
   const item = {
     stream: row.stream,
     status,
     stalled,
     pending,
-    backoffUntil: iso(backoffUntil),
+    retryAt: iso(retryAt),
     progress: progressFor(row, status),
     recentRuns: recentRunsFor(row),
     recentErrors: recentErrorsFor(row),
@@ -838,14 +602,15 @@ function streamItemFor(row: SyncMonitorStreamRow, now: Date): SyncMonitorStreamI
     }, now),
     activeRun: activeRunFor(row),
     lastCompletion: lastCompletionFor(row),
-    lastSuccessAt: iso(lastSuccessAt(row)),
-    lastFailureAt: iso(lastFailureAt(row)),
+    succeededAt: iso(latestSuccessTimestamp(row)),
+    failedAt: iso(failedTimestamp(row)),
     lastErrorSummary: row.lastErrorSummary ?? row.lastCompletedErrorSummary,
     consecutiveFailures: row.consecutiveFailures,
   } satisfies Omit<SyncMonitorStreamItem, "syncUx">;
   const syncUxInput = {
     ...item,
     lastErrorCode: row.lastErrorCode,
+    blockerKind: row.blockerKind,
   };
 
   return {
@@ -858,13 +623,13 @@ export async function getPageStreamSyncUxByStream(
   app: AppContext,
   input: {
     pageId: number;
-    streams: SyncControlStream[];
+    streams: SyncStream[];
     windowHours?: number;
     now?: Date;
   },
 ) {
   if (input.streams.length === 0) {
-    return new Map<SyncControlStream, SyncUxSummary>();
+    return new Map<SyncStream, SyncUxSummary>();
   }
 
   const now = input.now ?? new Date();
@@ -879,7 +644,7 @@ export async function getPageStreamSyncUxByStream(
   return new Map(
     rows.map((row) => {
       const stream = streamItemFor(row, now);
-      return [row.stream, stream.syncUx] satisfies [SyncControlStream, SyncUxSummary];
+      return [row.stream, stream.syncUx] satisfies [SyncStream, SyncUxSummary];
     }),
   );
 }
@@ -887,10 +652,10 @@ export async function getPageStreamSyncUxByStream(
 function comparePages(a: SyncMonitorPageItem, b: SyncMonitorPageItem) {
   const score = (page: SyncMonitorPageItem) =>
     page.summary.stalledStreams * 1000 +
-    page.summary.failedStreams * 100 +
+    page.summary.blockedStreams * 100 +
     page.summary.runningStreams * 10 +
     page.summary.pendingStreams * 5 +
-    page.summary.backoffStreams;
+    page.summary.retryingStreams;
 
   const diff = score(b) - score(a);
   if (diff !== 0) {
@@ -962,7 +727,7 @@ export async function getSyncMonitorSnapshot(
       pageIds: input?.pageIds,
       pageLabel: input?.pageLabel,
       windowStart,
-      streams: [...LEGACY_SYNC_MONITOR_STREAMS],
+      streams: [...MONITORED_SYNC_STREAMS],
     }),
     listSyncMonitorRecentEvents(app.db, {
       pageIds: input?.pageIds,
@@ -971,16 +736,11 @@ export async function getSyncMonitorSnapshot(
       limit: eventLimit,
     }),
   ]);
-  const legacyRows = rows.filter((row): row is SyncMonitorStreamRow & { stream: LegacySyncMonitorStream } =>
-    isLegacySyncMonitorStream(row.stream)
-  );
-  const legacyEvents = events.filter(
-    (event): event is SyncMonitorRecentEventRow & { stream: LegacySyncRequestStream } =>
-      isLegacySyncRequestStream(event.stream),
-  );
+  const monitorRows = rows.filter((row) => isRequestedStream(row.stream));
+  const monitorEvents = events.filter((event) => isRequestedStream(event.stream));
 
   const pageMap = new Map<number, SyncMonitorPageItem>();
-  for (const row of legacyRows) {
+  for (const row of monitorRows) {
     const page = pageMap.get(row.pageId) ?? {
       pageId: row.pageId,
       pageLabel: row.pageLabel,
@@ -999,10 +759,10 @@ export async function getSyncMonitorSnapshot(
       },
       summary: {
         runningStreams: 0,
-        failedStreams: 0,
+        blockedStreams: 0,
         stalledStreams: 0,
         pendingStreams: 0,
-        backoffStreams: 0,
+        retryingStreams: 0,
       },
       streams: [],
       syncUx: buildPageSyncUx([]),
@@ -1013,8 +773,8 @@ export async function getSyncMonitorSnapshot(
     if (stream.status === "running") {
       page.summary.runningStreams += 1;
     }
-    if (stream.status === "failed" || stream.status === "auth_failed") {
-      page.summary.failedStreams += 1;
+    if (stream.status === "blocked") {
+      page.summary.blockedStreams += 1;
     }
     if (stream.stalled) {
       page.summary.stalledStreams += 1;
@@ -1022,8 +782,8 @@ export async function getSyncMonitorSnapshot(
     if (stream.pending) {
       page.summary.pendingStreams += 1;
     }
-    if (stream.backoffUntil) {
-      page.summary.backoffStreams += 1;
+    if (stream.retryAt) {
+      page.summary.retryingStreams += 1;
     }
 
     pageMap.set(row.pageId, page);
@@ -1042,10 +802,10 @@ export async function getSyncMonitorSnapshot(
     acc.pages += 1;
     acc.streams += page.streams.length;
     acc.runningStreams += page.summary.runningStreams;
-    acc.failedStreams += page.summary.failedStreams;
+    acc.blockedStreams += page.summary.blockedStreams;
     acc.stalledStreams += page.summary.stalledStreams;
     acc.pendingStreams += page.summary.pendingStreams;
-    acc.backoffStreams += page.summary.backoffStreams;
+    acc.retryingStreams += page.summary.retryingStreams;
     acc.counts.followers += page.counts.followers;
     acc.counts.subscribers += page.counts.subscribers;
     acc.counts.transactions += page.counts.transactions;
@@ -1078,10 +838,10 @@ export async function getSyncMonitorSnapshot(
     pages: 0,
     streams: 0,
     runningStreams: 0,
-    failedStreams: 0,
+    blockedStreams: 0,
     stalledStreams: 0,
     pendingStreams: 0,
-    backoffStreams: 0,
+    retryingStreams: 0,
     counts: {
       fans: 0,
       followers: 0,
@@ -1117,7 +877,7 @@ export async function getSyncMonitorSnapshot(
     last429At: Date | null;
     nextAvailableAt: Date | null;
   }>();
-  for (const row of legacyRows) {
+  for (const row of monitorRows) {
     const provider = providerMap.get(row.platform) ?? {
       total429s: 0,
       total5xxs: 0,
@@ -1152,7 +912,7 @@ export async function getSyncMonitorSnapshot(
     },
     overall,
     pages,
-    recentEvents: legacyEvents.map((event) => eventItemFor(event)),
+    recentEvents: monitorEvents.map((event) => eventItemFor(event)),
   };
 }
 
@@ -1175,12 +935,10 @@ export async function getSyncMonitorRecentRequests(
     since,
     limit,
   });
-  const legacyRows = rows.filter((row): row is typeof row & { stream: LegacySyncRequestStream } =>
-    isLegacySyncRequestStream(row.stream)
-  );
-
   const previousRequestAtByEgressKey = new Map<string, Date>();
-  return legacyRows.map((row) => {
+  return rows
+    .filter((row) => isRequestedStream(row.stream))
+    .map((row) => {
     const requestShape = asRecord(row.requestShape);
     const egressKey = asNullableString(requestShape?.egressKey);
     const previousRequestAt = egressKey ? previousRequestAtByEgressKey.get(egressKey) ?? null : null;
@@ -1192,6 +950,6 @@ export async function getSyncMonitorRecentRequests(
       previousRequestAtByEgressKey.set(egressKey, row.startedAt);
     }
 
-    return requestItemFor(row, proxyGapMs);
-  });
+      return requestItemFor(row, proxyGapMs);
+    });
 }

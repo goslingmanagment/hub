@@ -207,8 +207,8 @@ describe("notifications dashboard", () => {
     const page = await createFanslyPage(testDb.db, { modelId: model.id, label: "p1" });
 
     await openNotificationIncident(testDb.db, {
-      incidentKey: "auth_failed:" + page.id,
-      kind: "auth_failed",
+      incidentKey: "auth_blocked:" + page.id,
+      kind: "auth_blocked",
       platformAccountId: page.id,
       errorSummary: "Token expired",
     });
@@ -222,7 +222,7 @@ describe("notifications dashboard", () => {
     expect(listRes.statusCode).toBe(200);
     const listBody = listRes.json();
     expect(listBody.items.length).toBe(1);
-    expect(listBody.items[0].kind).toBe("auth_failed");
+    expect(listBody.items[0].kind).toBe("auth_blocked");
     expect(listBody.items[0].pageLabel).toBe("p1");
     expect(listBody.items[0].status).toBe("open");
 

@@ -1518,13 +1518,12 @@ export const syncRunDetailResponseSchema = z.object({
 });
 
 const syncMonitorStatusEnum = z.enum([
-  "running",
   "idle",
-  "completed",
-  "failed",
+  "pending",
+  "running",
+  "retrying",
+  "blocked",
   "paused",
-  "auth_failed",
-  "disabled",
 ]);
 const syncMonitorRateHealthEnum = z.enum(["healthy", "warning", "limited"]);
 
@@ -1590,15 +1589,15 @@ export const syncMonitorStreamItemSchema = z.object({
   status: syncMonitorStatusEnum,
   stalled: z.boolean(),
   pending: z.boolean(),
-  backoffUntil: isoTimestamp.nullable(),
+  retryAt: isoTimestamp.nullable(),
   progress: syncMonitorProgressSchema.nullable(),
   recentRuns: syncMonitorRecentRunsSchema,
   recentErrors: syncMonitorRecentErrorsSchema,
   rateHealth: syncMonitorRateHealthSchema,
   activeRun: syncMonitorActiveRunSchema.nullable(),
   lastCompletion: syncMonitorLastCompletionSchema.nullable(),
-  lastSuccessAt: isoTimestamp.nullable(),
-  lastFailureAt: isoTimestamp.nullable(),
+  succeededAt: isoTimestamp.nullable(),
+  failedAt: isoTimestamp.nullable(),
   lastErrorSummary: z.string().nullable(),
   consecutiveFailures: z.number().int(),
   syncUx: syncUxSummarySchema,
@@ -1615,10 +1614,10 @@ export const syncMonitorPageCountsSchema = z.object({
 
 export const syncMonitorPageSummarySchema = z.object({
   runningStreams: z.number().int(),
-  failedStreams: z.number().int(),
+  blockedStreams: z.number().int(),
   stalledStreams: z.number().int(),
   pendingStreams: z.number().int(),
-  backoffStreams: z.number().int(),
+  retryingStreams: z.number().int(),
 });
 
 export const syncMonitorPageItemSchema = z.object({
@@ -1646,10 +1645,10 @@ export const syncMonitorOverallSchema = z.object({
   pages: z.number().int(),
   streams: z.number().int(),
   runningStreams: z.number().int(),
-  failedStreams: z.number().int(),
+  blockedStreams: z.number().int(),
   stalledStreams: z.number().int(),
   pendingStreams: z.number().int(),
-  backoffStreams: z.number().int(),
+  retryingStreams: z.number().int(),
   counts: syncMonitorPageCountsSchema,
   recentRuns: syncMonitorRecentRunsSchema,
   recentErrors: syncMonitorRecentErrorsSchema,
@@ -1713,7 +1712,6 @@ export const syncRequestItemSchema = z.object({
     "dm_conversations",
     "dm_messages",
     "followers_reconcile",
-    "cleanup",
   ]),
   operation: z.string(),
   endpoint: z.string(),
@@ -1753,7 +1751,7 @@ const syncBlockStateEnum = z.enum([
   "not_available",
 ]);
 
-const extendedSyncControlStreamEnum = z.enum([
+const extendedSyncStreamEnum = z.enum([
   "light",
   "followers",
   "transactions",
@@ -1779,7 +1777,7 @@ export const syncBlockErrorSchema = z.object({
   stream: z.string().nullable(),
   code: z.string().nullable(),
   summary: z.string().nullable(),
-  lastFailedAt: isoTimestamp.nullable(),
+  failedAt: isoTimestamp.nullable(),
   consecutiveFailures: z.number().int(),
 });
 
@@ -1792,15 +1790,15 @@ export const syncStatusReasonSchema = z.object({
 const syncStreamRoleEnum = z.enum(["primary", "supporting"]);
 
 export const syncBlockIntervalSchema = z.object({
-  stream: extendedSyncControlStreamEnum,
+  stream: extendedSyncStreamEnum,
   cadenceSeconds: z.number().int(),
 });
 
 export const syncBlockSubstreamSchema = z.object({
-  stream: extendedSyncControlStreamEnum,
+  stream: extendedSyncStreamEnum,
   role: syncStreamRoleEnum,
   state: syncBlockStateEnum.exclude(["not_available"]),
-  lastSuccessAt: isoTimestamp.nullable(),
+  succeededAt: isoTimestamp.nullable(),
   nextDueAt: isoTimestamp.nullable(),
   nextRetryAt: isoTimestamp.nullable(),
   cadenceSeconds: z.number().int(),
@@ -1813,7 +1811,7 @@ export const syncBlockSubstreamSchema = z.object({
 export const syncBlockStatusSchema = z.object({
   block: syncBlockKeyEnum,
   state: syncBlockStateEnum,
-  lastSuccessAt: isoTimestamp.nullable(),
+  succeededAt: isoTimestamp.nullable(),
   progress: syncBlockProgressSchema.nullable(),
   progressStream: z.string().nullable(),
   progressRole: syncStreamRoleEnum.nullable(),
@@ -1832,7 +1830,7 @@ export const syncBlockStatusSchema = z.object({
 const syncDiagnosisCodeEnum = z.enum([
   "worker_offline",
   "stalled_run",
-  "auth_failed",
+  "auth_blocked",
 ]);
 
 const syncDiagnosisSeverityEnum = z.enum(["warning", "error"]);
@@ -1902,9 +1900,9 @@ export const adminSyncBlockBodySchema = z.object({
   block: syncBlockKeyEnum,
 });
 
-export const adminSyncBlockRevisionSchema = z.object({
-  stream: extendedSyncControlStreamEnum,
-  desiredRevision: z.number().int(),
+export const adminSyncBlockRequestSchema = z.object({
+  stream: extendedSyncStreamEnum,
+  requestedSeq: z.number().int(),
 });
 
 export const adminSyncBlockResponseSchema = z.object({
@@ -1912,7 +1910,7 @@ export const adminSyncBlockResponseSchema = z.object({
   action: z.enum(["trigger", "pause", "resume", "reset"]),
   pageLabel: z.string(),
   block: syncBlockKeyEnum,
-  revisions: z.array(adminSyncBlockRevisionSchema).optional(),
+  requests: z.array(adminSyncBlockRequestSchema).optional(),
 });
 
 export const syncTriggerBodySchema = z.object({
@@ -2014,7 +2012,7 @@ export const adminIncidentsResponseSchema = z.object({
 
 // --- Notifications dashboard schemas ---
 const notificationConnectionStatusEnum = z.enum(["not_configured", "connected", "last_message_failed"]);
-const notificationIncidentKindEnum = z.enum(["auth_failed", "proxy_failed", "stream_failed_threshold"]);
+const notificationIncidentKindEnum = z.enum(["auth_blocked", "proxy_failed", "stream_failed_threshold"]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const deliveryKindEnum = z.enum([
   "test",

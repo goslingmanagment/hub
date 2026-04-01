@@ -6,6 +6,7 @@ import {
   finishSyncRun,
   insertSyncRequestAttempt,
   insertSyncRunEvent,
+  type SyncStream,
 } from "@agency_hub_core/db";
 import type {
   HttpRequestEvent,
@@ -22,16 +23,6 @@ import {
   type PersistedSyncError,
 } from "./errors.ts";
 
-type SyncStream =
-  | "light"
-  | "followers"
-  | "followers_reconcile"
-  | "transactions"
-  | "top_spenders"
-  | "subscribers"
-  | "dm_conversations"
-  | "dm_messages"
-  | "cleanup";
 type SyncProvider = "fansly" | "onlyfans";
 
 type RequestTraceWriter = {

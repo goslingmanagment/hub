@@ -5,9 +5,9 @@ import type { Platform, ProxyConfig } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import {
   models,
-  platformAccountCredentials,
-  platformAccountProxies,
-  platformAccounts,
+  pageCredentials,
+  egressEndpoints,
+  pages,
   spenderProjectionWatermarks,
 } from "../schema.ts";
 
@@ -160,7 +160,7 @@ export async function createPlatformPage(
   try {
     [created] = await db.transaction(async (tx) => {
       const [page] = await tx
-        .insert(platformAccounts)
+        .insert(pages)
         .values({
           modelId: input.modelId,
           platform: input.platform,
@@ -210,14 +210,14 @@ export async function storePlatformCredentials(
   },
 ) {
   const [credential] = await db
-    .insert(platformAccountCredentials)
+    .insert(pageCredentials)
     .values({
       platformAccountId: input.platformAccountId,
       encryptedSession: input.encryptedSession,
       keyVersion: input.keyVersion,
     })
     .onConflictDoUpdate({
-      target: platformAccountCredentials.platformAccountId,
+      target: pageCredentials.platformAccountId,
       set: {
         encryptedSession: input.encryptedSession,
         keyVersion: input.keyVersion,
@@ -238,7 +238,7 @@ export async function storeProxyConfig(
   },
 ) {
   const [proxy] = await db
-    .insert(platformAccountProxies)
+    .insert(egressEndpoints)
     .values({
       platformAccountId,
       url: input.url,
@@ -246,7 +246,7 @@ export async function storeProxyConfig(
       keyVersion: input.keyVersion,
     })
     .onConflictDoUpdate({
-      target: platformAccountProxies.platformAccountId,
+      target: egressEndpoints.platformAccountId,
       set: {
         url: input.url,
         encryptedAuth: input.encryptedAuth,
@@ -263,43 +263,43 @@ export async function deleteProxyConfig(
   platformAccountId: number,
 ) {
   await db
-    .delete(platformAccountProxies)
-    .where(eq(platformAccountProxies.platformAccountId, platformAccountId));
+    .delete(egressEndpoints)
+    .where(eq(egressEndpoints.platformAccountId, platformAccountId));
 }
 
 export async function findPageByLabel(db: Database, label: string) {
-  const page = await db.query.platformAccounts.findFirst({
-    where: eq(platformAccounts.label, label),
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.label, label),
   });
 
   if (!page) {
     return null;
   }
 
-  const credentials = await db.query.platformAccountCredentials.findFirst({
-    where: eq(platformAccountCredentials.platformAccountId, page.id),
+  const credentials = await db.query.pageCredentials.findFirst({
+    where: eq(pageCredentials.platformAccountId, page.id),
   });
-  const proxy = await db.query.platformAccountProxies.findFirst({
-    where: eq(platformAccountProxies.platformAccountId, page.id),
+  const proxy = await db.query.egressEndpoints.findFirst({
+    where: eq(egressEndpoints.platformAccountId, page.id),
   });
 
   return { page, credentials, proxy };
 }
 
 export async function findPageById(db: Database, platformAccountId: number) {
-  const page = await db.query.platformAccounts.findFirst({
-    where: eq(platformAccounts.id, platformAccountId),
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, platformAccountId),
   });
 
   if (!page) {
     return null;
   }
 
-  const credentials = await db.query.platformAccountCredentials.findFirst({
-    where: eq(platformAccountCredentials.platformAccountId, page.id),
+  const credentials = await db.query.pageCredentials.findFirst({
+    where: eq(pageCredentials.platformAccountId, page.id),
   });
-  const proxy = await db.query.platformAccountProxies.findFirst({
-    where: eq(platformAccountProxies.platformAccountId, page.id),
+  const proxy = await db.query.egressEndpoints.findFirst({
+    where: eq(egressEndpoints.platformAccountId, page.id),
   });
 
   return { page, credentials, proxy };
@@ -310,12 +310,12 @@ export async function listFanslyPages(db: Database) {
 }
 
 export async function listPlatformAccounts(db: Database) {
-  return db.query.platformAccounts.findMany();
+  return db.query.pages.findMany();
 }
 
 export async function listPagesByPlatform(db: Database, platform: Platform) {
-  return db.query.platformAccounts.findMany({
-    where: eq(platformAccounts.platform, platform),
+  return db.query.pages.findMany({
+    where: eq(pages.platform, platform),
   });
 }
 
@@ -336,9 +336,9 @@ export async function listAdminModels(db: Database) {
     id: models.id,
     slug: models.slug,
     name: models.name,
-    pageCount: sql<number>`count(${platformAccounts.id})::int`,
+    pageCount: sql<number>`count(${pages.id})::int`,
   }).from(models)
-    .leftJoin(platformAccounts, eq(platformAccounts.modelId, models.id))
+    .leftJoin(pages, eq(pages.modelId, models.id))
     .groupBy(models.id, models.slug, models.name)
     .orderBy(models.slug);
 }
@@ -407,9 +407,9 @@ export async function deleteModelBySlug(db: Database, slug: string) {
   }
 
   const [{ pageCount }] = await db.select({
-    pageCount: sql<number>`count(${platformAccounts.id})::int`,
-  }).from(platformAccounts)
-    .where(eq(platformAccounts.modelId, model.id));
+    pageCount: sql<number>`count(${pages.id})::int`,
+  }).from(pages)
+    .where(eq(pages.modelId, model.id));
 
   throw new ModelHasPagesError(slug, pageCount);
 }
@@ -426,25 +426,25 @@ export async function listAdminPages(
     if (input.pageIds.length === 0) {
       return [];
     }
-    clauses.push(inArray(platformAccounts.id, input.pageIds));
+    clauses.push(inArray(pages.id, input.pageIds));
   }
 
   return db.select({
-    id: platformAccounts.id,
-    label: platformAccounts.label,
-    platform: platformAccounts.platform,
-    username: platformAccounts.username,
-    displayName: platformAccounts.displayName,
-    followerCount: platformAccounts.followerCount,
-    subscriberCount: platformAccounts.subscriberCount,
-    lastLightSyncAt: platformAccounts.lastLightSyncAt,
-    lastFollowerSyncAt: platformAccounts.lastFollowerSyncAt,
+    id: pages.id,
+    label: pages.label,
+    platform: pages.platform,
+    username: pages.username,
+    displayName: pages.displayName,
+    followerCount: pages.followerCount,
+    subscriberCount: pages.subscriberCount,
+    lastLightSyncAt: pages.lastLightSyncAt,
+    lastFollowerSyncAt: pages.lastFollowerSyncAt,
     modelSlug: models.slug,
     modelName: models.name,
-  }).from(platformAccounts)
-    .innerJoin(models, eq(models.id, platformAccounts.modelId))
+  }).from(pages)
+    .innerJoin(models, eq(models.id, pages.modelId))
     .where(clauses.length > 0 ? and(...clauses) : undefined)
-    .orderBy(models.slug, platformAccounts.label);
+    .orderBy(models.slug, pages.label);
 }
 
 export async function updatePageByLabel(
@@ -455,8 +455,8 @@ export async function updatePageByLabel(
     modelSlug?: string;
   },
 ) {
-  const existing = await db.query.platformAccounts.findFirst({
-    where: eq(platformAccounts.label, label),
+  const existing = await db.query.pages.findFirst({
+    where: eq(pages.label, label),
   });
   if (!existing) {
     throw new CatalogPageNotFoundError(label);
@@ -485,9 +485,9 @@ export async function updatePageByLabel(
   let updated;
   try {
     [updated] = await db
-      .update(platformAccounts)
+      .update(pages)
       .set(patch)
-      .where(eq(platformAccounts.id, existing.id))
+      .where(eq(pages.id, existing.id))
       .returning();
   } catch (error) {
     if (hasErrorCode(error, "23505")) {
@@ -502,11 +502,11 @@ export async function updatePageByLabel(
 
 export async function deletePageByLabel(db: Database, label: string) {
   const [deleted] = await db
-    .delete(platformAccounts)
-    .where(eq(platformAccounts.label, label))
+    .delete(pages)
+    .where(eq(pages.label, label))
     .returning({
-      id: platformAccounts.id,
-      label: platformAccounts.label,
+      id: pages.id,
+      label: pages.label,
     });
 
   if (!deleted) {
@@ -549,8 +549,8 @@ export async function updatePageMetadata(
     syncType?: "light" | "followers";
   },
 ) {
-  const existingPage = await db.query.platformAccounts.findFirst({
-    where: eq(platformAccounts.id, platformAccountId),
+  const existingPage = await db.query.pages.findFirst({
+    where: eq(pages.id, platformAccountId),
   });
   if (!existingPage) {
     throw new Error(`Platform account ${platformAccountId} was not found`);
@@ -567,11 +567,11 @@ export async function updatePageMetadata(
     );
   }
 
-  const conflictingPage = await db.query.platformAccounts.findFirst({
+  const conflictingPage = await db.query.pages.findFirst({
     where: and(
-      eq(platformAccounts.platform, existingPage.platform),
-      eq(platformAccounts.platformAccountId, input.platformAccountIdValue),
-      ne(platformAccounts.id, platformAccountId),
+      eq(pages.platform, existingPage.platform),
+      eq(pages.platformAccountId, input.platformAccountIdValue),
+      ne(pages.id, platformAccountId),
     ),
   });
   if (conflictingPage) {
@@ -616,17 +616,17 @@ export async function updatePageMetadata(
   let updated;
   try {
     [updated] = await db
-      .update(platformAccounts)
+      .update(pages)
       .set(patch)
-      .where(eq(platformAccounts.id, platformAccountId))
+      .where(eq(pages.id, platformAccountId))
       .returning();
   } catch (error) {
     if (hasErrorCode(error, "23505")) {
-      const concurrentConflict = await db.query.platformAccounts.findFirst({
+      const concurrentConflict = await db.query.pages.findFirst({
         where: and(
-          eq(platformAccounts.platform, existingPage.platform),
-          eq(platformAccounts.platformAccountId, input.platformAccountIdValue),
-          ne(platformAccounts.id, platformAccountId),
+          eq(pages.platform, existingPage.platform),
+          eq(pages.platformAccountId, input.platformAccountIdValue),
+          ne(pages.id, platformAccountId),
         ),
       });
       throw new PlatformAccountIdentityConflictError(

@@ -116,9 +116,9 @@ function BlockDetailCard({
           {block.error?.code && (
             <p className="text-[11px] text-text-muted">Code: {block.error.code}</p>
           )}
-          {block.error?.lastFailedAt && (
+          {block.error?.failedAt && (
             <p className="text-[11px] text-text-muted">
-              Last failed: {formatRelativeTime(block.error.lastFailedAt)}
+              Last failed: {formatRelativeTime(block.error.failedAt)}
             </p>
           )}
           {block.error && block.error.consecutiveFailures > 0 && (
@@ -131,11 +131,11 @@ function BlockDetailCard({
 
       {/* Timing */}
       <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
-        {block.lastSuccessAt && (
+        {block.succeededAt && (
           <>
             <span className="text-text-muted">Last success</span>
             <span className="text-text-secondary">
-              {formatRelativeTime(block.lastSuccessAt)}
+              {formatRelativeTime(block.succeededAt)}
             </span>
           </>
         )}
@@ -211,8 +211,8 @@ function BlockDetailCard({
                         </span>
                       </td>
                       <td className="px-3 py-1.5 text-text-secondary">
-                        {sub.lastSuccessAt
-                          ? formatRelativeTime(sub.lastSuccessAt)
+                        {sub.succeededAt
+                          ? formatRelativeTime(sub.succeededAt)
                           : "\u2014"}
                       </td>
                       <td className="px-3 py-1.5 text-text-secondary">

@@ -11,12 +11,12 @@ vi.mock("../apps/runtime/src/services/telegram.ts", () => ({
 import {
   createFanslyPage,
   createModel,
-  ensureSyncStreamStateRows,
+  ensurePageSyncStates,
   finishSyncRequestAttempt,
   getNotificationIncidentByKey,
   insertSyncRequestAttempt,
   listNotificationIncidents,
-  markSyncPageAuthFailed,
+  markPageSyncAuthBlocked,
   openNotificationIncident,
   startSyncRun,
 } from "@agency_hub_core/db";
@@ -76,8 +76,8 @@ describe("notification incidents integration", () => {
       modelId: model.id,
       label: "auth-page",
     });
-    await ensureSyncStreamStateRows(testDb.db, {
-      platformAccountId: page.id,
+    await ensurePageSyncStates(testDb.db, {
+      pageId: page.id,
     });
 
     const app = createTestAppContext(testDb);
@@ -95,7 +95,7 @@ describe("notification incidents integration", () => {
       errorSummary: "session expired",
     });
 
-    let incident = await getNotificationIncidentByKey(testDb.db, `auth_failed:${page.id}`);
+    let incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
     expect(incident?.status).toBe("open");
     expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
     expect(telegramMocks.sendTelegramMessage).toHaveBeenLastCalledWith(expect.anything(), {
@@ -109,7 +109,7 @@ describe("notification incidents integration", () => {
       stream: "light",
     });
 
-    incident = await getNotificationIncidentByKey(testDb.db, `auth_failed:${page.id}`);
+    incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
     expect(incident?.status).toBe("resolved");
     expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
     expect(telegramMocks.sendTelegramMessage).toHaveBeenLastCalledWith(expect.anything(), {
@@ -123,7 +123,7 @@ describe("notification incidents integration", () => {
       errorSummary: "session expired again",
     });
 
-    incident = await getNotificationIncidentByKey(testDb.db, `auth_failed:${page.id}`);
+    incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
     expect(incident?.status).toBe("open");
     expect(incident?.resolvedAt).toBeNull();
     expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(3);
@@ -147,11 +147,11 @@ describe("notification incidents integration", () => {
       modelId: model.id,
       label: "threshold-page",
     });
-    await ensureSyncStreamStateRows(testDb.db, {
-      platformAccountId: proxiedPage.id,
+    await ensurePageSyncStates(testDb.db, {
+      pageId: proxiedPage.id,
     });
-    await ensureSyncStreamStateRows(testDb.db, {
-      platformAccountId: thresholdPage.id,
+    await ensurePageSyncStates(testDb.db, {
+      pageId: thresholdPage.id,
     });
 
     const app = createTestAppContext(testDb);
@@ -298,8 +298,8 @@ describe("notification incidents integration", () => {
       modelId: model.id,
       label: "latest-proxy-page",
     });
-    await ensureSyncStreamStateRows(testDb.db, {
-      platformAccountId: page.id,
+    await ensurePageSyncStates(testDb.db, {
+      pageId: page.id,
     });
 
     const app = createTestAppContext(testDb);
@@ -310,9 +310,9 @@ describe("notification incidents integration", () => {
     });
 
     await testDb.pool.query(`
-      insert into sync_request_attempts (
+      insert into sync_http_attempts (
         sync_run_id,
-        platform_account_id,
+        page_id,
         provider,
         stream,
         operation,
@@ -336,9 +336,9 @@ describe("notification incidents integration", () => {
     `, [run.id, page.id]);
 
     await testDb.pool.query(`
-      insert into sync_request_attempts (
+      insert into sync_http_attempts (
         sync_run_id,
-        platform_account_id,
+        page_id,
         provider,
         stream,
         operation,
@@ -402,10 +402,10 @@ describe("notification incidents integration", () => {
     const results = await Promise.all(
       Array.from({ length: 8 }, () =>
         openNotificationIncident(currentTestDb.db, {
-          incidentKey: `auth_failed:${page.id}`,
-          kind: "auth_failed",
+          incidentKey: `auth_blocked:${page.id}`,
+          kind: "auth_blocked",
           platformAccountId: page.id,
-          errorCode: "auth_failed",
+          errorCode: "auth_blocked",
           errorSummary: "session expired",
           metadata: {
             pageLabel: page.label,
@@ -425,14 +425,14 @@ describe("notification incidents integration", () => {
     });
     expect(incidents).toHaveLength(1);
     expect(incidents[0]).toEqual(expect.objectContaining({
-      incidentKey: `auth_failed:${page.id}`,
+      incidentKey: `auth_blocked:${page.id}`,
       status: "open",
-      errorCode: "auth_failed",
+      errorCode: "auth_blocked",
       errorSummary: "session expired",
     }));
   });
 
-  it("clears auth_failed state and resolves page-level incidents after successful verification recovery", async (context) => {
+  it("clears auth_blocked state and resolves page-level incidents after successful verification recovery", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -446,19 +446,19 @@ describe("notification incidents integration", () => {
       modelId: model.id,
       label: "recovery-page",
     });
-    await ensureSyncStreamStateRows(testDb.db, {
-      platformAccountId: page.id,
+    await ensurePageSyncStates(testDb.db, {
+      pageId: page.id,
     });
-    await markSyncPageAuthFailed(testDb.db, {
-      platformAccountId: page.id,
-      errorCode: "auth_failed",
+    await markPageSyncAuthBlocked(testDb.db, {
+      pageId: page.id,
+      errorCode: "auth_blocked",
       errorSummary: "expired session",
     });
     await openNotificationIncident(testDb.db, {
-      incidentKey: `auth_failed:${page.id}`,
-      kind: "auth_failed",
+      incidentKey: `auth_blocked:${page.id}`,
+      kind: "auth_blocked",
       platformAccountId: page.id,
-      errorCode: "auth_failed",
+      errorCode: "auth_blocked",
       errorSummary: "expired session",
       metadata: {
         pageLabel: page.label,
@@ -486,9 +486,10 @@ describe("notification incidents integration", () => {
 
     const statusRows = await testDb.pool.query<{ count: string }>(`
       select count(*)::int as count
-      from sync_state
-      where platform_account_id = $1
-        and status = 'auth_failed'
+      from page_sync_states
+      where page_id = $1
+        and status = 'blocked'
+        and blocker_kind = 'auth'
     `, [page.id]);
     expect(statusRows.rows[0]?.count).toBe(0);
 
@@ -497,7 +498,7 @@ describe("notification incidents integration", () => {
     });
     expect(incidents).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        kind: "auth_failed",
+        kind: "auth_blocked",
         status: "resolved",
       }),
       expect.objectContaining({

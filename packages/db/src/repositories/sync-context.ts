@@ -1,23 +1,23 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { SyncControlStream } from "./sync.ts";
+import type { SyncStream } from "./page-sync.ts";
 
-export interface SyncTaskExecutionContext {
-  platformAccountId: number;
-  task: SyncControlStream;
-  generation: number;
+export interface PageSyncExecutionContext {
+  pageId: number;
+  stream: SyncStream;
+  requestSeq: number;
   leaseToken: string;
 }
 
-const syncTaskExecutionContextStorage = new AsyncLocalStorage<SyncTaskExecutionContext>();
+const pageSyncExecutionContextStorage = new AsyncLocalStorage<PageSyncExecutionContext>();
 
-export function runWithSyncTaskExecutionContext<T>(
-  context: SyncTaskExecutionContext,
+export function runWithPageSyncExecutionContext<T>(
+  context: PageSyncExecutionContext,
   run: () => Promise<T>,
 ): Promise<T> {
-  return syncTaskExecutionContextStorage.run(context, run);
+  return pageSyncExecutionContextStorage.run(context, run);
 }
 
-export function getSyncTaskExecutionContext() {
-  return syncTaskExecutionContextStorage.getStore() ?? null;
+export function getPageSyncExecutionContext() {
+  return pageSyncExecutionContextStorage.getStore() ?? null;
 }

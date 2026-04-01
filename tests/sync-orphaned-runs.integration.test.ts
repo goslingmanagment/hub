@@ -164,7 +164,7 @@ describe("closeOrphanedSyncRuns", () => {
 
     const attemptCount = await testDb.pool.query<{ count: number }>(`
       select count(*)::int as count
-      from sync_request_attempts
+      from sync_http_attempts
       where sync_run_id in (${failedRun.id}, ${partialRun.id})
     `);
     const eventCount = await testDb.pool.query<{ count: number }>(`
@@ -334,7 +334,7 @@ describe("closeInactiveSyncRuns", () => {
 
     const attemptCount = await testDb.pool.query<{ count: number }>(`
       select count(*)::int as count
-      from sync_request_attempts
+      from sync_http_attempts
       where sync_run_id in (${inactiveFailedRun.id}, ${inactivePartialRun.id}, ${activeByRecentRequestRun.id})
     `);
     const eventCount = await testDb.pool.query<{ count: number }>(`

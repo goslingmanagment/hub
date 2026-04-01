@@ -74,12 +74,12 @@ function providerSummary(snapshot: SyncMonitorSnapshot) {
 function rowFlags(input: {
   stalled: boolean;
   pending: boolean;
-  backoffUntil: string | null;
+  retryAt: string | null;
 }) {
   const flags = [];
   if (input.stalled) flags.push("stalled");
   if (input.pending) flags.push("pending");
-  if (input.backoffUntil) flags.push("backoff");
+  if (input.retryAt) flags.push("retrying");
   return flags.length > 0 ? flags.join(",") : "-";
 }
 
@@ -131,7 +131,7 @@ export function renderSyncMonitor(snapshot: SyncMonitorSnapshot, now = new Date(
   const lines = [
     `Sync Monitor ${snapshot.generatedAt}`,
     `Window: last ${snapshot.window.hours}h since ${snapshot.window.startedAt}`,
-    `Pages=${snapshot.overall.pages} Streams=${snapshot.overall.streams} Running=${snapshot.overall.runningStreams} Failed=${snapshot.overall.failedStreams} Stalled=${snapshot.overall.stalledStreams} Pending=${snapshot.overall.pendingStreams} Backoff=${snapshot.overall.backoffStreams}`,
+    `Pages=${snapshot.overall.pages} Streams=${snapshot.overall.streams} Running=${snapshot.overall.runningStreams} Blocked=${snapshot.overall.blockedStreams} Stalled=${snapshot.overall.stalledStreams} Pending=${snapshot.overall.pendingStreams} Retrying=${snapshot.overall.retryingStreams}`,
     `Totals: fans=${snapshot.overall.counts.fans} tx=${snapshot.overall.counts.transactions} followers=${snapshot.overall.counts.followers} subscribers=${snapshot.overall.counts.subscribers} conv=${snapshot.overall.counts.conversations} msg=${snapshot.overall.counts.messages}`,
     `Recent: ok=${snapshot.overall.recentRuns.success} partial=${snapshot.overall.recentRuns.partial} failed=${snapshot.overall.recentRuns.failed} 429=${snapshot.overall.recentErrors.total429s} 5xx=${snapshot.overall.recentErrors.total5xxs} retries=${snapshot.overall.recentErrors.retryAttempts}`,
     `Providers: ${providerSummary(snapshot)}`,

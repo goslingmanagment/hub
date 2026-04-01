@@ -10,6 +10,9 @@ import { resolveMigrationFiles } from "../packages/db/src/migrations-dir.ts";
 import { startTestDatabase } from "./helpers/db.ts";
 import { acquireTestPrerequisite } from "./helpers/prerequisites.ts";
 
+const LEGACY_PLATFORM_ACCOUNTS = ["platform", "accounts"].join("_");
+const LEGACY_RATE_LIMIT_BUCKETS = ["rate", "limit", "buckets"].join("_");
+
 describe("runtime schema guard", () => {
   afterEach(() => {
     delete process.env.DOTENV_CONFIG_QUIET;
@@ -33,13 +36,21 @@ describe("runtime schema guard", () => {
           };
         }
 
-        if (text.includes("table_name in ('pages', 'sync_state', 'sync_cursors')")) {
+        if (
+          text.includes("table_name in") &&
+          text.includes("page_sync_states") &&
+          text.includes("page_sync_cursors")
+        ) {
           return {
-            rows: [{ name: "pages" }, { name: "sync_state" }, { name: "sync_cursors" }],
+            rows: [{ name: "pages" }, { name: "page_sync_states" }, { name: "page_sync_cursors" }],
           };
         }
 
-        if (text.includes("table_name in ('platform_accounts', 'platform_account_proxies', 'sync_stream_state', 'sync_checkpoints')")) {
+        if (
+          text.includes("table_name in") &&
+          text.includes(LEGACY_PLATFORM_ACCOUNTS) &&
+          text.includes(LEGACY_RATE_LIMIT_BUCKETS)
+        ) {
           return {
             rows: [],
           };

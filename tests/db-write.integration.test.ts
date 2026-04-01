@@ -290,7 +290,7 @@ describe("db write safety", () => {
 
     const pageRows = await testDb.pool.query(`
       select label,
-             platform_account_id,
+             external_page_id,
              username,
              display_name,
              follower_count,
@@ -316,7 +316,7 @@ describe("db write safety", () => {
 
     expect(pageRows.rows[0]).toMatchObject({
       label: "lora-main",
-      platform_account_id: "acct-123",
+      external_page_id: "acct-123",
       username: "lora_verified",
       display_name: "Lora Verified",
       follower_count: 42,
@@ -473,13 +473,13 @@ describe("db write safety", () => {
     );
 
     const rows = await testDb.pool.query(`
-      select platform_account_id, username, display_name
+      select external_page_id, username, display_name
       from pages
       where id = ${page.id}
     `);
 
     expect(rows.rows[0]).toMatchObject({
-      platform_account_id: "acct-123",
+      external_page_id: "acct-123",
       username: "lora_verified",
       display_name: "Lora Verified",
     });
@@ -843,7 +843,7 @@ describe("db write safety", () => {
     const pageRows = await testDb.pool.query(`
       select platform,
              label,
-             platform_account_id,
+             external_page_id,
              username,
              display_name,
              follower_count,
@@ -857,7 +857,7 @@ describe("db write safety", () => {
     expect(pageRows.rows[0]).toMatchObject({
       platform: "onlyfans",
       label: "lora-of",
-      platform_account_id: "of-acct-42",
+      external_page_id: "of-acct-42",
       username: "lora_of",
       display_name: "Lora OF",
       follower_count: null,
@@ -942,7 +942,7 @@ describe("db write safety", () => {
     });
 
     const pageRows = await testDb.pool.query(`
-      select platform_account_id,
+      select external_page_id,
              username,
              metadata::text as metadata
       from pages
@@ -950,7 +950,7 @@ describe("db write safety", () => {
     `);
 
     expect(pageRows.rows[0]).toMatchObject({
-      platform_account_id: "of-acct-42",
+      external_page_id: "of-acct-42",
       username: "lora_of",
     });
     expect(JSON.parse(pageRows.rows[0]?.metadata ?? "{}")).toMatchObject({
@@ -1282,9 +1282,9 @@ describe("db write safety", () => {
 
     const checkpointRows = await testDb.pool.query(`
       select count(*)::int as count, max(cursor_text) as cursor_text
-      from sync_cursors
-      where platform_account_id = ${page.id}
-        and task = 'transactions'
+      from page_sync_cursors
+      where page_id = ${page.id}
+        and stream = 'transactions'
     `);
     expect(checkpointRows.rows[0]?.count).toBe(1);
     expect(checkpointRows.rows[0]?.cursor_text).toBe("cursor-b");

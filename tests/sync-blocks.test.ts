@@ -3,13 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   deleteCheckpoints: vi.fn(),
   deletePageTopSpenders: vi.fn(),
-  ensureSyncTaskRows: vi.fn(),
+  ensurePageSyncStates: vi.fn(),
   findPageByLabel: vi.fn(),
-  pauseSyncTasks: vi.fn(),
-  requestSyncTaskGenerations: vi.fn(),
+  pausePageSync: vi.fn(),
+  requestPageSync: vi.fn(),
   resetPageDmSyncState: vi.fn(),
-  resetSyncTasks: vi.fn(),
-  resumeSyncTasks: vi.fn(),
+  resetPageSync: vi.fn(),
+  resumePageSync: vi.fn(),
 }));
 
 const syncStatusMocks = vi.hoisted(() => ({
@@ -43,7 +43,7 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   sendSyncPageWakeup: queueMocks.sendSyncPageWakeup,
 }));
 
-import { resolveSyncTaskPriority } from "@agency_hub_core/db";
+import { resolvePageSyncPriority } from "@agency_hub_core/db";
 
 import {
   getPageMessagesSyncBlock,
@@ -58,7 +58,7 @@ function buildBlock(overrides: Record<string, unknown> = {}) {
   return {
     block: "connection",
     state: "up_to_date",
-    lastSuccessAt: "2026-03-24T11:00:00.000Z",
+    succeededAt: "2026-03-24T11:00:00.000Z",
     progress: null,
     progressStream: null,
     progressRole: null,
@@ -75,7 +75,7 @@ function buildBlock(overrides: Record<string, unknown> = {}) {
       stream: "light",
       role: "primary",
       state: "up_to_date",
-      lastSuccessAt: "2026-03-24T11:00:00.000Z",
+      succeededAt: "2026-03-24T11:00:00.000Z",
       nextDueAt: "2026-03-24T13:00:00.000Z",
       nextRetryAt: null,
       cadenceSeconds: 3600,
@@ -113,7 +113,7 @@ function buildSnapshotPage(overrides: Record<string, unknown> = {}) {
           stream: "light",
           code: "credentials_invalid",
           summary: "Refresh credentials",
-          lastFailedAt: "2026-03-24T11:45:00.000Z",
+          failedAt: "2026-03-24T11:45:00.000Z",
           consecutiveFailures: 1,
         },
       }),
@@ -145,7 +145,7 @@ function buildSnapshotPage(overrides: Record<string, unknown> = {}) {
           stream: "followers",
           code: "http_500",
           summary: "Followers sync failed",
-          lastFailedAt: "2026-03-24T11:30:00.000Z",
+          failedAt: "2026-03-24T11:30:00.000Z",
           consecutiveFailures: 3,
         },
       }),
@@ -158,7 +158,7 @@ function buildSnapshotPage(overrides: Record<string, unknown> = {}) {
         substreams: [{
           stream: "dm_conversations",
           state: "up_to_date",
-          lastSuccessAt: "2026-03-24T10:50:00.000Z",
+          succeededAt: "2026-03-24T10:50:00.000Z",
           nextDueAt: "2026-03-24T12:30:00.000Z",
           nextRetryAt: null,
           cadenceSeconds: 1800,
@@ -177,7 +177,7 @@ function buildSnapshotPage(overrides: Record<string, unknown> = {}) {
         substreams: [{
           stream: "dm_messages",
           state: "up_to_date",
-          lastSuccessAt: "2026-03-24T10:40:00.000Z",
+          succeededAt: "2026-03-24T10:40:00.000Z",
           nextDueAt: "2026-03-25T10:40:00.000Z",
           nextRetryAt: null,
           cadenceSeconds: 86400,
@@ -248,7 +248,7 @@ describe("sync blocks service", () => {
     expect(overview.pages[1]?.blocks.messages_live.state).toBe("not_available");
     expect(overview.pages[1]?.blocks.messages_history.state).toBe("not_available");
     expect(overview.diagnosis).toMatchObject({
-      code: "auth_failed",
+      code: "auth_blocked",
       severity: "error",
     });
   });
@@ -359,10 +359,10 @@ describe("sync blocks service", () => {
       },
       proxy: null,
     });
-    dbMocks.ensureSyncTaskRows.mockResolvedValue(undefined);
-    dbMocks.requestSyncTaskGenerations.mockResolvedValue([
-      { task: "transactions", desiredGeneration: 5 },
-      { task: "top_spenders", desiredGeneration: 5 },
+    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.requestPageSync.mockResolvedValue([
+      { stream: "transactions", requestedSeq: 5 },
+      { stream: "top_spenders", requestedSeq: 5 },
     ]);
     queueMocks.sendSyncPageWakeup.mockResolvedValue("job-1");
 
@@ -379,20 +379,20 @@ describe("sync blocks service", () => {
       action: "trigger",
       pageLabel: "lana",
       block: "financials",
-      revisions: [
-        { stream: "transactions", desiredRevision: 5 },
-        { stream: "top_spenders", desiredRevision: 5 },
+      requests: [
+        { stream: "transactions", requestedSeq: 5 },
+        { stream: "top_spenders", requestedSeq: 5 },
       ],
     });
-    expect(dbMocks.requestSyncTaskGenerations).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      tasks: ["transactions", "top_spenders"],
+    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 7,
+      streams: ["transactions", "top_spenders"],
       source: "manual",
     }));
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       platformAccountId: 7,
       provider: "fansly",
-      priority: resolveSyncTaskPriority("transactions", "manual"),
+      priority: resolvePageSyncPriority("transactions", "manual"),
     }));
   });
 
@@ -405,8 +405,8 @@ describe("sync blocks service", () => {
       },
       proxy: null,
     });
-    dbMocks.ensureSyncTaskRows.mockResolvedValue(undefined);
-    dbMocks.pauseSyncTasks.mockResolvedValue(undefined);
+    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.pausePageSync.mockResolvedValue(undefined);
 
     await pauseSyncBlock({ db: {} } as never, {
       pageLabel: "lana",
@@ -414,9 +414,9 @@ describe("sync blocks service", () => {
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
 
-    expect(dbMocks.pauseSyncTasks).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      tasks: ["subscribers", "followers", "followers_reconcile"],
+    expect(dbMocks.pausePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 7,
+      streams: ["subscribers", "followers", "followers_reconcile"],
       now: new Date("2026-03-24T12:00:00.000Z"),
     }));
   });
@@ -430,8 +430,8 @@ describe("sync blocks service", () => {
       },
       proxy: null,
     });
-    dbMocks.ensureSyncTaskRows.mockResolvedValue(undefined);
-    dbMocks.resumeSyncTasks.mockResolvedValue(undefined);
+    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.resumePageSync.mockResolvedValue(undefined);
 
     await resumeSyncBlock({ db: {} } as never, {
       pageLabel: "lana",
@@ -439,9 +439,9 @@ describe("sync blocks service", () => {
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
 
-    expect(dbMocks.resumeSyncTasks).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      tasks: ["dm_conversations"],
+    expect(dbMocks.resumePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 7,
+      streams: ["dm_conversations"],
     }));
   });
 
@@ -454,12 +454,12 @@ describe("sync blocks service", () => {
       },
       proxy: null,
     });
-    dbMocks.ensureSyncTaskRows.mockResolvedValue(undefined);
+    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
     dbMocks.deleteCheckpoints.mockResolvedValue(undefined);
     dbMocks.resetPageDmSyncState.mockResolvedValue(undefined);
-    dbMocks.resetSyncTasks.mockResolvedValue(undefined);
-    dbMocks.requestSyncTaskGenerations.mockResolvedValue([
-      { task: "dm_messages", desiredGeneration: 4 },
+    dbMocks.resetPageSync.mockResolvedValue(undefined);
+    dbMocks.requestPageSync.mockResolvedValue([
+      { stream: "dm_messages", requestedSeq: 4 },
     ]);
     queueMocks.sendSyncPageWakeup.mockResolvedValue("job-1");
 
@@ -475,20 +475,20 @@ describe("sync blocks service", () => {
       accepted: true,
       action: "reset",
       block: "messages_history",
-      revisions: [{ stream: "dm_messages", desiredRevision: 4 }],
+      requests: [{ stream: "dm_messages", requestedSeq: 4 }],
     });
     expect(dbMocks.deleteCheckpoints).toHaveBeenCalledWith(expect.anything(), {
       platformAccountId: 7,
       streams: ["dm_messages"],
     });
     expect(dbMocks.resetPageDmSyncState).toHaveBeenCalledWith(expect.anything(), 7);
-    expect(dbMocks.resetSyncTasks).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      tasks: ["dm_messages"],
+    expect(dbMocks.resetPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 7,
+      streams: ["dm_messages"],
     }));
-    expect(dbMocks.requestSyncTaskGenerations).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      tasks: ["dm_messages"],
+    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 7,
+      streams: ["dm_messages"],
       source: "reset",
     }));
   });

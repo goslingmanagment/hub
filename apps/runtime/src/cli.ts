@@ -46,7 +46,7 @@ import {
   resolveStoredProxyConfig,
   type ResolvedPageContext,
 } from "./services/page-context.ts";
-import { requestPageSync, waitForRequestedSyncRevisions } from "./services/sync-control.ts";
+import { requestPageSync, waitForRequestedSyncRequests } from "./services/sync-control.ts";
 import { refreshPageMetadata } from "./services/sync/shared.ts";
 import { getSyncMonitorSnapshot } from "./services/sync-monitor.ts";
 import { renderSyncMonitor } from "./services/sync-monitor-view.ts";
@@ -805,9 +805,9 @@ export function buildProgram() {
             return;
           }
 
-          await waitForRequestedSyncRevisions(app, {
-            platformAccountId: request.page.id,
-            revisions: request.revisions,
+          await waitForRequestedSyncRequests(app, {
+            pageId: request.page.id,
+            requests: request.requests,
           });
           console.log(`Completed ${options.scope} sync for ${options.page}`);
         } finally {

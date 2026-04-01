@@ -157,7 +157,7 @@ function buildSyncBlock(
   return {
     block,
     state: "up_to_date" as const,
-    lastSuccessAt: "2026-03-24T11:55:00.000Z",
+    succeededAt: "2026-03-24T11:55:00.000Z",
     progress: null,
     progressStream: null,
     progressRole: null,
@@ -231,7 +231,7 @@ function buildSyncOverview(): {
 
 function buildSyncDiagnosis(
   overrides: Partial<{
-    code: "worker_offline" | "stalled_run" | "auth_failed";
+    code: "worker_offline" | "stalled_run" | "auth_blocked";
     severity: "warning" | "error";
     headline: string;
     detail: string;
@@ -282,10 +282,10 @@ function buildMonitorResponse() {
       pages: 1,
       streams: 7,
       runningStreams: 0,
-      failedStreams: 0,
+      blockedStreams: 0,
       stalledStreams: 0,
       pendingStreams: 0,
-      backoffStreams: 0,
+      retryingStreams: 0,
       counts: { fans: 0, followers: 34, subscribers: 12, transactions: 100, conversations: 10, messages: 200 },
       recentRuns: { running: 0, success: 1, partial: 0, failed: 0, skipped: 0 },
       recentErrors: { total429s: 0, total5xxs: 0, failedRuns: 0, failedAttempts: 0, retryAttempts: 0, last429At: null, last5xxAt: null },
@@ -301,7 +301,7 @@ function buildMonitorResponse() {
       username: "lana",
       displayName: "Lana",
       counts: { fans: 0, followers: 34, subscribers: 12, transactions: 100, conversations: 10, messages: 200 },
-      summary: { runningStreams: 0, failedStreams: 0, stalledStreams: 0, pendingStreams: 0, backoffStreams: 0, recentErrors: 0 },
+      summary: { runningStreams: 0, blockedStreams: 0, stalledStreams: 0, pendingStreams: 0, retryingStreams: 0, recentErrors: 0 },
       streams: [],
       syncUx: buildSyncUx(),
     }],

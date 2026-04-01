@@ -1,9 +1,9 @@
 import { and, count, desc, eq, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { notificationIncidents, platformAccounts, telegramDeliveryAttempts } from "../schema.ts";
+import { notificationIncidents, pages, telegramDeliveryAttempts } from "../schema.ts";
 
-export type NotificationIncidentKind = "auth_failed" | "proxy_failed" | "stream_failed_threshold";
+export type NotificationIncidentKind = "auth_blocked" | "proxy_failed" | "stream_failed_threshold";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";
@@ -80,7 +80,7 @@ export async function listNotificationIncidentsWithPages(
     clauses.push(eq(notificationIncidents.kind, input.kind));
   }
   if (input?.pageLabel) {
-    clauses.push(eq(platformAccounts.label, input.pageLabel));
+    clauses.push(eq(pages.label, input.pageLabel));
   }
 
   const whereClause = clauses.length > 0 ? and(...clauses) : undefined;
@@ -90,7 +90,7 @@ export async function listNotificationIncidentsWithPages(
   const countResult = await db
     .select({ total: count() })
     .from(notificationIncidents)
-    .innerJoin(platformAccounts, eq(notificationIncidents.platformAccountId, platformAccounts.id))
+    .innerJoin(pages, eq(notificationIncidents.platformAccountId, pages.id))
     .where(whereClause);
 
   const rows = await db
@@ -98,8 +98,8 @@ export async function listNotificationIncidentsWithPages(
       id: notificationIncidents.id,
       incidentKey: notificationIncidents.incidentKey,
       kind: notificationIncidents.kind,
-      pageLabel: platformAccounts.label,
-      platform: platformAccounts.platform,
+      pageLabel: pages.label,
+      platform: pages.platform,
       stream: notificationIncidents.stream,
       status: notificationIncidents.status,
       openedAt: notificationIncidents.openedAt,
@@ -110,7 +110,7 @@ export async function listNotificationIncidentsWithPages(
       notificationCount: sql<number>`(select count(*)::int from ${telegramDeliveryAttempts} where ${telegramDeliveryAttempts.notificationIncidentId} = ${notificationIncidents.id})`,
     })
     .from(notificationIncidents)
-    .innerJoin(platformAccounts, eq(notificationIncidents.platformAccountId, platformAccounts.id))
+    .innerJoin(pages, eq(notificationIncidents.platformAccountId, pages.id))
     .where(whereClause)
     .orderBy(desc(notificationIncidents.openedAt))
     .limit(limit)

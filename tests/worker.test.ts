@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   closeInactiveSyncRuns: vi.fn(),
-  ensureSyncTaskRows: vi.fn(),
-  scheduleDueSyncTasks: vi.fn(),
-  listRunnableSyncPagesV2: vi.fn(),
-  markSyncTaskWakeupEnqueued: vi.fn(),
+  ensurePageSyncStates: vi.fn(),
+  scheduleDuePageSync: vi.fn(),
+  listRunnablePageSync: vi.fn(),
+  markPageSyncEnqueued: vi.fn(),
 }));
 
 const queueMocks = vi.hoisted(() => ({
@@ -35,10 +35,10 @@ import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.t
 describe("sync planner", () => {
   beforeEach(() => {
     dbMocks.closeInactiveSyncRuns.mockReset();
-    dbMocks.ensureSyncTaskRows.mockReset();
-    dbMocks.scheduleDueSyncTasks.mockReset();
-    dbMocks.listRunnableSyncPagesV2.mockReset();
-    dbMocks.markSyncTaskWakeupEnqueued.mockReset();
+    dbMocks.ensurePageSyncStates.mockReset();
+    dbMocks.scheduleDuePageSync.mockReset();
+    dbMocks.listRunnablePageSync.mockReset();
+    dbMocks.markPageSyncEnqueued.mockReset();
     queueMocks.sendSyncPageWakeup.mockReset();
     dbMocks.closeInactiveSyncRuns.mockResolvedValue({
       totalCount: 0,
@@ -53,16 +53,16 @@ describe("sync planner", () => {
     } as never;
     const now = new Date("2026-03-14T12:00:00.000Z");
     const order: string[] = [];
-    dbMocks.listRunnableSyncPagesV2.mockResolvedValue([
+    dbMocks.listRunnablePageSync.mockResolvedValue([
       {
-        platformAccountId: 11,
+        pageId: 11,
         platform: "fansly",
         priority: 60,
         requestedAt: now,
         proxyUrl: "socks5://proxy-a.example",
       },
       {
-        platformAccountId: 22,
+        pageId: 22,
         platform: "onlyfans",
         priority: 45,
         requestedAt: now,
@@ -80,11 +80,11 @@ describe("sync planner", () => {
         partialCount: 0,
       };
     });
-    dbMocks.ensureSyncTaskRows.mockImplementation(async () => {
-      order.push("ensureSyncTaskRows");
+    dbMocks.ensurePageSyncStates.mockImplementation(async () => {
+      order.push("ensurePageSyncStates");
     });
-    dbMocks.scheduleDueSyncTasks.mockImplementation(async () => {
-      order.push("scheduleDueSyncTasks");
+    dbMocks.scheduleDuePageSync.mockImplementation(async () => {
+      order.push("scheduleDuePageSync");
     });
 
     const pages = await runSyncPlannerCycle({
@@ -97,12 +97,12 @@ describe("sync planner", () => {
       finishedAt: now,
       errorSummary: "Sync run auto-closed after inactivity",
     });
-    expect(dbMocks.ensureSyncTaskRows).toHaveBeenCalledWith({}, { now });
-    expect(dbMocks.scheduleDueSyncTasks).toHaveBeenCalledWith({}, { now });
+    expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { now });
+    expect(dbMocks.scheduleDuePageSync).toHaveBeenCalledWith({}, { now });
     expect(order).toEqual([
       "cleanup",
-      "ensureSyncTaskRows",
-      "scheduleDueSyncTasks",
+      "ensurePageSyncStates",
+      "scheduleDuePageSync",
     ]);
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenNthCalledWith(1, boss, {
       egressKey: "socks5://proxy-a.example:1080",
@@ -116,7 +116,7 @@ describe("sync planner", () => {
       priority: 45,
       provider: "onlyfans",
     });
-    expect(dbMocks.markSyncTaskWakeupEnqueued).toHaveBeenCalledTimes(2);
+    expect(dbMocks.markPageSyncEnqueued).toHaveBeenCalledTimes(2);
     expect(pages).toHaveLength(2);
   });
 
@@ -125,9 +125,9 @@ describe("sync planner", () => {
       send: vi.fn(),
     } as never;
     const now = new Date("2026-03-14T12:01:00.000Z");
-    dbMocks.listRunnableSyncPagesV2.mockResolvedValue([
+    dbMocks.listRunnablePageSync.mockResolvedValue([
       {
-        platformAccountId: 33,
+        pageId: 33,
         platform: "fansly",
         priority: 60,
         requestedAt: now,
@@ -147,7 +147,7 @@ describe("sync planner", () => {
       priority: 60,
       provider: "fansly",
     });
-    expect(dbMocks.markSyncTaskWakeupEnqueued).not.toHaveBeenCalled();
+    expect(dbMocks.markPageSyncEnqueued).not.toHaveBeenCalled();
   });
 
   it("logs cleanup counts when inactive runs are auto-closed", async () => {
@@ -158,7 +158,7 @@ describe("sync planner", () => {
     const logger = {
       info: vi.fn(),
     };
-    dbMocks.listRunnableSyncPagesV2.mockResolvedValue([]);
+    dbMocks.listRunnablePageSync.mockResolvedValue([]);
     dbMocks.closeInactiveSyncRuns.mockResolvedValue({
       totalCount: 2,
       failedCount: 1,

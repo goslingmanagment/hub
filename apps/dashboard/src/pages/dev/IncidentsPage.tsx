@@ -34,7 +34,7 @@ export function IncidentsPage() {
   const displaySummary = summary.reduce<Array<{ code: string; severity: string; count: number }>>((acc, item) => {
     const displaySeverity = getEventDisplaySeverity({
       eventCode: item.code,
-      severity: item.severity,
+      severity: item.severity ?? "info",
       details: null,
     });
     const existing = acc.find((entry) => entry.code === item.code && entry.severity === displaySeverity);

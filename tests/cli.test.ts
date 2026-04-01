@@ -47,7 +47,7 @@ const cliMocks = vi.hoisted(() => {
     onboardOnlyFansPage: vi.fn(),
     request: vi.fn(),
     requestPageSync: vi.fn(),
-    waitForRequestedSyncRevisions: vi.fn(),
+    waitForRequestedSyncRequests: vi.fn(),
     removePageProxy: vi.fn(),
     sendDailyRevenueTelegramReport: vi.fn(),
     sendManualDailyRevenueTelegramReport: vi.fn(),
@@ -97,7 +97,7 @@ vi.mock("../apps/runtime/src/services/notification-incidents.ts", () => ({
 
 vi.mock("../apps/runtime/src/services/sync-control.ts", () => ({
   requestPageSync: cliMocks.requestPageSync,
-  waitForRequestedSyncRevisions: cliMocks.waitForRequestedSyncRevisions,
+  waitForRequestedSyncRequests: cliMocks.waitForRequestedSyncRequests,
 }));
 
 vi.mock("../apps/runtime/src/services/telegram.ts", () => ({
@@ -170,7 +170,7 @@ describe("CLI parsing", () => {
     cliMocks.onboardOnlyFansPage.mockReset();
     cliMocks.request.mockReset();
     cliMocks.requestPageSync.mockReset();
-    cliMocks.waitForRequestedSyncRevisions.mockReset();
+    cliMocks.waitForRequestedSyncRequests.mockReset();
     cliMocks.removePageProxy.mockReset();
     cliMocks.sendDailyRevenueTelegramReport.mockReset();
     cliMocks.sendManualDailyRevenueTelegramReport.mockReset();
@@ -207,7 +207,7 @@ describe("CLI parsing", () => {
     });
     cliMocks.requestPageSync.mockResolvedValue({
       page: { id: 1, label: "page" },
-      revisions: [],
+      requests: [],
       wakeupId: "job-1",
     });
     cliMocks.backfillFanslyPageAliases.mockResolvedValue({
@@ -237,7 +237,7 @@ describe("CLI parsing", () => {
         aliasesCleared: 1,
       }],
     });
-    cliMocks.waitForRequestedSyncRevisions.mockResolvedValue(undefined);
+    cliMocks.waitForRequestedSyncRequests.mockResolvedValue(undefined);
     cliMocks.removePageProxy.mockResolvedValue(undefined);
     cliMocks.setPageProxy.mockResolvedValue(undefined);
     cliMocks.handleSuccessfulPageVerificationRecovery.mockResolvedValue(undefined);
@@ -482,11 +482,11 @@ describe("CLI parsing", () => {
     expect(boss.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("waits for requested revisions by default on sync", async () => {
+  it("waits for requested requests by default on sync", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     cliMocks.requestPageSync.mockResolvedValue({
       page: { id: 44, label: "lora-main" },
-      revisions: [{ stream: "light", desiredRevision: 2 }],
+      requests: [{ stream: "light", requestedSeq: 2 }],
       wakeupId: "job-44",
     });
 
@@ -505,14 +505,14 @@ describe("CLI parsing", () => {
       reason: "manual",
       onlyFansTransactionsStart: null,
     });
-    expect(cliMocks.waitForRequestedSyncRevisions).toHaveBeenCalledWith(expect.anything(), {
-      platformAccountId: 44,
-      revisions: [{ stream: "light", desiredRevision: 2 }],
+    expect(cliMocks.waitForRequestedSyncRequests).toHaveBeenCalledWith(expect.anything(), {
+      pageId: 44,
+      requests: [{ stream: "light", requestedSeq: 2 }],
     });
     expect(logSpy).toHaveBeenCalledWith("Completed light sync for lora-main");
   });
 
-  it("supports sync --no-wait without polling sync_state", async () => {
+  it("supports sync --no-wait without polling page sync state", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     cliMocks.findPageByLabel.mockResolvedValueOnce({
       page: {
@@ -525,7 +525,7 @@ describe("CLI parsing", () => {
     });
     cliMocks.requestPageSync.mockResolvedValue({
       page: { id: 55, label: "lora-main" },
-      revisions: [{ stream: "followers", desiredRevision: 1 }],
+      requests: [{ stream: "followers", requestedSeq: 1 }],
       wakeupId: "job-55",
     });
 
@@ -539,7 +539,7 @@ describe("CLI parsing", () => {
       "--no-wait",
     ], { from: "user" });
 
-    expect(cliMocks.waitForRequestedSyncRevisions).not.toHaveBeenCalled();
+    expect(cliMocks.waitForRequestedSyncRequests).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith("Queued followers sync for lora-main");
   });
 

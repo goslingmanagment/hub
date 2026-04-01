@@ -33,7 +33,7 @@ const RECOMMENDATION_MAP: Record<string, { text: string; color: string }> = {
     text: "The provider ignored the lower-bound filter and older transactions were rescanned. Sync handled it automatically; investigate only if the scan window keeps growing.",
     color: "border-[#f59e0b]",
   },
-  auth_failed: {
+  auth_blocked: {
     text: "Session token expired or invalid. Update credentials in page settings.",
     color: "border-[#ef4444]",
   },

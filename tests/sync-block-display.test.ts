@@ -25,7 +25,7 @@ describe("sync block display", () => {
     expect(formatBlockSummary({
       block: "financials",
       state: "up_to_date",
-      lastSuccessAt: "2026-03-24T11:00:00.000Z",
+      succeededAt: "2026-03-24T11:00:00.000Z",
       progress: null,
       error: null,
       needsAttention: false,
@@ -40,7 +40,7 @@ describe("sync block display", () => {
     expect(formatBlockSummary({
       block: "audience",
       state: "up_to_date",
-      lastSuccessAt: "2026-03-24T11:30:00.000Z",
+      succeededAt: "2026-03-24T11:30:00.000Z",
       progress: null,
       error: null,
       needsAttention: false,
@@ -55,7 +55,7 @@ describe("sync block display", () => {
     expect(formatBlockSummary({
       block: "messages_live",
       state: "up_to_date",
-      lastSuccessAt: "2026-03-24T10:00:00.000Z",
+      succeededAt: "2026-03-24T10:00:00.000Z",
       progress: null,
       error: null,
       needsAttention: false,
@@ -72,7 +72,7 @@ describe("sync block display", () => {
     expect(formatBlockSummary({
       block: "audience",
       state: "failed",
-      lastSuccessAt: "2026-03-18T10:00:00.000Z",
+      succeededAt: "2026-03-18T10:00:00.000Z",
       progress: {
         label: "1 of 697 subscribers processed",
         current: 1,
@@ -85,7 +85,7 @@ describe("sync block display", () => {
         stream: "subscribers",
         code: "progress_stalled",
         summary: "Sync stopped making progress",
-        lastFailedAt: null,
+        failedAt: null,
         consecutiveFailures: 0,
       },
       needsAttention: true,
@@ -102,7 +102,7 @@ describe("sync block display", () => {
     expect(formatBlockSummary({
       block: "audience",
       state: "backfilling",
-      lastSuccessAt: "2026-03-18T10:00:00.000Z",
+      succeededAt: "2026-03-18T10:00:00.000Z",
       progress: {
         label: "1 of 697 subscribers processed",
         current: 1,
@@ -126,7 +126,7 @@ describe("sync block display", () => {
     expect(formatBlockSummary({
       block: "financials",
       state: "backfilling",
-      lastSuccessAt: "2026-03-24T11:59:00.000Z",
+      succeededAt: "2026-03-24T11:59:00.000Z",
       progress: {
         label: "14 / 15 months",
         current: 14,
@@ -154,7 +154,7 @@ describe("sync block display", () => {
     expect(shouldShowBlockProgressBar({
       block: "financials",
       state: "up_to_date",
-      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      succeededAt: "2026-03-24T11:55:00.000Z",
       progress: {
         label: "15 / 15 months",
         current: 15,
@@ -178,7 +178,7 @@ describe("sync block display", () => {
     const block = {
       block: "audience",
       state: "syncing",
-      lastSuccessAt: "2026-03-24T11:53:00.000Z",
+      succeededAt: "2026-03-24T11:53:00.000Z",
       progress: {
         label: "75 / 75 followers",
         current: 75,
@@ -205,7 +205,7 @@ describe("sync block display", () => {
     const block = {
       block: "messages_live",
       state: "syncing",
-      lastSuccessAt: "2026-03-24T11:50:00.000Z",
+      succeededAt: "2026-03-24T11:50:00.000Z",
       progress: {
         label: "27 / 27 conversations",
         current: 27,
@@ -232,7 +232,7 @@ describe("sync block display", () => {
     const block = {
       block: "messages_live",
       state: "syncing",
-      lastSuccessAt: "2026-03-24T11:50:00.000Z",
+      succeededAt: "2026-03-24T11:50:00.000Z",
       progress: {
         label: "200 / 5,000 conversations",
         current: 200,
@@ -259,13 +259,13 @@ describe("sync block display", () => {
     const block = {
       block: "financials",
       state: "delayed",
-      lastSuccessAt: null,
+      succeededAt: null,
       progress: null,
       error: {
         stream: "top_spenders",
         code: "unmet_dependency",
         summary: "Waiting for transactions",
-        lastFailedAt: null,
+        failedAt: null,
         consecutiveFailures: 0,
       },
       statusReason: {
@@ -293,13 +293,13 @@ describe("sync block display", () => {
     const block = {
       block: "messages_live",
       state: "delayed",
-      lastSuccessAt: null,
+      succeededAt: null,
       progress: null,
       error: {
         stream: "dm_conversations",
         code: "unmet_dependency",
         summary: "Waiting for light, top_spenders, transactions, subscribers, followers",
-        lastFailedAt: null,
+        failedAt: null,
         consecutiveFailures: 0,
       },
       statusReason: {
@@ -331,7 +331,7 @@ describe("sync block display", () => {
       stream: "transactions",
       role: "primary",
       state: "delayed",
-      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      succeededAt: "2026-03-24T11:55:00.000Z",
       nextDueAt: "2026-03-24T12:55:00.000Z",
       nextRetryAt: null,
       cadenceSeconds: 3600,
@@ -349,7 +349,7 @@ describe("sync block display", () => {
       stream: "followers_reconcile",
       role: "supporting",
       state: "delayed",
-      lastSuccessAt: null,
+      succeededAt: null,
       nextDueAt: "2026-03-24T12:21:00.000Z",
       nextRetryAt: null,
       cadenceSeconds: 172800,
@@ -368,7 +368,7 @@ describe("sync block display", () => {
     const block = {
       block: "financials",
       state: "scheduled",
-      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      succeededAt: "2026-03-24T11:55:00.000Z",
       progress: {
         label: "15 / 15 months",
         current: 15,
@@ -404,7 +404,7 @@ describe("sync block display", () => {
       stream: "transactions",
       role: "primary",
       state: "scheduled",
-      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      succeededAt: "2026-03-24T11:55:00.000Z",
       nextDueAt: "2026-03-24T12:55:00.000Z",
       nextRetryAt: null,
       cadenceSeconds: 3600,
@@ -426,7 +426,7 @@ describe("sync block display", () => {
     const block = {
       block: "audience",
       state: "scheduled",
-      lastSuccessAt: null,
+      succeededAt: null,
       progress: {
         label: "14 / 15 months",
         current: 14,
@@ -463,7 +463,7 @@ describe("sync block display", () => {
     const block = {
       block: "messages_history",
       state: "delayed",
-      lastSuccessAt: "2026-03-24T11:55:00.000Z",
+      succeededAt: "2026-03-24T11:55:00.000Z",
       progress: {
         label: "203 / 3,669 conversations ready, 4 lagging",
         current: 203,

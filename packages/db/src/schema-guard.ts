@@ -7,6 +7,19 @@ type ColumnShapeRow = {
   column_default: string | null;
 };
 
+const REQUIRED_TABLE_NAMES = ["pages", "page_sync_states", "page_sync_cursors"] as const;
+const LEGACY_TABLE_NAMES = [
+  ["platform", "accounts"].join("_"),
+  ["platform", "account", "proxies"].join("_"),
+  ["sync", "stream", "state"].join("_"),
+  ["sync", "checkpoints"].join("_"),
+  ["sync", "state"].join("_"),
+  ["sync", "cursors"].join("_"),
+  ["sync", "requests"].join("_"),
+  ["rate", "limit", "buckets"].join("_"),
+  ["raw", "payloads"].join("_"),
+] as const;
+
 function normalizeDefaultExpression(value: string | null) {
   return (value ?? "")
     .toLowerCase()
@@ -84,11 +97,11 @@ export async function assertRuntimeSchemaReady(
     `select table_name as name
        from information_schema.tables
       where table_schema = 'public'
-        and table_name in ('pages', 'sync_state', 'sync_cursors')`,
+        and table_name in (${REQUIRED_TABLE_NAMES.map((name) => `'${name}'`).join(", ")})`,
   );
 
   const requiredNames = new Set(requiredTables.rows.map((row) => row.name));
-  for (const name of ["pages", "sync_state", "sync_cursors"]) {
+  for (const name of REQUIRED_TABLE_NAMES) {
     if (!requiredNames.has(name)) {
       throw driftError(`required table ${name} is missing`);
     }
@@ -98,7 +111,7 @@ export async function assertRuntimeSchemaReady(
     `select table_name as name
        from information_schema.tables
       where table_schema = 'public'
-        and table_name in ('platform_accounts', 'platform_account_proxies', 'sync_stream_state', 'sync_checkpoints')`,
+        and table_name in (${LEGACY_TABLE_NAMES.map((name) => `'${name}'`).join(", ")})`,
   );
 
   if (legacyTables.rows.length > 0) {

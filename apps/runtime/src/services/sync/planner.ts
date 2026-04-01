@@ -1,9 +1,9 @@
 import {
   closeInactiveSyncRuns,
-  ensureSyncTaskRows,
-  listRunnableSyncPagesV2,
-  markSyncTaskWakeupEnqueued,
-  scheduleDueSyncTasks,
+  ensurePageSyncStates,
+  listRunnablePageSync,
+  markPageSyncEnqueued,
+  scheduleDuePageSync,
 } from "@agency_hub_core/db";
 import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
@@ -34,20 +34,20 @@ export async function runSyncPlannerCycle(
     }, "Inactive sync run cleanup complete");
   }
 
-  await ensureSyncTaskRows(app.db, { now });
-  await scheduleDueSyncTasks(app.db, { now });
+  await ensurePageSyncStates(app.db, { now });
+  await scheduleDuePageSync(app.db, { now });
 
-  const runnablePages = await listRunnableSyncPagesV2(app.db, now);
+  const runnablePages = await listRunnablePageSync(app.db, now);
   for (const page of runnablePages) {
     const wakeupId = await sendSyncPageWakeup(boss, {
-      platformAccountId: page.platformAccountId,
+      platformAccountId: page.pageId,
       priority: page.priority,
       provider: page.platform,
       egressKey: buildProxyEgressKey(page.proxyUrl ? { url: page.proxyUrl } : null),
     });
 
     if (wakeupId) {
-      await markSyncTaskWakeupEnqueued(app.db, page.platformAccountId, now);
+      await markPageSyncEnqueued(app.db, page.pageId, now);
     }
   }
 

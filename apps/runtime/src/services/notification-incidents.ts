@@ -1,12 +1,12 @@
 import {
-  clearSyncPageAuthFailed,
+  clearPageSyncAuthBlock,
   getTelegramSettings,
   hasRecentTerminalProxyFailure,
   insertDeliveryAttempt,
   openNotificationIncident,
   resolveNotificationIncident,
   type NotificationIncidentKind,
-  type SyncControlStream,
+  type SyncStream,
 } from "@agency_hub_core/db";
 import { redactSensitiveText } from "@agency_hub_core/shared";
 
@@ -19,7 +19,7 @@ function incidentKey(
   input: {
     kind: NotificationIncidentKind;
     platformAccountId: number;
-    stream?: SyncControlStream | null;
+    stream?: SyncStream | null;
   },
 ) {
   return input.kind === "stream_failed_threshold" && input.stream
@@ -41,11 +41,11 @@ function openMessageForIncident(
     kind: NotificationIncidentKind;
     pageLabel: string;
     platform: "fansly" | "onlyfans";
-    stream?: SyncControlStream | null;
+    stream?: SyncStream | null;
     errorSummary: string | null;
   },
 ) {
-  const title = input.kind === "auth_failed"
+  const title = input.kind === "auth_blocked"
     ? "🚨 Auth failed"
     : input.kind === "proxy_failed"
       ? "🚨 Proxy failed"
@@ -64,10 +64,10 @@ function resolveMessageForIncident(
     kind: NotificationIncidentKind;
     pageLabel: string;
     platform: "fansly" | "onlyfans";
-    stream?: SyncControlStream | null;
+    stream?: SyncStream | null;
   },
 ) {
-  const detail = input.kind === "auth_failed"
+  const detail = input.kind === "auth_blocked"
     ? "Auth failed"
     : input.kind === "proxy_failed"
       ? "Proxy failed"
@@ -86,7 +86,7 @@ async function openIncidentAndNotify(
     platformAccountId: number;
     pageLabel: string;
     platform: "fansly" | "onlyfans";
-    stream?: SyncControlStream | null;
+    stream?: SyncStream | null;
     errorCode?: string | null;
     errorSummary?: string | null;
   },
@@ -149,7 +149,7 @@ async function resolveIncidentAndNotify(
     platformAccountId: number;
     pageLabel: string;
     platform: "fansly" | "onlyfans";
-    stream?: SyncControlStream | null;
+    stream?: SyncStream | null;
   },
 ) {
   try {
@@ -217,7 +217,7 @@ export async function notifyAuthFailedIncident(
 ) {
   await openIncidentAndNotify(app, {
     ...input,
-    kind: "auth_failed",
+    kind: "auth_blocked",
   });
 }
 
@@ -227,7 +227,7 @@ export async function notifySyncChunkFailureIncident(
     platformAccountId: number;
     pageLabel: string;
     platform: "fansly" | "onlyfans";
-    stream: SyncControlStream;
+    stream: SyncStream;
     runId: number;
     hasProxy: boolean;
     previousConsecutiveFailures: number;
@@ -267,12 +267,12 @@ export async function resolveSyncChunkRecoveryIncidents(
     platformAccountId: number;
     pageLabel: string;
     platform: "fansly" | "onlyfans";
-    stream: SyncControlStream;
+    stream: SyncStream;
   },
 ) {
   await resolveIncidentAndNotify(app, {
     ...input,
-    kind: "auth_failed",
+    kind: "auth_blocked",
   });
   await resolveIncidentAndNotify(app, {
     ...input,
@@ -293,17 +293,17 @@ export async function handleSuccessfulPageVerificationRecovery(
   },
 ) {
   try {
-    await clearSyncPageAuthFailed(app.db, input.platformAccountId);
+    await clearPageSyncAuthBlock(app.db, input.platformAccountId);
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,
       err: error,
-    }, "Failed to clear auth_failed during page verification recovery");
+    }, "Failed to clear auth_blocked during page verification recovery");
   }
 
   await resolveIncidentAndNotify(app, {
     ...input,
-    kind: "auth_failed",
+    kind: "auth_blocked",
   });
   await resolveIncidentAndNotify(app, {
     ...input,

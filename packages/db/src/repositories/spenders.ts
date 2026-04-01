@@ -15,7 +15,7 @@ import {
   fanUsernameAliases,
   fans,
   models,
-  platformAccounts,
+  pages,
   spenderDailyFacts,
   spenderLifetimePage,
   spenderProjectionWatermarks,
@@ -272,7 +272,7 @@ export async function getScopedLifetimeTotalsForFan(
 ) {
   const clauses = [
     eq(spenderLifetimePage.fanId, input.fanId),
-    eq(platformAccounts.platform, input.platform),
+    eq(pages.platform, input.platform),
   ];
 
   if (input.pageIds !== undefined) {
@@ -292,7 +292,7 @@ export async function getScopedLifetimeTotalsForFan(
     creatorNetAmountMills: sql<bigint>`coalesce(sum(${spenderLifetimePage.creatorNetAmountMills}), 0)::bigint`,
     lastTransactionAt: sql<Date | null>`max(${spenderLifetimePage.lastTransactionAt})`,
   }).from(spenderLifetimePage)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, spenderLifetimePage.platformAccountId))
+    .innerJoin(pages, eq(pages.id, spenderLifetimePage.platformAccountId))
     .where(and(...clauses));
 
   return {
@@ -315,13 +315,13 @@ export async function getSpenderProjectionAsOf(
 
   const clauses = [inArray(spenderProjectionWatermarks.platformAccountId, input.pageIds)];
   if (input.platform) {
-    clauses.push(eq(platformAccounts.platform, input.platform));
+    clauses.push(eq(pages.platform, input.platform));
   }
 
   const [row] = await db.select({
     asOf: sql<Date | null>`min(${spenderProjectionWatermarks.lastRebuiltAt})`,
   }).from(spenderProjectionWatermarks)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, spenderProjectionWatermarks.platformAccountId))
+    .innerJoin(pages, eq(pages.id, spenderProjectionWatermarks.platformAccountId))
     .where(and(...clauses));
 
   if (!row?.asOf) {
@@ -348,26 +348,26 @@ export async function listVisibleScopePages(
     return [];
   }
 
-  const clauses = [eq(platformAccounts.platform, input.platform)];
+  const clauses = [eq(pages.platform, input.platform)];
   if (input.pageIds !== undefined) {
-    clauses.push(inArray(platformAccounts.id, input.pageIds));
+    clauses.push(inArray(pages.id, input.pageIds));
   }
   if (input.modelSlug) {
     clauses.push(eq(models.slug, input.modelSlug));
   }
 
   return db.select({
-    id: platformAccounts.id,
-    label: platformAccounts.label,
-    platform: platformAccounts.platform,
+    id: pages.id,
+    label: pages.label,
+    platform: pages.platform,
     modelSlug: models.slug,
     modelName: models.name,
-    username: platformAccounts.username,
-    displayName: platformAccounts.displayName,
-  }).from(platformAccounts)
-    .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    username: pages.username,
+    displayName: pages.displayName,
+  }).from(pages)
+    .innerJoin(models, eq(models.id, pages.modelId))
     .where(and(...clauses))
-    .orderBy(models.slug, platformAccounts.label);
+    .orderBy(models.slug, pages.label);
 }
 
 export async function findVisibleFanByIdentity(
@@ -1034,11 +1034,11 @@ export async function getVisibleFanPageMemberships(
 
   return db.select({
     fanId: fanPages.fanId,
-    pageId: platformAccounts.id,
-    pageLabel: platformAccounts.label,
+    pageId: pages.id,
+    pageLabel: pages.label,
     modelSlug: models.slug,
     modelName: models.name,
-    platform: platformAccounts.platform,
+    platform: pages.platform,
     isFollower: fanPages.isFollower,
     followerSince: fanPages.followerSince,
     isSubscriber: fanPages.isSubscriber,
@@ -1049,8 +1049,8 @@ export async function getVisibleFanPageMemberships(
     creatorNetAmountMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(fanPages)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, fanPages.platformAccountId))
-    .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .innerJoin(pages, eq(pages.id, fanPages.platformAccountId))
+    .innerJoin(models, eq(models.id, pages.modelId))
     .leftJoin(spenderLifetimePage, and(
       eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
       eq(spenderLifetimePage.fanId, fanPages.fanId),
@@ -1059,7 +1059,7 @@ export async function getVisibleFanPageMemberships(
       inArray(fanPages.fanId, input.fanIds),
       inArray(fanPages.platformAccountId, input.pageIds),
     ))
-    .orderBy(models.slug, platformAccounts.label);
+    .orderBy(models.slug, pages.label);
 }
 
 export async function searchFansInScope(

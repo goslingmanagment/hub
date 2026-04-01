@@ -19,9 +19,9 @@ import { sql } from "drizzle-orm";
 import { fanFlagTypes, userRoles } from "@agency_hub_core/shared";
 
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
-export const syncRunStatusEnum = pgEnum("sync_run_status", [
+export const syncRunOutcomeEnum = pgEnum("sync_run_outcome", [
   "running",
-  "success",
+  "succeeded",
   "partial",
   "failed",
   "skipped",
@@ -34,39 +34,17 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "subscribers",
   "dm_conversations",
   "dm_messages",
-  "cleanup",
   "followers_reconcile",
 ]);
-export const syncTaskEnum = pgEnum("sync_task", [
-  "light",
-  "followers",
-  "transactions",
-  "top_spenders",
-  "subscribers",
-  "dm_conversations",
-  "dm_messages",
-  "followers_reconcile",
-  "cleanup",
-]);
-export const syncTaskStatusEnum = pgEnum("sync_task_status", [
+export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",
-  "queued",
+  "pending",
   "running",
-  "retry_wait",
+  "retrying",
   "blocked",
   "paused",
-  "active",
-  "auth_failed",
-  "disabled",
 ]);
-export const syncRequestReasonEnum = pgEnum("sync_request_reason", [
-  "scheduled",
-  "manual",
-  "onboarding",
-  "recovery",
-  "anomaly",
-]);
-export const syncOperationSourceEnum = pgEnum("sync_operation_source", [
+export const syncRequestSourceEnum = pgEnum("sync_request_source", [
   "scheduled",
   "manual",
   "onboarding",
@@ -79,13 +57,13 @@ export const syncWorkClassEnum = pgEnum("sync_work_class", [
   "history",
   "maintenance",
 ]);
-export const syncRequestAttemptStateEnum = pgEnum("sync_request_attempt_state", [
+export const syncHttpAttemptStateEnum = pgEnum("sync_http_attempt_state", [
   "started",
   "success",
   "retry",
   "failed",
 ]);
-export const syncRequestFailureKindEnum = pgEnum("sync_request_failure_kind", [
+export const syncHttpFailureKindEnum = pgEnum("sync_http_failure_kind", [
   "timeout",
   "transport",
   "http",
@@ -124,7 +102,7 @@ export const transactionInactiveReasonEnum = pgEnum("transaction_inactive_reason
   "missing_from_sync_window",
 ]);
 export const notificationIncidentKindEnum = pgEnum("notification_incident_kind", [
-  "auth_failed",
+  "auth_blocked",
   "proxy_failed",
   "stream_failed_threshold",
 ]);
@@ -276,60 +254,27 @@ export const telegramDeliveryAttempts = pgTable(
   }),
 );
 
-export const syncRequests = pgTable("sync_requests",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
-      .notNull(),
-    task: syncTaskEnum("task").notNull(),
-    generation: bigint("generation", { mode: "number" }).notNull(),
-    source: syncOperationSourceEnum("source").notNull(),
-    requestedByActor: text("requested_by_actor"),
-    requestedByUserId: bigint("requested_by_user_id", { mode: "number" }).references(
-      () => users.id,
-      { onDelete: "set null" },
-    ),
-    requestPayload: jsonb("request_payload").$type<Record<string, unknown>>().default({}).notNull(),
-    requestedAt: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => ({
-    accountRequestedIdx: index("sync_requests_account_requested_idx").on(
-      table.platformAccountId,
-      table.requestedAt,
-    ),
-    generationUniq: unique("sync_requests_account_task_generation_uniq").on(
-      table.platformAccountId,
-      table.task,
-      table.generation,
-    ),
-  }),
-);
-
 export const syncRuns = pgTable(
   "sync_runs",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
-    platformAccountId: bigint("platform_account_id", { mode: "number" })
+    pageId: bigint("page_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
-    operationId: bigint("operation_id", { mode: "number" }).references(() => syncRequests.id, {
-      onDelete: "set null",
-    }),
-    task: syncTaskEnum("task"),
-    generation: bigint("generation", { mode: "number" }),
+    requestSeq: bigint("request_seq", { mode: "number" }),
+    leasedSeq: bigint("leased_seq", { mode: "number" }),
+    source: syncRequestSourceEnum("source"),
     leaseToken: text("lease_token"),
     stream: syncStreamEnum("stream").notNull(),
-    trigger: text("trigger").notNull(),
-    status: syncRunStatusEnum("status").notNull(),
+    outcome: syncRunOutcomeEnum("outcome").notNull(),
     errorSummary: text("error_summary"),
     stats: jsonb("stats").$type<Record<string, unknown>>().default({}).notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (table) => ({
-    accountStreamIdx: index("sync_runs_account_stream_idx").on(
-      table.platformAccountId,
+    pageStreamIdx: index("sync_runs_page_stream_idx").on(
+      table.pageId,
       table.stream,
       table.startedAt,
     ),
@@ -342,21 +287,18 @@ export const syncHttpAttempts = pgTable("sync_http_attempts",
     syncRunId: bigint("sync_run_id", { mode: "number" })
       .references(() => syncRuns.id, { onDelete: "cascade" })
       .notNull(),
-    platformAccountId: bigint("platform_account_id", { mode: "number" })
+    pageId: bigint("page_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
-    operationId: bigint("operation_id", { mode: "number" }).references(() => syncRequests.id, {
-      onDelete: "set null",
-    }),
-    task: syncTaskEnum("task"),
-    generation: bigint("generation", { mode: "number" }),
+    requestSeq: bigint("request_seq", { mode: "number" }),
+    source: syncRequestSourceEnum("source"),
     provider: platformEnum("provider").notNull(),
     stream: syncStreamEnum("stream").notNull(),
     operation: text("operation").notNull(),
     logicalRequestId: text("logical_request_id").notNull(),
     attemptNumber: integer("attempt_number").notNull(),
-    state: syncRequestAttemptStateEnum("state").notNull(),
-    failureKind: syncRequestFailureKindEnum("failure_kind"),
+    state: syncHttpAttemptStateEnum("state").notNull(),
+    failureKind: syncHttpFailureKindEnum("failure_kind"),
     httpStatus: integer("http_status"),
     retryDelayMs: integer("retry_delay_ms"),
     durationMs: integer("duration_ms"),
@@ -387,14 +329,11 @@ export const syncRunEvents = pgTable(
     syncRunId: bigint("sync_run_id", { mode: "number" })
       .references(() => syncRuns.id, { onDelete: "cascade" })
       .notNull(),
-    platformAccountId: bigint("platform_account_id", { mode: "number" })
+    pageId: bigint("page_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
-    operationId: bigint("operation_id", { mode: "number" }).references(() => syncRequests.id, {
-      onDelete: "set null",
-    }),
-    task: syncTaskEnum("task"),
-    generation: bigint("generation", { mode: "number" }),
+    requestSeq: bigint("request_seq", { mode: "number" }),
+    source: syncRequestSourceEnum("source"),
     leaseToken: text("lease_token"),
     provider: platformEnum("provider").notNull(),
     stream: syncStreamEnum("stream").notNull(),
@@ -410,47 +349,37 @@ export const syncRunEvents = pgTable(
   }),
 );
 
-export const syncState = pgTable("sync_state",
+export const pageSyncStates = pgTable("page_sync_states",
   {
-    platformAccountId: bigint("platform_account_id", { mode: "number" })
+    pageId: bigint("page_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
-    task: syncTaskEnum("task").notNull(),
-    status: syncTaskStatusEnum("status").default("idle").notNull(),
-    desiredGeneration: bigint("desired_generation", { mode: "number" }).default(0).notNull(),
-    runningGeneration: bigint("running_generation", { mode: "number" }),
-    appliedGeneration: bigint("applied_generation", { mode: "number" }).default(0).notNull(),
-    scheduleIntervalSeconds: integer("schedule_interval_seconds").default(0).notNull(),
+    stream: syncStreamEnum("stream").notNull(),
+    status: pageSyncStatusEnum("status").default("idle").notNull(),
+    requestSeq: bigint("request_seq", { mode: "number" }).default(0).notNull(),
+    leasedSeq: bigint("leased_seq", { mode: "number" }),
+    appliedSeq: bigint("applied_seq", { mode: "number" }).default(0).notNull(),
+    requestSource: syncRequestSourceEnum("request_source"),
+    requestPayload: jsonb("request_payload").$type<Record<string, unknown>>().default({}).notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }),
+    enqueuedAt: timestamp("enqueued_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    progressedAt: timestamp("progressed_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    succeededAt: timestamp("succeeded_at", { withTimezone: true }),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    retryKind: text("retry_kind"),
+    retryAt: timestamp("retry_at", { withTimezone: true }),
+    blockerKind: text("blocker_kind"),
+    blockerCode: text("blocker_code"),
+    blockerMessage: text("blocker_message"),
+    blockedAt: timestamp("blocked_at", { withTimezone: true }),
+    phase: text("phase"),
+    workClass: syncWorkClassEnum("work_class"),
+    progress: jsonb("progress").$type<Record<string, unknown>>().default({}).notNull(),
+    cadenceSeconds: integer("cadence_seconds").notNull(),
     slotOffsetSeconds: integer("slot_offset_seconds").notNull(),
     lastScheduledSlot: bigint("last_scheduled_slot", { mode: "number" }).default(-1).notNull(),
-    nextDueAt: timestamp("next_due_at", { withTimezone: true }),
-    basePriority: integer("base_priority"),
-    effectivePriority: integer("effective_priority"),
-    pendingReason: syncRequestReasonEnum("pending_reason"),
-    desiredRevision: bigint("desired_revision", { mode: "number" }),
-    satisfiedRevision: bigint("satisfied_revision", { mode: "number" }),
-    desiredAt: timestamp("desired_at", { withTimezone: true }),
-    requestPayload: jsonb("request_payload").$type<Record<string, unknown>>().default({}).notNull(),
-    cadenceSeconds: integer("cadence_seconds"),
-    backoffUntil: timestamp("backoff_until", { withTimezone: true }),
-    lastSucceededAt: timestamp("last_succeeded_at", { withTimezone: true }),
-    lastFailedAt: timestamp("last_failed_at", { withTimezone: true }),
-    lastRequestedAt: timestamp("last_requested_at", { withTimezone: true }),
-    lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
-    lastStartedAt: timestamp("last_started_at", { withTimezone: true }),
-    lastProgressAt: timestamp("last_progress_at", { withTimezone: true }),
-    lastFinishedAt: timestamp("last_finished_at", { withTimezone: true }),
-    lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
-    lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
-    retryClass: text("retry_class"),
-    retryAt: timestamp("retry_at", { withTimezone: true }),
-    blockerType: text("blocker_type"),
-    blockerCode: text("blocker_code"),
-    blockerReason: text("blocker_reason"),
-    blockedSince: timestamp("blocked_since", { withTimezone: true }),
-    currentPhase: text("current_phase"),
-    currentWorkClass: syncWorkClassEnum("current_work_class"),
-    progressPayload: jsonb("progress_payload").$type<Record<string, unknown>>().default({}).notNull(),
     leaseOwner: text("lease_owner"),
     leaseToken: text("lease_token"),
     leaseHeartbeatAt: timestamp("lease_heartbeat_at", { withTimezone: true }),
@@ -463,53 +392,53 @@ export const syncState = pgTable("sync_state",
   },
   (table) => ({
     pk: primaryKey({
-      name: "sync_state_pkey",
-      columns: [table.platformAccountId, table.task],
+      name: "page_sync_states_pkey",
+      columns: [table.pageId, table.stream],
     }),
-    freshnessIdx: index("sync_state_freshness_idx").on(table.task, table.lastSuccessAt),
-    leaseIdx: index("sync_state_lease_idx").on(table.status, table.leaseExpiresAt),
-    runnableIdx: index("sync_state_runnable_idx").on(
+    freshnessIdx: index("page_sync_states_freshness_idx").on(table.stream, table.succeededAt),
+    leaseIdx: index("page_sync_states_lease_idx").on(table.status, table.leaseExpiresAt),
+    runnableIdx: index("page_sync_states_runnable_idx").on(
       table.status,
       table.retryAt,
-      table.platformAccountId,
-      table.task,
+      table.pageId,
+      table.stream,
     ),
-    scheduleIdx: index("sync_state_schedule_idx").on(
+    scheduleIdx: index("page_sync_states_schedule_idx").on(
       table.status,
       table.lastScheduledSlot,
-      table.platformAccountId,
-      table.task,
+      table.pageId,
+      table.stream,
     ),
   }),
 );
 
-export const syncCursors = pgTable(
-  "sync_cursors",
+export const pageSyncCursors = pgTable(
+  "page_sync_cursors",
   {
-    platformAccountId: bigint("platform_account_id", { mode: "number" })
+    pageId: bigint("page_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
-    task: syncTaskEnum("task").notNull(),
+    stream: syncStreamEnum("stream").notNull(),
     cursorText: text("cursor_text"),
     cursorTimestamp: timestamp("cursor_timestamp", { withTimezone: true }),
-    cursorGeneration: bigint("cursor_generation", { mode: "number" }),
+    cursorSeq: bigint("cursor_seq", { mode: "number" }),
     state: jsonb("state").$type<Record<string, unknown>>().default({}).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-    lastSuccessfulRunId: bigint("last_successful_run_id", { mode: "number" }).references(
+    cursorLastSucceededRunId: bigint("last_succeeded_run_id", { mode: "number" }).references(
       () => syncRuns.id,
       { onDelete: "set null" },
     ),
-    lastSuccessfulAt: timestamp("last_successful_at", { withTimezone: true }),
+    cursorLastSucceededAt: timestamp("last_succeeded_at", { withTimezone: true }),
   },
   (table) => ({
     pk: primaryKey({
-      name: "sync_cursors_pkey",
-      columns: [table.platformAccountId, table.task],
+      name: "page_sync_cursors_pkey",
+      columns: [table.pageId, table.stream],
     }),
   }),
 );
-export const rateLimitBuckets = pgTable(
-  "rate_limit_buckets",
+export const syncRateLimits = pgTable(
+  "sync_rate_limits",
   {
     provider: platformEnum("provider").notNull(),
     scope: text("scope").notNull(),
@@ -520,22 +449,25 @@ export const rateLimitBuckets = pgTable(
   },
   (table) => ({
     pk: primaryKey({
-      name: "rate_limit_buckets_pkey",
+      name: "sync_rate_limits_pkey",
       columns: [table.provider, table.scope, table.egressKey],
     }),
   }),
 );
 
-export const rawPayloads = pgTable(
-  "raw_payloads",
+export const syncRawPayloads = pgTable(
+  "sync_raw_payloads",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
-    platformAccountId: bigint("platform_account_id", { mode: "number" })
+    pageId: bigint("page_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
     syncRunId: bigint("sync_run_id", { mode: "number" }).references(() => syncRuns.id, {
       onDelete: "set null",
     }),
+    stream: syncStreamEnum("stream"),
+    requestSeq: bigint("request_seq", { mode: "number" }),
+    source: syncRequestSourceEnum("source"),
     endpoint: text("endpoint").notNull(),
     requestParams: jsonb("request_params").$type<Record<string, unknown>>().default({}).notNull(),
     responsePayload: jsonb("response_payload").$type<unknown>().notNull(),
@@ -547,7 +479,7 @@ export const rawPayloads = pgTable(
     retainUntil: timestamp("retain_until", { withTimezone: true }).notNull(),
   },
   (table) => ({
-    retainIdx: index("raw_payloads_retain_idx").on(table.retainUntil),
+    retainIdx: index("sync_raw_payloads_retain_idx").on(table.retainUntil),
   }),
 );
 
@@ -1352,23 +1284,6 @@ export const fanFlags = pgTable(
   }),
 );
 
-export const platformAccounts = pages;
-export const platformAccountCredentials = pageCredentials;
-export const platformAccountProxies = egressEndpoints;
-export const syncOperations = syncRequests;
-export const syncRequestAttempts = syncHttpAttempts;
-export const syncTasks = syncState;
-export const syncStreamState = Object.assign(syncState, {
-  stream: syncState.task,
-}) as typeof syncState & {
-  stream: typeof syncState.task;
-};
-export const syncCheckpoints = Object.assign(syncCursors, {
-  stream: syncCursors.task,
-}) as typeof syncCursors & {
-  stream: typeof syncCursors.task;
-};
-export const syncProviderRateLimits = rateLimitBuckets;
 export const fanPages = pageFans;
 export const fanPageExternalNotes = pageFanExternalNotes;
 export const fanPageAliases = pageFanAliases;

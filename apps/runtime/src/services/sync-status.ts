@@ -1,16 +1,16 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
-  DOMAIN_POLICY,
-  TASK_POLICY,
-  ensureSyncTaskRows,
-  getSyncTasksForPlatform,
+  ensurePageSyncStates,
+  getSyncStreamsForPlatform,
   listSyncMonitorStreamRows,
-  listSyncTaskRows,
+  listPageSyncStates,
   listVisiblePages,
+  type PageSyncState,
+  SYNC_DOMAIN_POLICY,
+  SYNC_STREAM_POLICY,
+  type SyncDomain,
+  type SyncStream,
   type SyncMonitorStreamRow,
-  type SyncTaskRow,
-  type SyncV2Domain,
-  type SyncV2Task,
 } from "@agency_hub_core/db";
 import { buildProxyEgressKey } from "@agency_hub_core/shared";
 
@@ -22,7 +22,7 @@ export const SYNC_DOMAIN_BLOCKS = [
   "audience",
   "messages_live",
   "messages_history",
-] as const satisfies readonly SyncV2Domain[];
+] as const satisfies readonly SyncDomain[];
 
 export type SyncDomainBlockKey = typeof SYNC_DOMAIN_BLOCKS[number];
 
@@ -57,17 +57,17 @@ export interface SyncStatusReason {
 export type SyncStreamRole = "primary" | "supporting";
 
 export interface SyncTaskReadStatus {
-  task: SyncV2Task;
+  stream: SyncStream;
   domain: SyncDomainBlockKey;
-  runtimeState: SyncTaskRow["status"] | "not_started";
+  runtimeState: PageSyncState["status"] | "not_started";
   state: Exclude<SyncDomainBlockState, "not_available">;
   workClass: "live" | "history" | "maintenance" | null;
   phase: string | null;
-  desiredGeneration: number;
-  appliedGeneration: number;
-  lastSuccessAt: string | null;
-  lastProgressAt: string | null;
-  lastFailureAt: string | null;
+  requestedSeq: number;
+  appliedSeq: number;
+  succeededAt: string | null;
+  progressedAt: string | null;
+  failedAt: string | null;
   nextDueAt: string | null;
   nextRetryAt: string | null;
   queueAgeSeconds: number | null;
@@ -79,27 +79,27 @@ export interface SyncTaskReadStatus {
   error: {
     code: string | null;
     summary: string | null;
-    lastFailedAt: string | null;
+    failedAt: string | null;
     consecutiveFailures: number;
   } | null;
 }
 
 type QueueContext = {
-  activeSiblingStreams: SyncV2Task[];
+  activeSiblingStreams: SyncStream[];
 };
 
 export interface SyncDomainBlockStatus {
   block: SyncDomainBlockKey;
   state: SyncDomainBlockState;
-  lastSuccessAt: string | null;
+  succeededAt: string | null;
   progress: SyncDomainProgress | null;
-  progressStream: SyncV2Task | null;
+  progressStream: SyncStream | null;
   progressRole: SyncStreamRole | null;
   error: {
-    stream: SyncV2Task | null;
+    stream: SyncStream | null;
     code: string | null;
     summary: string | null;
-    lastFailedAt: string | null;
+    failedAt: string | null;
     consecutiveFailures: number;
   } | null;
   statusReason: SyncStatusReason | null;
@@ -108,16 +108,16 @@ export interface SyncDomainBlockStatus {
   nextDueAt: string | null;
   nextRetryAt: string | null;
   intervals: Array<{
-    stream: SyncV2Task;
+    stream: SyncStream;
     cadenceSeconds: number;
   }>;
   metrics: Record<string, unknown>;
   connectionStatus: "connected" | "not_connected" | "error" | null;
   substreams: Array<{
-    stream: SyncV2Task;
+    stream: SyncStream;
     role: SyncStreamRole;
     state: Exclude<SyncDomainBlockState, "not_available">;
-    lastSuccessAt: string | null;
+    succeededAt: string | null;
     nextDueAt: string | null;
     nextRetryAt: string | null;
     cadenceSeconds: number;
@@ -125,10 +125,10 @@ export interface SyncDomainBlockStatus {
     needsAttention: boolean;
     statusReason: SyncStatusReason | null;
     error: {
-      stream: SyncV2Task | null;
+      stream: SyncStream | null;
       code: string | null;
       summary: string | null;
-      lastFailedAt: string | null;
+      failedAt: string | null;
       consecutiveFailures: number;
     } | null;
   }>;
@@ -200,8 +200,8 @@ function earliestIso(values: Array<Date | null | undefined>) {
   return iso(earliest);
 }
 
-function computeNextDueAt(task: SyncTaskRow) {
-  return new Date(((task.lastScheduledSlot + 1) * task.scheduleIntervalSeconds + task.slotOffsetSeconds) * 1000);
+function computeNextDueAt(task: PageSyncState) {
+  return new Date(((task.lastScheduledSlot + 1) * task.cadenceSeconds + task.slotOffsetSeconds) * 1000);
 }
 
 function parseDependencyWaitingFor(summary: string | null | undefined): string[] | null {
@@ -225,13 +225,13 @@ function buildRuntimeGroupId(page: {
   return `${page.platform}:${buildProxyEgressKey(page.proxyUrl ? { url: page.proxyUrl } : null)}`;
 }
 
-function hasActiveProgress(task: SyncTaskRow, now: Date) {
+function hasActiveProgress(task: PageSyncState, now: Date) {
   if (task.status !== "running") {
     return false;
   }
 
-  const policy = TASK_POLICY[task.task];
-  const lastActiveAt = task.lastProgressAt ?? task.lastStartedAt;
+  const policy = SYNC_STREAM_POLICY[task.stream];
+  const lastActiveAt = task.progressedAt ?? task.startedAt;
   if (!lastActiveAt) {
     return false;
   }
@@ -239,8 +239,8 @@ function hasActiveProgress(task: SyncTaskRow, now: Date) {
   return (now.getTime() - lastActiveAt.getTime()) <= policy.progressStallThresholdMs;
 }
 
-function sortTasksByPolicyOrder(tasks: Iterable<SyncV2Task>) {
-  return [...new Set(tasks)].sort((left, right) => TASK_POLICY[left].taskIndex - TASK_POLICY[right].taskIndex);
+function sortTasksByPolicyOrder(tasks: Iterable<SyncStream>) {
+  return [...new Set(tasks)].sort((left, right) => SYNC_STREAM_POLICY[left].streamIndex - SYNC_STREAM_POLICY[right].streamIndex);
 }
 
 function buildStatusReason(
@@ -283,19 +283,19 @@ function buildDelayedDomainReason(input: {
 }
 
 function buildTaskError(
-  task: SyncTaskRow,
+  task: PageSyncState,
   statusReason: SyncStatusReason | null,
 ): SyncTaskReadStatus["error"] {
-  const code = task.lastErrorCode ?? task.blockerCode ?? task.blockerType ?? statusReason?.code ?? null;
-  const summary = task.lastErrorSummary ?? task.blockerReason ?? statusReason?.summary ?? null;
-  if (!code && !summary && !task.lastFailureAt) {
+  const code = task.lastErrorCode ?? task.blockerCode ?? task.blockerKind ?? statusReason?.code ?? null;
+  const summary = task.lastErrorSummary ?? task.blockerMessage ?? statusReason?.summary ?? null;
+  if (!code && !summary && !task.failedAt) {
     return null;
   }
 
   return {
     code,
     summary,
-    lastFailedAt: iso(task.lastFailureAt),
+    failedAt: iso(task.failedAt),
     consecutiveFailures: task.consecutiveFailures,
   };
 }
@@ -305,18 +305,18 @@ function firstAttentionTask(tasks: SyncTaskReadStatus[]) {
 }
 
 function hasPendingWork(task: SyncTaskReadStatus) {
-  return task.desiredGeneration > task.appliedGeneration ||
-    task.runtimeState === "queued" ||
-    task.runtimeState === "retry_wait";
+  return task.requestedSeq > task.appliedSeq ||
+    task.runtimeState === "pending" ||
+    task.runtimeState === "retrying";
 }
 
-function taskRoleForBlock(policy: (typeof DOMAIN_POLICY)[SyncDomainBlockKey], task: SyncV2Task): SyncStreamRole {
-  return policy.primaryTasks.includes(task) ? "primary" : "supporting";
+function taskRoleForBlock(policy: (typeof SYNC_DOMAIN_POLICY)[SyncDomainBlockKey], stream: SyncStream): SyncStreamRole {
+  return policy.primaryStreams.includes(stream) ? "primary" : "supporting";
 }
 
 function pickProgressTask(
   tasks: SyncTaskReadStatus[],
-  policy: (typeof DOMAIN_POLICY)[SyncDomainBlockKey],
+  policy: (typeof SYNC_DOMAIN_POLICY)[SyncDomainBlockKey],
   primaryFresh: boolean,
 ) {
   const withProgress = tasks.filter((task) => task.progress !== null);
@@ -325,7 +325,7 @@ function pickProgressTask(
   }
 
   if (primaryFresh) {
-    return withProgress.find((task) => taskRoleForBlock(policy, task.task) === "supporting") ?? withProgress[0] ?? null;
+  return withProgress.find((task) => taskRoleForBlock(policy, task.stream) === "supporting") ?? withProgress[0] ?? null;
   }
 
   return withProgress[0] ?? null;
@@ -362,7 +362,7 @@ function isHealthyDisplayBlock(block: SyncDomainBlockStatus) {
 
 export function mapDomainBlockToSyncUx(block: SyncDomainBlockStatus): SyncUxSummary {
   const updatedAt = latestIso(block.tasks.map((task) => (
-    task.lastProgressAt ? new Date(task.lastProgressAt) : task.lastSuccessAt ? new Date(task.lastSuccessAt) : null
+    task.progressedAt ? new Date(task.progressedAt) : task.succeededAt ? new Date(task.succeededAt) : null
   )));
   const progressLabel = block.progress?.label ?? null;
   const reasonSummary = block.statusReason?.summary ?? block.error?.summary ?? null;
@@ -516,7 +516,7 @@ function buildPageSyncUx(blocks: SyncDomainBlockStatus[]) {
       return summary("syncing", {
         label: "Syncing",
         headline: "Syncing now",
-        detail: "Background sync is actively processing queued work.",
+        detail: "Background sync is actively processing pending work.",
         progressLabel: activeBlock.progress?.label ?? null,
         updatedAt: mapDomainBlockToSyncUx(activeBlock).updatedAt,
       });
@@ -539,9 +539,9 @@ function buildPageSyncUx(blocks: SyncDomainBlockStatus[]) {
     return summary("off", {
       label: "Paused",
       headline: "Sync is paused",
-      detail: "All supported sync domains are paused.",
-      updatedAt: latestIso(supportedBlocks.map((block) => (
-        block.lastSuccessAt ? new Date(block.lastSuccessAt) : null
+        detail: "All supported sync domains are paused.",
+        updatedAt: latestIso(supportedBlocks.map((block) => (
+        block.succeededAt ? new Date(block.succeededAt) : null
       ))),
     });
   }
@@ -559,21 +559,21 @@ function buildPageSyncUx(blocks: SyncDomainBlockStatus[]) {
     headline: "Up to date",
     detail: "All supported sync domains are current.",
     updatedAt: latestIso(supportedBlocks.map((block) => (
-      block.lastSuccessAt ? new Date(block.lastSuccessAt) : null
+      block.succeededAt ? new Date(block.succeededAt) : null
     ))),
   });
 }
 
 function buildProgressFromPayload(
-  task: SyncTaskRow,
+  task: PageSyncState,
   monitorRow: SyncMonitorStreamRow | null,
 ): SyncDomainProgress | null {
-  const payload = task.progressPayload ?? {};
+  const payload = task.progress ?? {};
 
   if (typeof payload.pageCount === "number" && typeof payload.offset === "number") {
     const total = Math.max(payload.pageCount, 0);
     const current = Math.max(0, Math.min(payload.offset, total));
-    const unit = task.task === "dm_conversations" ? "conversations" : task.task === "subscribers"
+    const unit = task.stream === "dm_conversations" ? "conversations" : task.stream === "subscribers"
       ? "subscribers"
       : "followers";
     return {
@@ -615,7 +615,7 @@ function buildProgressFromPayload(
     };
   }
 
-  if (task.task === "transactions" && typeof payload.processedTransactions === "number") {
+  if (task.stream === "transactions" && typeof payload.processedTransactions === "number") {
     const current = Math.max(0, payload.processedTransactions + (typeof payload.processedChargebacks === "number"
       ? payload.processedChargebacks
       : 0));
@@ -630,7 +630,7 @@ function buildProgressFromPayload(
     };
   }
 
-  if (task.task === "dm_messages" && monitorRow) {
+  if (task.stream === "dm_messages" && monitorRow) {
     const total = monitorRow.dmEligibleConversationCount;
     const current = monitorRow.dmBackfillCompleteConversationCount;
     const lagging = monitorRow.dmLaggingConversationCount;
@@ -669,19 +669,19 @@ function buildProgressFromPayload(
 }
 
 function deriveTaskState(
-  task: SyncTaskRow,
+  task: PageSyncState,
   monitorRow: SyncMonitorStreamRow | null,
   now: Date,
   queueContext?: QueueContext,
 ): SyncTaskReadStatus {
-  const policy = TASK_POLICY[task.task];
-  const queueAgeSeconds = task.desiredGeneration > task.appliedGeneration && task.lastRequestedAt
-    ? ageSeconds(task.lastRequestedAt, now)
+  const policy = SYNC_STREAM_POLICY[task.stream];
+  const queueAgeSeconds = task.requestSeq > task.appliedSeq && task.requestedAt
+    ? ageSeconds(task.requestedAt, now)
     : null;
-  const freshnessAgeSeconds = ageSeconds(task.lastSuccessAt, now);
+  const freshnessAgeSeconds = ageSeconds(task.succeededAt, now);
   const progressStalled = task.status === "running" &&
-    task.lastProgressAt !== null &&
-    (now.getTime() - task.lastProgressAt.getTime()) > policy.progressStallThresholdMs;
+    task.progressedAt !== null &&
+    (now.getTime() - task.progressedAt.getTime()) > policy.progressStallThresholdMs;
   const queueDelayed = queueAgeSeconds !== null &&
     (queueAgeSeconds * 1000) > policy.queueDelayThresholdMs;
   const nextDueAt = computeNextDueAt(task);
@@ -694,36 +694,36 @@ function deriveTaskState(
     state = "paused";
     statusReason = buildStatusReason("paused", "Sync is paused.");
   } else if (task.status === "blocked") {
-    if (task.blockerType === "dependency") {
+    if (task.blockerKind === "dependency") {
       state = "delayed";
       statusReason = buildStatusReason(
         task.blockerCode ?? "unmet_dependency",
-        task.blockerReason ?? "Waiting for prerequisite sync work.",
-        parseDependencyWaitingFor(task.blockerReason),
+        task.blockerMessage ?? "Waiting for prerequisite sync work.",
+        parseDependencyWaitingFor(task.blockerMessage),
       );
     } else {
       state = "failed";
       statusReason = buildStatusReason(
-        task.blockerCode ?? task.blockerType ?? "blocked",
-        task.blockerReason ?? task.lastErrorSummary ?? "Sync is blocked.",
+        task.blockerCode ?? task.blockerKind ?? "blocked",
+        task.blockerMessage ?? task.lastErrorSummary ?? "Sync is blocked.",
       );
     }
-  } else if (task.status === "retry_wait") {
+  } else if (task.status === "retrying") {
     state = "retrying";
     statusReason = buildStatusReason(
-      task.retryClass ?? "retry_wait",
+      task.retryKind ?? "retrying",
       task.lastErrorSummary ?? "Retrying automatically.",
     );
   } else if (task.status === "running") {
     if (progressStalled) {
       state = "delayed";
       statusReason = buildStatusReason("progress_stalled", "Sync is running but not making progress.");
-    } else if ((task.currentWorkClass ?? policy.defaultWorkClass) === "live") {
+    } else if ((task.workClass ?? policy.defaultWorkClass) === "live") {
       state = "syncing";
     } else {
       state = "backfilling";
     }
-  } else if (task.desiredGeneration > task.appliedGeneration || task.status === "queued") {
+  } else if (task.requestSeq > task.appliedSeq || task.status === "pending") {
     if ((queueContext?.activeSiblingStreams.length ?? 0) > 0) {
       state = "scheduled";
       statusReason = buildStatusReason(
@@ -740,9 +740,9 @@ function deriveTaskState(
     } else {
       state = "scheduled";
     }
-  } else if (task.lastSuccessAt === null && task.desiredGeneration === 0) {
+  } else if (task.succeededAt === null && task.requestSeq === 0) {
     state = "not_started";
-  } else if (task.lastSuccessAt !== null && policy.freshnessSlaSeconds !== null && freshnessAgeSeconds !== null &&
+  } else if (task.succeededAt !== null && policy.freshnessSlaSeconds !== null && freshnessAgeSeconds !== null &&
     freshnessAgeSeconds > policy.freshnessSlaSeconds) {
     state = "delayed";
     statusReason = buildStatusReason("stale", "Last successful sync is older than the freshness target.");
@@ -751,24 +751,24 @@ function deriveTaskState(
   }
 
   const isFresh = policy.freshnessSlaSeconds === null
-    ? task.lastSuccessAt !== null
+    ? task.succeededAt !== null
     : freshnessAgeSeconds !== null && freshnessAgeSeconds <= policy.freshnessSlaSeconds;
   const error = state === "failed" || state === "retrying"
     ? buildTaskError(task, statusReason)
     : null;
 
   return {
-    task: task.task,
+    stream: task.stream,
     domain: policy.domain,
-    runtimeState: task.lastSuccessAt === null && task.desiredGeneration === 0 ? "not_started" : task.status,
+    runtimeState: task.succeededAt === null && task.requestSeq === 0 ? "not_started" : task.status,
     state,
-    workClass: task.currentWorkClass ?? policy.defaultWorkClass,
-    phase: task.currentPhase,
-    desiredGeneration: task.desiredGeneration,
-    appliedGeneration: task.appliedGeneration,
-    lastSuccessAt: iso(task.lastSuccessAt),
-    lastProgressAt: iso(task.lastProgressAt),
-    lastFailureAt: iso(task.lastFailureAt),
+    workClass: task.workClass ?? policy.defaultWorkClass,
+    phase: task.phase,
+    requestedSeq: task.requestSeq,
+    appliedSeq: task.appliedSeq,
+    succeededAt: iso(task.succeededAt),
+    progressedAt: iso(task.progressedAt),
+    failedAt: iso(task.failedAt),
     nextDueAt: iso(nextDueAt),
     nextRetryAt: iso(task.retryAt),
     queueAgeSeconds,
@@ -791,13 +791,13 @@ function deriveDomainState(
   tasks: SyncTaskReadStatus[],
   monitorRows: SyncMonitorStreamRow[],
 ): SyncDomainBlockStatus {
-  const policy = DOMAIN_POLICY[block];
+  const policy = SYNC_DOMAIN_POLICY[block];
   const supportedTasks = tasks;
   if (supportedTasks.length === 0) {
     return {
       block,
       state: "not_available",
-      lastSuccessAt: null,
+      succeededAt: null,
       progress: null,
       progressStream: null,
       progressRole: null,
@@ -815,16 +815,16 @@ function deriveDomainState(
     };
   }
 
-  const primaryTasks = supportedTasks.filter((task) => policy.primaryTasks.includes(task.task));
-  const supportingTasks = supportedTasks.filter((task) => policy.supportingTasks.includes(task.task));
+  const primaryTasks = supportedTasks.filter((task) => policy.primaryStreams.includes(task.stream));
+  const supportingTasks = supportedTasks.filter((task) => policy.supportingStreams.includes(task.stream));
   const earliestRetryAt = earliestIso(supportedTasks.map((task) => (
     task.nextRetryAt ? new Date(task.nextRetryAt) : null
   )));
   const earliestNextDueAt = earliestIso(supportedTasks.map((task) => (
     task.nextDueAt ? new Date(task.nextDueAt) : null
   )));
-  const lastSuccessAt = latestIso(supportedTasks.map((task) => (
-    task.lastSuccessAt ? new Date(task.lastSuccessAt) : null
+  const succeededAt = latestIso(supportedTasks.map((task) => (
+    task.succeededAt ? new Date(task.succeededAt) : null
   )));
   const primaryPending = primaryTasks.some(hasPendingWork);
   const supportingPending = supportingTasks.some(hasPendingWork);
@@ -837,15 +837,15 @@ function deriveDomainState(
   const anyPrimaryHistoryRunning = primaryTasks.some((task) =>
     task.runtimeState === "running" && task.workClass !== "live"
   );
-  const anyPrimaryRetrying = primaryTasks.some((task) => task.runtimeState === "retry_wait");
+  const anyPrimaryRetrying = primaryTasks.some((task) => task.runtimeState === "retrying");
   const anySupportingLiveRunning = supportingTasks.some((task) =>
     task.runtimeState === "running" && task.workClass === "live"
   );
   const anySupportingHistoryRunning = supportingTasks.some((task) =>
     task.runtimeState === "running" && task.workClass !== "live"
   );
-  const anySupportingRetrying = supportingTasks.some((task) => task.runtimeState === "retry_wait");
-  const allPrimaryNeverSucceeded = primaryTasks.every((task) => task.lastSuccessAt === null);
+  const anySupportingRetrying = supportingTasks.some((task) => task.runtimeState === "retrying");
+  const allPrimaryNeverSucceeded = primaryTasks.every((task) => task.succeededAt === null);
   const allPrimaryFresh = primaryTasks.every(isFreshEnough);
   const primaryFresh = allPrimaryFresh;
   const messagesMonitorRow = monitorRows.find((row) => row.stream === "dm_messages") ?? monitorRows[0] ?? null;
@@ -898,7 +898,7 @@ function deriveDomainState(
   }
 
   const progressTask = block === "messages_history"
-    ? primaryTasks.find((task) => task.task === "dm_messages") ?? null
+    ? primaryTasks.find((task) => task.stream === "dm_messages") ?? null
     : pickProgressTask(supportedTasks, policy, primaryFresh);
   const progress = block === "messages_history" && messagesMonitorRow
     ? {
@@ -925,7 +925,7 @@ function deriveDomainState(
       },
     } satisfies SyncDomainProgress
     : progressTask?.progress ?? null;
-  const progressStream = progress ? progressTask?.task ?? null : null;
+  const progressStream = progress ? progressTask?.stream ?? null : null;
   const progressRole = progressStream ? taskRoleForBlock(policy, progressStream) : null;
 
   const metricsRow = monitorRows[0] ?? null;
@@ -972,10 +972,10 @@ function deriveDomainState(
     : null;
   const error = errorTask?.error
     ? {
-      stream: errorTask.task,
+      stream: errorTask.stream,
       code: errorTask.error.code,
       summary: errorTask.error.summary,
-      lastFailedAt: errorTask.error.lastFailedAt,
+      failedAt: errorTask.error.failedAt,
       consecutiveFailures: errorTask.error.consecutiveFailures,
     }
     : null;
@@ -991,7 +991,7 @@ function deriveDomainState(
   return {
     block,
     state,
-    lastSuccessAt,
+    succeededAt,
     progress,
     progressStream,
     progressRole,
@@ -1002,28 +1002,28 @@ function deriveDomainState(
     nextDueAt: earliestNextDueAt,
     nextRetryAt: earliestRetryAt,
     intervals: supportedTasks.map((task) => ({
-      stream: task.task,
-      cadenceSeconds: TASK_POLICY[task.task].cadenceSeconds,
+      stream: task.stream,
+      cadenceSeconds: SYNC_STREAM_POLICY[task.stream].cadenceSeconds,
     })),
     metrics,
     connectionStatus,
     substreams: supportedTasks.map((task) => ({
-      stream: task.task,
-      role: taskRoleForBlock(policy, task.task),
+      stream: task.stream,
+      role: taskRoleForBlock(policy, task.stream),
       state: task.state,
-      lastSuccessAt: task.lastSuccessAt,
+      succeededAt: task.succeededAt,
       nextDueAt: task.nextDueAt,
       nextRetryAt: task.nextRetryAt,
-      cadenceSeconds: TASK_POLICY[task.task].cadenceSeconds,
+      cadenceSeconds: SYNC_STREAM_POLICY[task.stream].cadenceSeconds,
       isFresh: task.isFresh,
       needsAttention: task.needsAttention,
       statusReason: task.statusReason,
       error: task.error
         ? {
-          stream: task.task,
+          stream: task.stream,
           code: task.error.code,
           summary: task.error.summary,
-          lastFailedAt: task.error.lastFailedAt,
+          failedAt: task.error.failedAt,
           consecutiveFailures: task.error.consecutiveFailures,
         }
         : null,
@@ -1063,20 +1063,20 @@ export async function getSyncStatusSnapshot(
   }
 
   if (input?.pageIds || input?.pageLabel || scopedPageIds.length === 1) {
-    await Promise.all(scopedPageIds.map((pageId) => ensureSyncTaskRows(app.db, {
-      platformAccountId: pageId,
+    await Promise.all(scopedPageIds.map((pageId) => ensurePageSyncStates(app.db, {
+      pageId,
       now,
     })));
   } else {
-    await ensureSyncTaskRows(app.db, { now });
+    await ensurePageSyncStates(app.db, { now });
   }
 
   const [taskRows, monitorRows] = await Promise.all([
-    listSyncTaskRows(app.db),
+    listPageSyncStates(app.db),
     listSyncMonitorStreamRows(app.db, {
       pageIds: scopedPageIds,
       windowStart: new Date(now.getTime() - 24 * 60 * 60 * 1000),
-      streams: [...getSyncTasksForPlatform("fansly")],
+      streams: [...getSyncStreamsForPlatform("fansly")],
     }),
   ]);
 
@@ -1085,27 +1085,27 @@ export async function getSyncStatusSnapshot(
   const runtimeGroupByPageId = new Map(
     allVisiblePages.map((page) => [page.id, buildRuntimeGroupId(page)] as const),
   );
-  const activeStreamsByGroupId = new Map<string, Set<SyncV2Task>>();
+  const activeStreamsByGroupId = new Map<string, Set<SyncStream>>();
   for (const taskRow of taskRows) {
-    if (!visiblePageIds.has(taskRow.platformAccountId) || !hasActiveProgress(taskRow, now)) {
+    if (!visiblePageIds.has(taskRow.pageId) || !hasActiveProgress(taskRow, now)) {
       continue;
     }
 
-    const page = pagesById.get(taskRow.platformAccountId);
+    const page = pagesById.get(taskRow.pageId);
     if (!page) {
       continue;
     }
 
     const groupId = runtimeGroupByPageId.get(page.id) ?? buildRuntimeGroupId(page);
-    const current = activeStreamsByGroupId.get(groupId) ?? new Set<SyncV2Task>();
-    current.add(taskRow.task);
+    const current = activeStreamsByGroupId.get(groupId) ?? new Set<SyncStream>();
+    current.add(taskRow.stream);
     activeStreamsByGroupId.set(groupId, current);
   }
 
   const taskRowsByPageTask = new Map(
     taskRows
-      .filter((row) => scopedPageIds.includes(row.platformAccountId))
-      .map((row) => [`${row.platformAccountId}:${row.task}`, row] as const),
+      .filter((row) => scopedPageIds.includes(row.pageId))
+      .map((row) => [`${row.pageId}:${row.stream}`, row] as const),
   );
   const monitorRowsByPageTask = new Map(
     monitorRows.map((row) => [`${row.pageId}:${row.stream}`, row] as const),
@@ -1114,39 +1114,41 @@ export async function getSyncStatusSnapshot(
   return {
     generatedAt: now.toISOString(),
     pages: scopedPages.map((page) => {
-      const supportedTasks = getSyncTasksForPlatform(page.platform);
+      const supportedTasks = getSyncStreamsForPlatform(page.platform);
       const blocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) => {
         const domainTasks = supportedTasks
-          .filter((task) => DOMAIN_POLICY[block].primaryTasks.includes(task) || DOMAIN_POLICY[block].supportingTasks.includes(task))
-          .map((task) => {
-            const taskRow = taskRowsByPageTask.get(`${page.id}:${task}`);
-            const monitorRow = monitorRowsByPageTask.get(`${page.id}:${task}`) ?? null;
+          .filter((stream) => SYNC_DOMAIN_POLICY[block].primaryStreams.includes(stream) || SYNC_DOMAIN_POLICY[block].supportingStreams.includes(stream))
+          .map((stream) => {
+            const taskRow = taskRowsByPageTask.get(`${page.id}:${stream}`);
+            const monitorRow = monitorRowsByPageTask.get(`${page.id}:${stream}`) ?? null;
             const effectiveTaskRow = taskRow ?? {
-              platformAccountId: page.id,
-              task,
+              pageId: page.id,
+              stream,
               status: "idle",
-              desiredGeneration: 0,
-              runningGeneration: null,
-              appliedGeneration: 0,
-              scheduleIntervalSeconds: TASK_POLICY[task].cadenceSeconds,
+              requestSeq: 0,
+              leasedSeq: null,
+              appliedSeq: 0,
+              requestSource: null,
+              requestPayload: {},
+              cadenceSeconds: SYNC_STREAM_POLICY[stream].cadenceSeconds,
               slotOffsetSeconds: 0,
               lastScheduledSlot: 0,
-              lastRequestedAt: null,
-              lastEnqueuedAt: null,
-              lastStartedAt: null,
-              lastProgressAt: null,
-              lastFinishedAt: null,
-              lastSuccessAt: null,
-              lastFailureAt: null,
-              retryClass: null,
+              requestedAt: null,
+              enqueuedAt: null,
+              startedAt: null,
+              progressedAt: null,
+              finishedAt: null,
+              succeededAt: null,
+              failedAt: null,
+              retryKind: null,
               retryAt: null,
-              blockerType: null,
+              blockerKind: null,
               blockerCode: null,
-              blockerReason: null,
-              blockedSince: null,
-              currentPhase: null,
-              currentWorkClass: TASK_POLICY[task].defaultWorkClass,
-              progressPayload: {},
+              blockerMessage: null,
+              blockedAt: null,
+              phase: null,
+              workClass: SYNC_STREAM_POLICY[stream].defaultWorkClass,
+              progress: {},
               leaseOwner: null,
               leaseToken: null,
               leaseHeartbeatAt: null,
@@ -1156,7 +1158,7 @@ export async function getSyncStatusSnapshot(
               lastErrorSummary: null,
               createdAt: now,
               updatedAt: now,
-            } satisfies SyncTaskRow;
+            } satisfies PageSyncState;
 
             const groupId = runtimeGroupByPageId.get(page.id) ?? buildRuntimeGroupId(page);
             const activeSiblingStreams = sortTasksByPolicyOrder(activeStreamsByGroupId.get(groupId) ?? []);
@@ -1167,7 +1169,7 @@ export async function getSyncStatusSnapshot(
           });
         const domainMonitorRows = monitorRows.filter((row) =>
           row.pageId === page.id &&
-          domainTasks.some((task) => task.task === row.stream)
+          domainTasks.some((task) => task.stream === row.stream)
         );
 
         return [block, deriveDomainState(block, page, domainTasks, domainMonitorRows)] as const;

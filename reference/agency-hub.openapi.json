@@ -10191,6 +10191,13 @@
                                 ],
                                 "additionalProperties": false
                               },
+                              "segment": {
+                                "type": "string",
+                                "enum": [
+                                  "active",
+                                  "inactive"
+                                ]
+                              },
                               "overdueDays": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
@@ -10287,6 +10294,7 @@
                                   "status": {
                                     "type": "string",
                                     "enum": [
+                                      "active",
                                       "expired",
                                       "never"
                                     ]
@@ -10323,6 +10331,7 @@
                               "fanId",
                               "fan",
                               "ltv",
+                              "segment",
                               "overdueDays",
                               "silenceDays",
                               "conversation",
@@ -10416,6 +10425,13 @@
                                 ],
                                 "additionalProperties": false
                               },
+                              "segment": {
+                                "type": "string",
+                                "enum": [
+                                  "active",
+                                  "inactive"
+                                ]
+                              },
                               "overdueDays": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
@@ -10512,6 +10528,7 @@
                                   "status": {
                                     "type": "string",
                                     "enum": [
+                                      "active",
                                       "expired",
                                       "never"
                                     ]
@@ -10548,6 +10565,7 @@
                               "fanId",
                               "fan",
                               "ltv",
+                              "segment",
                               "overdueDays",
                               "silenceDays",
                               "conversation",
@@ -15672,7 +15690,7 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
-                        "failedStreams": {
+                        "blockedStreams": {
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
@@ -15687,7 +15705,7 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
-                        "backoffStreams": {
+                        "retryingStreams": {
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
@@ -15987,10 +16005,10 @@
                         "pages",
                         "streams",
                         "runningStreams",
-                        "failedStreams",
+                        "blockedStreams",
                         "stalledStreams",
                         "pendingStreams",
-                        "backoffStreams",
+                        "retryingStreams",
                         "counts",
                         "recentRuns",
                         "recentErrors",
@@ -16097,7 +16115,7 @@
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
                               },
-                              "failedStreams": {
+                              "blockedStreams": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -16112,7 +16130,7 @@
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
                               },
-                              "backoffStreams": {
+                              "retryingStreams": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
@@ -16120,10 +16138,10 @@
                             },
                             "required": [
                               "runningStreams",
-                              "failedStreams",
+                              "blockedStreams",
                               "stalledStreams",
                               "pendingStreams",
-                              "backoffStreams"
+                              "retryingStreams"
                             ],
                             "additionalProperties": false
                           },
@@ -16147,13 +16165,12 @@
                                 "status": {
                                   "type": "string",
                                   "enum": [
-                                    "running",
                                     "idle",
-                                    "completed",
-                                    "failed",
-                                    "paused",
-                                    "auth_failed",
-                                    "disabled"
+                                    "pending",
+                                    "running",
+                                    "retrying",
+                                    "blocked",
+                                    "paused"
                                   ]
                                 },
                                 "stalled": {
@@ -16162,7 +16179,7 @@
                                 "pending": {
                                   "type": "boolean"
                                 },
-                                "backoffUntil": {
+                                "retryAt": {
                                   "anyOf": [
                                     {
                                       "type": "string"
@@ -16462,7 +16479,7 @@
                                     }
                                   ]
                                 },
-                                "lastSuccessAt": {
+                                "succeededAt": {
                                   "anyOf": [
                                     {
                                       "type": "string"
@@ -16472,7 +16489,7 @@
                                     }
                                   ]
                                 },
-                                "lastFailureAt": {
+                                "failedAt": {
                                   "anyOf": [
                                     {
                                       "type": "string"
@@ -16580,15 +16597,15 @@
                                 "status",
                                 "stalled",
                                 "pending",
-                                "backoffUntil",
+                                "retryAt",
                                 "progress",
                                 "recentRuns",
                                 "recentErrors",
                                 "rateHealth",
                                 "activeRun",
                                 "lastCompletion",
-                                "lastSuccessAt",
-                                "lastFailureAt",
+                                "succeededAt",
+                                "failedAt",
                                 "lastErrorSummary",
                                 "consecutiveFailures",
                                 "syncUx"
@@ -16940,8 +16957,7 @@
                           "subscribers",
                           "dm_conversations",
                           "dm_messages",
-                          "followers_reconcile",
-                          "cleanup"
+                          "followers_reconcile"
                         ]
                       },
                       "operation": {
@@ -17205,7 +17221,7 @@
                               "enum": [
                                 "worker_offline",
                                 "stalled_run",
-                                "auth_failed"
+                                "auth_blocked"
                               ]
                             },
                             "severity": {
@@ -17307,7 +17323,7 @@
                                     "enum": [
                                       "worker_offline",
                                       "stalled_run",
-                                      "auth_failed"
+                                      "auth_blocked"
                                     ]
                                   },
                                   "severity": {
@@ -17384,7 +17400,7 @@
                                       "not_available"
                                     ]
                                   },
-                                  "lastSuccessAt": {
+                                  "succeededAt": {
                                     "anyOf": [
                                       {
                                         "type": "string"
@@ -17514,7 +17530,7 @@
                                               }
                                             ]
                                           },
-                                          "lastFailedAt": {
+                                          "failedAt": {
                                             "anyOf": [
                                               {
                                                 "type": "string"
@@ -17534,7 +17550,7 @@
                                           "stream",
                                           "code",
                                           "summary",
-                                          "lastFailedAt",
+                                          "failedAt",
                                           "consecutiveFailures"
                                         ],
                                         "additionalProperties": false
@@ -17713,7 +17729,7 @@
                                             "paused"
                                           ]
                                         },
-                                        "lastSuccessAt": {
+                                        "succeededAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -17840,7 +17856,7 @@
                                                     }
                                                   ]
                                                 },
-                                                "lastFailedAt": {
+                                                "failedAt": {
                                                   "anyOf": [
                                                     {
                                                       "type": "string"
@@ -17860,7 +17876,7 @@
                                                 "stream",
                                                 "code",
                                                 "summary",
-                                                "lastFailedAt",
+                                                "failedAt",
                                                 "consecutiveFailures"
                                               ],
                                               "additionalProperties": false
@@ -17875,7 +17891,7 @@
                                         "stream",
                                         "role",
                                         "state",
-                                        "lastSuccessAt",
+                                        "succeededAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
@@ -17891,7 +17907,7 @@
                                 "required": [
                                   "block",
                                   "state",
-                                  "lastSuccessAt",
+                                  "succeededAt",
                                   "progress",
                                   "progressStream",
                                   "progressRole",
@@ -17936,7 +17952,7 @@
                                       "not_available"
                                     ]
                                   },
-                                  "lastSuccessAt": {
+                                  "succeededAt": {
                                     "anyOf": [
                                       {
                                         "type": "string"
@@ -18066,7 +18082,7 @@
                                               }
                                             ]
                                           },
-                                          "lastFailedAt": {
+                                          "failedAt": {
                                             "anyOf": [
                                               {
                                                 "type": "string"
@@ -18086,7 +18102,7 @@
                                           "stream",
                                           "code",
                                           "summary",
-                                          "lastFailedAt",
+                                          "failedAt",
                                           "consecutiveFailures"
                                         ],
                                         "additionalProperties": false
@@ -18265,7 +18281,7 @@
                                             "paused"
                                           ]
                                         },
-                                        "lastSuccessAt": {
+                                        "succeededAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -18392,7 +18408,7 @@
                                                     }
                                                   ]
                                                 },
-                                                "lastFailedAt": {
+                                                "failedAt": {
                                                   "anyOf": [
                                                     {
                                                       "type": "string"
@@ -18412,7 +18428,7 @@
                                                 "stream",
                                                 "code",
                                                 "summary",
-                                                "lastFailedAt",
+                                                "failedAt",
                                                 "consecutiveFailures"
                                               ],
                                               "additionalProperties": false
@@ -18427,7 +18443,7 @@
                                         "stream",
                                         "role",
                                         "state",
-                                        "lastSuccessAt",
+                                        "succeededAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
@@ -18443,7 +18459,7 @@
                                 "required": [
                                   "block",
                                   "state",
-                                  "lastSuccessAt",
+                                  "succeededAt",
                                   "progress",
                                   "progressStream",
                                   "progressRole",
@@ -18488,7 +18504,7 @@
                                       "not_available"
                                     ]
                                   },
-                                  "lastSuccessAt": {
+                                  "succeededAt": {
                                     "anyOf": [
                                       {
                                         "type": "string"
@@ -18618,7 +18634,7 @@
                                               }
                                             ]
                                           },
-                                          "lastFailedAt": {
+                                          "failedAt": {
                                             "anyOf": [
                                               {
                                                 "type": "string"
@@ -18638,7 +18654,7 @@
                                           "stream",
                                           "code",
                                           "summary",
-                                          "lastFailedAt",
+                                          "failedAt",
                                           "consecutiveFailures"
                                         ],
                                         "additionalProperties": false
@@ -18817,7 +18833,7 @@
                                             "paused"
                                           ]
                                         },
-                                        "lastSuccessAt": {
+                                        "succeededAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -18944,7 +18960,7 @@
                                                     }
                                                   ]
                                                 },
-                                                "lastFailedAt": {
+                                                "failedAt": {
                                                   "anyOf": [
                                                     {
                                                       "type": "string"
@@ -18964,7 +18980,7 @@
                                                 "stream",
                                                 "code",
                                                 "summary",
-                                                "lastFailedAt",
+                                                "failedAt",
                                                 "consecutiveFailures"
                                               ],
                                               "additionalProperties": false
@@ -18979,7 +18995,7 @@
                                         "stream",
                                         "role",
                                         "state",
-                                        "lastSuccessAt",
+                                        "succeededAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
@@ -18995,7 +19011,7 @@
                                 "required": [
                                   "block",
                                   "state",
-                                  "lastSuccessAt",
+                                  "succeededAt",
                                   "progress",
                                   "progressStream",
                                   "progressRole",
@@ -19040,7 +19056,7 @@
                                       "not_available"
                                     ]
                                   },
-                                  "lastSuccessAt": {
+                                  "succeededAt": {
                                     "anyOf": [
                                       {
                                         "type": "string"
@@ -19170,7 +19186,7 @@
                                               }
                                             ]
                                           },
-                                          "lastFailedAt": {
+                                          "failedAt": {
                                             "anyOf": [
                                               {
                                                 "type": "string"
@@ -19190,7 +19206,7 @@
                                           "stream",
                                           "code",
                                           "summary",
-                                          "lastFailedAt",
+                                          "failedAt",
                                           "consecutiveFailures"
                                         ],
                                         "additionalProperties": false
@@ -19369,7 +19385,7 @@
                                             "paused"
                                           ]
                                         },
-                                        "lastSuccessAt": {
+                                        "succeededAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -19496,7 +19512,7 @@
                                                     }
                                                   ]
                                                 },
-                                                "lastFailedAt": {
+                                                "failedAt": {
                                                   "anyOf": [
                                                     {
                                                       "type": "string"
@@ -19516,7 +19532,7 @@
                                                 "stream",
                                                 "code",
                                                 "summary",
-                                                "lastFailedAt",
+                                                "failedAt",
                                                 "consecutiveFailures"
                                               ],
                                               "additionalProperties": false
@@ -19531,7 +19547,7 @@
                                         "stream",
                                         "role",
                                         "state",
-                                        "lastSuccessAt",
+                                        "succeededAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
@@ -19547,7 +19563,7 @@
                                 "required": [
                                   "block",
                                   "state",
-                                  "lastSuccessAt",
+                                  "succeededAt",
                                   "progress",
                                   "progressStream",
                                   "progressRole",
@@ -19592,7 +19608,7 @@
                                       "not_available"
                                     ]
                                   },
-                                  "lastSuccessAt": {
+                                  "succeededAt": {
                                     "anyOf": [
                                       {
                                         "type": "string"
@@ -19722,7 +19738,7 @@
                                               }
                                             ]
                                           },
-                                          "lastFailedAt": {
+                                          "failedAt": {
                                             "anyOf": [
                                               {
                                                 "type": "string"
@@ -19742,7 +19758,7 @@
                                           "stream",
                                           "code",
                                           "summary",
-                                          "lastFailedAt",
+                                          "failedAt",
                                           "consecutiveFailures"
                                         ],
                                         "additionalProperties": false
@@ -19921,7 +19937,7 @@
                                             "paused"
                                           ]
                                         },
-                                        "lastSuccessAt": {
+                                        "succeededAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -20048,7 +20064,7 @@
                                                     }
                                                   ]
                                                 },
-                                                "lastFailedAt": {
+                                                "failedAt": {
                                                   "anyOf": [
                                                     {
                                                       "type": "string"
@@ -20068,7 +20084,7 @@
                                                 "stream",
                                                 "code",
                                                 "summary",
-                                                "lastFailedAt",
+                                                "failedAt",
                                                 "consecutiveFailures"
                                               ],
                                               "additionalProperties": false
@@ -20083,7 +20099,7 @@
                                         "stream",
                                         "role",
                                         "state",
-                                        "lastSuccessAt",
+                                        "succeededAt",
                                         "nextDueAt",
                                         "nextRetryAt",
                                         "cadenceSeconds",
@@ -20099,7 +20115,7 @@
                                 "required": [
                                   "block",
                                   "state",
-                                  "lastSuccessAt",
+                                  "succeededAt",
                                   "progress",
                                   "progressStream",
                                   "progressRole",
@@ -20303,7 +20319,7 @@
                                   "enum": [
                                     "worker_offline",
                                     "stalled_run",
-                                    "auth_failed"
+                                    "auth_blocked"
                                   ]
                                 },
                                 "severity": {
@@ -20380,7 +20396,7 @@
                                     "not_available"
                                   ]
                                 },
-                                "lastSuccessAt": {
+                                "succeededAt": {
                                   "anyOf": [
                                     {
                                       "type": "string"
@@ -20510,7 +20526,7 @@
                                             }
                                           ]
                                         },
-                                        "lastFailedAt": {
+                                        "failedAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -20530,7 +20546,7 @@
                                         "stream",
                                         "code",
                                         "summary",
-                                        "lastFailedAt",
+                                        "failedAt",
                                         "consecutiveFailures"
                                       ],
                                       "additionalProperties": false
@@ -20709,7 +20725,7 @@
                                           "paused"
                                         ]
                                       },
-                                      "lastSuccessAt": {
+                                      "succeededAt": {
                                         "anyOf": [
                                           {
                                             "type": "string"
@@ -20836,7 +20852,7 @@
                                                   }
                                                 ]
                                               },
-                                              "lastFailedAt": {
+                                              "failedAt": {
                                                 "anyOf": [
                                                   {
                                                     "type": "string"
@@ -20856,7 +20872,7 @@
                                               "stream",
                                               "code",
                                               "summary",
-                                              "lastFailedAt",
+                                              "failedAt",
                                               "consecutiveFailures"
                                             ],
                                             "additionalProperties": false
@@ -20871,7 +20887,7 @@
                                       "stream",
                                       "role",
                                       "state",
-                                      "lastSuccessAt",
+                                      "succeededAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
@@ -20887,7 +20903,7 @@
                               "required": [
                                 "block",
                                 "state",
-                                "lastSuccessAt",
+                                "succeededAt",
                                 "progress",
                                 "progressStream",
                                 "progressRole",
@@ -20932,7 +20948,7 @@
                                     "not_available"
                                   ]
                                 },
-                                "lastSuccessAt": {
+                                "succeededAt": {
                                   "anyOf": [
                                     {
                                       "type": "string"
@@ -21062,7 +21078,7 @@
                                             }
                                           ]
                                         },
-                                        "lastFailedAt": {
+                                        "failedAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -21082,7 +21098,7 @@
                                         "stream",
                                         "code",
                                         "summary",
-                                        "lastFailedAt",
+                                        "failedAt",
                                         "consecutiveFailures"
                                       ],
                                       "additionalProperties": false
@@ -21261,7 +21277,7 @@
                                           "paused"
                                         ]
                                       },
-                                      "lastSuccessAt": {
+                                      "succeededAt": {
                                         "anyOf": [
                                           {
                                             "type": "string"
@@ -21388,7 +21404,7 @@
                                                   }
                                                 ]
                                               },
-                                              "lastFailedAt": {
+                                              "failedAt": {
                                                 "anyOf": [
                                                   {
                                                     "type": "string"
@@ -21408,7 +21424,7 @@
                                               "stream",
                                               "code",
                                               "summary",
-                                              "lastFailedAt",
+                                              "failedAt",
                                               "consecutiveFailures"
                                             ],
                                             "additionalProperties": false
@@ -21423,7 +21439,7 @@
                                       "stream",
                                       "role",
                                       "state",
-                                      "lastSuccessAt",
+                                      "succeededAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
@@ -21439,7 +21455,7 @@
                               "required": [
                                 "block",
                                 "state",
-                                "lastSuccessAt",
+                                "succeededAt",
                                 "progress",
                                 "progressStream",
                                 "progressRole",
@@ -21484,7 +21500,7 @@
                                     "not_available"
                                   ]
                                 },
-                                "lastSuccessAt": {
+                                "succeededAt": {
                                   "anyOf": [
                                     {
                                       "type": "string"
@@ -21614,7 +21630,7 @@
                                             }
                                           ]
                                         },
-                                        "lastFailedAt": {
+                                        "failedAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -21634,7 +21650,7 @@
                                         "stream",
                                         "code",
                                         "summary",
-                                        "lastFailedAt",
+                                        "failedAt",
                                         "consecutiveFailures"
                                       ],
                                       "additionalProperties": false
@@ -21813,7 +21829,7 @@
                                           "paused"
                                         ]
                                       },
-                                      "lastSuccessAt": {
+                                      "succeededAt": {
                                         "anyOf": [
                                           {
                                             "type": "string"
@@ -21940,7 +21956,7 @@
                                                   }
                                                 ]
                                               },
-                                              "lastFailedAt": {
+                                              "failedAt": {
                                                 "anyOf": [
                                                   {
                                                     "type": "string"
@@ -21960,7 +21976,7 @@
                                               "stream",
                                               "code",
                                               "summary",
-                                              "lastFailedAt",
+                                              "failedAt",
                                               "consecutiveFailures"
                                             ],
                                             "additionalProperties": false
@@ -21975,7 +21991,7 @@
                                       "stream",
                                       "role",
                                       "state",
-                                      "lastSuccessAt",
+                                      "succeededAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
@@ -21991,7 +22007,7 @@
                               "required": [
                                 "block",
                                 "state",
-                                "lastSuccessAt",
+                                "succeededAt",
                                 "progress",
                                 "progressStream",
                                 "progressRole",
@@ -22036,7 +22052,7 @@
                                     "not_available"
                                   ]
                                 },
-                                "lastSuccessAt": {
+                                "succeededAt": {
                                   "anyOf": [
                                     {
                                       "type": "string"
@@ -22166,7 +22182,7 @@
                                             }
                                           ]
                                         },
-                                        "lastFailedAt": {
+                                        "failedAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -22186,7 +22202,7 @@
                                         "stream",
                                         "code",
                                         "summary",
-                                        "lastFailedAt",
+                                        "failedAt",
                                         "consecutiveFailures"
                                       ],
                                       "additionalProperties": false
@@ -22365,7 +22381,7 @@
                                           "paused"
                                         ]
                                       },
-                                      "lastSuccessAt": {
+                                      "succeededAt": {
                                         "anyOf": [
                                           {
                                             "type": "string"
@@ -22492,7 +22508,7 @@
                                                   }
                                                 ]
                                               },
-                                              "lastFailedAt": {
+                                              "failedAt": {
                                                 "anyOf": [
                                                   {
                                                     "type": "string"
@@ -22512,7 +22528,7 @@
                                               "stream",
                                               "code",
                                               "summary",
-                                              "lastFailedAt",
+                                              "failedAt",
                                               "consecutiveFailures"
                                             ],
                                             "additionalProperties": false
@@ -22527,7 +22543,7 @@
                                       "stream",
                                       "role",
                                       "state",
-                                      "lastSuccessAt",
+                                      "succeededAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
@@ -22543,7 +22559,7 @@
                               "required": [
                                 "block",
                                 "state",
-                                "lastSuccessAt",
+                                "succeededAt",
                                 "progress",
                                 "progressStream",
                                 "progressRole",
@@ -22588,7 +22604,7 @@
                                     "not_available"
                                   ]
                                 },
-                                "lastSuccessAt": {
+                                "succeededAt": {
                                   "anyOf": [
                                     {
                                       "type": "string"
@@ -22718,7 +22734,7 @@
                                             }
                                           ]
                                         },
-                                        "lastFailedAt": {
+                                        "failedAt": {
                                           "anyOf": [
                                             {
                                               "type": "string"
@@ -22738,7 +22754,7 @@
                                         "stream",
                                         "code",
                                         "summary",
-                                        "lastFailedAt",
+                                        "failedAt",
                                         "consecutiveFailures"
                                       ],
                                       "additionalProperties": false
@@ -22917,7 +22933,7 @@
                                           "paused"
                                         ]
                                       },
-                                      "lastSuccessAt": {
+                                      "succeededAt": {
                                         "anyOf": [
                                           {
                                             "type": "string"
@@ -23044,7 +23060,7 @@
                                                   }
                                                 ]
                                               },
-                                              "lastFailedAt": {
+                                              "failedAt": {
                                                 "anyOf": [
                                                   {
                                                     "type": "string"
@@ -23064,7 +23080,7 @@
                                               "stream",
                                               "code",
                                               "summary",
-                                              "lastFailedAt",
+                                              "failedAt",
                                               "consecutiveFailures"
                                             ],
                                             "additionalProperties": false
@@ -23079,7 +23095,7 @@
                                       "stream",
                                       "role",
                                       "state",
-                                      "lastSuccessAt",
+                                      "succeededAt",
                                       "nextDueAt",
                                       "nextRetryAt",
                                       "cadenceSeconds",
@@ -23095,7 +23111,7 @@
                               "required": [
                                 "block",
                                 "state",
-                                "lastSuccessAt",
+                                "succeededAt",
                                 "progress",
                                 "progressStream",
                                 "progressRole",
@@ -23326,7 +23342,7 @@
                                   "enum": [
                                     "worker_offline",
                                     "stalled_run",
-                                    "auth_failed"
+                                    "auth_blocked"
                                   ]
                                 },
                                 "severity": {
@@ -23413,7 +23429,7 @@
                             "not_available"
                           ]
                         },
-                        "lastSuccessAt": {
+                        "succeededAt": {
                           "anyOf": [
                             {
                               "type": "string"
@@ -23543,7 +23559,7 @@
                                     }
                                   ]
                                 },
-                                "lastFailedAt": {
+                                "failedAt": {
                                   "anyOf": [
                                     {
                                       "type": "string"
@@ -23563,7 +23579,7 @@
                                 "stream",
                                 "code",
                                 "summary",
-                                "lastFailedAt",
+                                "failedAt",
                                 "consecutiveFailures"
                               ],
                               "additionalProperties": false
@@ -23742,7 +23758,7 @@
                                   "paused"
                                 ]
                               },
-                              "lastSuccessAt": {
+                              "succeededAt": {
                                 "anyOf": [
                                   {
                                     "type": "string"
@@ -23869,7 +23885,7 @@
                                           }
                                         ]
                                       },
-                                      "lastFailedAt": {
+                                      "failedAt": {
                                         "anyOf": [
                                           {
                                             "type": "string"
@@ -23889,7 +23905,7 @@
                                       "stream",
                                       "code",
                                       "summary",
-                                      "lastFailedAt",
+                                      "failedAt",
                                       "consecutiveFailures"
                                     ],
                                     "additionalProperties": false
@@ -23904,7 +23920,7 @@
                               "stream",
                               "role",
                               "state",
-                              "lastSuccessAt",
+                              "succeededAt",
                               "nextDueAt",
                               "nextRetryAt",
                               "cadenceSeconds",
@@ -23920,7 +23936,7 @@
                       "required": [
                         "block",
                         "state",
-                        "lastSuccessAt",
+                        "succeededAt",
                         "progress",
                         "progressStream",
                         "progressRole",
@@ -28275,7 +28291,7 @@
                         "messages_history"
                       ]
                     },
-                    "revisions": {
+                    "requests": {
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -28293,7 +28309,7 @@
                               "followers_reconcile"
                             ]
                           },
-                          "desiredRevision": {
+                          "requestedSeq": {
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
@@ -28301,7 +28317,7 @@
                         },
                         "required": [
                           "stream",
-                          "desiredRevision"
+                          "requestedSeq"
                         ],
                         "additionalProperties": false
                       }
@@ -28543,7 +28559,7 @@
                         "messages_history"
                       ]
                     },
-                    "revisions": {
+                    "requests": {
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -28561,7 +28577,7 @@
                               "followers_reconcile"
                             ]
                           },
-                          "desiredRevision": {
+                          "requestedSeq": {
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
@@ -28569,7 +28585,7 @@
                         },
                         "required": [
                           "stream",
-                          "desiredRevision"
+                          "requestedSeq"
                         ],
                         "additionalProperties": false
                       }
@@ -28782,7 +28798,7 @@
                         "messages_history"
                       ]
                     },
-                    "revisions": {
+                    "requests": {
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -28800,7 +28816,7 @@
                               "followers_reconcile"
                             ]
                           },
-                          "desiredRevision": {
+                          "requestedSeq": {
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
@@ -28808,7 +28824,7 @@
                         },
                         "required": [
                           "stream",
-                          "desiredRevision"
+                          "requestedSeq"
                         ],
                         "additionalProperties": false
                       }
@@ -29021,7 +29037,7 @@
                         "messages_history"
                       ]
                     },
-                    "revisions": {
+                    "requests": {
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -29039,7 +29055,7 @@
                               "followers_reconcile"
                             ]
                           },
-                          "desiredRevision": {
+                          "requestedSeq": {
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
@@ -29047,7 +29063,7 @@
                         },
                         "required": [
                           "stream",
-                          "desiredRevision"
+                          "requestedSeq"
                         ],
                         "additionalProperties": false
                       }
@@ -33460,7 +33476,7 @@
             "schema": {
               "type": "string",
               "enum": [
-                "auth_failed",
+                "auth_blocked",
                 "proxy_failed",
                 "stream_failed_threshold"
               ]
@@ -33530,7 +33546,7 @@
                           "kind": {
                             "type": "string",
                             "enum": [
-                              "auth_failed",
+                              "auth_blocked",
                               "proxy_failed",
                               "stream_failed_threshold"
                             ]

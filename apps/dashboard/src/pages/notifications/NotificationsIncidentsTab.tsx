@@ -8,7 +8,7 @@ const LIMIT = 50;
 
 function kindLabel(kind: string) {
   switch (kind) {
-    case "auth_failed": return "Auth Failed";
+    case "auth_blocked": return "Auth Blocked";
     case "proxy_failed": return "Proxy Failed";
     case "stream_failed_threshold": return "Stream Failed 3x";
     default: return kind;
@@ -56,7 +56,7 @@ export function NotificationsIncidentsTab() {
           className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
         >
           <option value="">All Types</option>
-          <option value="auth_failed">Auth Failed</option>
+          <option value="auth_blocked">Auth Blocked</option>
           <option value="proxy_failed">Proxy Failed</option>
           <option value="stream_failed_threshold">Stream Failed 3x</option>
         </select>
@@ -159,4 +159,3 @@ export function NotificationsIncidentsTab() {
     </div>
   );
 }
-

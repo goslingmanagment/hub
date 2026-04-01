@@ -6,7 +6,7 @@ import {
   fanPageExternalNotes,
   fanPages,
   fans,
-  platformAccounts,
+  pages,
 } from "../schema.ts";
 
 export const FANSLY_PAGE_ALIAS_SOURCE = "fansly_custom_username_note" as const;
@@ -237,7 +237,7 @@ export async function listFanslyFanPageIdentityBackfillTargets(
     platformAccountIds?: number[];
   },
 ) {
-  const clauses = [eq(platformAccounts.platform, "fansly")];
+  const clauses = [eq(pages.platform, "fansly")];
 
   if (input?.platformAccountIds) {
     if (input.platformAccountIds.length === 0) {
@@ -248,12 +248,12 @@ export async function listFanslyFanPageIdentityBackfillTargets(
 
   return db.select({
     platformAccountId: fanPages.platformAccountId,
-    pageLabel: platformAccounts.label,
+    pageLabel: pages.label,
     fanId: fanPages.fanId,
     platformUserId: fans.platformUserId,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
-    .innerJoin(platformAccounts, eq(platformAccounts.id, fanPages.platformAccountId))
+    .innerJoin(pages, eq(pages.id, fanPages.platformAccountId))
     .where(and(...clauses))
-    .orderBy(platformAccounts.label, fans.platformUserId);
+    .orderBy(pages.label, fans.platformUserId);
 }

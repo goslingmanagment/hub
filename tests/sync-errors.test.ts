@@ -26,7 +26,7 @@ describe("sync error normalization", () => {
 
   it("sanitizes query-style payload persistence errors", () => {
     const drizzleError = new Error(
-      "Failed query: insert into raw_payloads values (...) params: [huge serialized payload]",
+      "Failed query: insert into sync_raw_payloads values (...) params: [huge serialized payload]",
     );
     drizzleError.name = "DrizzleQueryError";
     (drizzleError as Error & { cause: { code: string } }).cause = { code: "54000" };

@@ -55,7 +55,7 @@
   Kept `PAGE_DM_MESSAGE_HISTORY_LIMIT=25` as the canonical DM history limit and added a reset helper that clears stored DM state for a true message-block reset.
 
 - `packages/db/src/repositories/sync.ts`
-  Added `top_spenders` to the control plane, changed cadences, added DM dependency gating, added sync-state config reconciliation for existing rows, and added helpers for checkpoint deletion, status changes, row resets, and manual revision requests that preserve `auth_failed`.
+  Added `top_spenders` to the control plane, changed cadences, added DM dependency gating, added page-sync state config reconciliation for existing rows, and added helpers for checkpoint deletion, status changes, row resets, and manual request sequencing that preserve `auth_blocked` handling.
 
 - `packages/db/src/schema.ts`
   Added the `top_spenders` stream enum value, changed the DM stored-message constraint from `75` to `25`, and defined the new `page_top_spenders` table.
@@ -283,7 +283,7 @@
 - Legacy guardrails were preserved:
   - subscriber empty-page safety check
   - follower anomaly detection that triggers reconcile
-  - `auth_failed` still blocks all streams
+  - `auth_blocked` still blocks affected page streams
 
 ## Notable implementation choices
 

@@ -8,7 +8,7 @@ import {
   auditEvents,
   authSessions,
   models,
-  platformAccounts,
+  pages,
   userPageAssignments,
   users,
 } from "../schema.ts";
@@ -101,16 +101,16 @@ export async function unassignUserFromPage(db: Database, userId: number, platfor
 
 export async function listUserPageAssignments(db: Database, userId: number) {
   return db.select({
-    pageId: platformAccounts.id,
-    label: platformAccounts.label,
-    platform: platformAccounts.platform,
+    pageId: pages.id,
+    label: pages.label,
+    platform: pages.platform,
     modelSlug: models.slug,
     modelName: models.name,
   }).from(userPageAssignments)
-    .innerJoin(platformAccounts, eq(platformAccounts.id, userPageAssignments.platformAccountId))
-    .innerJoin(models, eq(models.id, platformAccounts.modelId))
+    .innerJoin(pages, eq(pages.id, userPageAssignments.platformAccountId))
+    .innerJoin(models, eq(models.id, pages.modelId))
     .where(eq(userPageAssignments.userId, userId))
-    .orderBy(models.slug, platformAccounts.label);
+    .orderBy(models.slug, pages.label);
 }
 
 export async function createAuthSession(db: Database, input: CreateAuthSessionInput) {

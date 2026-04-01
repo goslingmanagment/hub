@@ -11,11 +11,11 @@ import {
   listPageDmConversationsByPlatformConversationIds,
   markPageDmConversationsInvisibleByGeneration,
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
+  requestPageSync,
   rebuildFollowerRollups,
   rebuildSubscriberRollups,
-  requestSyncTaskGenerations,
   selectNextPageDmMessageSyncCandidate,
-  updateLegacySyncTimestamp,
+  updatePageSyncTimestampCache,
   upsertPageTopSpenders,
   upsertCheckpoint,
   upsertCheckpointProgress,
@@ -28,10 +28,10 @@ import {
   refreshFanPageFollowerState,
   refreshFanPageSubscriberState,
   type MessageCoverageStatus,
+  type PageSyncLease,
   type UpsertFanPageInput,
   type UpsertPageFollowInput,
   type UpsertPageSubscriptionInput,
-  type SyncStreamStateRow,
 } from "@agency_hub_core/db";
 import {
   FANSLY_MAPPER_VERSION,
@@ -66,6 +66,21 @@ import {
   type SyncRunTelemetry,
 } from "./observability.ts";
 import { composeRequestObservers, type SyncChunkYieldReason, type SyncChunkBudget } from "./chunk-budget.ts";
+import {
+  emptyDmMessagesCursorState,
+  parseDmConversationCursorState,
+  parseDmMessagesCursorState,
+  parseFollowersCursorState,
+  parseFollowersReconcileCursorState,
+  parseSubscribersCursorState,
+  parseTopSpendersCursorState,
+  type DmMessagesCursorState,
+  type FollowersCursorState,
+  type FollowersReconcileCursorState,
+  type SubscribersCursorState,
+  type TopSpendersCursorState,
+  type TopSpendersCursorWindow,
+} from "./cursor-state.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
   dmRetentionDate,
@@ -177,68 +192,6 @@ class DmMessagesChunkRequestObserver implements HttpRequestObserver {
   }
 }
 
-type SubscribersCheckpointState = {
-  revision: number;
-  generation: number;
-  offset: number;
-  pageCount: number;
-  providerReportedTotal: number | null;
-};
-
-type FollowersCheckpointState = {
-  revision: number;
-  knownFollowId: string | null;
-  newestFollowId: string | null;
-  offset: number;
-  pageCount: number;
-  sourceFollowerCount: number;
-};
-
-type FollowersReconcileCheckpointState = {
-  revision: number;
-  generation: number;
-  offset: number;
-  pageCount: number;
-  sourceFollowerCount: number;
-};
-
-type DmConversationCheckpointState = {
-  version: 1;
-  mode: "full_scan";
-  generation: number;
-  offset: number;
-  pageCount: number;
-  providerReportedTotal: number | null;
-  unchangedPageStreak: number;
-  fullSweepStartedAt: string;
-  lastFullSweepCompletedAt: string | null;
-};
-
-type DmMessagesCheckpointState = {
-  version: 1;
-  currentConversationId: number | null;
-  currentPlatformConversationId: string | null;
-  currentBeforeMessageId: string | null;
-  currentMode: "backfill" | "incremental" | null;
-};
-
-type TopSpendersCheckpointWindow = {
-  kind: "month" | "week" | "day";
-  monthKey: string;
-  startedAt: string;
-  endedAt: string;
-};
-
-type TopSpendersCheckpointState = {
-  version: 1;
-  mode: "bootstrap" | "steady_state";
-  accountCreatedAt: string;
-  totalMonths: number;
-  completedMonths: number;
-  pendingWindows: TopSpendersCheckpointWindow[];
-  lastWindowStartedAt: string | null;
-  lastWindowEndedAt: string | null;
-};
 
 function asRecord(value: unknown) {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -292,247 +245,6 @@ async function probeFanslyAccountResolution(
   }
 }
 
-function parseSubscribersCheckpointState(
-  value: unknown,
-  revision: number,
-): SubscribersCheckpointState | null {
-  const state = asRecord(value);
-  if (!state || asNumber(state.revision) !== revision) {
-    return null;
-  }
-
-  const generation = asNumber(state.generation);
-  const offset = asNumber(state.offset);
-  const pageCount = asNumber(state.pageCount);
-  const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
-  if (
-    generation === null ||
-    offset === null ||
-    pageCount === null ||
-    providerReportedTotal === undefined
-  ) {
-    return null;
-  }
-
-  return {
-    revision,
-    generation,
-    offset,
-    pageCount,
-    providerReportedTotal,
-  };
-}
-
-function parseFollowersCheckpointState(
-  value: unknown,
-  revision: number,
-): FollowersCheckpointState | null {
-  const state = asRecord(value);
-  if (!state || asNumber(state.revision) !== revision) {
-    return null;
-  }
-
-  const offset = asNumber(state.offset);
-  const pageCount = asNumber(state.pageCount);
-  const sourceFollowerCount = asNumber(state.sourceFollowerCount);
-  const knownFollowId = asNullableString(state.knownFollowId);
-  const newestFollowId = asNullableString(state.newestFollowId);
-  if (
-    offset === null ||
-    pageCount === null ||
-    sourceFollowerCount === null ||
-    knownFollowId === undefined ||
-    newestFollowId === undefined
-  ) {
-    return null;
-  }
-
-  return {
-    revision,
-    knownFollowId,
-    newestFollowId,
-    offset,
-    pageCount,
-    sourceFollowerCount,
-  };
-}
-
-function parseFollowersReconcileCheckpointState(
-  value: unknown,
-  revision: number,
-): FollowersReconcileCheckpointState | null {
-  const state = asRecord(value);
-  if (!state || asNumber(state.revision) !== revision) {
-    return null;
-  }
-
-  const generation = asNumber(state.generation);
-  const offset = asNumber(state.offset);
-  const pageCount = asNumber(state.pageCount);
-  const sourceFollowerCount = asNumber(state.sourceFollowerCount);
-  if (
-    generation === null ||
-    offset === null ||
-    pageCount === null ||
-    sourceFollowerCount === null
-  ) {
-    return null;
-  }
-
-  return {
-    revision,
-    generation,
-    offset,
-    pageCount,
-    sourceFollowerCount,
-  };
-}
-
-function parseDmConversationCheckpointState(value: unknown) {
-  const state = asRecord(value);
-  if (!state || asNumber(state.version) !== 1 || state.mode !== "full_scan") {
-    return null;
-  }
-
-  const generation = asNumber(state.generation);
-  const offset = asNumber(state.offset);
-  const pageCount = asNumber(state.pageCount);
-  const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
-  const unchangedPageStreak = asNumber(state.unchangedPageStreak);
-  const fullSweepStartedAt = asNullableString(state.fullSweepStartedAt);
-  const lastFullSweepCompletedAt = asNullableString(state.lastFullSweepCompletedAt);
-  if (
-    generation === null ||
-    offset === null ||
-    pageCount === null ||
-    providerReportedTotal === undefined ||
-    unchangedPageStreak === null ||
-    !fullSweepStartedAt
-  ) {
-    return null;
-  }
-
-  return {
-    version: 1 as const,
-    mode: "full_scan" as const,
-    generation,
-    offset,
-    pageCount,
-    providerReportedTotal,
-    unchangedPageStreak,
-    fullSweepStartedAt,
-    lastFullSweepCompletedAt,
-  } satisfies DmConversationCheckpointState;
-}
-
-function parseDmMessagesCheckpointState(value: unknown) {
-  const state = asRecord(value);
-  if (!state || asNumber(state.version) !== 1) {
-    return null;
-  }
-
-  const currentConversationId = state.currentConversationId === null
-    ? null
-    : asNumber(state.currentConversationId);
-  const currentPlatformConversationId = asNullableString(state.currentPlatformConversationId);
-  const currentBeforeMessageId = asNullableString(state.currentBeforeMessageId);
-  const currentMode = state.currentMode === "backfill" || state.currentMode === "incremental"
-    ? state.currentMode
-    : state.currentMode === null || state.currentMode === undefined
-      ? null
-      : undefined;
-
-  if (
-    currentConversationId === undefined ||
-    currentPlatformConversationId === undefined ||
-    currentBeforeMessageId === undefined ||
-    currentMode === undefined
-  ) {
-    return null;
-  }
-
-  return {
-    version: 1 as const,
-    currentConversationId,
-    currentPlatformConversationId,
-    currentBeforeMessageId,
-    currentMode,
-  } satisfies DmMessagesCheckpointState;
-}
-
-function emptyDmMessagesCheckpointState(): DmMessagesCheckpointState {
-  return {
-    version: 1,
-    currentConversationId: null,
-    currentPlatformConversationId: null,
-    currentBeforeMessageId: null,
-    currentMode: null,
-  };
-}
-
-function parseTopSpendersCheckpointState(value: unknown) {
-  const state = asRecord(value);
-  if (!state || asNumber(state.version) !== 1) {
-    return null;
-  }
-
-  const mode = state.mode === "bootstrap" || state.mode === "steady_state"
-    ? state.mode
-    : null;
-  const accountCreatedAt = asNullableString(state.accountCreatedAt);
-  const totalMonths = asNumber(state.totalMonths);
-  const completedMonths = asNumber(state.completedMonths);
-  const lastWindowStartedAt = asNullableString(state.lastWindowStartedAt);
-  const lastWindowEndedAt = asNullableString(state.lastWindowEndedAt);
-  const rawPendingWindows = Array.isArray(state.pendingWindows) ? state.pendingWindows : null;
-
-  if (
-    mode === null ||
-    !accountCreatedAt ||
-    totalMonths === null ||
-    completedMonths === null ||
-    lastWindowStartedAt === undefined ||
-    lastWindowEndedAt === undefined ||
-    rawPendingWindows === null
-  ) {
-    return null;
-  }
-
-  const pendingWindows = rawPendingWindows.flatMap((window) => {
-    const record = asRecord(window);
-    if (!record) {
-      return [];
-    }
-
-    const kind = record.kind === "month" || record.kind === "week" || record.kind === "day"
-      ? record.kind
-      : null;
-    const monthKey = asNullableString(record.monthKey);
-    const startedAt = asNullableString(record.startedAt);
-    const endedAt = asNullableString(record.endedAt);
-    if (!kind || !monthKey || !startedAt || !endedAt) {
-      return [];
-    }
-
-    return [{ kind, monthKey, startedAt, endedAt } satisfies TopSpendersCheckpointWindow];
-  });
-
-  if (pendingWindows.length !== rawPendingWindows.length) {
-    return null;
-  }
-
-  return {
-    version: 1 as const,
-    mode,
-    accountCreatedAt,
-    totalMonths,
-    completedMonths,
-    pendingWindows,
-    lastWindowStartedAt,
-    lastWindowEndedAt,
-  } satisfies TopSpendersCheckpointState;
-}
-
 function buildOnlyFansRequestContext(app: AppContext, input: ExecutorRequestContext) {
   if (input.pageContext.platform !== "onlyfans") {
     throw new Error("Expected an OnlyFans page context");
@@ -550,11 +262,10 @@ async function triggerFollowersReconcileAnomaly(
   app: AppContext,
   platformAccountId: number,
 ) {
-  await requestSyncTaskGenerations(app.db, {
-    platformAccountId,
-    tasks: ["followers_reconcile"],
+  await requestPageSync(app.db, {
+    pageId: platformAccountId,
+    streams: ["followers_reconcile"],
     source: "anomaly",
-    requestedByActor: "executor_anomaly",
   });
 }
 
@@ -668,7 +379,7 @@ function buildTopSpendersBootstrapWindows(
   accountCreatedAt: Date,
   now: Date,
 ) {
-  const windows: TopSpendersCheckpointWindow[] = [];
+  const windows: TopSpendersCursorWindow[] = [];
   let cursor = new Date(accountCreatedAt);
 
   while (cursor.getTime() < now.getTime()) {
@@ -686,7 +397,7 @@ function buildTopSpendersBootstrapWindows(
   return windows;
 }
 
-function splitTopSpendersWindow(window: TopSpendersCheckpointWindow) {
+function splitTopSpendersWindow(window: TopSpendersCursorWindow) {
   const nextWindowMs = window.kind === "month"
     ? TOP_SPENDERS_WINDOW_WEEK_MS
     : window.kind === "week"
@@ -701,7 +412,7 @@ function splitTopSpendersWindow(window: TopSpendersCheckpointWindow) {
     return null;
   }
 
-  const windows: TopSpendersCheckpointWindow[] = [];
+  const windows: TopSpendersCursorWindow[] = [];
   let cursor = new Date(window.startedAt);
   const endedAt = new Date(window.endedAt);
 
@@ -721,7 +432,7 @@ function splitTopSpendersWindow(window: TopSpendersCheckpointWindow) {
 
 function computeCompletedTopSpenderMonths(
   totalMonths: number,
-  pendingWindows: TopSpendersCheckpointWindow[],
+  pendingWindows: TopSpendersCursorWindow[],
 ) {
   const remainingMonths = new Set(pendingWindows.map((window) => window.monthKey)).size;
   return Math.max(0, totalMonths - remainingMonths);
@@ -730,7 +441,7 @@ function computeCompletedTopSpenderMonths(
 function buildTopSpendersBootstrapState(
   accountCreatedAt: Date,
   now: Date,
-): TopSpendersCheckpointState {
+): TopSpendersCursorState {
   const pendingWindows = buildTopSpendersBootstrapWindows(accountCreatedAt, now);
   return {
     version: 1,
@@ -897,8 +608,8 @@ export async function executeLightChunk(
   await input.telemetry.recordPhaseStarted("page_metadata");
   if (input.pageContext.platform === "fansly") {
     const account = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
-    await updateLegacySyncTimestamp(app.db, {
-      platformAccountId: input.pageContext.page.id,
+    await updatePageSyncTimestampCache(app.db, {
+      pageId: input.pageContext.page.id,
       syncType: "light",
     });
 
@@ -913,8 +624,8 @@ export async function executeLightChunk(
   }
 
   const account = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
-  await updateLegacySyncTimestamp(app.db, {
-    platformAccountId: input.pageContext.page.id,
+  await updatePageSyncTimestampCache(app.db, {
+    pageId: input.pageContext.page.id,
     syncType: "light",
   });
 
@@ -951,7 +662,7 @@ export async function executeTopSpendersChunk(
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
 
-  let initialState = parseTopSpendersCheckpointState(checkpoint?.state);
+  let initialState = parseTopSpendersCursorState(checkpoint?.state);
   if (!initialState || initialState.accountCreatedAt !== accountCreatedAtIso) {
     initialState = buildTopSpendersBootstrapState(accountCreatedAt, now);
     const initializedCheckpoint = await upsertCheckpointProgress(app.db, {
@@ -967,7 +678,7 @@ export async function executeTopSpendersChunk(
   if (!initialState) {
     throw new Error("Failed to initialize top spenders checkpoint state");
   }
-  let state: TopSpendersCheckpointState = initialState;
+  let state: TopSpendersCursorState = initialState;
 
   let windowsProcessed = 0;
   let windowsSplit = 0;
@@ -975,7 +686,7 @@ export async function executeTopSpendersChunk(
 
   const processPendingWindows = async () => {
     while (state.pendingWindows.length > 0) {
-      const currentWindow: TopSpendersCheckpointWindow = state.pendingWindows[0]!;
+      const currentWindow: TopSpendersCursorWindow = state.pendingWindows[0]!;
       const windowStartedAt = new Date(currentWindow.startedAt);
       const windowEndedAt = new Date(currentWindow.endedAt);
       const response = await app.adapter.getEarningsAccountsPage(requestContext, {
@@ -1142,7 +853,7 @@ export async function executeTopSpendersChunk(
     monthKey: buildUtcMonthKey(steadyStateWindowStartedAt),
     startedAt: steadyStateWindowStartedAt.toISOString(),
     endedAt: steadyStateWindowEndedAt.toISOString(),
-  } satisfies TopSpendersCheckpointWindow;
+  } satisfies TopSpendersCursorWindow;
   const response = await app.adapter.getEarningsAccountsPage(requestContext, {
     after: steadyStateWindowStartedAt,
     before: steadyStateWindowEndedAt,
@@ -1203,7 +914,7 @@ export async function executeTopSpendersChunk(
     pendingWindows: [],
     lastWindowStartedAt: steadyStateWindowStartedAt.toISOString(),
     lastWindowEndedAt: steadyStateWindowEndedAt.toISOString(),
-  } satisfies TopSpendersCheckpointState;
+  } satisfies TopSpendersCursorState;
   const completedCheckpoint = await upsertCheckpoint(app.db, {
     platformAccountId: input.pageContext.page.id,
     stream: "top_spenders",
@@ -1234,7 +945,7 @@ export async function executeTopSpendersChunk(
 export async function executeTransactionsChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
-    streamState: SyncStreamStateRow;
+    streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
@@ -1264,7 +975,7 @@ export async function executeTransactionsChunk(
 
   const payload = input.streamState.requestPayload;
   const requestedRevision = asNumber(payload?.revision);
-  const transactionsStart = requestedRevision === input.streamState.desiredRevision &&
+  const transactionsStart = requestedRevision === input.streamState.requestSeq &&
       typeof payload?.onlyFansTransactionsStart === "string"
     ? new Date(payload.onlyFansTransactionsStart)
     : null;
@@ -1293,7 +1004,7 @@ export async function executeTransactionsChunk(
 export async function executeSubscribersChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
-    streamState: SyncStreamStateRow;
+    streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
@@ -1311,15 +1022,15 @@ export async function executeSubscribersChunk(
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "subscribers");
   await input.telemetry.recordCheckpointLoaded("subscribers", summarizeCheckpoint(checkpoint));
 
-  const existingState = parseSubscribersCheckpointState(checkpoint?.state, input.streamState.desiredRevision);
+  const existingState = parseSubscribersCursorState(checkpoint?.state, input.streamState.requestSeq);
   const previousGeneration = asNumber(asRecord(checkpoint?.state)?.generation) ?? 0;
   let state = existingState ?? {
-    revision: input.streamState.desiredRevision,
+    revision: input.streamState.requestSeq,
     generation: previousGeneration + 1,
     offset: 0,
     pageCount: 0,
     providerReportedTotal: null,
-  } satisfies SubscribersCheckpointState;
+  } satisfies SubscribersCursorState;
 
   if (!existingState) {
     await upsertCheckpointProgress(app.db, {
@@ -1495,7 +1206,7 @@ export async function executeSubscribersChunk(
 export async function executeFollowersChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
-    streamState: SyncStreamStateRow;
+    streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
@@ -1512,15 +1223,15 @@ export async function executeFollowersChunk(
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "followers");
   await input.telemetry.recordCheckpointLoaded("followers", summarizeCheckpoint(checkpoint));
-  const existingState = parseFollowersCheckpointState(checkpoint?.state, input.streamState.desiredRevision);
+  const existingState = parseFollowersCursorState(checkpoint?.state, input.streamState.requestSeq);
 
-  let state: FollowersCheckpointState;
+  let state: FollowersCursorState;
   if (existingState) {
     state = existingState;
   } else {
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
     state = {
-      revision: input.streamState.desiredRevision,
+      revision: input.streamState.requestSeq,
       knownFollowId: checkpoint?.cursorText ?? null,
       newestFollowId: null,
       offset: 0,
@@ -1609,8 +1320,8 @@ export async function executeFollowersChunk(
         await upsertPageFollows(dbTx, followInputs);
         await upsertFanPages(dbTx, fanPageInputs);
         await rebuildFollowerRollups(dbTx, input.pageContext.page.id, state.sourceFollowerCount);
-        await updateLegacySyncTimestamp(dbTx, {
-          platformAccountId: input.pageContext.page.id,
+        await updatePageSyncTimestampCache(dbTx, {
+          pageId: input.pageContext.page.id,
           syncType: "followers",
         });
         return upsertCheckpoint(dbTx, {
@@ -1686,7 +1397,7 @@ export async function executeFollowersChunk(
 export async function executeFollowersReconcileChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
-    streamState: SyncStreamStateRow;
+    streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
@@ -1704,18 +1415,18 @@ export async function executeFollowersReconcileChunk(
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "followers_reconcile");
   await input.telemetry.recordCheckpointLoaded("followers_reconcile", summarizeCheckpoint(checkpoint));
 
-  const existingState = parseFollowersReconcileCheckpointState(
+  const existingState = parseFollowersReconcileCursorState(
     checkpoint?.state,
-    input.streamState.desiredRevision,
+    input.streamState.requestSeq,
   );
   const previousGeneration = asNumber(asRecord(checkpoint?.state)?.generation) ?? 0;
-  let state: FollowersReconcileCheckpointState;
+  let state: FollowersReconcileCursorState;
   if (existingState) {
     state = existingState;
   } else {
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
     state = {
-      revision: input.streamState.desiredRevision,
+      revision: input.streamState.requestSeq,
       generation: previousGeneration + 1,
       offset: 0,
       pageCount: 0,
@@ -1799,8 +1510,8 @@ export async function executeFollowersReconcileChunk(
         });
         await refreshFanPageFollowerState(dbTx, input.pageContext.page.id);
         await rebuildFollowerRollups(dbTx, input.pageContext.page.id, state.sourceFollowerCount);
-        await updateLegacySyncTimestamp(dbTx, {
-          platformAccountId: input.pageContext.page.id,
+        await updatePageSyncTimestampCache(dbTx, {
+          pageId: input.pageContext.page.id,
           syncType: "followers",
         });
         return upsertCheckpoint(dbTx, {
@@ -1871,7 +1582,7 @@ export async function executeFollowersReconcileChunk(
 export async function executeDmConversationsChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
-    streamState: SyncStreamStateRow;
+    streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
@@ -1893,7 +1604,7 @@ export async function executeDmConversationsChunk(
 
   const pageAccountId = getFanslyPlatformAccountIdValue(input.pageContext);
   const checkpointStateRecord = asRecord(checkpoint?.state);
-  const existingState = parseDmConversationCheckpointState(checkpoint?.state);
+  const existingState = parseDmConversationCursorState(checkpoint?.state);
   let state = existingState ?? {
     version: 1 as const,
     mode: "full_scan" as const,
@@ -2238,7 +1949,7 @@ export async function executeDmConversationsChunk(
 export async function executeDmMessagesChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
-    streamState: SyncStreamStateRow;
+    streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
@@ -2266,9 +1977,9 @@ export async function executeDmMessagesChunk(
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_messages");
   await input.telemetry.recordCheckpointLoaded("dm_messages", summarizeCheckpoint(checkpoint));
 
-  let state = parseDmMessagesCheckpointState(checkpoint?.state) ?? emptyDmMessagesCheckpointState();
+  let state = parseDmMessagesCursorState(checkpoint?.state) ?? emptyDmMessagesCursorState();
 
-  if (!parseDmMessagesCheckpointState(checkpoint?.state)) {
+  if (!parseDmMessagesCursorState(checkpoint?.state)) {
     const progressCheckpoint = await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "dm_messages",
@@ -2303,7 +2014,7 @@ export async function executeDmMessagesChunk(
         : null;
 
       if (conversation && isFanslyDmMessageSyncExcluded(conversation.metadata)) {
-        state = emptyDmMessagesCheckpointState();
+        state = emptyDmMessagesCursorState();
         const progressCheckpoint = await upsertCheckpointProgress(app.db, {
           platformAccountId: input.pageContext.page.id,
           stream: "dm_messages",
@@ -2340,7 +2051,7 @@ export async function executeDmMessagesChunk(
               : "incremental";
 
         state = {
-          ...emptyDmMessagesCheckpointState(),
+          ...emptyDmMessagesCursorState(),
           currentConversationId: conversation.id,
           currentPlatformConversationId: conversation.platformConversationId,
           currentBeforeMessageId: currentMode === "backfill"
@@ -2451,7 +2162,7 @@ export async function executeDmMessagesChunk(
             },
           );
 
-          state = emptyDmMessagesCheckpointState();
+          state = emptyDmMessagesCursorState();
           const progressCheckpoint = await upsertCheckpointProgress(app.db, {
             platformAccountId: input.pageContext.page.id,
             stream: "dm_messages",
@@ -2531,7 +2242,7 @@ export async function executeDmMessagesChunk(
           });
           conversation = finalized.conversation;
           completedConversations += 1;
-          state = emptyDmMessagesCheckpointState();
+          state = emptyDmMessagesCursorState();
           const progressCheckpoint = await upsertCheckpointProgress(app.db, {
             platformAccountId: input.pageContext.page.id,
             stream: "dm_messages",
@@ -2623,7 +2334,7 @@ export async function executeStreamChunk(
   app: AppContext,
   input: {
     pageContext: ResolvedPageContext;
-    streamState: SyncStreamStateRow;
+    streamState: PageSyncLease;
     syncRunId: number;
     telemetry: SyncRunTelemetry;
     budget: SyncChunkBudget;

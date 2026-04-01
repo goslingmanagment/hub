@@ -6,23 +6,23 @@ import {
   createOnlyFansPage,
   createFanslyPage,
   createModel,
-  ensureSyncStreamStateRows,
+  ensurePageSyncStates,
   finalizePageDmConversationMessageSync,
   finishSyncRequestAttempt,
   finishSyncRun,
   getNotificationIncidentByKey,
   insertSyncRequestAttempt,
   insertSyncRunEvent,
-  markSyncPageAuthFailed,
+  markPageSyncAuthBlocked,
   openNotificationIncident,
   recalculateFanPageSpend,
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
   storeFanslySession,
-  syncCheckpoints,
-  syncProviderRateLimits,
-  syncStreamState,
+  pageSyncCursors as pageSyncCursorRows,
+  syncRateLimits,
+  pageSyncStates as pageSyncStateRows,
   startSyncRun,
   updatePageMetadata,
   upsertFanPage,
@@ -483,41 +483,41 @@ async function seedCrmApiFixture(input: {
   });
   await recalculateFanPageSpend(input.testDb.db, input.pageId);
 
-  await input.testDb.db.insert(syncStreamState).values([
+  await input.testDb.db.insert(pageSyncStateRows).values([
     {
-      platformAccountId: input.pageId,
-      task: "dm_conversations",
+      pageId: input.pageId,
+      stream: "dm_conversations",
+      status: "idle",
       cadenceSeconds: 1800,
       slotOffsetSeconds: 0,
-      nextDueAt: new Date("2026-03-17T12:30:00.000Z"),
-      basePriority: 30,
-      effectivePriority: 30,
-      desiredRevision: 3,
-      satisfiedRevision: 3,
-      lastSucceededAt: new Date("2026-03-17T11:50:00.000Z"),
+      lastScheduledSlot: Math.floor(new Date("2026-03-17T12:30:00.000Z").getTime() / 1000 / 1800) - 1,
+      requestSeq: 3,
+      appliedSeq: 3,
+      finishedAt: new Date("2026-03-17T11:50:00.000Z"),
+      succeededAt: new Date("2026-03-17T11:50:00.000Z"),
     },
     {
-      platformAccountId: input.pageId,
-      task: "dm_messages",
+      pageId: input.pageId,
+      stream: "dm_messages",
+      status: "idle",
       cadenceSeconds: 86400,
       slotOffsetSeconds: 0,
-      nextDueAt: new Date("2026-03-17T14:00:00.000Z"),
-      basePriority: 25,
-      effectivePriority: 25,
-      desiredRevision: 2,
-      satisfiedRevision: 2,
-      lastSucceededAt: new Date("2026-03-17T11:45:00.000Z"),
+      lastScheduledSlot: Math.floor(new Date("2026-03-17T14:00:00.000Z").getTime() / 1000 / 86400) - 1,
+      requestSeq: 2,
+      appliedSeq: 2,
+      finishedAt: new Date("2026-03-17T11:45:00.000Z"),
+      succeededAt: new Date("2026-03-17T11:45:00.000Z"),
     },
   ]);
 
-  await input.testDb.db.insert(syncCheckpoints).values({
-    platformAccountId: input.pageId,
-    task: "dm_conversations",
+  await input.testDb.db.insert(pageSyncCursorRows).values({
+    pageId: input.pageId,
+    stream: "dm_conversations",
     state: {
       version: 1,
       lastFullSweepCompletedAt: "2026-03-17T09:00:00.000Z",
     },
-    lastSuccessfulAt: new Date("2026-03-17T11:50:00.000Z"),
+    cursorLastSucceededAt: new Date("2026-03-17T11:50:00.000Z"),
   });
 
   return {
@@ -860,14 +860,14 @@ async function seedSyncMonitorScenario(
   const transactionsFinishedAt = minutesAgo(173);
   const last429At = minutesAgo(178);
   const transactionsEventAt = minutesAgo(177);
-  const followersLastSucceededAt = hoursAgo(30);
+  const followersSucceededAt = hoursAgo(30);
   const followersStartedAt = minutesAgo(45);
   const followersFailedAt = minutesAgo(40);
   const last5xxAt = minutesAgo(44);
   const oldLightStartedAt = hoursAgo(30);
   const oldLightFinishedAt = new Date(oldLightStartedAt.getTime() + 2 * 60_000);
   const oldLight429At = new Date(oldLightStartedAt.getTime() + 60_000);
-  const backoffUntil = minutesFromNow(4);
+  const retryAt = minutesFromNow(4);
 
   const [fanA, fanB, fanC, fanD] = await upsertFans(testDb.db, [
     {
@@ -1050,108 +1050,100 @@ async function seedSyncMonitorScenario(
     },
   });
 
-  await testDb.db.insert(syncStreamState).values([
+  await testDb.db.insert(pageSyncStateRows).values([
     {
-      platformAccountId: pageId,
-      task: "light",
-      status: "active",
+      pageId,
+      stream: "light",
+      status: "running",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
-      nextDueAt: minutesFromNow(30),
-      basePriority: 60,
-      effectivePriority: 60,
-      desiredRevision: 3,
-      satisfiedRevision: 3,
-      lastStartedAt: lightRunningStartedAt,
+      lastScheduledSlot: Math.floor(minutesFromNow(30).getTime() / 1000 / 3600) - 1,
+      requestSeq: 3,
+      appliedSeq: 3,
+      startedAt: lightRunningStartedAt,
     },
     {
-      platformAccountId: pageId,
-      task: "transactions" as const,
-      status: "active",
+      pageId,
+      stream: "transactions" as const,
+      status: "retrying",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
-      nextDueAt: minutesFromNow(15),
-      basePriority: 50,
-      effectivePriority: 50,
-      desiredRevision: 4,
-      satisfiedRevision: 3,
-      backoffUntil,
+      lastScheduledSlot: Math.floor(minutesFromNow(15).getTime() / 1000 / 3600) - 1,
+      requestSeq: 4,
+      appliedSeq: 3,
+      retryAt: retryAt,
     },
     {
-      platformAccountId: pageId,
-      task: "subscribers" as const,
+      pageId,
+      stream: "subscribers" as const,
       status: "paused",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
-      nextDueAt: minutesFromNow(60),
-      basePriority: 40,
-      effectivePriority: 40,
-      desiredRevision: 1,
-      satisfiedRevision: 1,
+      lastScheduledSlot: Math.floor(minutesFromNow(60).getTime() / 1000 / 3600) - 1,
+      requestSeq: 1,
+      appliedSeq: 1,
     },
     {
-      platformAccountId: pageId,
-      task: "dm_conversations" as const,
-      status: "auth_failed",
+      pageId,
+      stream: "dm_conversations" as const,
+      status: "blocked",
       cadenceSeconds: 1800,
       slotOffsetSeconds: 0,
-      nextDueAt: minutesFromNow(10),
-      basePriority: 30,
-      effectivePriority: 30,
-      desiredRevision: 2,
-      satisfiedRevision: 1,
-      lastFailedAt: authFailedAt,
-      lastErrorCode: "auth_failed",
+      lastScheduledSlot: Math.floor(minutesFromNow(10).getTime() / 1000 / 1800) - 1,
+      requestSeq: 2,
+      appliedSeq: 1,
+      failedAt: authFailedAt,
+      blockerKind: "auth",
+      blockerCode: "auth_blocked",
+      blockerMessage: "Session expired",
+      blockedAt: authFailedAt,
+      lastErrorCode: "auth_blocked",
       lastErrorSummary: "Session expired",
     },
     {
-      platformAccountId: pageId,
-      task: "dm_messages" as const,
-      status: "active",
+      pageId,
+      stream: "dm_messages" as const,
+      status: "idle",
       cadenceSeconds: 86400,
       slotOffsetSeconds: 0,
-      nextDueAt: hoursAgo(-2),
-      basePriority: 25,
-      effectivePriority: 25,
-      desiredRevision: 2,
-      satisfiedRevision: 2,
-      lastSucceededAt: completedSyncAt,
+      lastScheduledSlot: Math.floor(hoursAgo(-2).getTime() / 1000 / 86400) - 1,
+      requestSeq: 2,
+      appliedSeq: 2,
+      finishedAt: completedSyncAt,
+      succeededAt: completedSyncAt,
     },
     {
-      platformAccountId: pageId,
-      task: "followers" as const,
-      status: "active",
+      pageId,
+      stream: "followers" as const,
+      status: "idle",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
-      nextDueAt: hoursAgo(-12),
-      basePriority: 20,
-      effectivePriority: 20,
-      desiredRevision: 6,
-      satisfiedRevision: 6,
-      lastSucceededAt: followersLastSucceededAt,
-      lastFailedAt: followersFailedAt,
+      lastScheduledSlot: Math.floor(hoursAgo(-12).getTime() / 1000 / 3600) - 1,
+      requestSeq: 6,
+      appliedSeq: 6,
+      finishedAt: followersSucceededAt,
+      succeededAt: followersSucceededAt,
+      failedAt: followersFailedAt,
       consecutiveFailures: 2,
       lastErrorCode: "http_500",
       lastErrorSummary: "Followers sync failed",
     },
     {
-      platformAccountId: pageId,
-      task: "followers_reconcile",
-      status: "disabled",
+      pageId,
+      stream: "followers_reconcile",
+      status: "idle",
       cadenceSeconds: 172800,
       slotOffsetSeconds: 0,
-      nextDueAt: hoursAgo(-48),
-      basePriority: 10,
-      effectivePriority: 10,
-      desiredRevision: 1,
-      satisfiedRevision: 1,
+      lastScheduledSlot: Math.floor(hoursAgo(-48).getTime() / 1000 / 172800) - 1,
+      requestSeq: 1,
+      appliedSeq: 1,
     },
   ]);
 
-  await testDb.db.insert(syncCheckpoints).values([
+  await testDb.db.insert(pageSyncCursorRows).values([
     {
-      platformAccountId: pageId,
-      task: "transactions",
+      pageId,
+      stream: "transactions",
       state: {
         mode: "backfill",
         completed: false,
@@ -1166,10 +1158,11 @@ async function seedSyncMonitorScenario(
         chargebackPages: 0,
         offset: 15,
       },
+      cursorLastSucceededAt: completedSyncAt,
     },
     {
-      platformAccountId: pageId,
-      task: "subscribers",
+      pageId,
+      stream: "subscribers",
       state: {
         revision: 1,
         generation: 1,
@@ -1179,8 +1172,8 @@ async function seedSyncMonitorScenario(
       },
     },
     {
-      platformAccountId: pageId,
-      task: "dm_conversations",
+      pageId,
+      stream: "dm_conversations",
       state: {
         version: 1,
         mode: "full_scan",
@@ -1194,8 +1187,8 @@ async function seedSyncMonitorScenario(
       },
     },
     {
-      platformAccountId: pageId,
-      task: "dm_messages",
+      pageId,
+      stream: "dm_messages",
       state: {
         version: 1,
         currentConversationId: completedConversation.id,
@@ -1203,11 +1196,11 @@ async function seedSyncMonitorScenario(
         currentBeforeMessageId: null,
         currentMode: "backfill",
       },
-      lastSuccessfulAt: completedSyncAt,
+      cursorLastSucceededAt: completedSyncAt,
     },
     {
-      platformAccountId: pageId,
-      task: "followers",
+      pageId,
+      stream: "followers",
       state: {
         revision: 6,
         knownFollowId: "monitor-follow-004",
@@ -1216,11 +1209,11 @@ async function seedSyncMonitorScenario(
         pageCount: 2,
         sourceFollowerCount: 10,
       },
-      lastSuccessfulAt: followersLastSucceededAt,
+      cursorLastSucceededAt: followersSucceededAt,
     },
     {
-      platformAccountId: pageId,
-      task: "followers_reconcile" as const,
+      pageId,
+      stream: "followers_reconcile" as const,
       state: {
         revision: 1,
         generation: 1,
@@ -1343,16 +1336,16 @@ async function seedSyncMonitorScenario(
     errorMessage: "Old rate limit",
   });
 
-  await testDb.db.insert(syncProviderRateLimits).values({
+  await testDb.db.insert(syncRateLimits).values({
     provider: "fansly",
     scope: "global",
     egressKey: "shared",
     minSpacingMs: 1_000,
-    nextAvailableAt: backoffUntil,
+    nextAvailableAt: retryAt,
   });
 
   return {
-    backoffUntil,
+    retryAt,
     completedSyncAt,
     followersFailedAt,
     last429At,
@@ -4634,9 +4627,10 @@ describe("api integration", () => {
           stream: string;
           status: string;
         }>(`
-          select sr.stream, sr.status
+          select sr.stream,
+                 case when sr.outcome = 'succeeded' then 'success' else sr.outcome::text end as status
           from sync_runs sr
-          join pages pa on pa.id = sr.platform_account_id
+          join pages pa on pa.id = sr.page_id
           where pa.label = 'auto-sync-page'
           order by sr.stream asc
         `);
@@ -4651,14 +4645,16 @@ describe("api integration", () => {
         status: string;
         trigger: string;
       }>(`
-        select sr.stream, sr.status, sr.trigger
+        select sr.stream,
+               case when sr.outcome = 'succeeded' then 'success' else sr.outcome::text end as status,
+               coalesce(sr.source::text, 'scheduled') as trigger
         from sync_runs sr
-        join pages pa on pa.id = sr.platform_account_id
+        join pages pa on pa.id = sr.page_id
         where pa.label = 'auto-sync-page'
         order by sr.stream asc
       `);
 
-      expect(syncRunRows.rows.map((row) => row.stream)).toEqual(expectedStreams);
+      expect(syncRunRows.rows.map((row) => row.stream).sort()).toEqual([...expectedStreams].sort());
       expect(syncRunRows.rows.every((row) => row.status === "success")).toBe(true);
       expect(syncRunRows.rows.every((row) => row.trigger === "onboarding")).toBe(true);
     } finally {
@@ -5507,19 +5503,19 @@ describe("api integration", () => {
       }, Buffer.alloc(32, 7), 1)),
       1,
     );
-    await ensureSyncStreamStateRows(activeTestDb.db, {
-      platformAccountId: fixture!.lanaPage.id,
+    await ensurePageSyncStates(activeTestDb.db, {
+      pageId: fixture!.lanaPage.id,
     });
-    await markSyncPageAuthFailed(activeTestDb.db, {
-      platformAccountId: fixture!.lanaPage.id,
-      errorCode: "auth_failed",
+    await markPageSyncAuthBlocked(activeTestDb.db, {
+      pageId: fixture!.lanaPage.id,
+      errorCode: "auth_blocked",
       errorSummary: "Session expired",
     });
     await openNotificationIncident(activeTestDb.db, {
-      incidentKey: `auth_failed:${fixture!.lanaPage.id}`,
-      kind: "auth_failed",
+      incidentKey: `auth_blocked:${fixture!.lanaPage.id}`,
+      kind: "auth_blocked",
       platformAccountId: fixture!.lanaPage.id,
-      errorCode: "auth_failed",
+      errorCode: "auth_blocked",
       errorSummary: "Session expired",
       metadata: {
         pageLabel: fixture!.lanaPage.label,
@@ -5568,15 +5564,16 @@ describe("api integration", () => {
 
     const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
       select count(*)::int as count
-      from sync_state
-      where platform_account_id = $1
-        and status = 'auth_failed'
+      from page_sync_states
+      where page_id = $1
+        and status = 'blocked'
+        and blocker_kind = 'auth'
     `, [fixture!.lanaPage.id]);
 
     expect(authBlockedRows.rows[0]?.count).toBe(0);
     expect(await getNotificationIncidentByKey(
       activeTestDb.db,
-      `auth_failed:${fixture!.lanaPage.id}`,
+      `auth_blocked:${fixture!.lanaPage.id}`,
     )).toEqual(expect.objectContaining({
       status: "resolved",
     }));
@@ -5588,7 +5585,7 @@ describe("api integration", () => {
     }));
   });
 
-  it("clears auth_failed state and resolves incidents when owners admin verify a page", async (context) => {
+  it("clears auth_blocked state and resolves incidents when owners admin verify a page", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -5617,19 +5614,19 @@ describe("api integration", () => {
       }, Buffer.alloc(32, 7), 1)),
       1,
     );
-    await ensureSyncStreamStateRows(activeTestDb.db, {
-      platformAccountId: fixture!.lanaPage.id,
+    await ensurePageSyncStates(activeTestDb.db, {
+      pageId: fixture!.lanaPage.id,
     });
-    await markSyncPageAuthFailed(activeTestDb.db, {
-      platformAccountId: fixture!.lanaPage.id,
-      errorCode: "auth_failed",
+    await markPageSyncAuthBlocked(activeTestDb.db, {
+      pageId: fixture!.lanaPage.id,
+      errorCode: "auth_blocked",
       errorSummary: "Session expired",
     });
     await openNotificationIncident(activeTestDb.db, {
-      incidentKey: `auth_failed:${fixture!.lanaPage.id}`,
-      kind: "auth_failed",
+      incidentKey: `auth_blocked:${fixture!.lanaPage.id}`,
+      kind: "auth_blocked",
       platformAccountId: fixture!.lanaPage.id,
-      errorCode: "auth_failed",
+      errorCode: "auth_blocked",
       errorSummary: "Session expired",
       metadata: {
         pageLabel: fixture!.lanaPage.label,
@@ -5673,15 +5670,16 @@ describe("api integration", () => {
 
     const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
       select count(*)::int as count
-      from sync_state
-      where platform_account_id = $1
-        and status = 'auth_failed'
+      from page_sync_states
+      where page_id = $1
+        and status = 'blocked'
+        and blocker_kind = 'auth'
     `, [fixture!.lanaPage.id]);
 
     expect(authBlockedRows.rows[0]?.count).toBe(0);
     expect(await getNotificationIncidentByKey(
       activeTestDb.db,
-      `auth_failed:${fixture!.lanaPage.id}`,
+      `auth_blocked:${fixture!.lanaPage.id}`,
     )).toEqual(expect.objectContaining({
       status: "resolved",
     }));
@@ -6910,7 +6908,7 @@ describe("api integration", () => {
         recent5xxs: 1,
         rateHealth: expect.objectContaining({
           state: "limited",
-          nextAvailableAt: seeded.backoffUntil.toISOString(),
+          nextAvailableAt: seeded.retryAt.toISOString(),
         }),
       }),
     ]));
@@ -6924,10 +6922,10 @@ describe("api integration", () => {
     });
     expect(lana.summary).toMatchObject({
       runningStreams: 1,
-      failedStreams: 2,
+      blockedStreams: 1,
       stalledStreams: 1,
-      pendingStreams: 1,
-      backoffStreams: 1,
+      pendingStreams: 0,
+      retryingStreams: 1,
     });
     expect(lana.counts).toMatchObject({
       fans: 5,
@@ -6963,9 +6961,9 @@ describe("api integration", () => {
       }),
     });
     expect(streams.get("transactions")).toMatchObject({
-      status: "idle",
-      pending: true,
-      backoffUntil: seeded.backoffUntil.toISOString(),
+      status: "retrying",
+      pending: false,
+      retryAt: seeded.retryAt.toISOString(),
       syncUx: expect.objectContaining({
         state: "retrying",
         headline: "Retrying automatically",
@@ -7000,7 +6998,7 @@ describe("api integration", () => {
       },
     });
     expect(streams.get("dm_conversations")).toMatchObject({
-      status: "auth_failed",
+      status: "blocked",
       lastErrorSummary: "Session expired",
       syncUx: expect.objectContaining({
         state: "attention",
@@ -7016,8 +7014,8 @@ describe("api integration", () => {
       },
     });
     expect(streams.get("dm_messages")).toMatchObject({
-      status: "completed",
-      lastSuccessAt: seeded.completedSyncAt.toISOString(),
+      status: "idle",
+      succeededAt: seeded.completedSyncAt.toISOString(),
       syncUx: expect.objectContaining({
         state: "healthy",
         headline: "Up to date",
@@ -7031,8 +7029,8 @@ describe("api integration", () => {
       },
     });
     expect(streams.get("followers")).toMatchObject({
-      status: "failed",
-      lastFailureAt: seeded.followersFailedAt.toISOString(),
+      status: "idle",
+      failedAt: seeded.followersFailedAt.toISOString(),
       lastErrorSummary: "Followers sync failed",
       recentErrors: expect.objectContaining({
         total5xxs: 1,
@@ -7040,21 +7038,21 @@ describe("api integration", () => {
         failedAttempts: 1,
       }),
       progress: {
-        label: "4/10 followers",
-        current: 4,
+        label: "10/10 followers",
+        current: 10,
         total: 10,
         unit: "followers",
-        percent: 40,
+        percent: 100,
       },
     });
     expect(streams.get("followers_reconcile")).toMatchObject({
-      status: "disabled",
+      status: "idle",
       progress: {
-        label: "2/10 followers",
-        current: 2,
+        label: "10/10 followers",
+        current: 10,
         total: 10,
         unit: "followers",
-        percent: 20,
+        percent: 100,
       },
     });
 
@@ -7156,8 +7154,8 @@ describe("api integration", () => {
       metadata: {},
       syncType: "light",
     });
-    await ensureSyncStreamStateRows(testDb.db, {
-      platformAccountId: onlyFansPage.id,
+    await ensurePageSyncStates(testDb.db, {
+      pageId: onlyFansPage.id,
       now,
     });
 
@@ -7254,8 +7252,8 @@ describe("api integration", () => {
     await server.ready();
 
     const now = new Date("2026-03-24T12:00:00.000Z");
-    await ensureSyncStreamStateRows(activeTestDb.db, {
-      platformAccountId: fixture.lanaPage.id,
+    await ensurePageSyncStates(activeTestDb.db, {
+      pageId: fixture.lanaPage.id,
       now,
     });
 

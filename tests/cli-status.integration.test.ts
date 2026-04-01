@@ -6,9 +6,9 @@ import {
   finishSyncRequestAttempt,
   finishSyncRun,
   insertSyncRequestAttempt,
-  syncCheckpoints,
-  syncProviderRateLimits,
-  syncStreamState,
+  pageSyncCursors as pageSyncCursorRows,
+  syncRateLimits,
+  pageSyncStates as pageSyncStateRows,
   insertSyncRunEvent,
   startSyncRun,
 } from "@agency_hub_core/db";
@@ -265,37 +265,33 @@ async function seedSyncMonitorRows(
     finishedAt: new Date("2026-03-20T09:02:00.500Z"),
   });
 
-  await testDb.db.insert(syncStreamState).values([
+  await testDb.db.insert(pageSyncStateRows).values([
     {
-      platformAccountId: pageId,
-      task: "light",
-      status: "active",
+      pageId,
+      stream: "light",
+      status: "running",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
-      nextDueAt: new Date("2026-03-20T12:15:00.000Z"),
-      basePriority: 60,
-      effectivePriority: 60,
-      desiredRevision: 2,
-      satisfiedRevision: 2,
-      lastStartedAt: new Date("2026-03-20T10:00:00.000Z"),
+      lastScheduledSlot: Math.floor(new Date("2026-03-20T12:15:00.000Z").getTime() / 1000 / 3600) - 1,
+      requestSeq: 2,
+      appliedSeq: 2,
+      startedAt: new Date("2026-03-20T10:00:00.000Z"),
     },
     {
-      platformAccountId: pageId,
-      task: "transactions",
-      status: "active",
+      pageId,
+      stream: "transactions",
+      status: "retrying",
       cadenceSeconds: 3600,
       slotOffsetSeconds: 0,
-      nextDueAt: new Date("2026-03-20T12:15:00.000Z"),
-      basePriority: 50,
-      effectivePriority: 50,
-      desiredRevision: 4,
-      satisfiedRevision: 3,
-      backoffUntil: new Date("2026-03-20T12:04:00.000Z"),
+      lastScheduledSlot: Math.floor(new Date("2026-03-20T12:15:00.000Z").getTime() / 1000 / 3600) - 1,
+      requestSeq: 4,
+      appliedSeq: 3,
+      retryAt: new Date("2026-03-20T12:04:00.000Z"),
     },
   ]);
-  await testDb.db.insert(syncCheckpoints).values({
-    platformAccountId: pageId,
-    task: "transactions",
+  await testDb.db.insert(pageSyncCursorRows).values({
+    pageId,
+    stream: "transactions",
     state: {
       mode: "backfill",
       completed: false,
@@ -310,8 +306,9 @@ async function seedSyncMonitorRows(
       chargebackPages: 0,
       offset: 8,
     },
+    cursorLastSucceededAt: new Date("2026-03-20T09:05:00.000Z"),
   });
-  await testDb.db.insert(syncProviderRateLimits).values({
+  await testDb.db.insert(syncRateLimits).values({
     provider: "fansly",
     scope: "global",
     egressKey: "shared",
@@ -405,7 +402,7 @@ describe("CLI status flows", () => {
     const detail = await getStatusDetail(appContext, recentLanaRun.id);
 
     expect(statusOutput).toContain("run_id\tpage_label\tstream\ttrigger\tstatus\thealth");
-    expect(statusOutput).toContain(`${recentLanaRun.id}\tlana\tlight\tcli\tsuccess\thealthy`);
+    expect(statusOutput).toContain(`${recentLanaRun.id}\tlana\tlight\tmanual\tsuccess\thealthy`);
     expect(statusOutput).not.toContain("\tnova\t");
     expect(statusOutput).not.toContain(`${oldLanaRun.id}\tlana\tlight\tworker`);
 
@@ -500,12 +497,12 @@ describe("CLI status flows", () => {
     expect(fullOutput).toContain("Providers: fansly:limited");
     expect(fullOutput).toContain("lana");
     expect(fullOutput).toContain("nova");
-    expect(fullOutput).toContain("pending,backoff");
+    expect(fullOutput).toContain("Retrying=1");
     expect(fullOutput).toContain("stalled");
     expect(fullOutput).toContain("9 items backfilled");
 
     expect(filteredOutput).toContain("lana");
     expect(filteredOutput).toContain("Pages=1 Streams=7");
-    expect(filteredOutput).toContain("pending,backoff");
+    expect(filteredOutput).toContain("Retrying=1");
   });
 });

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
-  ensureSyncTaskRows: vi.fn(),
+  ensurePageSyncStates: vi.fn(),
   listVisiblePages: vi.fn(),
-  listSyncTaskRows: vi.fn(),
+  listPageSyncStates: vi.fn(),
   listSyncMonitorStreamRows: vi.fn(),
 }));
 
@@ -11,9 +11,9 @@ vi.mock("@agency_hub_core/db", async () => {
   const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
   return {
     ...actual,
-    ensureSyncTaskRows: dbMocks.ensureSyncTaskRows,
+    ensurePageSyncStates: dbMocks.ensurePageSyncStates,
     listVisiblePages: dbMocks.listVisiblePages,
-    listSyncTaskRows: dbMocks.listSyncTaskRows,
+    listPageSyncStates: dbMocks.listPageSyncStates,
     listSyncMonitorStreamRows: dbMocks.listSyncMonitorStreamRows,
   };
 });
@@ -23,31 +23,31 @@ import { getSyncStatusSnapshot } from "../apps/runtime/src/services/sync-status.
 function buildTaskRow(overrides: Record<string, unknown> = {}) {
   const now = new Date("2026-03-24T12:00:00.000Z");
   return {
-    platformAccountId: 7,
-    task: "light",
+    pageId: 7,
+    stream: "light",
     status: "idle",
-    desiredGeneration: 1,
-    runningGeneration: null,
-    appliedGeneration: 1,
-    scheduleIntervalSeconds: 3600,
+    requestSeq: 1,
+    leasedSeq: null,
+    appliedSeq: 1,
+    cadenceSeconds: 3600,
     slotOffsetSeconds: 0,
     lastScheduledSlot: 10,
-    lastRequestedAt: now,
-    lastEnqueuedAt: now,
-    lastStartedAt: now,
-    lastProgressAt: now,
-    lastFinishedAt: now,
-    lastSuccessAt: now,
-    lastFailureAt: null,
-    retryClass: null,
+    requestedAt: now,
+    enqueuedAt: now,
+    startedAt: now,
+    progressedAt: now,
+    finishedAt: now,
+    succeededAt: now,
+    failedAt: null,
+    retryKind: null,
     retryAt: null,
-    blockerType: null,
+    blockerKind: null,
     blockerCode: null,
-    blockerReason: null,
-    blockedSince: null,
-    currentPhase: null,
-    currentWorkClass: "live",
-    progressPayload: {},
+    blockerMessage: null,
+    blockedAt: null,
+    phase: null,
+    workClass: "live",
+    progress: {},
     leaseOwner: null,
     leaseToken: null,
     leaseHeartbeatAt: null,
@@ -80,26 +80,26 @@ function buildMonitorRow(overrides: Record<string, unknown> = {}) {
     dmBackfillCompleteConversationCount: 6,
     dmLaggingConversationCount: 0,
     stream: "light",
-    targetStatus: "active",
+    status: "idle",
     cadenceSeconds: 3600,
     nextDueAt: new Date("2026-03-24T13:00:00.000Z"),
-    desiredRevision: 1,
-    satisfiedRevision: 1,
-    desiredAt: new Date("2026-03-24T12:00:00.000Z"),
-    backoffUntil: null,
-    lastEnqueuedAt: null,
-    lastStartedAt: null,
-    lastFinishedAt: null,
-    lastSucceededAt: new Date("2026-03-24T12:00:00.000Z"),
-    lastFailedAt: null,
+    requestSeq: 1,
+    appliedSeq: 1,
+    requestedAt: new Date("2026-03-24T12:00:00.000Z"),
+    retryAt: null,
+    enqueuedAt: null,
+    startedAt: null,
+    finishedAt: null,
+    succeededAt: new Date("2026-03-24T12:00:00.000Z"),
+    failedAt: null,
     consecutiveFailures: 0,
     lastErrorCode: null,
     lastErrorSummary: null,
     checkpointCursorText: null,
     checkpointCursorTimestamp: null,
     checkpointState: null,
-    checkpointLastSuccessfulAt: null,
-    checkpointLastSuccessfulRunId: null,
+    cursorLastSucceededAt: null,
+    cursorLastSucceededRunId: null,
     runningRunId: null,
     runningTrigger: null,
     runningStartedAt: null,
@@ -157,7 +157,7 @@ describe("sync status service", () => {
   });
 
   it("does not report message history as up_to_date while backlog remains", async () => {
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{
       id: 7,
       label: "lana",
@@ -174,10 +174,10 @@ describe("sync status service", () => {
       proxyUrl: null,
       proxyHasAuth: false,
     }]);
-    dbMocks.listSyncTaskRows.mockResolvedValue([
-      buildTaskRow({ task: "light" }),
-      buildTaskRow({ task: "dm_conversations", scheduleIntervalSeconds: 1800 }),
-      buildTaskRow({ task: "dm_messages", scheduleIntervalSeconds: 86400, currentWorkClass: "history" }),
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }),
+      buildTaskRow({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+      buildTaskRow({ stream: "dm_messages", cadenceSeconds: 86400, workClass: "history" }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
       buildMonitorRow({ stream: "light" }),
@@ -216,7 +216,7 @@ describe("sync status service", () => {
   });
 
   it("surfaces an auth blocker as failed connection sync and requires action", async () => {
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{
       id: 7,
       label: "lana",
@@ -233,27 +233,27 @@ describe("sync status service", () => {
       proxyUrl: null,
       proxyHasAuth: false,
     }]);
-    dbMocks.listSyncTaskRows.mockResolvedValue([
+    dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
-        task: "light",
+        stream: "light",
         status: "blocked",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: null,
-        lastFailureAt: new Date("2026-03-24T11:59:00.000Z"),
-        blockerType: "auth",
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: null,
+        failedAt: new Date("2026-03-24T11:59:00.000Z"),
+        blockerKind: "auth",
         blockerCode: "credentials_invalid",
-        blockerReason: "Session expired",
-        lastErrorCode: "auth_failed",
+        blockerMessage: "Session expired",
+        lastErrorCode: "auth_blocked",
         lastErrorSummary: "Session expired",
       }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
       buildMonitorRow({
         stream: "light",
-        lastSucceededAt: null,
-        lastFailedAt: new Date("2026-03-24T11:59:00.000Z"),
-        lastErrorCode: "auth_failed",
+        succeededAt: null,
+        failedAt: new Date("2026-03-24T11:59:00.000Z"),
+        lastErrorCode: "auth_blocked",
         lastErrorSummary: "Session expired",
       }),
     ]);
@@ -265,7 +265,7 @@ describe("sync status service", () => {
 
     expect(snapshot.pages[0]?.blocks.connection.state).toBe("failed");
     expect(snapshot.pages[0]?.blocks.connection.connectionStatus).toBe("error");
-    expect(["credentials_invalid", "auth_failed"]).toContain(
+    expect(["credentials_invalid", "auth_blocked"]).toContain(
       snapshot.pages[0]?.blocks.connection.error?.code ?? null,
     );
     expect(snapshot.pages[0]?.blocks.connection.error?.summary).toBe("Session expired");
@@ -273,7 +273,7 @@ describe("sync status service", () => {
   });
 
   it("prefers the current dependency blocker over stale last-error fields", async () => {
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{
       id: 7,
       label: "lana",
@@ -290,22 +290,22 @@ describe("sync status service", () => {
       proxyUrl: null,
       proxyHasAuth: false,
     }]);
-    dbMocks.listSyncTaskRows.mockResolvedValue([
-      buildTaskRow({ task: "light" }),
-      buildTaskRow({ task: "transactions" }),
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }),
+      buildTaskRow({ stream: "transactions" }),
       buildTaskRow({
-        task: "dm_conversations",
-        scheduleIntervalSeconds: 1800,
+        stream: "dm_conversations",
+        cadenceSeconds: 1800,
         status: "blocked",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: null,
-        blockerType: "dependency",
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: null,
+        blockerKind: "dependency",
         blockerCode: "unmet_dependency",
-        blockerReason: "Waiting for light, transactions",
+        blockerMessage: "Waiting for light, transactions",
         lastErrorCode: "http_500",
         lastErrorSummary: "Old transport failure",
-        lastFailureAt: new Date("2026-03-24T11:30:00.000Z"),
+        failedAt: new Date("2026-03-24T11:30:00.000Z"),
       }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
@@ -340,21 +340,21 @@ describe("sync status service", () => {
   });
 
   it("keeps financials in catching-up mode when only top spenders enrichment is running", async () => {
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
-    dbMocks.listSyncTaskRows.mockResolvedValue([
+    dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
-        task: "transactions",
-        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
+        stream: "transactions",
+        succeededAt: new Date("2026-03-24T11:55:00.000Z"),
       }),
       buildTaskRow({
-        task: "top_spenders",
+        stream: "top_spenders",
         status: "running",
-        desiredGeneration: 1,
-        appliedGeneration: 0,
-        currentWorkClass: "maintenance",
-        lastSuccessAt: null,
-        progressPayload: {
+        requestSeq: 1,
+        appliedSeq: 0,
+        workClass: "maintenance",
+        succeededAt: null,
+        progress: {
           totalMonths: 15,
           completedMonths: 14,
         },
@@ -393,24 +393,24 @@ describe("sync status service", () => {
   });
 
   it("surfaces queue-delayed runtime problems on primary financial streams", async () => {
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
-    dbMocks.listSyncTaskRows.mockResolvedValue([
+    dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
-        task: "light",
-        lastSuccessAt: new Date("2026-03-24T11:50:00.000Z"),
+        stream: "light",
+        succeededAt: new Date("2026-03-24T11:50:00.000Z"),
       }),
       buildTaskRow({
-        task: "transactions",
+        stream: "transactions",
         status: "queued",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
-        lastRequestedAt: new Date("2026-03-24T11:40:00.000Z"),
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: new Date("2026-03-24T11:55:00.000Z"),
+        requestedAt: new Date("2026-03-24T11:40:00.000Z"),
       }),
       buildTaskRow({
-        task: "top_spenders",
-        lastSuccessAt: new Date("2026-03-24T11:56:00.000Z"),
+        stream: "top_spenders",
+        succeededAt: new Date("2026-03-24T11:56:00.000Z"),
       }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
@@ -438,7 +438,7 @@ describe("sync status service", () => {
   });
 
   it("treats fresh queue waits as healthy when a sibling page is actively using the same queue group", async () => {
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage(),
       buildVisiblePage({
@@ -447,25 +447,25 @@ describe("sync status service", () => {
         username: "lana_alt",
       }),
     ]);
-    dbMocks.listSyncTaskRows.mockResolvedValue([
+    dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
-        task: "transactions",
+        stream: "transactions",
         status: "queued",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
-        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: new Date("2026-03-24T11:55:00.000Z"),
+        requestedAt: new Date("2026-03-24T11:20:00.000Z"),
       }),
       buildTaskRow({
-        platformAccountId: 8,
-        task: "dm_messages",
+        pageId: 8,
+        stream: "dm_messages",
         status: "running",
-        desiredGeneration: 1,
-        appliedGeneration: 0,
-        currentWorkClass: "history",
-        lastSuccessAt: null,
-        lastStartedAt: new Date("2026-03-24T11:58:00.000Z"),
-        lastProgressAt: new Date("2026-03-24T11:59:00.000Z"),
+        requestSeq: 1,
+        appliedSeq: 0,
+        workClass: "history",
+        succeededAt: null,
+        startedAt: new Date("2026-03-24T11:58:00.000Z"),
+        progressedAt: new Date("2026-03-24T11:59:00.000Z"),
       }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
@@ -497,54 +497,54 @@ describe("sync status service", () => {
   });
 
   it("keeps page sync UX blue while history backfill runs and fresh siblings wait in queue", async () => {
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
-    dbMocks.listSyncTaskRows.mockResolvedValue([
+    dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
-        task: "light",
-        lastSuccessAt: new Date("2026-03-24T11:50:00.000Z"),
+        stream: "light",
+        succeededAt: new Date("2026-03-24T11:50:00.000Z"),
       }),
       buildTaskRow({
-        task: "transactions",
+        stream: "transactions",
         status: "queued",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
-        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: new Date("2026-03-24T11:55:00.000Z"),
+        requestedAt: new Date("2026-03-24T11:20:00.000Z"),
       }),
       buildTaskRow({
-        task: "subscribers",
+        stream: "subscribers",
         status: "queued",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: new Date("2026-03-24T11:54:00.000Z"),
-        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: new Date("2026-03-24T11:54:00.000Z"),
+        requestedAt: new Date("2026-03-24T11:20:00.000Z"),
       }),
       buildTaskRow({
-        task: "followers",
+        stream: "followers",
         status: "queued",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: new Date("2026-03-24T11:54:00.000Z"),
-        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: new Date("2026-03-24T11:54:00.000Z"),
+        requestedAt: new Date("2026-03-24T11:20:00.000Z"),
       }),
       buildTaskRow({
-        task: "dm_conversations",
+        stream: "dm_conversations",
         status: "queued",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: new Date("2026-03-24T11:54:00.000Z"),
-        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: new Date("2026-03-24T11:54:00.000Z"),
+        requestedAt: new Date("2026-03-24T11:20:00.000Z"),
       }),
       buildTaskRow({
-        task: "dm_messages",
+        stream: "dm_messages",
         status: "running",
-        desiredGeneration: 1,
-        appliedGeneration: 0,
-        currentWorkClass: "history",
-        lastSuccessAt: null,
-        lastStartedAt: new Date("2026-03-24T11:58:00.000Z"),
-        lastProgressAt: new Date("2026-03-24T11:59:00.000Z"),
+        requestSeq: 1,
+        appliedSeq: 0,
+        workClass: "history",
+        succeededAt: null,
+        startedAt: new Date("2026-03-24T11:58:00.000Z"),
+        progressedAt: new Date("2026-03-24T11:59:00.000Z"),
       }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
@@ -582,7 +582,7 @@ describe("sync status service", () => {
   });
 
   it("still marks queue waits as delayed when active siblings are in another queue group", async () => {
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage(),
       buildVisiblePage({
@@ -592,25 +592,25 @@ describe("sync status service", () => {
         proxyUrl: "http://127.0.0.1:18080",
       }),
     ]);
-    dbMocks.listSyncTaskRows.mockResolvedValue([
+    dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
-        task: "transactions",
+        stream: "transactions",
         status: "queued",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
-        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: new Date("2026-03-24T11:55:00.000Z"),
+        requestedAt: new Date("2026-03-24T11:20:00.000Z"),
       }),
       buildTaskRow({
-        platformAccountId: 8,
-        task: "dm_messages",
+        pageId: 8,
+        stream: "dm_messages",
         status: "running",
-        desiredGeneration: 1,
-        appliedGeneration: 0,
-        currentWorkClass: "history",
-        lastSuccessAt: null,
-        lastStartedAt: new Date("2026-03-24T11:58:00.000Z"),
-        lastProgressAt: new Date("2026-03-24T11:59:00.000Z"),
+        requestSeq: 1,
+        appliedSeq: 0,
+        workClass: "history",
+        succeededAt: null,
+        startedAt: new Date("2026-03-24T11:58:00.000Z"),
+        progressedAt: new Date("2026-03-24T11:59:00.000Z"),
       }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
@@ -630,7 +630,7 @@ describe("sync status service", () => {
   });
 
   it("does not treat stalled sibling work as an active queue owner", async () => {
-    dbMocks.ensureSyncTaskRows.mockResolvedValue([]);
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage(),
       buildVisiblePage({
@@ -639,25 +639,25 @@ describe("sync status service", () => {
         username: "lana_alt",
       }),
     ]);
-    dbMocks.listSyncTaskRows.mockResolvedValue([
+    dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
-        task: "transactions",
+        stream: "transactions",
         status: "queued",
-        desiredGeneration: 2,
-        appliedGeneration: 1,
-        lastSuccessAt: new Date("2026-03-24T11:55:00.000Z"),
-        lastRequestedAt: new Date("2026-03-24T11:20:00.000Z"),
+        requestSeq: 2,
+        appliedSeq: 1,
+        succeededAt: new Date("2026-03-24T11:55:00.000Z"),
+        requestedAt: new Date("2026-03-24T11:20:00.000Z"),
       }),
       buildTaskRow({
-        platformAccountId: 8,
-        task: "dm_messages",
+        pageId: 8,
+        stream: "dm_messages",
         status: "running",
-        desiredGeneration: 1,
-        appliedGeneration: 0,
-        currentWorkClass: "history",
-        lastSuccessAt: null,
-        lastStartedAt: new Date("2026-03-24T11:20:00.000Z"),
-        lastProgressAt: new Date("2026-03-24T11:00:00.000Z"),
+        requestSeq: 1,
+        appliedSeq: 0,
+        workClass: "history",
+        succeededAt: null,
+        startedAt: new Date("2026-03-24T11:20:00.000Z"),
+        progressedAt: new Date("2026-03-24T11:00:00.000Z"),
       }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([

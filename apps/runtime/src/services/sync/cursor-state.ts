@@ -1,0 +1,350 @@
+type SubscribersCursorState = {
+  revision: number;
+  generation: number;
+  offset: number;
+  pageCount: number;
+  providerReportedTotal: number | null;
+};
+
+type FollowersCursorState = {
+  revision: number;
+  knownFollowId: string | null;
+  newestFollowId: string | null;
+  offset: number;
+  pageCount: number;
+  sourceFollowerCount: number;
+};
+
+type FollowersReconcileCursorState = {
+  revision: number;
+  generation: number;
+  offset: number;
+  pageCount: number;
+  sourceFollowerCount: number;
+};
+
+type DmConversationCursorState = {
+  version: 1;
+  mode: "full_scan";
+  generation: number;
+  offset: number;
+  pageCount: number;
+  providerReportedTotal: number | null;
+  unchangedPageStreak: number;
+  fullSweepStartedAt: string;
+  lastFullSweepCompletedAt: string | null;
+};
+
+type DmMessagesCursorState = {
+  version: 1;
+  currentConversationId: number | null;
+  currentPlatformConversationId: string | null;
+  currentBeforeMessageId: string | null;
+  currentMode: "backfill" | "incremental" | null;
+};
+
+type TopSpendersCursorWindow = {
+  kind: "month" | "week" | "day";
+  monthKey: string;
+  startedAt: string;
+  endedAt: string;
+};
+
+type TopSpendersCursorState = {
+  version: 1;
+  mode: "bootstrap" | "steady_state";
+  accountCreatedAt: string;
+  totalMonths: number;
+  completedMonths: number;
+  pendingWindows: TopSpendersCursorWindow[];
+  lastWindowStartedAt: string | null;
+  lastWindowEndedAt: string | null;
+};
+
+function asRecord(value: unknown) {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asNullableNumber(value: unknown) {
+  return value === null ? null : asNumber(value);
+}
+
+function asNullableString(value: unknown) {
+  return value === null || typeof value === "string" ? value : null;
+}
+
+function parseRevision(revision: number | null | undefined) {
+  return typeof revision === "number" && Number.isFinite(revision) ? revision : null;
+}
+
+export function parseSubscribersCursorState(
+  value: unknown,
+  revision: number | null | undefined,
+): SubscribersCursorState | null {
+  const expectedRevision = parseRevision(revision);
+  if (expectedRevision === null) {
+    return null;
+  }
+
+  const state = asRecord(value);
+  if (!state || asNumber(state.revision) !== expectedRevision) {
+    return null;
+  }
+
+  const generation = asNumber(state.generation);
+  const offset = asNumber(state.offset);
+  const pageCount = asNumber(state.pageCount);
+  const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
+  if (
+    generation === null ||
+    offset === null ||
+    pageCount === null ||
+    providerReportedTotal === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    revision: expectedRevision,
+    generation,
+    offset,
+    pageCount,
+    providerReportedTotal,
+  };
+}
+
+export function parseFollowersCursorState(
+  value: unknown,
+  revision: number | null | undefined,
+): FollowersCursorState | null {
+  const expectedRevision = parseRevision(revision);
+  if (expectedRevision === null) {
+    return null;
+  }
+
+  const state = asRecord(value);
+  if (!state || asNumber(state.revision) !== expectedRevision) {
+    return null;
+  }
+
+  const offset = asNumber(state.offset);
+  const pageCount = asNumber(state.pageCount);
+  const sourceFollowerCount = asNumber(state.sourceFollowerCount);
+  const knownFollowId = asNullableString(state.knownFollowId);
+  const newestFollowId = asNullableString(state.newestFollowId);
+  if (
+    offset === null ||
+    pageCount === null ||
+    sourceFollowerCount === null ||
+    knownFollowId === undefined ||
+    newestFollowId === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    revision: expectedRevision,
+    knownFollowId,
+    newestFollowId,
+    offset,
+    pageCount,
+    sourceFollowerCount,
+  };
+}
+
+export function parseFollowersReconcileCursorState(
+  value: unknown,
+  revision: number | null | undefined,
+): FollowersReconcileCursorState | null {
+  const expectedRevision = parseRevision(revision);
+  if (expectedRevision === null) {
+    return null;
+  }
+
+  const state = asRecord(value);
+  if (!state || asNumber(state.revision) !== expectedRevision) {
+    return null;
+  }
+
+  const generation = asNumber(state.generation);
+  const offset = asNumber(state.offset);
+  const pageCount = asNumber(state.pageCount);
+  const sourceFollowerCount = asNumber(state.sourceFollowerCount);
+  if (
+    generation === null ||
+    offset === null ||
+    pageCount === null ||
+    sourceFollowerCount === null
+  ) {
+    return null;
+  }
+
+  return {
+    revision: expectedRevision,
+    generation,
+    offset,
+    pageCount,
+    sourceFollowerCount,
+  };
+}
+
+export function parseDmConversationCursorState(value: unknown): DmConversationCursorState | null {
+  const state = asRecord(value);
+  if (!state || asNumber(state.version) !== 1 || state.mode !== "full_scan") {
+    return null;
+  }
+
+  const generation = asNumber(state.generation);
+  const offset = asNumber(state.offset);
+  const pageCount = asNumber(state.pageCount);
+  const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
+  const unchangedPageStreak = asNumber(state.unchangedPageStreak);
+  const fullSweepStartedAt = asNullableString(state.fullSweepStartedAt);
+  const lastFullSweepCompletedAt = asNullableString(state.lastFullSweepCompletedAt);
+  if (
+    generation === null ||
+    offset === null ||
+    pageCount === null ||
+    providerReportedTotal === undefined ||
+    unchangedPageStreak === null ||
+    !fullSweepStartedAt
+  ) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    mode: "full_scan",
+    generation,
+    offset,
+    pageCount,
+    providerReportedTotal,
+    unchangedPageStreak,
+    fullSweepStartedAt,
+    lastFullSweepCompletedAt,
+  };
+}
+
+export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorState | null {
+  const state = asRecord(value);
+  if (!state || asNumber(state.version) !== 1) {
+    return null;
+  }
+
+  const currentConversationId = state.currentConversationId === null
+    ? null
+    : asNumber(state.currentConversationId);
+  const currentPlatformConversationId = asNullableString(state.currentPlatformConversationId);
+  const currentBeforeMessageId = asNullableString(state.currentBeforeMessageId);
+  const currentMode = state.currentMode === "backfill" || state.currentMode === "incremental"
+    ? state.currentMode
+    : state.currentMode === null || state.currentMode === undefined
+      ? null
+      : undefined;
+
+  if (
+    currentConversationId === undefined ||
+    currentPlatformConversationId === undefined ||
+    currentBeforeMessageId === undefined ||
+    currentMode === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    currentConversationId,
+    currentPlatformConversationId,
+    currentBeforeMessageId,
+    currentMode,
+  };
+}
+
+export function emptyDmMessagesCursorState(): DmMessagesCursorState {
+  return {
+    version: 1,
+    currentConversationId: null,
+    currentPlatformConversationId: null,
+    currentBeforeMessageId: null,
+    currentMode: null,
+  };
+}
+
+export function parseTopSpendersCursorState(value: unknown): TopSpendersCursorState | null {
+  const state = asRecord(value);
+  if (!state || asNumber(state.version) !== 1) {
+    return null;
+  }
+
+  const mode = state.mode === "bootstrap" || state.mode === "steady_state"
+    ? state.mode
+    : null;
+  const accountCreatedAt = asNullableString(state.accountCreatedAt);
+  const totalMonths = asNumber(state.totalMonths);
+  const completedMonths = asNumber(state.completedMonths);
+  const lastWindowStartedAt = asNullableString(state.lastWindowStartedAt);
+  const lastWindowEndedAt = asNullableString(state.lastWindowEndedAt);
+  const rawPendingWindows = Array.isArray(state.pendingWindows) ? state.pendingWindows : null;
+
+  if (
+    mode === null ||
+    !accountCreatedAt ||
+    totalMonths === null ||
+    completedMonths === null ||
+    lastWindowStartedAt === undefined ||
+    lastWindowEndedAt === undefined ||
+    rawPendingWindows === null
+  ) {
+    return null;
+  }
+
+  const pendingWindows = rawPendingWindows.flatMap((window) => {
+    const record = asRecord(window);
+    if (!record) {
+      return [];
+    }
+
+    const kind = record.kind === "month" || record.kind === "week" || record.kind === "day"
+      ? record.kind
+      : null;
+    const monthKey = asNullableString(record.monthKey);
+    const startedAt = asNullableString(record.startedAt);
+    const endedAt = asNullableString(record.endedAt);
+    if (!kind || !monthKey || !startedAt || !endedAt) {
+      return [];
+    }
+
+    return [{ kind, monthKey, startedAt, endedAt } satisfies TopSpendersCursorWindow];
+  });
+
+  if (pendingWindows.length !== rawPendingWindows.length) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    mode,
+    accountCreatedAt,
+    totalMonths,
+    completedMonths,
+    pendingWindows,
+    lastWindowStartedAt,
+    lastWindowEndedAt,
+  };
+}
+
+export type {
+  DmConversationCursorState,
+  DmMessagesCursorState,
+  FollowersCursorState,
+  FollowersReconcileCursorState,
+  SubscribersCursorState,
+  TopSpendersCursorState,
+  TopSpendersCursorWindow,
+};
