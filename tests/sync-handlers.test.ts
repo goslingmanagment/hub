@@ -1052,6 +1052,49 @@ describe("sync executor handlers", () => {
     expect(result.clearRequestPayload).toBe(true);
   });
 
+  it("passes the active lease to Fansly transaction syncs for mid-run progress updates", async () => {
+    const telemetry = createTelemetry();
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+    } as never;
+    transactionMocks.syncTransactions.mockResolvedValue({
+      processed: 2,
+      newestSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+    });
+
+    const result = await executeTransactionsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 77,
+          label: "fansly-page",
+          commissionRate: 0.2,
+        },
+        session: { authorization: "secret" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 7,
+        leasedSeq: 7,
+        leaseToken: "lease-token",
+      },
+      syncRunId: 200,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(transactionMocks.syncTransactions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      activeLease: {
+        requestSeq: 7,
+        leaseToken: "lease-token",
+      },
+    }));
+    expect(result.satisfied).toBe(true);
+  });
+
   it("propagates yielded OnlyFans transaction chunks", async () => {
     const telemetry = createTelemetry();
     const app = {

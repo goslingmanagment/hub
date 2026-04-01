@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   getCheckpoint: vi.fn(),
   getOldestPendingTransactionAt: vi.fn(),
+  recordRunningPageSyncProgress: vi.fn(),
   rebuildSpenderProjections: vi.fn(),
   rebuildRevenueRollups: vi.fn(),
   upsertCheckpoint: vi.fn(),
@@ -84,6 +85,7 @@ describe("syncTransactions", () => {
     sharedMocks.retentionDate.mockReturnValue(new Date("2026-09-10T00:00:00.000Z"));
     fanHydrationMocks.hydrateFans.mockResolvedValue(new Map());
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
+    dbMocks.recordRunningPageSyncProgress.mockResolvedValue(true);
     dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);
     dbMocks.rebuildRevenueRollups.mockResolvedValue(undefined);
     dbMocks.upsertFanPages.mockResolvedValue(undefined);
@@ -344,5 +346,89 @@ describe("syncTransactions", () => {
         rawType: 999999,
       }),
     }));
+  });
+
+  it("records runtime progress for each Fansly backfill page while the lease is active", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+
+    const telemetry = createTelemetry();
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi
+          .fn()
+          .mockResolvedValueOnce({
+            items: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+            total: 2,
+            done: false,
+            raw: {},
+          })
+          .mockResolvedValueOnce({
+            items: [buildTransaction("tx-2", "2026-03-09T00:00:00.000Z")],
+            total: 2,
+            done: true,
+            raw: {},
+          }),
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+      activeLease: {
+        requestSeq: 5,
+        leaseToken: "lease-token",
+      },
+    });
+
+    expect(dbMocks.recordRunningPageSyncProgress).toHaveBeenCalledTimes(2);
+    expect(dbMocks.recordRunningPageSyncProgress).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      expect.objectContaining({
+        pageId: 1,
+        stream: "transactions",
+        requestSeq: 5,
+        leaseToken: "lease-token",
+        phase: "transactions",
+        workClass: "history",
+        progress: expect.objectContaining({
+          processedTransactions: 1,
+          processedTransactionsThisRun: 1,
+          transactionPages: 1,
+          offset: 1,
+        }),
+      }),
+    );
+    expect(dbMocks.recordRunningPageSyncProgress).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({
+        progress: expect.objectContaining({
+          processedTransactions: 2,
+          processedTransactionsThisRun: 2,
+          transactionPages: 2,
+          offset: 2,
+        }),
+      }),
+    );
   });
 });

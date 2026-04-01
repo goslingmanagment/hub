@@ -1,6 +1,7 @@
 import {
   getCheckpoint,
   getOldestPendingTransactionAt,
+  recordRunningPageSyncProgress,
   rebuildSpenderProjections,
   rebuildRevenueRollups,
   upsertCheckpoint,
@@ -25,6 +26,11 @@ import {
   parseTransactionBackfillState,
   type FanslyTransactionBackfillState,
 } from "./transaction-backfill.ts";
+
+type ActiveSyncLease = {
+  requestSeq: number;
+  leaseToken: string;
+};
 
 function resolveFanslyCommissionRate(
   destinationTax: number | null,
@@ -420,6 +426,34 @@ async function syncTransactionsIncremental(
   return { processed, newestSeenAt };
 }
 
+async function recordTransactionsRuntimeProgress(
+  db: AppContext["db"],
+  input: {
+    platformAccountId: number;
+    activeLease?: ActiveSyncLease;
+  },
+  state: FanslyTransactionBackfillState,
+  processedTransactionsThisRun: number,
+) {
+  if (!input.activeLease) {
+    return;
+  }
+
+  await recordRunningPageSyncProgress(db, {
+    pageId: input.platformAccountId,
+    stream: "transactions",
+    requestSeq: input.activeLease.requestSeq,
+    leaseToken: input.activeLease.leaseToken,
+    progressedAt: new Date(),
+    phase: state.phase,
+    workClass: "history",
+    progress: {
+      ...state,
+      processedTransactionsThisRun,
+    },
+  });
+}
+
 async function syncTransactionsBackfill(
   app: AppContext,
   input: {
@@ -429,6 +463,7 @@ async function syncTransactionsBackfill(
     requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;
+    activeLease?: ActiveSyncLease;
   },
   checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
   existingState: FanslyTransactionBackfillState | null,
@@ -617,6 +652,11 @@ async function syncTransactionsBackfill(
           stream: "transactions",
           state: nextState,
         });
+
+        await recordTransactionsRuntimeProgress(dbTx, {
+          platformAccountId: input.platformAccountId,
+          activeLease: input.activeLease,
+        }, nextState, currentRunProcessed + page.items.length);
       });
 
       state = nextState;
@@ -736,6 +776,7 @@ export async function syncTransactions(
     requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;
+    activeLease?: ActiveSyncLease;
   },
 ) {
   const checkpoint = await getCheckpoint(app.db, input.platformAccountId, "transactions");

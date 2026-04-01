@@ -964,6 +964,12 @@ export async function executeTransactionsChunk(
       },
       syncRunId: input.syncRunId,
       telemetry: input.telemetry,
+      activeLease: input.streamState.leaseToken
+        ? {
+          requestSeq: input.streamState.leasedSeq ?? input.streamState.requestSeq,
+          leaseToken: input.streamState.leaseToken,
+        }
+        : undefined,
     });
 
     return {
