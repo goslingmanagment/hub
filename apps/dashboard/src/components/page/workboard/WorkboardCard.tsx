@@ -47,26 +47,52 @@ function FanAvatar({ name }: { name: string }) {
   );
 }
 
-interface SnoozeButtonsProps {
+interface ActionButtonsProps {
+  onContacted: () => void;
   onSnooze: (days: number) => void;
   isPending: boolean;
 }
 
-function SnoozeButtons({ onSnooze, isPending }: SnoozeButtonsProps) {
+function ActionButtons({ onContacted, onSnooze, isPending }: ActionButtonsProps) {
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[11px] text-text-muted">Snooze</span>
-      {[7, 14, 30].map((days) => (
+      <button
+        type="button"
+        disabled={isPending}
+        onClick={(e) => { e.stopPropagation(); onContacted(); }}
+        className="px-2.5 py-0.5 text-[11px] font-semibold rounded bg-green/15 text-green hover:bg-green/25 transition-colors disabled:opacity-50"
+      >
+        {isPending ? "Сохраняю..." : "Написал"}
+      </button>
+      <div className="relative">
         <button
-          key={days}
           type="button"
           disabled={isPending}
-          onClick={(e) => { e.stopPropagation(); onSnooze(days); }}
+          onClick={(e) => { e.stopPropagation(); setSnoozeOpen(!snoozeOpen); }}
           className="px-2 py-0.5 text-[11px] font-medium rounded border border-border text-text-muted hover:text-text-secondary hover:bg-hover transition-colors disabled:opacity-50"
         >
-          {days}d
+          Отложить ▾
         </button>
-      ))}
+        {snoozeOpen && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={(e) => { e.stopPropagation(); setSnoozeOpen(false); }} />
+            <div className="absolute right-0 top-full mt-1 z-20 bg-card border border-border rounded-lg shadow-lg py-1 min-w-[80px]">
+              {([7, 14, 30] as const).map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onSnooze(days); setSnoozeOpen(false); }}
+                  className="w-full px-3 py-1.5 text-left text-[12px] text-text-secondary hover:bg-hover transition-colors"
+                >
+                  {days} дн.
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -78,20 +104,21 @@ interface WorkboardCardProps {
   pageLabel: string;
   isExpanded: boolean;
   onToggle: () => void;
+  onContacted: () => void;
   onSnooze: (days: number) => void;
   isSnoozePending: boolean;
 }
 
 export function WorkboardCard({
-  vm, pageLabel, isExpanded, onToggle, onSnooze, isSnoozePending,
+  vm, pageLabel, isExpanded, onToggle, onContacted, onSnooze, isSnoozePending,
 }: WorkboardCardProps) {
   const [copied, setCopied] = useState(false);
   const platformConversationId = vm.platformConversationId;
   const canPreview = vm.canPreview && platformConversationId !== null;
-  const externalLinkLabel = vm.fanslyExternalKind === "chat" ? "Copy chat" : "Copy profile";
+  const externalLinkLabel = vm.fanslyExternalKind === "chat" ? "Скопировать чат" : "Скопировать профиль";
   const externalLinkTitle = vm.fanslyExternalKind === "chat"
-    ? "Copy Fansly chat link"
-    : "Copy Fansly profile link";
+    ? "Скопировать ссылку на чат Fansly"
+    : "Скопировать ссылку на профиль Fansly";
 
   async function handleCopyFanslyLink(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
@@ -101,17 +128,17 @@ export function WorkboardCard({
     }
 
     if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-      toast.error("Clipboard is not available");
+      toast.error("Буфер обмена недоступен");
       return;
     }
 
     try {
       await navigator.clipboard.writeText(vm.fanslyExternalUrl);
       setCopied(true);
-      toast.success(vm.fanslyExternalKind === "chat" ? "Fansly chat link copied" : "Fansly profile link copied");
+      toast.success(vm.fanslyExternalKind === "chat" ? "Ссылка на чат скопирована" : "Ссылка на профиль скопирована");
       globalThis.setTimeout(() => setCopied(false), 2000);
     } catch {
-      toast.error(vm.fanslyExternalKind === "chat" ? "Failed to copy Fansly chat link" : "Failed to copy Fansly profile link");
+      toast.error("Не удалось скопировать ссылку");
     }
   }
 
@@ -126,7 +153,7 @@ export function WorkboardCard({
           <div className="flex items-center gap-2 min-w-0">
             <FanAvatar name={vm.fanLabel} />
             {vm.kind === "subscriber" && (
-              <span title={`Follow-up cadence: ${vm.touchpointLabel}`}>
+              <span title={`До истечения подписки: ${vm.touchpointLabel}`}>
                 <TouchpointBadge touchpointCode={vm.touchpointCode} touchpointLabel={vm.touchpointLabel} />
               </span>
             )}
@@ -156,11 +183,11 @@ export function WorkboardCard({
         <div className="mt-1.5 text-[13px] text-text-muted">
           <span className="font-semibold text-text-primary">{vm.whyNowLabel}</span>
           <span className="mx-1.5 text-border">·</span>
-          Fan: <span className="font-semibold text-text-secondary">{vm.lastFanMessageLabel ?? "never"}</span>
+          Фан: <span className="font-semibold text-text-secondary">{vm.lastFanMessageLabel ?? "никогда"}</span>
           <span className="mx-1.5 text-border">·</span>
-          Model: <span className="font-semibold text-text-secondary">{vm.lastModelMessageLabel ?? "never"}</span>
+          Модель: <span className="font-semibold text-text-secondary">{vm.lastModelMessageLabel ?? "никогда"}</span>
           <span className="mx-1.5 text-border">·</span>
-          Spend: <span className="font-semibold text-text-secondary">{vm.lastTransactionLabel ?? "never"}</span>
+          Траты: <span className="font-semibold text-text-secondary">{vm.lastTransactionLabel ?? "никогда"}</span>
         </div>
 
         {/* Row 3: Subscription details + actions */}
@@ -169,26 +196,26 @@ export function WorkboardCard({
             {vm.kind === "subscriber" ? (
               <>
                 <span>
-                  Expires {vm.expiryLabel}
+                  Истекает {vm.expiryLabel}
                   <span className="ml-1 text-text-secondary">({vm.expiryRelativeLabel})</span>
                 </span>
                 {vm.autoRenew !== null && (
                   <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold ${vm.autoRenew ? "bg-green/10 text-green" : "bg-warning/10 text-warning"}`}>
-                    {vm.autoRenew ? "Auto-renew" : "No renew"}
+                    {vm.autoRenew ? "Автопродление" : "Без продления"}
                   </span>
                 )}
               </>
             ) : (
               <span>
                 {vm.subscriptionStatus === "expired"
-                  ? `Sub expired${vm.subscriptionExpiresLabel ? ` (${vm.subscriptionExpiresLabel})` : ""}`
-                  : "Never subscribed"}
+                  ? `Подписка истекла${vm.subscriptionExpiresLabel ? ` (${vm.subscriptionExpiresLabel})` : ""}`
+                  : "Не подписывался"}
               </span>
             )}
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <SnoozeButtons onSnooze={onSnooze} isPending={isSnoozePending} />
+            <ActionButtons onContacted={onContacted} onSnooze={onSnooze} isPending={isSnoozePending} />
             {vm.fanslyExternalUrl && (
               <button
                 type="button"
@@ -197,7 +224,7 @@ export function WorkboardCard({
                 title={externalLinkTitle}
                 aria-label={externalLinkTitle}
               >
-                {copied ? "Copied!" : externalLinkLabel}
+                {copied ? "Скопировано!" : externalLinkLabel}
               </button>
             )}
             <Link
@@ -205,7 +232,7 @@ export function WorkboardCard({
               onClick={(e) => e.stopPropagation()}
               className="ml-2 px-3 py-0.5 text-[11px] font-semibold rounded bg-accent text-white hover:bg-accent/85 transition-colors"
             >
-              Profile
+              Профиль
             </Link>
           </div>
         </div>

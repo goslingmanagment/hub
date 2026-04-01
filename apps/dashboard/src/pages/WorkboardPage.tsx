@@ -3,28 +3,28 @@ import { useParams, Navigate } from "react-router";
 import { useWorkboard, useWorkboardSnooze, useWorkboardUnsnooze } from "@/api/queries";
 import { ApiError } from "@/api/client";
 import { WorkboardCard } from "@/components/page/workboard/WorkboardCard";
+import { WorkboardCompactRow } from "@/components/page/workboard/WorkboardCompactRow";
 import { SnoozedSection } from "@/components/page/workboard/SnoozedSection";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import {
   mapSubscriberVm,
   mapSpenderVm,
   mapSnoozedVm,
+  type WorkboardSubscriberVm,
+  type WorkboardSpenderVm,
+  type WorkboardCardVm,
 } from "./workboard/viewModel.js";
+import { formatMills } from "@/lib/format";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext";
+import { toast } from "sonner";
 
 type Tab = "subscribers" | "activeSpenders" | "inactiveSpenders";
-type SectionConfig = {
-  key: Tab;
-  label: string;
-  total: number;
-  hiddenCount: number;
-  items: Array<ReturnType<typeof mapSubscriberVm> | ReturnType<typeof mapSpenderVm>>;
-};
+type ViewMode = "cards" | "compact";
 
 const TAB_LABELS: Record<Tab, string> = {
-  subscribers: "Subscribers",
-  activeSpenders: "Active spenders",
-  inactiveSpenders: "Inactive spenders",
+  subscribers: "Подписчики",
+  activeSpenders: "Активные спендеры",
+  inactiveSpenders: "Неактивные спендеры",
 };
 
 const TABS: Tab[] = ["subscribers", "activeSpenders", "inactiveSpenders"];
@@ -32,6 +32,181 @@ const TABS: Tab[] = ["subscribers", "activeSpenders", "inactiveSpenders"];
 function isPresent<T>(value: T | null | undefined): value is T {
   return value != null;
 }
+
+/* ── Priority lane helpers ──────────────────────────────────────── */
+
+interface PriorityLane<T extends WorkboardCardVm> {
+  key: string;
+  title: string;
+  subtitle: string | null;
+  items: T[];
+}
+
+function buildSubscriberLanes(vms: WorkboardSubscriberVm[]): PriorityLane<WorkboardSubscriberVm>[] {
+  const atRisk: WorkboardSubscriberVm[] = [];
+  const followUp: WorkboardSubscriberVm[] = [];
+
+  for (const vm of vms) {
+    if (vm.autoRenew === true) {
+      followUp.push(vm);
+    } else {
+      atRisk.push(vm);
+    }
+  }
+
+  // Sort each lane by LTV descending
+  const byLtvDesc = (a: WorkboardCardVm, b: WorkboardCardVm) => b.ltvMills - a.ltvMills;
+  atRisk.sort(byLtvDesc);
+  followUp.sort(byLtvDesc);
+
+  const lanes: PriorityLane<WorkboardSubscriberVm>[] = [];
+
+  if (atRisk.length > 0) {
+    const totalAtRiskMills = atRisk.reduce((sum, vm) => sum + vm.ltvMills, 0);
+    lanes.push({
+      key: "at-risk",
+      title: `Могут уйти (${atRisk.length})`,
+      subtitle: `Под угрозой: ${formatMills(totalAtRiskMills)}`,
+      items: atRisk,
+    });
+  }
+
+  if (followUp.length > 0) {
+    lanes.push({
+      key: "follow-up",
+      title: `Поддержать (${followUp.length})`,
+      subtitle: "Автопродление включено — меньше риска",
+      items: followUp,
+    });
+  }
+
+  return lanes;
+}
+
+function buildSpenderLanes(vms: WorkboardSpenderVm[]): PriorityLane<WorkboardSpenderVm>[] {
+  if (vms.length === 0) return [];
+
+  // Single lane sorted by LTV desc
+  const sorted = [...vms].sort((a, b) => b.ltvMills - a.ltvMills);
+  const totalMills = sorted.reduce((sum, vm) => sum + vm.ltvMills, 0);
+
+  return [{
+    key: "spenders",
+    title: `Фаны (${sorted.length})`,
+    subtitle: `Общий LTV: ${formatMills(totalMills)}`,
+    items: sorted,
+  }];
+}
+
+/* ── View mode toggle ───────────────────────────────────────────── */
+
+function ViewModeToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
+  return (
+    <div className="flex items-center rounded-lg border border-border overflow-hidden">
+      <button
+        type="button"
+        onClick={() => onChange("cards")}
+        className={`px-3 py-1 text-[11px] font-medium transition-colors ${
+          mode === "cards"
+            ? "bg-accent text-white"
+            : "text-text-muted hover:text-text-secondary hover:bg-hover"
+        }`}
+      >
+        Карточки
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("compact")}
+        className={`px-3 py-1 text-[11px] font-medium transition-colors ${
+          mode === "compact"
+            ? "bg-accent text-white"
+            : "text-text-muted hover:text-text-secondary hover:bg-hover"
+        }`}
+      >
+        Таблица
+      </button>
+    </div>
+  );
+}
+
+/* ── Lane header ────────────────────────────────────────────────── */
+
+function LaneHeader({ title, subtitle, isAtRisk }: { title: string; subtitle: string | null; isAtRisk: boolean }) {
+  return (
+    <div className={`flex items-center justify-between px-3 py-2 rounded-lg mb-2 ${
+      isAtRisk ? "bg-warning/8 border border-warning/20" : "bg-hover/50 border border-border"
+    }`}>
+      <span className={`text-[13px] font-bold ${isAtRisk ? "text-warning" : "text-text-secondary"}`}>
+        {title}
+      </span>
+      {subtitle && (
+        <span className={`text-[12px] ${isAtRisk ? "text-warning/80 font-semibold" : "text-text-muted"}`}>
+          {subtitle}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/* ── Compact table wrapper ──────────────────────────────────────── */
+
+function CompactTable({
+  lanes,
+  tab,
+  onContacted,
+  onSnooze,
+  pendingSnoozeFanId,
+}: {
+  lanes: PriorityLane<WorkboardCardVm>[];
+  tab: Tab;
+  onContacted: (fanId: number) => void;
+  onSnooze: (fanId: number, days: number) => void;
+  pendingSnoozeFanId: number | null;
+}) {
+  const isSubscribers = tab === "subscribers";
+
+  return (
+    <div className="space-y-4">
+      {lanes.map((lane) => (
+        <div key={lane.key}>
+          {(lanes.length > 1 || lane.subtitle) && (
+            <LaneHeader title={lane.title} subtitle={lane.subtitle} isAtRisk={lane.key === "at-risk"} />
+          )}
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-border bg-hover/30 text-[11px] text-text-muted font-medium">
+                  <th className="py-2 px-3">Фан</th>
+                  {isSubscribers && <th className="py-2 px-2">Тир</th>}
+                  <th className="py-2 px-2 text-right">LTV</th>
+                  <th className="py-2 px-2 text-center">{isSubscribers ? "Продление" : "Статус"}</th>
+                  <th className="py-2 px-2">{isSubscribers ? "Истекает" : "Причина"}</th>
+                  <th className="py-2 px-2">Срок</th>
+                  <th className="py-2 px-2">Контакт</th>
+                  <th className="py-2 px-2">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lane.items.map((vm) => (
+                  <WorkboardCompactRow
+                    key={vm.fanId}
+                    vm={vm}
+                    showTierColumn={isSubscribers}
+                    onContacted={() => onContacted(vm.fanId)}
+                    onSnooze={(days) => onSnooze(vm.fanId, days)}
+                    isSnoozePending={pendingSnoozeFanId === vm.fanId}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── Main page ──────────────────────────────────────────────────── */
 
 export function WorkboardPage() {
   const { pageLabel } = useParams();
@@ -51,6 +226,7 @@ export function WorkboardPage() {
   const unsnoozeMutation = useWorkboardUnsnooze(resolvedPageLabel);
 
   const [tab, setTab] = useState<Tab>("subscribers");
+  const [viewMode, setViewMode] = useState<ViewMode>("cards");
   const [expandedFanId, setExpandedFanId] = useState<number | null>(null);
   const [pendingSnoozeFanId, setPendingSnoozeFanId] = useState<number | null>(null);
   const [pendingUnsnoozeFanId, setPendingUnsnoozeFanId] = useState<number | null>(null);
@@ -95,34 +271,31 @@ export function WorkboardPage() {
   };
   const totalHidden = hiddenCounts.subscribers + hiddenCounts.activeSpenders + hiddenCounts.inactiveSpenders;
 
-  const sections: SectionConfig[] = [
-    {
-      key: "subscribers",
-      label: TAB_LABELS.subscribers,
-      total: tabCounts.subscribers,
-      hiddenCount: hiddenCounts.subscribers,
-      items: subscriberVms,
-    },
-    {
-      key: "activeSpenders",
-      label: TAB_LABELS.activeSpenders,
-      total: tabCounts.activeSpenders,
-      hiddenCount: hiddenCounts.activeSpenders,
-      items: activeSpenderVms,
-    },
-    {
-      key: "inactiveSpenders",
-      label: TAB_LABELS.inactiveSpenders,
-      total: tabCounts.inactiveSpenders,
-      hiddenCount: hiddenCounts.inactiveSpenders,
-      items: inactiveSpenderVms,
-    },
-  ];
-  const activeSection = sections.find((section) => section.key === tab) ?? sections[0];
+  // Build priority lanes for current tab
+  const currentLanes: PriorityLane<WorkboardCardVm>[] = useMemo(() => {
+    switch (tab) {
+      case "subscribers": return buildSubscriberLanes(subscriberVms);
+      case "activeSpenders": return buildSpenderLanes(activeSpenderVms);
+      case "inactiveSpenders": return buildSpenderLanes(inactiveSpenderVms);
+    }
+  }, [tab, subscriberVms, activeSpenderVms, inactiveSpenderVms]);
+
+  const currentHiddenCount = hiddenCounts[tab];
+  const currentTotalItems = currentLanes.reduce((sum, lane) => sum + lane.items.length, 0);
 
   useEffect(() => {
     setExpandedFanId(null);
   }, [tab]);
+
+  async function handleContacted(fanId: number) {
+    setPendingSnoozeFanId(fanId);
+    try {
+      await snoozeMutation.mutateAsync({ fanId, days: 7 });
+      toast.success("Отмечен как обработанный");
+    } finally {
+      setPendingSnoozeFanId((current) => (current === fanId ? null : current));
+    }
+  }
 
   async function handleSnooze(fanId: number, days: number) {
     setPendingSnoozeFanId(fanId);
@@ -149,8 +322,8 @@ export function WorkboardPage() {
   if (!resolvedPageLabel) {
     return (
       <StatusPanel
-        title="Workboard page is missing"
-        description="Open the workboard from a valid page route."
+        title="Страница не указана"
+        description="Откройте Workboard через меню страницы."
         tone="error"
       />
     );
@@ -159,8 +332,8 @@ export function WorkboardPage() {
   if (pageCatalogState === "ready" && !page && (!isLoading || isError)) {
     return (
       <StatusPanel
-        title="Page not found"
-        description="The requested page does not exist in the dashboard catalog."
+        title="Страница не найдена"
+        description="Запрашиваемая страница не существует."
         tone="error"
       />
     );
@@ -173,8 +346,8 @@ export function WorkboardPage() {
   if (isLoading && !data && pageCatalogState !== "ready") {
     return (
       <StatusPanel
-        title="Loading workboard"
-        description="Resolving page details and fetching the workboard snapshot."
+        title="Загрузка"
+        description="Подготовка данных страницы и загрузка очереди."
       />
     );
   }
@@ -182,8 +355,8 @@ export function WorkboardPage() {
   if (isLoading && !data) {
     return (
       <StatusPanel
-        title="Loading workboard"
-        description="Fetching the current queue snapshot."
+        title="Загрузка"
+        description="Загружаем текущую очередь."
       />
     );
   }
@@ -192,10 +365,10 @@ export function WorkboardPage() {
     const isNotFound = error instanceof ApiError && error.status === 404;
     return (
       <StatusPanel
-        title={isNotFound ? "Workboard unavailable" : "Workboard failed to load"}
+        title={isNotFound ? "Workboard недоступен" : "Ошибка загрузки"}
         description={isNotFound
-          ? "The current page does not expose a workboard snapshot."
-          : "The queue snapshot could not be loaded. Try again in a moment."}
+          ? "Для этой страницы Workboard недоступен."
+          : "Не удалось загрузить очередь. Попробуйте обновить страницу."}
         tone="error"
       />
     );
@@ -203,23 +376,28 @@ export function WorkboardPage() {
 
   return (
     <div>
-      <div className="mb-5">
-        <h1 className="text-xl font-extrabold text-text-primary">
-          Workboard &mdash; {page?.label ?? resolvedPageLabel}
-        </h1>
-        {data && (
-          <div className="mt-1 text-sm text-text-muted">
-            {totalOverdue} need attention
-            {totalHidden > 0 && (
-              <span> &middot; {totalHidden} hidden</span>
-            )}
-            {snoozedVms.length > 0 && (
-              <span> &middot; {snoozedVms.length} snoozed</span>
-            )}
-          </div>
-        )}
+      {/* Header */}
+      <div className="mb-5 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-extrabold text-text-primary">
+            Workboard &mdash; {page?.label ?? resolvedPageLabel}
+          </h1>
+          {data && (
+            <div className="mt-1 text-sm text-text-muted">
+              Ожидают внимания: {totalOverdue}
+              {totalHidden > 0 && (
+                <span> &middot; {totalHidden} скрыто</span>
+              )}
+              {snoozedVms.length > 0 && (
+                <span> &middot; {snoozedVms.length} отложено</span>
+              )}
+            </div>
+          )}
+        </div>
+        <ViewModeToggle mode={viewMode} onChange={setViewMode} />
       </div>
 
+      {/* Tabs */}
       <div className="mb-5 flex items-center gap-1 border-b border-border">
         {TABS.map((t) => (
           <button
@@ -242,37 +420,58 @@ export function WorkboardPage() {
         ))}
       </div>
 
-      {activeSection.hiddenCount > 0 && (
+      {/* Hidden rows warning */}
+      {currentHiddenCount > 0 && (
         <div className="mb-3 rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-4 py-3 text-sm text-text-secondary">
-          {activeSection.hiddenCount} {activeSection.hiddenCount === 1 ? "row is" : "rows are"} hidden because the profile label is unavailable.
+          {currentHiddenCount} {currentHiddenCount === 1 ? "строка скрыта" : "строк скрыто"} — профиль не найден.
         </div>
       )}
 
-      {activeSection.items.length === 0 ? (
-        activeSection.total > 0 && activeSection.hiddenCount > 0 ? (
+      {/* Content */}
+      {currentTotalItems === 0 ? (
+        currentHiddenCount > 0 ? (
           <StatusPanel
-            title="No visible fans in this tab"
-            description="The API returned workboard items, but every row in this tab is currently hidden because the profile label is unavailable."
+            title="Нет видимых фанов"
+            description="Все записи в этом табе скрыты — профили не найдены."
           />
         ) : (
-          <EmptyState label={activeSection.label} />
+          <EmptyState label={TAB_LABELS[tab]} />
         )
+      ) : viewMode === "compact" ? (
+        <CompactTable
+          lanes={currentLanes}
+          tab={tab}
+          onContacted={handleContacted}
+          onSnooze={handleSnooze}
+          pendingSnoozeFanId={pendingSnoozeFanId}
+        />
       ) : (
-        <div className="space-y-2">
-          {activeSection.items.map((vm) => vm && (
-            <WorkboardCard
-              key={vm.fanId}
-              vm={vm}
-              pageLabel={resolvedPageLabel}
-              isExpanded={expandedFanId === vm.fanId}
-              onToggle={() => toggleExpand(vm.fanId)}
-              onSnooze={(days) => handleSnooze(vm.fanId, days)}
-              isSnoozePending={pendingSnoozeFanId === vm.fanId}
-            />
+        <div className="space-y-4">
+          {currentLanes.map((lane) => (
+            <div key={lane.key}>
+              {(currentLanes.length > 1 || lane.subtitle) && (
+                <LaneHeader title={lane.title} subtitle={lane.subtitle} isAtRisk={lane.key === "at-risk"} />
+              )}
+              <div className="space-y-2">
+                {lane.items.map((vm) => (
+                  <WorkboardCard
+                    key={vm.fanId}
+                    vm={vm}
+                    pageLabel={resolvedPageLabel}
+                    isExpanded={expandedFanId === vm.fanId}
+                    onToggle={() => toggleExpand(vm.fanId)}
+                    onContacted={() => handleContacted(vm.fanId)}
+                    onSnooze={(days) => handleSnooze(vm.fanId, days)}
+                    isSnoozePending={pendingSnoozeFanId === vm.fanId}
+                  />
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       )}
 
+      {/* Snoozed section */}
       {data && (
         <SnoozedSection
           items={snoozedVms}
@@ -287,8 +486,8 @@ export function WorkboardPage() {
 function EmptyState({ label }: { label: string }) {
   return (
     <StatusPanel
-      title="All caught up"
-      description={`No overdue fans are waiting in ${label.toLowerCase()}.`}
+      title="Все сделано"
+      description={`Нет фанов, которым нужно написать (${label.toLowerCase()}).`}
     />
   );
 }

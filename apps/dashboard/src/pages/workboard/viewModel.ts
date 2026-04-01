@@ -29,6 +29,7 @@ interface WorkboardBaseVm {
   profileHref: string;
   fanslyExternalUrl: string | null;
   fanslyExternalKind: FanslyExternalLinkKind | null;
+  ltvMills: number;
   ltvLabel: string;
   overdueDays: number;
   overdueSeverity: OverdueSeverity;
@@ -78,10 +79,11 @@ function buildBaseVm(pageLabel: string, item: SubscriberItem | SpenderItem): Wor
     profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
     fanslyExternalUrl: fanslyExternalLink?.url ?? null,
     fanslyExternalKind: fanslyExternalLink?.kind ?? null,
+    ltvMills: item.ltv.creatorNetAmountMills,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
     overdueDays: item.overdueDays,
     overdueSeverity: resolveOverdueSeverity(item.overdueDays),
-    overdueLabel: item.overdueDays > 0 ? `Overdue ${item.overdueDays}d` : "Due today",
+    overdueLabel: item.overdueDays > 0 ? `Просрочено ${item.overdueDays}д` : "На сегодня",
     whyNowLabel: "",
     lastFanMessageLabel: item.conversation.lastFanMessageAt
       ? formatRelativeTime(item.conversation.lastFanMessageAt)
@@ -107,9 +109,9 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
     kind: "subscriber",
     touchpointCode: item.touchpoint.code,
     touchpointLabel: item.touchpoint.label,
-    whyNowLabel: `${item.touchpoint.label} subscriber follow-up`,
+    whyNowLabel: `Подписка истекает через ${item.touchpoint.label} — напишите`,
     expiryLabel: formatDate(item.subscription.expiresAt),
-    expiryRelativeLabel: `in ${daysRemaining(item.subscription.expiresAt)}d`,
+    expiryRelativeLabel: `через ${daysRemaining(item.subscription.expiresAt)}д`,
     autoRenew: item.subscription.autoRenew,
     tierName: item.subscription.tierName,
     tierShortName: item.subscription.tierName
@@ -132,8 +134,8 @@ export function mapSpenderVm(
     ...baseVm,
     kind: "spender",
     whyNowLabel: segment === "activeSpenders"
-      ? `Active spender silent ${item.silenceDays}d`
-      : `Inactive spender silent ${item.silenceDays}d`,
+      ? `Активный спендер, не писали ${item.silenceDays}д`
+      : `Неактивный спендер, не писали ${item.silenceDays}д`,
     subscriptionStatus: item.subscription.status,
     subscriptionExpiresLabel: item.subscription.expiresAt
       ? formatDate(item.subscription.expiresAt)
@@ -144,6 +146,7 @@ export function mapSpenderVm(
 export interface WorkboardSnoozedVm {
   fanId: number;
   fanLabel: string;
+  ltvMills: number;
   ltvLabel: string;
   snoozedUntilLabel: string;
 }
@@ -157,6 +160,7 @@ export function mapSnoozedVm(item: SnoozedItem): WorkboardSnoozedVm | null {
   return {
     fanId: item.fanId,
     fanLabel: fan.label,
+    ltvMills: item.ltv.creatorNetAmountMills,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
     snoozedUntilLabel: formatDate(item.snoozedUntil),
   };

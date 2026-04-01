@@ -135,9 +135,9 @@ describe("WorkboardPage", () => {
       pageCatalogState: "loading",
     });
 
-    expect(html).toContain("Loading workboard");
-    expect(html).toContain("Resolving page details and fetching the workboard snapshot.");
-    expect(html).not.toContain("Page not found");
+    expect(html).toContain("Загрузка");
+    expect(html).toContain("Подготовка данных страницы и загрузка очереди.");
+    expect(html).not.toContain("Страница не найдена");
   });
 
   it("shows not found only after the shell catalog has loaded without the page", () => {
@@ -148,7 +148,7 @@ describe("WorkboardPage", () => {
       }],
     });
 
-    expect(html).toContain("Page not found");
+    expect(html).toContain("Страница не найдена");
     expect(queryMocks.useWorkboard).toHaveBeenCalledWith("lana", { enabled: false });
   });
 
@@ -158,7 +158,7 @@ describe("WorkboardPage", () => {
     });
 
     expect(html).toBe("");
-    expect(html).not.toContain("Page not found");
+    expect(html).not.toContain("Страница не найдена");
     expect(queryMocks.useWorkboard).toHaveBeenCalledWith("lana", { enabled: false });
   });
 
@@ -172,8 +172,8 @@ describe("WorkboardPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("Workboard unavailable");
-    expect(html).toContain("does not expose a workboard snapshot");
+    expect(html).toContain("Workboard недоступен");
+    expect(html).toContain("Для этой страницы Workboard недоступен.");
   });
 
   it("keeps API totals in the header while surfacing rows hidden client-side", () => {
@@ -244,9 +244,9 @@ describe("WorkboardPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("1 need attention");
-    expect(html).toContain("1 hidden");
-    expect(html).toContain("No visible fans in this tab");
+    expect(html).toContain("Ожидают внимания: 1");
+    expect(html).toContain("1 скрыто");
+    expect(html).toContain("Нет видимых фанов");
     expect(html).not.toContain("Deleted user");
   });
 

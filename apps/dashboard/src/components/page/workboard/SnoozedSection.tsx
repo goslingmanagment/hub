@@ -20,7 +20,7 @@ export function SnoozedSection({ items, onUnsnooze, pendingFanId }: SnoozedSecti
         className="flex items-center gap-2 text-sm font-medium text-text-secondary hover:text-text-primary transition-colors"
       >
         <span className={`transition-transform ${isOpen ? "rotate-90" : ""}`}>&#9656;</span>
-        Snoozed ({items.length})
+        Отложенные ({items.length})
       </button>
 
       {isOpen && (
@@ -33,7 +33,7 @@ export function SnoozedSection({ items, onUnsnooze, pendingFanId }: SnoozedSecti
               <div className="flex items-center gap-4 min-w-0">
                 <span className="text-text-primary font-medium truncate">{item.fanLabel}</span>
                 <span className="text-text-muted shrink-0">{item.ltvLabel}</span>
-                <span className="text-text-muted shrink-0">until {item.snoozedUntilLabel}</span>
+                <span className="text-text-muted shrink-0">до {item.snoozedUntilLabel}</span>
               </div>
               <button
                 type="button"
@@ -41,7 +41,7 @@ export function SnoozedSection({ items, onUnsnooze, pendingFanId }: SnoozedSecti
                 onClick={() => onUnsnooze(item.fanId)}
                 className="px-2 py-1 text-[11px] font-medium rounded border border-border text-text-muted hover:text-text-secondary hover:bg-hover transition-colors disabled:opacity-50 shrink-0"
               >
-                {pendingFanId === item.fanId ? "Unsnoozing..." : "Unsnooze"}
+                {pendingFanId === item.fanId ? "Возвращаю..." : "Вернуть"}
               </button>
             </div>
           ))}
