@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
+
 import {
   assertOwnedPageSyncLease,
   getCheckpoint,
   getOldestPendingTransactionAt,
+  markTransactionsScanToken,
   mergePageMetadata,
   retireTransactionsMissingFromWindow,
   rebuildSpenderProjections,
@@ -386,8 +389,16 @@ type OnlyFansIncrementalResumeState = {
   chargebackPages: number;
   olderThanBoundaryItems: number;
   olderThanBoundaryPages: number;
+  scanToken: string;
+};
+
+type LegacyOnlyFansIncrementalResumeState = Omit<OnlyFansIncrementalResumeState, "scanToken"> & {
   keepTransactionIds: string[];
 };
+
+type ParsedOnlyFansIncrementalResumeState =
+  | OnlyFansIncrementalResumeState
+  | LegacyOnlyFansIncrementalResumeState;
 
 function asStringArray(value: unknown) {
   if (!Array.isArray(value)) {
@@ -424,7 +435,7 @@ function asNullableString(value: unknown) {
   return value === null || typeof value === "string" ? value : null;
 }
 
-function parseOnlyFansIncrementalResumeState(value: unknown): OnlyFansIncrementalResumeState | null {
+function parseOnlyFansIncrementalResumeState(value: unknown): ParsedOnlyFansIncrementalResumeState | null {
   const state = isRecord(value) ? value : null;
   if (
     !state ||
@@ -447,7 +458,9 @@ function parseOnlyFansIncrementalResumeState(value: unknown): OnlyFansIncrementa
   const chargebackPages = asNonNegativeInt(state.chargebackPages);
   const olderThanBoundaryItems = asNonNegativeInt(state.olderThanBoundaryItems);
   const olderThanBoundaryPages = asNonNegativeInt(state.olderThanBoundaryPages);
-  const keepTransactionIds = asStringArray(state.keepTransactionIds);
+  const scanToken = typeof state.scanToken === "string" ? state.scanToken : null;
+  const hasLegacyKeepTransactionIds = Object.prototype.hasOwnProperty.call(state, "keepTransactionIds");
+  const keepTransactionIds = hasLegacyKeepTransactionIds ? asStringArray(state.keepTransactionIds) : undefined;
 
   if (
     start === null ||
@@ -463,12 +476,13 @@ function parseOnlyFansIncrementalResumeState(value: unknown): OnlyFansIncrementa
     olderThanBoundaryItems === null ||
     olderThanBoundaryPages === null ||
     keepTransactionIds === null ||
+    (scanToken === null && keepTransactionIds === undefined) ||
     (state.phase !== "transactions" && state.phase !== "chargebacks")
   ) {
     return null;
   }
 
-  return {
+  const parsedState = {
     mode: "incremental",
     completed: false,
     provider: "onlyfans",
@@ -485,7 +499,18 @@ function parseOnlyFansIncrementalResumeState(value: unknown): OnlyFansIncrementa
     chargebackPages,
     olderThanBoundaryItems,
     olderThanBoundaryPages,
-    keepTransactionIds,
+  };
+
+  if (scanToken !== null) {
+    return {
+      ...parsedState,
+      scanToken,
+    };
+  }
+
+  return {
+    ...parsedState,
+    keepTransactionIds: keepTransactionIds ?? [],
   };
 }
 
@@ -503,7 +528,7 @@ function buildOnlyFansIncrementalResumeState(input: {
   chargebackPages: number;
   olderThanBoundaryItems: number;
   olderThanBoundaryPages: number;
-  keepTransactionIds: string[];
+  scanToken: string;
 }): OnlyFansIncrementalResumeState {
   return {
     mode: "incremental",
@@ -522,7 +547,34 @@ function buildOnlyFansIncrementalResumeState(input: {
     chargebackPages: input.chargebackPages,
     olderThanBoundaryItems: input.olderThanBoundaryItems,
     olderThanBoundaryPages: input.olderThanBoundaryPages,
-    keepTransactionIds: Array.from(new Set(input.keepTransactionIds)),
+    scanToken: input.scanToken,
+  };
+}
+
+function getLegacyOnlyFansKeepTransactionIds(
+  state: ParsedOnlyFansIncrementalResumeState,
+) {
+  return "keepTransactionIds" in state ? state.keepTransactionIds : [];
+}
+
+function normalizeOnlyFansIncrementalResumeState(
+  state: ParsedOnlyFansIncrementalResumeState,
+  scanToken = "scanToken" in state ? state.scanToken : randomUUID(),
+): {
+  legacyKeepTransactionIds: string[];
+  state: OnlyFansIncrementalResumeState;
+} {
+  const legacyKeepTransactionIds = getLegacyOnlyFansKeepTransactionIds(state);
+  const { keepTransactionIds: _keepTransactionIds, ...normalizedState } = state as ParsedOnlyFansIncrementalResumeState & {
+    keepTransactionIds?: string[];
+  };
+
+  return {
+    legacyKeepTransactionIds,
+    state: {
+      ...normalizedState,
+      scanToken,
+    },
   };
 }
 
@@ -555,6 +607,7 @@ async function upsertOnlyFansIncrementalTransactionsPage(
   input: {
     platformAccountId: number;
     commissionRate: number;
+    scanToken: string;
   },
   items: OnlyMonsterTransaction[],
 ) {
@@ -590,6 +643,7 @@ async function upsertOnlyFansIncrementalTransactionsPage(
       sourceDestinationAmountMills: grossAmountMills,
       creatorNetAmountMills,
       occurredAt: new Date(item.timestamp),
+      scanToken: input.scanToken,
     });
   }
 }
@@ -599,6 +653,7 @@ async function upsertOnlyFansIncrementalChargebacksPage(
   input: {
     platformAccountId: number;
     commissionRate: number;
+    scanToken: string;
   },
   items: OnlyMonsterChargeback[],
 ) {
@@ -635,6 +690,7 @@ async function upsertOnlyFansIncrementalChargebacksPage(
       creatorNetAmountMills,
       occurredAt: new Date(item.chargeback_timestamp),
       sourceUpdatedAt: new Date(item.transaction_timestamp),
+      scanToken: input.scanToken,
     });
   }
 }
@@ -653,7 +709,7 @@ async function syncOnlyFansTransactionsIncremental(
     budget: SyncChunkBudget;
   },
   checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
-  existingState: OnlyFansIncrementalResumeState | null,
+  existingState: ParsedOnlyFansIncrementalResumeState | null,
 ): Promise<OnlyFansTransactionSyncResult> {
   const oldestPendingAt = await getOldestPendingTransactionAt(app.db, input.platformAccountId);
   const lookbackStart = checkpoint?.cursorTimestamp
@@ -702,8 +758,29 @@ async function syncOnlyFansTransactionsIncremental(
       chargebackPages: 0,
       olderThanBoundaryItems: 0,
       olderThanBoundaryPages: 0,
-      keepTransactionIds: [],
+      scanToken: randomUUID(),
     });
+  } else {
+    const normalized = normalizeOnlyFansIncrementalResumeState(state);
+    state = normalized.state;
+
+    if (normalized.legacyKeepTransactionIds.length > 0 || !("scanToken" in existingState)) {
+      await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+        if (normalized.legacyKeepTransactionIds.length > 0) {
+          await markTransactionsScanToken(dbTx, {
+            platformAccountId: input.platformAccountId,
+            transactionIds: normalized.legacyKeepTransactionIds,
+            scanToken: normalized.state.scanToken,
+          });
+        }
+
+        await upsertCheckpointProgress(dbTx, {
+          platformAccountId: input.platformAccountId,
+          stream: "transactions",
+          state: normalized.state,
+        });
+      });
+    }
   }
 
   const start = new Date(state.start);
@@ -718,7 +795,6 @@ async function syncOnlyFansTransactionsIncremental(
   let oldestSeenAt: Date | null = state.oldestSeenAt ? new Date(state.oldestSeenAt) : null;
   let olderThanBoundaryItems = state.olderThanBoundaryItems;
   let olderThanBoundaryPages = state.olderThanBoundaryPages;
-  const sourceTransactionIds = new Set(state.keepTransactionIds);
   const seenUnknownRawTypes = new Set<string>();
   let cleanupApplied = false;
   let currentRunProcessedTransactions = 0;
@@ -737,6 +813,7 @@ async function syncOnlyFansTransactionsIncremental(
       processedChargebacks: state.processedChargebacks,
       transactionPages: state.transactionPages,
       chargebackPages: state.chargebackPages,
+      scanToken: state.scanToken,
     },
   );
 
@@ -814,10 +891,6 @@ async function syncOnlyFansTransactionsIncremental(
         olderThanBoundaryPages += 1;
       }
 
-      const nextKeepTransactionIds = [
-        ...sourceTransactionIds,
-        ...page.parsed.items.map((item) => item.id),
-      ];
       const nextState = buildOnlyFansIncrementalResumeState({
         phase: page.parsed.cursor ? "transactions" : "chargebacks",
         start,
@@ -832,7 +905,7 @@ async function syncOnlyFansTransactionsIncremental(
         chargebackPages: state.chargebackPages,
         olderThanBoundaryItems,
         olderThanBoundaryPages,
-        keepTransactionIds: nextKeepTransactionIds,
+        scanToken: state.scanToken,
       });
 
       for (const item of page.parsed.items) {
@@ -843,6 +916,7 @@ async function syncOnlyFansTransactionsIncremental(
         await upsertOnlyFansIncrementalTransactionsPage(dbTx, {
           platformAccountId: input.platformAccountId,
           commissionRate: input.commissionRate,
+          scanToken: state.scanToken,
         }, page.parsed.items);
         await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.platformAccountId,
@@ -851,9 +925,6 @@ async function syncOnlyFansTransactionsIncremental(
         });
       });
 
-      for (const item of page.parsed.items) {
-        sourceTransactionIds.add(item.id);
-      }
       state = nextState;
       currentRunProcessedTransactions += page.parsed.items.length;
 
@@ -936,10 +1007,6 @@ async function syncOnlyFansTransactionsIncremental(
         olderThanBoundaryPages += 1;
       }
 
-      const nextKeepTransactionIds = [
-        ...sourceTransactionIds,
-        ...page.parsed.items.map((item) => item.id),
-      ];
       const nextState = buildOnlyFansIncrementalResumeState({
         phase: "chargebacks",
         start,
@@ -954,13 +1021,14 @@ async function syncOnlyFansTransactionsIncremental(
         chargebackPages: state.chargebackPages + 1,
         olderThanBoundaryItems,
         olderThanBoundaryPages,
-        keepTransactionIds: nextKeepTransactionIds,
+        scanToken: state.scanToken,
       });
 
       await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
         await upsertOnlyFansIncrementalChargebacksPage(dbTx, {
           platformAccountId: input.platformAccountId,
           commissionRate: input.commissionRate,
+          scanToken: state.scanToken,
         }, page.parsed.items);
         await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.platformAccountId,
@@ -969,9 +1037,6 @@ async function syncOnlyFansTransactionsIncremental(
         });
       });
 
-      for (const item of page.parsed.items) {
-        sourceTransactionIds.add(item.id);
-      }
       state = nextState;
       currentRunProcessedChargebacks += page.parsed.items.length;
 
@@ -1021,8 +1086,8 @@ async function syncOnlyFansTransactionsIncremental(
       platformAccountId: input.platformAccountId,
       from: start,
       to: end,
-      cleanupMode: sourceTransactionIds.size > 0 ? "keep_set" : "authoritative_empty",
-      keepTransactionIds: Array.from(sourceTransactionIds),
+      cleanupMode: "scan_token",
+      scanToken: state.scanToken,
     });
     await rebuildSpenderProjections(tx, input.platformAccountId, start);
     await rebuildRevenueRollups(tx, input.platformAccountId, start);
@@ -1067,7 +1132,7 @@ async function syncOnlyFansTransactionsIncremental(
     await input.telemetry.addNote("Delete-missing-in-window cleanup was applied to the OnlyFans transaction scan", {
       from: start.toISOString(),
       to: end.toISOString(),
-      keptTransactionIds: sourceTransactionIds.size,
+      scanToken: state.scanToken,
     });
   }
 

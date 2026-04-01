@@ -2,6 +2,7 @@ import {
   assertOwnedPageSyncLease,
   getCheckpoint,
   getOldestPendingTransactionAt,
+  PageSyncLeaseLostError,
   recordRunningPageSyncProgress,
   rebuildSpenderProjections,
   rebuildRevenueRollups,
@@ -709,18 +710,33 @@ async function syncTransactionsBackfill(
       }
     }
   } catch (error) {
+    if (error instanceof PageSyncLeaseLostError) {
+      throw error;
+    }
+
     const dirtyFrom = state.dirtyFrom ? new Date(state.dirtyFrom) : null;
-    await flushFanslyDirtyRange(app, input.platformAccountId, dirtyFrom);
-    if (dirtyFrom) {
-      state = {
-        ...state,
-        dirtyFrom: null,
-      };
-      await upsertCheckpointProgress(app.db, {
+    try {
+      await flushFanslyDirtyRange(app, input.platformAccountId, dirtyFrom);
+      if (dirtyFrom) {
+        state = {
+          ...state,
+          dirtyFrom: null,
+        };
+        await upsertCheckpointProgress(app.db, {
+          platformAccountId: input.platformAccountId,
+          stream: "transactions",
+          state,
+        });
+      }
+    } catch (cleanupError) {
+      app.logger.warn({
+        err: cleanupError,
+        originalErr: error,
+        pageLabel: input.pageLabel,
         platformAccountId: input.platformAccountId,
+        provider: "fansly",
         stream: "transactions",
-        state,
-      });
+      }, "Failed to flush Fansly dirty range after backfill error");
     }
 
     throw error;

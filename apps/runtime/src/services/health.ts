@@ -5,9 +5,7 @@ import { getSyncStatusSnapshot } from "./sync-status.ts";
 type ServiceHealthStatus = "ok" | "degraded";
 type SystemCheckStatus = "ok" | "error";
 
-function serializeError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+const PUBLIC_DATABASE_CHECK_ERROR = "Database check failed";
 
 function ageMinutes(timestamp: string | null, now: Date) {
   if (!timestamp) {
@@ -56,6 +54,10 @@ export async function getSystemHealth(app: AppContext) {
       },
     };
   } catch (error) {
+    app.logger.error({
+      err: error,
+    }, "Health check database probe failed");
+
     return {
       statusCode: 503,
       body: {
@@ -68,7 +70,7 @@ export async function getSystemHealth(app: AppContext) {
           database: {
             status: "error" as SystemCheckStatus,
             latencyMs: Date.now() - startedAt,
-            error: serializeError(error),
+            error: PUBLIC_DATABASE_CHECK_ERROR,
           },
         },
       },

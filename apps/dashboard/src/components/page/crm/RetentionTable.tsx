@@ -207,7 +207,9 @@ export function RetentionTable({
                     </td>
                     <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
                       <span>{row.expiryLabel}</span>
-                      <span className="ml-1 text-text-muted text-[12px]">{row.expiryRelativeLabel}</span>
+                      {row.expiryRelativeLabel && (
+                        <span className="ml-1 text-text-muted text-[12px]">{row.expiryRelativeLabel}</span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <TouchpointBadge touchpointCode={row.touchpointCode} touchpointLabel={row.touchpointLabel} />

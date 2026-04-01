@@ -46,6 +46,7 @@ export interface UpsertTransactionInput {
   receiverId?: string | null;
   occurredAt: Date;
   sourceUpdatedAt?: Date | null;
+  scanToken?: string | null;
 }
 
 export async function upsertTransaction(db: Database, input: UpsertTransactionInput) {
@@ -69,6 +70,7 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     receiverId: input.receiverId ?? null,
     occurredAt: input.occurredAt,
     sourceUpdatedAt: input.sourceUpdatedAt ?? null,
+    scanToken: input.scanToken ?? null,
     isActive: true,
     inactiveReason: null,
     inactivatedAt: null,
@@ -76,6 +78,9 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
   const updateSet = {
     ...insertValues,
     fanId: sql<number | null>`coalesce(excluded.fan_id, ${transactions.fanId})`,
+    scanToken: input.scanToken === undefined
+      ? sql`${transactions.scanToken}`
+      : (input.scanToken ?? null),
   };
 
   const [transaction] = await db
@@ -91,6 +96,32 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     })
     .returning();
   return transaction;
+}
+
+export async function markTransactionsScanToken(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    transactionIds: string[];
+    scanToken: string;
+  },
+) {
+  if (input.transactionIds.length === 0) {
+    return;
+  }
+
+  for (let index = 0; index < input.transactionIds.length; index += 1_000) {
+    const batch = input.transactionIds.slice(index, index + 1_000);
+    await db
+      .update(transactions)
+      .set({
+        scanToken: input.scanToken,
+      })
+      .where(and(
+        eq(transactions.platformAccountId, input.platformAccountId),
+        inArray(transactions.transactionId, batch),
+      ));
+  }
 }
 
 export async function rebuildRevenueRollups(
@@ -309,8 +340,9 @@ export async function retireTransactionsMissingFromWindow(
     platformAccountId: number;
     from: Date;
     to: Date;
-    cleanupMode: "keep_set" | "authoritative_empty";
+    cleanupMode: "keep_set" | "authoritative_empty" | "scan_token";
     keepTransactionIds?: string[];
+    scanToken?: string;
   },
 ) {
   const clauses = [
@@ -326,6 +358,12 @@ export async function retireTransactionsMissingFromWindow(
       return;
     }
     clauses.push(notInArray(transactions.transactionId, keepTransactionIds));
+  } else if (input.cleanupMode === "scan_token") {
+    if (!input.scanToken) {
+      throw new Error("scanToken is required for scan_token cleanup");
+    }
+
+    clauses.push(sql`${transactions.scanToken} is distinct from ${input.scanToken}`);
   }
 
   await db

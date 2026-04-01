@@ -13,7 +13,7 @@ export interface RetentionRowVm {
   platformConversationId: string | null;
   profileHref: string;
   expiryLabel: string;
-  expiryRelativeLabel: string;
+  expiryRelativeLabel: string | null;
   touchpointCode: string;
   touchpointLabel: string;
   isSoftTouchpoint: boolean;
@@ -65,6 +65,7 @@ export function mapRetentionRowVm(
   item: CrmRetentionResponse["items"][number],
 ): RetentionRowVm {
   const fan = resolveFanLabelForScope(item.fan, "page");
+  const expiresAt = item.subscription.subscriptionExpiresAt;
   return {
     fanLabel: fan.label,
     fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
@@ -77,8 +78,8 @@ export function mapRetentionRowVm(
     canPreview: item.platformConversationId !== null,
     platformConversationId: item.platformConversationId,
     profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
-    expiryLabel: formatDate(item.subscription.subscriptionExpiresAt!),
-    expiryRelativeLabel: `in ${daysRemaining(item.subscription.subscriptionExpiresAt!)}d`,
+    expiryLabel: expiresAt ? formatDate(expiresAt) : "—",
+    expiryRelativeLabel: expiresAt ? `in ${daysRemaining(expiresAt)}d` : null,
     touchpointCode: item.touchpointCode,
     touchpointLabel: item.touchpointLabel,
     isSoftTouchpoint: item.isSoftTouchpoint,

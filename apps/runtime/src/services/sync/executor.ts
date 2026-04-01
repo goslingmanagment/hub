@@ -342,6 +342,7 @@ export async function executeNextSyncPageChunk(
         leaseFenced = true;
       }
     }).catch((error) => {
+      leaseFenced = true;
       app.logger.warn(
         { err: error, platformAccountId, stream: taskLease.stream },
         "Failed to heartbeat page sync lease",

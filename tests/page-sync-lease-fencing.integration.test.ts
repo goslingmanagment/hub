@@ -5,8 +5,10 @@ import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
+  getPageSyncState,
   PageSyncLeaseLostError,
   pausePageSync,
+  reclaimExpiredPageSync,
   requestPageSync,
   runWithPageSyncExecutionContext,
   withOwnedPageSyncTransaction,
@@ -101,6 +103,73 @@ describe("page sync lease fencing", () => {
         "select count(*)::int as count from lease_fencing_probe",
       );
       expect(probeRows.rows[0]?.count).toBe(0);
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("reclaims expired leases to pending when a new request arrives after the initial read", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "reclaim-model",
+        name: "Reclaim Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "reclaim-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+
+      await testDb.pool.query(
+        `
+          update page_sync_states
+          set status = 'running',
+              request_seq = 0,
+              applied_seq = 0,
+              leased_seq = 0,
+              lease_owner = 'worker-1',
+              lease_token = 'lease-1',
+              lease_heartbeat_at = $1,
+              lease_expires_at = $2,
+              updated_at = $1
+          where page_id = $3
+            and stream = 'followers'
+        `,
+        [now, new Date(now.getTime() - 1_000), page.id],
+      );
+
+      const dbWithInjectedRequest = Object.create(testDb.db) as typeof testDb.db;
+      dbWithInjectedRequest.transaction = async (callback) => {
+        await requestPageSync(testDb.db, {
+          pageId: page.id,
+          streams: ["followers"],
+          source: "manual",
+          now,
+        });
+        return testDb.db.transaction(callback);
+      };
+
+      await reclaimExpiredPageSync(dbWithInjectedRequest, now);
+
+      const state = await getPageSyncState(testDb.db, page.id, "followers");
+      expect(state).toMatchObject({
+        status: "pending",
+        requestSeq: 1,
+        appliedSeq: 0,
+        leasedSeq: null,
+        leaseToken: null,
+      });
     } finally {
       await testDb.stop();
     }

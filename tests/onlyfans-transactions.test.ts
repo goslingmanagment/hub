@@ -4,6 +4,7 @@ const dbMocks = vi.hoisted(() => ({
   retireTransactionsMissingFromWindow: vi.fn(),
   getCheckpoint: vi.fn(),
   getOldestPendingTransactionAt: vi.fn(),
+  markTransactionsScanToken: vi.fn(),
   mergePageMetadata: vi.fn(),
   rebuildSpenderProjections: vi.fn(),
   rebuildRevenueRollups: vi.fn(),
@@ -216,6 +217,7 @@ describe("syncOnlyFansTransactions", () => {
 
     dbMocks.retireTransactionsMissingFromWindow.mockResolvedValue(undefined);
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
+    dbMocks.markTransactionsScanToken.mockResolvedValue(undefined);
     dbMocks.mergePageMetadata.mockResolvedValue(null);
     dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);
     dbMocks.rebuildRevenueRollups.mockResolvedValue(undefined);
@@ -731,8 +733,8 @@ describe("syncOnlyFansTransactions", () => {
         platformAccountId: 1,
         from: new Date("2026-03-07T00:00:00.000Z"),
         to: new Date("2026-03-15T00:00:00.000Z"),
-        cleanupMode: "authoritative_empty",
-        keepTransactionIds: [],
+        cleanupMode: "scan_token",
+        scanToken: expect.any(String),
       }),
     );
     expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
@@ -769,8 +771,8 @@ describe("syncOnlyFansTransactions", () => {
       expect.objectContaining({
         platformAccountId: 1,
         from: new Date("2026-03-07T00:00:00.000Z"),
-        cleanupMode: "keep_set",
-        keepTransactionIds: ["tx-1"],
+        cleanupMode: "scan_token",
+        scanToken: expect.any(String),
       }),
     );
     expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
@@ -807,8 +809,8 @@ describe("syncOnlyFansTransactions", () => {
       expect.objectContaining({
         platformAccountId: 1,
         from: new Date("2026-03-07T00:00:00.000Z"),
-        cleanupMode: "keep_set",
-        keepTransactionIds: ["cb-1"],
+        cleanupMode: "scan_token",
+        scanToken: expect.any(String),
       }),
     );
     expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
@@ -847,7 +849,8 @@ describe("syncOnlyFansTransactions", () => {
     expect(yieldedState.mode).toBe("incremental");
     expect(yieldedState.phase).toBe("transactions");
     expect(yieldedState.cursor).toBe("tx-cursor-1");
-    expect(yieldedState.keepTransactionIds).toEqual(["tx-1"]);
+    expect(yieldedState.scanToken).toEqual(expect.any(String));
+    expect(yieldedState).not.toHaveProperty("keepTransactionIds");
     expect(yieldedState.dirtyFrom).toBeNull();
 
     const resumedAdapter = createAdapter({
@@ -868,11 +871,12 @@ describe("syncOnlyFansTransactions", () => {
 
     expect(resumedAdapter.getTransactionsPage.mock.calls[0]![2].cursor).toBe("tx-cursor-1");
     expect(resumedResult.satisfied).toBe(true);
+    expect(dbMocks.markTransactionsScanToken).not.toHaveBeenCalled();
     expect(dbMocks.retireTransactionsMissingFromWindow).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.objectContaining({
-        cleanupMode: "keep_set",
-        keepTransactionIds: ["tx-1", "tx-2"],
+        cleanupMode: "scan_token",
+        scanToken: yieldedState.scanToken,
       }),
     );
   });
@@ -903,7 +907,8 @@ describe("syncOnlyFansTransactions", () => {
     expect(yieldedState.mode).toBe("incremental");
     expect(yieldedState.phase).toBe("chargebacks");
     expect(yieldedState.cursor).toBe("cb-cursor-1");
-    expect(yieldedState.keepTransactionIds).toEqual(["tx-1", "cb-1"]);
+    expect(yieldedState.scanToken).toEqual(expect.any(String));
+    expect(yieldedState).not.toHaveProperty("keepTransactionIds");
     expect(yieldedState.dirtyFrom).toBeNull();
 
     const resumedAdapter = createAdapter({
@@ -927,8 +932,65 @@ describe("syncOnlyFansTransactions", () => {
     expect(dbMocks.retireTransactionsMissingFromWindow).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.objectContaining({
-        cleanupMode: "keep_set",
-        keepTransactionIds: ["tx-1", "cb-1", "cb-2"],
+        cleanupMode: "scan_token",
+        scanToken: yieldedState.scanToken,
+      }),
+    );
+  });
+
+  it("compacts legacy incremental checkpoints into a scan token before resuming", async () => {
+    const legacyState = {
+      mode: "incremental",
+      completed: false,
+      provider: "onlyfans",
+      phase: "transactions",
+      start: "2026-03-07T00:00:00.000Z",
+      end: "2026-03-15T00:00:00.000Z",
+      cursor: "tx-cursor-legacy",
+      newestSeenAt: "2026-03-10T00:00:00.000Z",
+      oldestSeenAt: "2026-03-10T00:00:00.000Z",
+      dirtyFrom: null,
+      processedTransactions: 1,
+      processedChargebacks: 0,
+      transactionPages: 1,
+      chargebackPages: 0,
+      olderThanBoundaryItems: 0,
+      olderThanBoundaryPages: 0,
+      keepTransactionIds: ["tx-1"],
+    };
+    const resumedAdapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-2", "2026-03-09T00:00:00.000Z")]),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+
+    await runOnlyFansTransactionsSync({
+      adapter: resumedAdapter,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: legacyState,
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    const compactedState = dbMocks.upsertCheckpointProgress.mock.calls[0]![1].state;
+    expect(compactedState.scanToken).toEqual(expect.any(String));
+    expect(compactedState).not.toHaveProperty("keepTransactionIds");
+    expect(dbMocks.markTransactionsScanToken).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        platformAccountId: 1,
+        transactionIds: ["tx-1"],
+        scanToken: compactedState.scanToken,
+      },
+    );
+    expect(resumedAdapter.getTransactionsPage.mock.calls[0]![2].cursor).toBe("tx-cursor-legacy");
+    expect(dbMocks.retireTransactionsMissingFromWindow).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        cleanupMode: "scan_token",
+        scanToken: compactedState.scanToken,
       }),
     );
   });

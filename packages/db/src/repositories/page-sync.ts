@@ -877,17 +877,14 @@ export async function reclaimExpiredPageSync(
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     for (const row of reclaimable) {
-      const nextStatus: PageSyncStatus = row.blockerKind
-        ? "blocked"
-        : row.retryAt && row.retryAt.getTime() > now.getTime()
-          ? "retrying"
-          : row.requestSeq > row.appliedSeq
-            ? "pending"
-            : "idle";
-
       await database.execute(sql`
         update ${pageSyncStates}
-        set status = ${nextStatus}::page_sync_status,
+        set status = case
+                       when blocker_kind is not null then 'blocked'::page_sync_status
+                       when retry_at is not null and retry_at > ${now} then 'retrying'::page_sync_status
+                       when request_seq > applied_seq then 'pending'::page_sync_status
+                       else 'idle'::page_sync_status
+                     end,
             leased_seq = null,
             lease_owner = null,
             lease_token = null,

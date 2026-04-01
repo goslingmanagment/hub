@@ -44,6 +44,39 @@ describe("runMigrations", () => {
     }
   });
 
+  it("acquires and releases the advisory lock around direct migration runs", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-lock-"));
+    const db = {
+      query: vi.fn(async (text: string) => {
+        if (text.includes("select 1 from schema_migrations where id = $1")) {
+          return {
+            rowCount: 1,
+            rows: [],
+          };
+        }
+
+        return {
+          rowCount: 0,
+          rows: [],
+        };
+      }),
+    };
+
+    try {
+      await writeFile(path.join(tempDir, "0001_lock_probe.sql"), "select 1;\n");
+
+      await expect(runMigrations({
+        db: db as never,
+        migrationsDir: tempDir,
+      })).resolves.toBeUndefined();
+
+      expect(db.query).toHaveBeenCalledWith("select pg_advisory_lock($1, $2)", [31415, 27182]);
+      expect(db.query).toHaveBeenCalledWith("select pg_advisory_unlock($1, $2)", [31415, 27182]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to module-relative migrations when cwd has no packages/db/migrations", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-fallback-"));
     const originalCwd = process.cwd();

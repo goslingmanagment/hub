@@ -886,6 +886,7 @@ export const transactions = pgTable(
     receiverId: text("receiver_id"),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true }),
+    scanToken: text("scan_token"),
     isActive: boolean("is_active").default(true).notNull(),
     inactiveReason: transactionInactiveReasonEnum("inactive_reason"),
     inactivatedAt: timestamp("inactivated_at", { withTimezone: true }),

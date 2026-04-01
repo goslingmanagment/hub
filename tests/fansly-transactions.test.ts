@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PageSyncLeaseLostError } from "@agency_hub_core/db";
+
 const dbMocks = vi.hoisted(() => ({
   getCheckpoint: vi.fn(),
   getOldestPendingTransactionAt: vi.fn(),
@@ -435,6 +437,107 @@ describe("syncTransactions", () => {
           offset: 2,
         }),
       }),
+    );
+  });
+
+  it("rethrows lease loss without attempting dirty-range cleanup", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    const leaseLost = new PageSyncLeaseLostError();
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi
+          .fn()
+          .mockResolvedValueOnce({
+            items: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+            total: 2,
+            done: false,
+            raw: {},
+          })
+          .mockRejectedValueOnce(leaseLost),
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: createTelemetry() as never,
+    })).rejects.toBe(leaseLost);
+
+    expect(dbMocks.rebuildSpenderProjections).not.toHaveBeenCalled();
+    expect(dbMocks.rebuildRevenueRollups).not.toHaveBeenCalled();
+  });
+
+  it("preserves the primary backfill error when dirty-range cleanup fails", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    const primaryError = new Error("upstream failed");
+    const cleanupError = new Error("flush failed");
+    dbMocks.rebuildSpenderProjections.mockRejectedValueOnce(cleanupError);
+
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi
+          .fn()
+          .mockResolvedValueOnce({
+            items: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+            total: 2,
+            done: false,
+            raw: {},
+          })
+          .mockRejectedValueOnce(primaryError),
+      },
+      logger,
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: createTelemetry() as never,
+    })).rejects.toBe(primaryError);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: cleanupError,
+        originalErr: primaryError,
+        pageLabel: "fansly-page",
+        platformAccountId: 1,
+      }),
+      "Failed to flush Fansly dirty range after backfill error",
     );
   });
 });

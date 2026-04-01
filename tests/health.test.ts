@@ -13,7 +13,7 @@ vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
   getSyncStatusSnapshot: healthMocks.getSyncStatusSnapshot,
 }));
 
-import { getPublicSyncHealth } from "../apps/runtime/src/services/health.ts";
+import { getPublicSyncHealth, getSystemHealth } from "../apps/runtime/src/services/health.ts";
 
 describe("health service", () => {
   afterEach(() => {
@@ -75,5 +75,27 @@ describe("health service", () => {
         },
       ],
     });
+  });
+
+  it("sanitizes database probe failures in the public health response", async () => {
+    const app = {
+      pool: {
+        query: vi.fn().mockRejectedValue(new Error("password authentication failed for user \"postgres\"")),
+      },
+      logger: {
+        error: vi.fn(),
+      },
+    };
+
+    const result = await getSystemHealth(app as never);
+
+    expect(result.statusCode).toBe(503);
+    expect(result.body.checks.database.error).toBe("Database check failed");
+    expect(app.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.any(Error),
+      }),
+      "Health check database probe failed",
+    );
   });
 });

@@ -4830,10 +4830,11 @@ describe("api integration", () => {
         },
         database: {
           status: "error",
-          error: "db probe failed",
+          error: "Database check failed",
         },
       },
     });
+    expect(degraded.json().checks.database.error).not.toContain("db probe failed");
     expect(typeof degraded.json().checks.database.latencyMs).toBe("number");
   });
 

@@ -495,6 +495,46 @@ describe("sync executor", () => {
     expect(dbMocks.heartbeatPageSyncLease).toHaveBeenCalledTimes(1);
   });
 
+  it("fences the lease when heartbeat persistence fails", async () => {
+    vi.useFakeTimers();
+
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.heartbeatPageSyncLease.mockRejectedValueOnce(new Error("db unavailable"));
+    handlerMocks.executeStreamChunk.mockImplementation(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+      return {
+        satisfied: true,
+        stats: { processedThisChunk: 1 },
+      };
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(result).toMatchObject({
+      kind: "idle",
+      platformAccountId: 55,
+      stream: null,
+      runId: 777,
+      needsContinuation: false,
+    });
+    expect(telemetryMocks.instances[0]?.recordSkipped).toHaveBeenCalledWith("Page sync lease lost");
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+    expect(app.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.any(Error),
+        platformAccountId: 55,
+        stream: "followers",
+      }),
+      "Failed to heartbeat page sync lease",
+    );
+  });
+
   it("executor workers fetch with groupConcurrency and ignore active groups", async () => {
     vi.useFakeTimers();
 

@@ -7,6 +7,9 @@ import type { PoolClient, QueryResult } from "pg";
 import { createPool } from "./client.ts";
 import { resolveMigrationFiles } from "./migrations-dir.ts";
 
+const MIGRATION_LOCK_KEY_1 = 31415;
+const MIGRATION_LOCK_KEY_2 = 27182;
+
 function assertUniqueMigrationPrefixes(files: string[]) {
   const seenPrefixes = new Map<string, string>();
 
@@ -46,45 +49,66 @@ async function withMigrationClient<T>(
   }
 }
 
+async function withMigrationLock<T>(
+  db: MigrationDb,
+  run: () => Promise<T>,
+) {
+  await db.query("select pg_advisory_lock($1, $2)", [
+    MIGRATION_LOCK_KEY_1,
+    MIGRATION_LOCK_KEY_2,
+  ]);
+
+  try {
+    return await run();
+  } finally {
+    await db.query("select pg_advisory_unlock($1, $2)", [
+      MIGRATION_LOCK_KEY_1,
+      MIGRATION_LOCK_KEY_2,
+    ]).catch(() => undefined);
+  }
+}
+
 export async function runMigrations(input?: {
   databaseUrl?: string;
   db?: MigrationDb;
   migrationsDir?: string;
 }) {
   const migrate = async (db: MigrationDb) => {
-    await db.query(`
-      create table if not exists schema_migrations (
-        id text primary key,
-        applied_at timestamptz not null default now()
-      )
-    `);
+    await withMigrationLock(db, async () => {
+      await db.query(`
+        create table if not exists schema_migrations (
+          id text primary key,
+          applied_at timestamptz not null default now()
+        )
+      `);
 
-    const { files, migrationsDir } = await resolveMigrationFiles({
-      migrationsDir: input?.migrationsDir,
+      const { files, migrationsDir } = await resolveMigrationFiles({
+        migrationsDir: input?.migrationsDir,
+      });
+      assertUniqueMigrationPrefixes(files);
+
+      for (const file of files) {
+        const alreadyApplied = await db.query(
+          "select 1 from schema_migrations where id = $1",
+          [file],
+        );
+
+        if (alreadyApplied.rowCount) {
+          continue;
+        }
+
+        const sql = await readFile(path.join(migrationsDir, file), "utf8");
+        await db.query("begin");
+        try {
+          await db.query(sql);
+          await db.query("insert into schema_migrations (id) values ($1)", [file]);
+          await db.query("commit");
+        } catch (error) {
+          await db.query("rollback");
+          throw error;
+        }
+      }
     });
-    assertUniqueMigrationPrefixes(files);
-
-    for (const file of files) {
-      const alreadyApplied = await db.query(
-        "select 1 from schema_migrations where id = $1",
-        [file],
-      );
-
-      if (alreadyApplied.rowCount) {
-        continue;
-      }
-
-      const sql = await readFile(path.join(migrationsDir, file), "utf8");
-      await db.query("begin");
-      try {
-        await db.query(sql);
-        await db.query("insert into schema_migrations (id) values ($1)", [file]);
-        await db.query("commit");
-      } catch (error) {
-        await db.query("rollback");
-        throw error;
-      }
-    }
   };
 
   if (input?.db) {
