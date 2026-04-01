@@ -458,6 +458,33 @@ describe("dashboard sync product surfaces", () => {
   it("renders all-time page spenders from lifetime metrics instead of zeroing window values", () => {
     const html = renderToStaticMarkup(createElement(PageSpendersSection, {
       spenders: {
+        scope: {
+          kind: "page",
+          platform: "fansly",
+          pageCount: 1,
+          page: {
+            id: 1,
+            label: "lana",
+            platform: "fansly",
+            modelSlug: "lana",
+            modelName: "Lana",
+          },
+          model: null,
+        },
+        period: {
+          timeZone: "UTC",
+          fromBusinessDate: null,
+          toBusinessDateInclusive: null,
+          asOf: "2026-03-24T11:55:00.000Z",
+        },
+        diagnostics: {
+          totalGrossAmountMills: 1234,
+          totalCreatorNetAmountMills: 1234,
+          attributedGrossAmountMills: 1234,
+          attributedCreatorNetAmountMills: 1234,
+          unattributedGrossAmountMills: 0,
+          unattributedCreatorNetAmountMills: 0,
+        },
         total: 1,
         items: [{
           fan: {
@@ -465,6 +492,7 @@ describe("dashboard sync product surfaces", () => {
             platformUserId: "fan-001",
             username: "buyer",
             displayName: "Buyer One",
+            createdAtExternal: null,
             pageAlias: null,
           },
           metrics: {
