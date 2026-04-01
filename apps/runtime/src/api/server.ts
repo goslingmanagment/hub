@@ -5,6 +5,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import {
   routeSchemas,
   type RevenueDailyTypedItem,
+  type UpdateCredentialsBody,
 } from "@agency_hub_core/contracts";
 import {
   CatalogModelNotFoundError,
@@ -1944,7 +1945,8 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return updatePageCredentials(appContext, request.params.pageLabel, request.body as any);
+    const body: UpdateCredentialsBody = request.body;
+    return updatePageCredentials(appContext, request.params.pageLabel, body);
   });
 
   // ---------------------------------------------------------------------------

@@ -4,13 +4,10 @@ import {
   findPageByLabel,
   storePlatformCredentials,
 } from "@agency_hub_core/db";
-import type { SyncUxSummary } from "@agency_hub_core/contracts";
+import type { SyncUxSummary, UpdateCredentialsBody } from "@agency_hub_core/contracts";
 import {
   encryptJson,
   normalizeProxyConfig,
-  type FanslySessionBundle,
-  type OnlyMonsterTokenBundle,
-  type ProxyConfig,
   type StoredPlatformCredentialBundle,
 } from "@agency_hub_core/shared";
 
@@ -163,16 +160,7 @@ export async function listConnectionStatuses(
 export async function updatePageCredentials(
   app: AppContext,
   pageLabel: string,
-  body: {
-    platform: "fansly";
-    session: FanslySessionBundle;
-    proxy?: ProxyConfig | null;
-  } | {
-    platform: "onlyfans";
-    auth: OnlyMonsterTokenBundle;
-    username: string;
-    proxy?: ProxyConfig | null;
-  },
+  body: UpdateCredentialsBody,
 ) {
   const stored = await findPageByLabel(app.db, pageLabel);
   if (!stored) {
