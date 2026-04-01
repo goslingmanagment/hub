@@ -23,19 +23,23 @@ import type {
 import { api } from "./client.js";
 import { qs } from "./utils.js";
 
-export function usePageRevenue(pageLabel: string, period: string) {
+type QueryOptions = { enabled?: boolean };
+
+export function usePageRevenue(pageLabel: string, period: string, options: QueryOptions = {}) {
   return useQuery({
     queryKey: ["pageRevenue", pageLabel, period],
     queryFn: () =>
       api.get<PageRevenueResponse>(`/api/v1/pages/${pageLabel}/revenue?period=${period}`),
+    enabled: options.enabled ?? true,
   });
 }
 
-export function usePageRevenueDaily(pageLabel: string, period = "30d") {
+export function usePageRevenueDaily(pageLabel: string, period = "30d", options: QueryOptions = {}) {
   return useQuery({
     queryKey: ["pageRevenueDaily", pageLabel, period],
     queryFn: () =>
       api.get<RevenueDailyResponse>(`/api/v1/pages/${pageLabel}/revenue/daily?period=${period}`),
+    enabled: options.enabled ?? true,
   });
 }
 
@@ -49,19 +53,22 @@ export function usePageSubscribers(
     startedWithinHours?: number;
     autoRenew?: boolean;
   } = {},
+  options: QueryOptions = {},
 ) {
   return useQuery({
     queryKey: ["pageSubscribers", pageLabel, params],
     queryFn: () =>
       api.get<SubscriberListResponse>(`/api/v1/pages/${pageLabel}/subscribers${qs(params)}`),
+    enabled: options.enabled ?? true,
   });
 }
 
-export function usePageSubscribersDaily(pageLabel: string, period = "30d") {
+export function usePageSubscribersDaily(pageLabel: string, period = "30d", options: QueryOptions = {}) {
   return useQuery({
     queryKey: ["pageSubscribersDaily", pageLabel, period],
     queryFn: () =>
       api.get<SubscriberDailyResponse>(`/api/v1/pages/${pageLabel}/subscribers/daily?period=${period}`),
+    enabled: options.enabled ?? true,
   });
 }
 
@@ -97,11 +104,13 @@ export function usePageFollowersDaily(
 export function usePageTransactions(
   pageLabel: string,
   params: { limit?: number; offset?: number; type?: string; state?: string } = {},
+  options: QueryOptions = {},
 ) {
   return useQuery({
     queryKey: ["pageTransactions", pageLabel, params],
     queryFn: () =>
       api.get<TransactionListResponse>(`/api/v1/pages/${pageLabel}/transactions${qs(params)}`),
+    enabled: options.enabled ?? true,
   });
 }
 
@@ -210,10 +219,11 @@ export function useSpenders(params: {
   sortBy?: string;
   sortDir?: string;
   query?: string;
-}) {
+}, options: QueryOptions = {}) {
   return useQuery({
     queryKey: ["spenders", params],
     queryFn: () => api.get<SpenderListResponse>(`/api/v2/spenders${qs(params)}`),
+    enabled: options.enabled ?? true,
   });
 }
 
@@ -261,4 +271,3 @@ export function useSpenderBatch(body: SpenderBatchBody | null) {
 
   return query;
 }
-

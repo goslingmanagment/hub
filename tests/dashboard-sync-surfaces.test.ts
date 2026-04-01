@@ -177,6 +177,7 @@ function renderWithRouter(
   element: ReturnType<typeof createElement>,
   initialEntries = ["/"],
   pages = buildOverviewPage().pages,
+  shellOverrides: Partial<DashboardShellValue> = {},
 ) {
   const shellValue: DashboardShellValue = {
     pageCatalogState: "ready" as const,
@@ -184,6 +185,7 @@ function renderWithRouter(
     pages,
     findPageByLabel: (pageLabel: string | undefined) =>
       pages.find((page) => page.label === pageLabel) ?? null,
+    ...shellOverrides,
   };
 
   return renderToStaticMarkup(createElement(
@@ -374,6 +376,83 @@ describe("dashboard sync product surfaces", () => {
 
     expect(html).not.toContain("Data updates paused");
     expect(html).not.toContain("Reconnect credentials");
+  });
+
+  it("keeps page-detail queries disabled for stale page routes until the not-found state is shown", () => {
+    const html = renderWithRouter(
+      createElement(Routes, undefined,
+        createElement(Route, {
+          path: "/pages/:pageLabel",
+          element: createElement(PageDetailPage),
+        }),
+      ),
+      ["/pages/missing"],
+      buildOverviewPage().pages,
+    );
+
+    expect(html).toContain("Page not found");
+    expect(queryMocks.usePageRevenue).toHaveBeenCalledWith("missing", "30d", { enabled: false });
+    expect(queryMocks.usePageFollowersDaily).toHaveBeenCalledWith("missing", "30d", { enabled: false });
+    expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("missing", "30d", { enabled: false });
+    expect(queryMocks.usePageRevenueDaily).toHaveBeenCalledWith("missing", "30d", { enabled: false });
+    expect(queryMocks.usePageSubscribers).toHaveBeenCalledWith("missing", { limit: 6 }, { enabled: false });
+    expect(queryMocks.usePageTransactions).toHaveBeenCalledWith("missing", {
+      limit: 50,
+      offset: 0,
+      type: undefined,
+    }, {
+      enabled: false,
+    });
+    expect(queryMocks.useSpenders).toHaveBeenCalledWith({
+      scope: "page",
+      pageLabel: "missing",
+      period: "30d",
+      limit: 50,
+      offset: 0,
+      sortBy: "creatorNetAmountMills",
+      sortDir: "desc",
+    }, {
+      enabled: false,
+    });
+  });
+
+  it("enables page-detail queries once the shell catalog resolves the page", () => {
+    const overview = buildOverviewPage();
+
+    renderWithRouter(
+      createElement(Routes, undefined,
+        createElement(Route, {
+          path: "/pages/:pageLabel",
+          element: createElement(PageDetailPage),
+        }),
+      ),
+      ["/pages/lana"],
+      overview.pages,
+    );
+
+    expect(queryMocks.usePageRevenue).toHaveBeenCalledWith("lana", "30d", { enabled: true });
+    expect(queryMocks.usePageFollowersDaily).toHaveBeenCalledWith("lana", "30d", { enabled: true });
+    expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("lana", "30d", { enabled: true });
+    expect(queryMocks.usePageRevenueDaily).toHaveBeenCalledWith("lana", "30d", { enabled: true });
+    expect(queryMocks.usePageSubscribers).toHaveBeenCalledWith("lana", { limit: 6 }, { enabled: true });
+    expect(queryMocks.usePageTransactions).toHaveBeenCalledWith("lana", {
+      limit: 50,
+      offset: 0,
+      type: undefined,
+    }, {
+      enabled: true,
+    });
+    expect(queryMocks.useSpenders).toHaveBeenCalledWith({
+      scope: "page",
+      pageLabel: "lana",
+      period: "30d",
+      limit: 50,
+      offset: 0,
+      sortBy: "creatorNetAmountMills",
+      sortDir: "desc",
+    }, {
+      enabled: true,
+    });
   });
 
   it("uses CRM coverage language instead of generic sync chrome", () => {

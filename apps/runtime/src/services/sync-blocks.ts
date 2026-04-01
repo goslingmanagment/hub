@@ -463,6 +463,7 @@ export async function pauseSyncBlock(
 
 export async function resumeSyncBlock(
   app: AppContext,
+  boss: Pick<PgBoss, "send">,
   input: {
     pageLabel: string;
     block: SyncBlockKey;
@@ -485,12 +486,29 @@ export async function resumeSyncBlock(
     streams: tasks,
     now,
   });
+  const requests = await requestPageSyncRows(app.db, {
+    pageId: stored.page.id,
+    streams: tasks,
+    source: "manual",
+    now,
+  });
+  await enqueueBlockWakeup(boss, {
+    platformAccountId: stored.page.id,
+    platform: stored.page.platform,
+    proxyUrl: stored.proxy?.url ?? null,
+    tasks,
+    reason: "manual",
+  });
 
   return {
     accepted: true as const,
     action: "resume" as const,
     pageLabel: stored.page.label,
     block: input.block,
+    requests: requests.map((request) => ({
+      stream: request.stream,
+      requestedSeq: request.requestedSeq,
+    })),
   };
 }
 

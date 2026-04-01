@@ -1647,7 +1647,10 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return resumeSyncBlock(appContext, request.body);
+    if (!boss) {
+      throw new ServiceUnavailableError("Job queue not available");
+    }
+    return resumeSyncBlock(appContext, boss, request.body);
   });
 
   server.post("/api/v1/admin/sync/blocks/reset", {

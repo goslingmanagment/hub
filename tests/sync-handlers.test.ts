@@ -880,12 +880,76 @@ describe("sync executor handlers", () => {
       stream: "followers",
     }));
     expect(dbMocks.countActivePageFollows).toHaveBeenCalledWith(db, 12);
-    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(db, {
-      pageId: 12,
-      streams: ["followers_reconcile"],
-      source: "anomaly",
-    });
+  expect(dbMocks.requestPageSync).toHaveBeenCalledWith(db, {
+    pageId: 12,
+    streams: ["followers_reconcile"],
+    source: "anomaly",
   });
+});
+
+it("guards against empty first-page follower reconcile wipes when active followers already exist", async () => {
+  const telemetry = createTelemetry();
+  const db = {
+    transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback({})),
+  };
+  const app = {
+    db,
+    config: {
+      followerPageDelayMs: 0,
+      syncSharedRateLimitEnabled: false,
+    },
+    adapter: {
+      getFollowersPage: vi.fn(async () => ({
+        items: [],
+        accounts: [],
+        done: true,
+        raw: {},
+      })),
+    },
+  } as never;
+
+  dbMocks.getCheckpoint.mockResolvedValue(null);
+  sharedMocks.refreshPageMetadata.mockResolvedValue({
+    parsed: {
+      account: {
+        followCount: 5,
+      },
+    },
+  });
+  dbMocks.countActivePageFollows.mockResolvedValue(3);
+
+  await expect(executeFollowersReconcileChunk(app, {
+    pageContext: {
+      platform: "fansly",
+      page: {
+        id: 13,
+        label: "fansly-page",
+        platformAccountId: "acct-13",
+        metadata: {},
+      },
+      session: { authorization: "token" },
+      proxy: null,
+    },
+    streamState: {
+      requestSeq: 4,
+    },
+    syncRunId: 102,
+    telemetry: telemetry as never,
+    budget: new SyncChunkBudget(),
+  } as never)).rejects.toThrow("refusing destructive finalization");
+
+  expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+    code: "followers_reconcile_empty_first_page_guard",
+    details: {
+      sourceFollowerCount: 5,
+      existingActiveFollowers: 3,
+    },
+  }));
+  expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
+  expect(dbMocks.refreshFanPageFollowerState).not.toHaveBeenCalled();
+  expect(dbMocks.rebuildFollowerRollups).not.toHaveBeenCalled();
+  expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+});
 
   it("runs follower reconcile finalization against generation-based state", async () => {
     const telemetry = createTelemetry();

@@ -1530,6 +1530,24 @@ export async function executeFollowersReconcileChunk(
       action: "inserting followers raw payload",
     });
 
+    if (state.offset === 0 && page.items.length === 0 && state.sourceFollowerCount > 0) {
+      const existingActiveFollowers = asNumber(
+        await countActivePageFollows(app.db, input.pageContext.page.id),
+      ) ?? 0;
+      if (existingActiveFollowers > 0) {
+        await input.telemetry.addAnomaly({
+          code: "followers_reconcile_empty_first_page_guard",
+          severity: "warn",
+          message: "Follower reconcile returned zero rows on the first page while active followers already exist",
+          details: {
+            sourceFollowerCount: state.sourceFollowerCount,
+            existingActiveFollowers,
+          },
+        });
+        throw new Error("Follower reconcile returned zero rows; refusing destructive finalization");
+      }
+    }
+
     const nextState = page.done
       ? state
       : {

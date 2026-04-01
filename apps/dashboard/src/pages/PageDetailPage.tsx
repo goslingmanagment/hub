@@ -63,38 +63,52 @@ export function PageDetailPage() {
   const selectedPeriod = period;
 
   const { findPageByLabel, pageCatalogState, pageCatalogError } = useDashboardShell();
+  const resolvedPageLabel = pageLabel ?? "";
   const page = findPageByLabel(pageLabel);
+  const canLoadPageData = resolvedPageLabel.length > 0 && pageCatalogState === "ready" && !!page;
 
-  const { data: selectedRevenue } = usePageRevenue(pageLabel!, selectedPeriod);
+  const { data: selectedRevenue } = usePageRevenue(resolvedPageLabel, selectedPeriod, {
+    enabled: canLoadPageData,
+  });
 
   const isFansly = page?.platform === "fansly";
-  const { data: dailyData } = usePageFollowersDaily(pageLabel!, selectedPeriod, {
-    enabled: isFansly,
+  const { data: dailyData } = usePageFollowersDaily(resolvedPageLabel, selectedPeriod, {
+    enabled: canLoadPageData && isFansly,
   });
-  const { data: subsDailyData } = usePageSubscribersDaily(pageLabel!, selectedPeriod);
-  const { data: revenueDailyData } = usePageRevenueDaily(pageLabel!, selectedPeriod);
+  const { data: subsDailyData } = usePageSubscribersDaily(resolvedPageLabel, selectedPeriod, {
+    enabled: canLoadPageData,
+  });
+  const { data: revenueDailyData } = usePageRevenueDaily(resolvedPageLabel, selectedPeriod, {
+    enabled: canLoadPageData,
+  });
 
-  const { data: subscribers } = usePageSubscribers(pageLabel!, { limit: 6 });
+  const { data: subscribers } = usePageSubscribers(resolvedPageLabel, { limit: 6 }, {
+    enabled: canLoadPageData,
+  });
 
   const [activeTab, setActiveTab] = useState<TabKey>("transactions");
   const [txOffset, setTxOffset] = useState(0);
   const [txTypeFilter, setTxTypeFilter] = useState("");
   const [spendersOffset, setSpendersOffset] = useState(0);
 
-  const { data: transactions } = usePageTransactions(pageLabel!, {
+  const { data: transactions } = usePageTransactions(resolvedPageLabel, {
     limit: PAGE_SIZE,
     offset: txOffset,
     type: txTypeFilter || undefined,
+  }, {
+    enabled: canLoadPageData,
   });
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
   const { data: spenders } = useSpenders({
     scope: "page",
-    pageLabel,
+    pageLabel: resolvedPageLabel,
     period: spenderPeriod,
     limit: PAGE_SIZE,
     offset: spendersOffset,
     sortBy: "creatorNetAmountMills",
     sortDir: "desc",
+  }, {
+    enabled: canLoadPageData,
   });
 
   useEffect(() => {

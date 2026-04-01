@@ -432,17 +432,77 @@ describe("sync blocks service", () => {
     });
     dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
     dbMocks.resumePageSync.mockResolvedValue(undefined);
+    dbMocks.requestPageSync.mockResolvedValue([
+      { stream: "dm_conversations", requestedSeq: 3 },
+    ]);
+    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-2");
 
-    await resumeSyncBlock({ db: {} } as never, {
+    const response = await resumeSyncBlock({ db: {} } as never, {
+      send: vi.fn(),
+    } as never, {
       pageLabel: "lana",
       block: "messages_live",
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
 
+    expect(response).toMatchObject({
+      accepted: true,
+      action: "resume",
+      block: "messages_live",
+      requests: [{ stream: "dm_conversations", requestedSeq: 3 }],
+    });
     expect(dbMocks.resumePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       pageId: 7,
       streams: ["dm_conversations"],
     }));
+    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 7,
+      streams: ["dm_conversations"],
+      source: "manual",
+    }));
+    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes message history by re-requesting work and enqueueing a wakeup", async () => {
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: {
+        id: 7,
+        label: "lana",
+        platform: "fansly",
+      },
+      proxy: null,
+    });
+    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.resumePageSync.mockResolvedValue(undefined);
+    dbMocks.requestPageSync.mockResolvedValue([
+      { stream: "dm_messages", requestedSeq: 4 },
+    ]);
+    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-3");
+
+    const response = await resumeSyncBlock({ db: {} } as never, {
+      send: vi.fn(),
+    } as never, {
+      pageLabel: "lana",
+      block: "messages_history",
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(response).toMatchObject({
+      accepted: true,
+      action: "resume",
+      block: "messages_history",
+      requests: [{ stream: "dm_messages", requestedSeq: 4 }],
+    });
+    expect(dbMocks.resumePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 7,
+      streams: ["dm_messages"],
+    }));
+    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 7,
+      streams: ["dm_messages"],
+      source: "manual",
+    }));
+    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledTimes(1);
   });
 
   it("resets message history without clearing auth through the legacy message endpoint", async () => {
