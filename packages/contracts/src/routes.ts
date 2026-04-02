@@ -2574,7 +2574,7 @@ export const routeSchemas = {
   crmSummary: {
     tags: ["crm"],
     summary: "Get CRM freshness, coverage, and queue totals for one Fansly page",
-    security: cookieOrBearerSecurity,
+    security: cookieOnlySecurity,
     params: pageParamsSchema,
     querystring: crmSummaryQuerySchema,
     response: {
@@ -2588,7 +2588,7 @@ export const routeSchemas = {
   crmRetention: {
     tags: ["crm"],
     summary: "List retention CRM candidates for one Fansly page",
-    security: cookieOrBearerSecurity,
+    security: cookieOnlySecurity,
     params: pageParamsSchema,
     querystring: crmRetentionQuerySchema,
     response: {
@@ -2602,7 +2602,7 @@ export const routeSchemas = {
   crmReactivation: {
     tags: ["crm"],
     summary: "List reactivation CRM candidates for one Fansly page",
-    security: cookieOrBearerSecurity,
+    security: cookieOnlySecurity,
     params: pageParamsSchema,
     querystring: crmReactivationQuerySchema,
     response: {
@@ -2616,7 +2616,7 @@ export const routeSchemas = {
   crmConversationPreview: {
     tags: ["crm"],
     summary: "Return locally cached DM preview rows for one conversation",
-    security: cookieOrBearerSecurity,
+    security: cookieOnlySecurity,
     params: crmConversationPreviewParamsSchema,
     querystring: crmConversationPreviewQuerySchema,
     response: {
@@ -2645,7 +2645,7 @@ export const routeSchemas = {
   workboard: {
     tags: ["workboard"],
     summary: "Get workboard queue for one Fansly page",
-    security: cookieOrBearerSecurity,
+    security: cookieOnlySecurity,
     params: pageParamsSchema,
     response: {
       200: workboardResponseSchema,
@@ -2658,7 +2658,7 @@ export const routeSchemas = {
   workboardSnooze: {
     tags: ["workboard"],
     summary: "Snooze a fan on the workboard",
-    security: cookieOrBearerSecurity,
+    security: cookieOnlySecurity,
     params: pageParamsSchema,
     body: workboardSnoozeBodySchema,
     response: {
@@ -2672,7 +2672,7 @@ export const routeSchemas = {
   workboardUnsnooze: {
     tags: ["workboard"],
     summary: "Unsnooze a fan on the workboard",
-    security: cookieOrBearerSecurity,
+    security: cookieOnlySecurity,
     params: workboardUnsnoozeParamsSchema,
     response: {
       200: z.object({ ok: z.literal(true) }),
