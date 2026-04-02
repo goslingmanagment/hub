@@ -28,9 +28,6 @@ describe("dashboard sync display policy", () => {
     expect(getSyncUxDisplayMode(summary, "overview_row")).toBe("hidden");
     expect(getSyncUxDisplayMode(summary, "page_detail")).toBe("hidden");
     expect(getSyncUxDisplayMode(summary, "credentials")).toBe("hidden");
-    expect(getSyncUxDisplayMode(summary, "crm_header", {
-      hasIncompleteData: false,
-    })).toBe("hidden");
     expect(getSyncUxDisplayMode(summary, "sync_settings")).toBe("home");
   });
 
@@ -52,23 +49,5 @@ describe("dashboard sync display policy", () => {
     expect(getSyncUxDisplayMode(summary, "overview_row")).toBe("exception");
     expect(getSyncUxDisplayMode(summary, "page_detail")).toBe("exception");
     expect(getSyncUxDisplayMode(summary, "credentials")).toBe("exception");
-  });
-
-  it("shows CRM explanations only for incomplete data or blocking states", () => {
-    expect(getSyncUxDisplayMode(buildSyncUx({
-      state: "retrying",
-    }), "crm_header", {
-      hasIncompleteData: false,
-    })).toBe("hidden");
-    expect(getSyncUxDisplayMode(buildSyncUx({
-      state: "retrying",
-    }), "crm_header", {
-      hasIncompleteData: true,
-    })).toBe("exception");
-    expect(getSyncUxDisplayMode(buildSyncUx({
-      state: "off",
-    }), "crm_header", {
-      hasIncompleteData: false,
-    })).toBe("exception");
   });
 });

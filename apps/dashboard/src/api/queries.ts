@@ -3,7 +3,7 @@ export * from "./adminPages.js";
 export * from "./adminSync.js";
 export * from "./adminUsers.js";
 export * from "./auth.js";
-export * from "./crm.js";
+export * from "./conversations.js";
 export * from "./dev.js";
 export * from "./overview.js";
 export * from "./pages.js";

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
-import type { CrmConversationPreviewResponse } from "@agency_hub_core/contracts";
-import { useCrmConversationPreview } from "@/api/queries";
+import type { PageConversationPreviewResponse } from "@agency_hub_core/contracts";
+import { usePageConversationPreview } from "@/api/queries";
 import { formatRelativeTime, formatUsdFromCents } from "@/lib/format";
 
 interface ChatPreviewPanelProps {
@@ -13,7 +13,7 @@ interface ChatPreviewPanelProps {
 
 const PREVIEW_LOADING_STATES = new Set(["syncing", "catching_up", "retrying", "setup"]);
 
-function getEmptyPreviewCopy(data: CrmConversationPreviewResponse) {
+function getEmptyPreviewCopy(data: PageConversationPreviewResponse) {
   const previewLoading = data.conversation.messageCoverageStatus === "pending_backfill" ||
     PREVIEW_LOADING_STATES.has(data.messageSyncUx.state);
   const previewCapped = data.conversation.messageCoverageStatus === "partial_window";
@@ -75,7 +75,7 @@ function getEmptyPreviewCopy(data: CrmConversationPreviewResponse) {
   };
 }
 
-function getPreviewFooterText(data: CrmConversationPreviewResponse) {
+function getPreviewFooterText(data: PageConversationPreviewResponse) {
   const previewLoading = data.conversation.messageCoverageStatus === "pending_backfill" ||
     PREVIEW_LOADING_STATES.has(data.messageSyncUx.state);
 
@@ -115,7 +115,7 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
     data,
     isError,
     isLoading,
-  } = useCrmConversationPreview(pageLabel, platformConversationId, { limit });
+  } = usePageConversationPreview(pageLabel, platformConversationId, { limit });
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const hasAutoScrolledRef = useRef(false);
 
@@ -169,7 +169,7 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
   return (
     <div className="bg-hover/50 px-6 py-4 space-y-2">
       <div ref={messagesContainerRef} className="flex flex-col gap-1.5 max-h-[320px] overflow-y-auto">
-        {data.messages.map((msg: CrmConversationPreviewResponse["messages"][number]) => {
+        {data.messages.map((msg: PageConversationPreviewResponse["messages"][number]) => {
           const isModel = msg.senderRole === "model";
           return (
             <div

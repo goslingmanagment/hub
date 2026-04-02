@@ -5,8 +5,7 @@ export type SyncUxDisplaySurface =
   | "overview_row"
   | "page_detail"
   | "credentials"
-  | "sync_settings"
-  | "crm_header";
+  | "sync_settings";
 
 export type SyncUxExceptionKind = "credentials" | "attention" | "off";
 
@@ -33,12 +32,7 @@ export function getSyncUxExceptionKind(summary: SyncUxSummary): SyncUxExceptionK
 export function getSyncUxDisplayMode(
   summary: SyncUxSummary,
   surface: SyncUxDisplaySurface,
-  input?: {
-    hasIncompleteData?: boolean;
-  },
 ): SyncUxDisplayMode {
-  const hasIncompleteData = input?.hasIncompleteData ?? false;
-
   switch (surface) {
     case "overview_row":
       return getSyncUxExceptionKind(summary) ? "exception" : "hidden";
@@ -48,9 +42,5 @@ export function getSyncUxDisplayMode(
       return summary.requiresAction ? "exception" : "hidden";
     case "sync_settings":
       return "home";
-    case "crm_header":
-      return summary.requiresAction || summary.state === "off" || hasIncompleteData
-        ? "exception"
-        : "hidden";
   }
 }

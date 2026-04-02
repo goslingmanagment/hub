@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 
 const queryMocks = vi.hoisted(() => ({
-  useCrmConversationPreview: vi.fn(),
+  usePageConversationPreview: vi.fn(),
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
@@ -27,7 +27,7 @@ function buildSyncUx(
     state: "healthy" as const,
     label: "Up to date",
     headline: "Conversation history is ready",
-    detail: "CRM previews are ready to use.",
+    detail: "Conversation previews are ready to use.",
     progressLabel: null,
     nextRetryAt: null,
     updatedAt: "2026-03-24T11:55:00.000Z",
@@ -42,7 +42,7 @@ function renderPanel() {
     undefined,
     createElement(ChatPreviewPanel, {
       pageLabel: "lana",
-      platformConversationId: "crm-conv-001",
+      platformConversationId: "conversation-001",
       profileHref: "/pages/lana/fans/fansly/fan-001",
     }),
   ));
@@ -50,11 +50,11 @@ function renderPanel() {
 
 describe("ChatPreviewPanel", () => {
   beforeEach(() => {
-    queryMocks.useCrmConversationPreview.mockReset();
+    queryMocks.usePageConversationPreview.mockReset();
   });
 
   it("renders an explicit error state when preview loading fails", () => {
-    queryMocks.useCrmConversationPreview.mockReturnValue({
+    queryMocks.usePageConversationPreview.mockReturnValue({
       data: undefined,
       isError: true,
       isLoading: false,
@@ -67,7 +67,7 @@ describe("ChatPreviewPanel", () => {
   });
 
   it("keeps the empty state for genuinely empty conversations", () => {
-    queryMocks.useCrmConversationPreview.mockReturnValue({
+    queryMocks.usePageConversationPreview.mockReturnValue({
       data: {
         messageSyncUx: buildSyncUx(),
         conversation: {
@@ -87,7 +87,7 @@ describe("ChatPreviewPanel", () => {
   });
 
   it("hides the healthy sync footer once preview messages are ready", () => {
-    queryMocks.useCrmConversationPreview.mockReturnValue({
+    queryMocks.usePageConversationPreview.mockReturnValue({
       data: {
         messageSyncUx: buildSyncUx(),
         conversation: {
@@ -112,7 +112,7 @@ describe("ChatPreviewPanel", () => {
   });
 
   it("formats stored tip amounts as cents in the preview bubble", () => {
-    queryMocks.useCrmConversationPreview.mockReturnValue({
+    queryMocks.usePageConversationPreview.mockReturnValue({
       data: {
         messageSyncUx: buildSyncUx(),
         conversation: {
@@ -136,7 +136,7 @@ describe("ChatPreviewPanel", () => {
   });
 
   it("uses data-loading language for transient empty previews", () => {
-    queryMocks.useCrmConversationPreview.mockReturnValue({
+    queryMocks.usePageConversationPreview.mockReturnValue({
       data: {
         messageSyncUx: buildSyncUx({
           state: "retrying",

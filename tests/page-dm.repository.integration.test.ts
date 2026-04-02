@@ -1,23 +1,17 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
   createFanslyPage,
   createModel,
   finalizePageDmConversationMessageSync,
-  getCrmFreshnessCoverage,
-  getCrmConversationPreview,
+  getPageDmSyncCoverage,
+  getPageConversationPreview,
   getPageConversationMessages,
-  listCrmReactivation,
-  listCrmRetention,
-  recalculateFanPageSpend,
   selectNextPageDmMessageSyncCandidate,
-  upsertFanPage,
   upsertFans,
   upsertPageDmConversation,
   upsertPageDmMessages,
-  upsertPageSubscription,
-  upsertTransaction,
 } from "@agency_hub_core/db";
 import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
@@ -30,7 +24,7 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 
-async function createCrmPage(testDb: StartedTestDatabase, label: string) {
+async function createTestPage(testDb: StartedTestDatabase, label: string) {
   const model = await createModel(testDb.db, {
     slug: `${label}-model`,
     name: `${label} model`,
@@ -42,7 +36,7 @@ async function createCrmPage(testDb: StartedTestDatabase, label: string) {
   });
 }
 
-describe("crm repository integration", () => {
+describe("page DM repository integration", () => {
   let testDb: StartedTestDatabase | null = null;
 
   beforeAll(async () => {
@@ -63,505 +57,6 @@ describe("crm repository integration", () => {
     await resetIntegrationDatabase(testDb.pool);
   });
 
-  it("selects the primary visible conversation by visibility, recency, then conversation id", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-17T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-retention-primary");
-    const [fan] = await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: "fan-primary",
-      username: "fan_primary",
-      displayName: "Fan Primary",
-    }]);
-
-    await upsertFanPage(testDb.db, {
-      fanId: fan.id,
-      platformAccountId: page.id,
-      isSubscriber: true,
-      subscriberSince: new Date("2026-02-01T00:00:00.000Z"),
-      subscriptionExpiresAt: new Date("2026-03-22T12:00:00.000Z"),
-      autoRenew: false,
-      pageAlias: "Primary VIP",
-    });
-    await upsertPageSubscription(testDb.db, {
-      platformSubscriptionId: "sub-primary",
-      platformAccountId: page.id,
-      fanId: fan.id,
-      rawStatus: 3,
-      canonicalStatus: "active",
-      priceMills: 5000n,
-      renewPriceMills: 5000n,
-      autoRenew: false,
-      sourceCreatedAt: new Date("2026-02-01T00:00:00.000Z"),
-      endsAt: new Date("2026-03-22T12:00:00.000Z"),
-      subscriptionTierName: "VIP",
-    });
-    await upsertTransaction(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      transactionId: "tx-primary",
-      rawType: 20001,
-      canonicalType: "tip",
-      transactionState: "posted",
-      rawStatus: 2,
-      grossAmountMills: 9000n,
-      sourceDestinationAmountMills: 9000n,
-      creatorNetAmountMills: 9000n,
-      occurredAt: new Date("2026-03-10T12:00:00.000Z"),
-    });
-    await recalculateFanPageSpend(testDb.db, page.id);
-
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      platformConversationId: "visible-1",
-      partnerPlatformUserId: "fan-primary",
-      partnerUsername: "fan_primary",
-      partnerDisplayName: "Fan Primary",
-      conversationFlags: 0,
-      unreadCount: 0,
-      subscriptionTierId: null,
-      lastMessageId: "msg-visible-1",
-      lastUnreadMessageId: null,
-      lastMessageAt: new Date("2026-03-14T00:00:00.000Z"),
-      lastMessageSenderId: "fan-primary",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "visible one",
-      lastFanMessageAt: new Date("2026-03-14T00:00:00.000Z"),
-      lastModelMessageAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      platformConversationId: "visible-2",
-      partnerPlatformUserId: "fan-primary",
-      partnerUsername: "fan_primary",
-      partnerDisplayName: "Fan Primary",
-      conversationFlags: 0,
-      unreadCount: 3,
-      subscriptionTierId: null,
-      lastMessageId: "msg-visible-2",
-      lastUnreadMessageId: "msg-visible-2",
-      lastMessageAt: new Date("2026-03-14T00:00:00.000Z"),
-      lastMessageSenderId: "fan-primary",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "visible two",
-      lastFanMessageAt: new Date("2026-03-14T00:00:00.000Z"),
-      lastModelMessageAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      platformConversationId: "hidden-newer",
-      partnerPlatformUserId: "fan-primary",
-      partnerUsername: "fan_primary",
-      partnerDisplayName: "Fan Primary",
-      conversationFlags: 0,
-      unreadCount: 9,
-      subscriptionTierId: null,
-      lastMessageId: "msg-hidden",
-      lastUnreadMessageId: "msg-hidden",
-      lastMessageAt: new Date("2026-03-16T00:00:00.000Z"),
-      lastMessageSenderId: "fan-primary",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "hidden newer",
-      lastFanMessageAt: new Date("2026-03-16T00:00:00.000Z"),
-      lastModelMessageAt: null,
-      isVisible: false,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-
-    const retention = await listCrmRetention(testDb.db, {
-      platformAccountId: page.id,
-      limit: 10,
-      offset: 0,
-      showHandled: false,
-      now,
-    });
-
-    expect(retention.items).toHaveLength(1);
-    expect(retention.items[0]).toMatchObject({
-      pageAlias: "Primary VIP",
-      platformConversationId: "visible-2",
-      unreadCount: 3,
-      touchpointCode: "5d",
-      isSoftTouchpoint: false,
-      isHandled: false,
-      subscriptionTierName: "VIP",
-    });
-  });
-
-  it("suppresses handled retention rows unless showHandled=true", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-17T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-retention-handled");
-    const [fan] = await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: "fan-handled",
-      username: "fan_handled",
-      displayName: "Fan Handled",
-    }]);
-
-    await upsertFanPage(testDb.db, {
-      fanId: fan.id,
-      platformAccountId: page.id,
-      isSubscriber: true,
-      subscriberSince: new Date("2026-02-01T00:00:00.000Z"),
-      subscriptionExpiresAt: new Date("2026-03-20T12:00:00.000Z"),
-      autoRenew: true,
-    });
-    await upsertPageSubscription(testDb.db, {
-      platformSubscriptionId: "sub-handled",
-      platformAccountId: page.id,
-      fanId: fan.id,
-      rawStatus: 3,
-      canonicalStatus: "active",
-      priceMills: 5000n,
-      renewPriceMills: 5000n,
-      autoRenew: true,
-      sourceCreatedAt: new Date("2026-02-01T00:00:00.000Z"),
-      endsAt: new Date("2026-03-20T12:00:00.000Z"),
-    });
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      platformConversationId: "handled-conv",
-      partnerPlatformUserId: "fan-handled",
-      partnerUsername: "fan_handled",
-      partnerDisplayName: "Fan Handled",
-      conversationFlags: 0,
-      unreadCount: 0,
-      subscriptionTierId: null,
-      lastMessageId: "handled-msg",
-      lastUnreadMessageId: null,
-      lastMessageAt: new Date("2026-03-17T12:30:00.000Z"),
-      lastMessageSenderId: "acct",
-      lastMessageSenderRole: "model",
-      lastMessagePreview: "recent touch",
-      lastFanMessageAt: null,
-      lastModelMessageAt: new Date("2026-03-17T12:30:00.000Z"),
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-
-    const hidden = await listCrmRetention(testDb.db, {
-      platformAccountId: page.id,
-      limit: 10,
-      offset: 0,
-      showHandled: false,
-      now,
-    });
-    const shown = await listCrmRetention(testDb.db, {
-      platformAccountId: page.id,
-      limit: 10,
-      offset: 0,
-      showHandled: true,
-      now,
-    });
-
-    expect(hidden.items).toHaveLength(0);
-    expect(shown.items).toHaveLength(1);
-    expect(shown.items[0]?.isHandled).toBe(true);
-    expect(shown.items[0]?.touchpointCode).toBe("3d");
-  });
-
-  it("issues a single SQL statement per retention query call", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-17T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-retention-single-query");
-    const [fan] = await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: "fan-single-query",
-      username: "fan_single_query",
-      displayName: "Fan Single Query",
-    }]);
-
-    await upsertFanPage(testDb.db, {
-      fanId: fan.id,
-      platformAccountId: page.id,
-      isSubscriber: true,
-      subscriberSince: new Date("2026-02-01T00:00:00.000Z"),
-      subscriptionExpiresAt: new Date("2026-03-20T12:00:00.000Z"),
-      autoRenew: true,
-    });
-    await upsertPageSubscription(testDb.db, {
-      platformSubscriptionId: "sub-single-query",
-      platformAccountId: page.id,
-      fanId: fan.id,
-      rawStatus: 3,
-      canonicalStatus: "active",
-      priceMills: 5000n,
-      renewPriceMills: 5000n,
-      autoRenew: true,
-      sourceCreatedAt: new Date("2026-02-01T00:00:00.000Z"),
-      endsAt: new Date("2026-03-20T12:00:00.000Z"),
-    });
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      platformConversationId: "single-query-conv",
-      partnerPlatformUserId: "fan-single-query",
-      partnerUsername: "fan_single_query",
-      partnerDisplayName: "Fan Single Query",
-      conversationFlags: 0,
-      unreadCount: 1,
-      subscriptionTierId: null,
-      lastMessageId: "single-query-msg",
-      lastUnreadMessageId: "single-query-msg",
-      lastMessageAt: new Date("2026-03-17T10:00:00.000Z"),
-      lastMessageSenderId: "fan-single-query",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "single query",
-      lastFanMessageAt: new Date("2026-03-17T10:00:00.000Z"),
-      lastModelMessageAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-
-    const querySpy = vi.spyOn(testDb.pool, "query");
-
-    try {
-      const retention = await listCrmRetention(testDb.db, {
-        platformAccountId: page.id,
-        limit: 10,
-        offset: 0,
-        showHandled: false,
-        now,
-      });
-
-      expect(retention.total).toBe(1);
-      expect(retention.items).toHaveLength(1);
-      expect(querySpy).toHaveBeenCalledTimes(1);
-    } finally {
-      querySpy.mockRestore();
-    }
-  });
-
-  it("treats wildcard characters literally in retention search", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-17T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-retention-wildcard");
-    const [targetFan, distractorFan] = await upsertFans(testDb.db, [
-      {
-        platform: "fansly",
-        platformUserId: "fan-retention-wildcard-target",
-        username: "wild_100%buyer",
-        displayName: "Wildcard Retention Target",
-      },
-      {
-        platform: "fansly",
-        platformUserId: "fan-retention-wildcard-distractor",
-        username: "wildX100buyer",
-        displayName: "Wildcard Retention Distractor",
-      },
-    ]);
-
-    await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: targetFan.platformUserId,
-      username: "retention-renamed",
-      displayName: "Wildcard Retention Target",
-    }]);
-
-    for (const [index, fan] of [targetFan, distractorFan].entries()) {
-      await upsertFanPage(testDb.db, {
-        fanId: fan.id,
-        platformAccountId: page.id,
-        isSubscriber: true,
-        subscriberSince: new Date("2026-02-01T00:00:00.000Z"),
-        subscriptionExpiresAt: new Date(`2026-03-2${index}T12:00:00.000Z`),
-        autoRenew: index === 0 ? false : true,
-      });
-      await upsertPageSubscription(testDb.db, {
-        platformSubscriptionId: `sub-retention-wildcard-${index}`,
-        platformAccountId: page.id,
-        fanId: fan.id,
-        rawStatus: 3,
-        canonicalStatus: "active",
-        priceMills: 5000n,
-        renewPriceMills: 5000n,
-        autoRenew: index === 0 ? false : true,
-        sourceCreatedAt: new Date("2026-02-01T00:00:00.000Z"),
-        endsAt: new Date(`2026-03-2${index}T12:00:00.000Z`),
-      });
-    }
-
-    const retention = await listCrmRetention(testDb.db, {
-      platformAccountId: page.id,
-      limit: 10,
-      offset: 0,
-      query: "wild_100%",
-      showHandled: false,
-      now,
-    });
-
-    expect(retention.total).toBe(1);
-    expect(retention.items).toHaveLength(1);
-    expect(retention.items[0]).toMatchObject({
-      platformUserId: "fan-retention-wildcard-target",
-      username: "retention-renamed",
-    });
-  });
-
-  it("computes reactivation score from mills and ignores page_fans.last_seen_at", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-17T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-reactivation");
-    const [fan] = await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: "fan-reactivation",
-      username: "fan_reactivation",
-      displayName: "Fan Reactivation",
-    }]);
-
-    await upsertFanPage(testDb.db, {
-      fanId: fan.id,
-      platformAccountId: page.id,
-      isSubscriber: false,
-      subscriberSince: new Date("2026-01-01T00:00:00.000Z"),
-      subscriptionExpiresAt: new Date("2026-02-01T00:00:00.000Z"),
-      autoRenew: false,
-    });
-    await upsertTransaction(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      transactionId: "tx-reactivation",
-      rawType: 20001,
-      canonicalType: "tip",
-      transactionState: "posted",
-      rawStatus: 2,
-      grossAmountMills: 12000n,
-      sourceDestinationAmountMills: 12000n,
-      creatorNetAmountMills: 12000n,
-      occurredAt: new Date("2026-02-15T12:00:00.000Z"),
-    });
-    await recalculateFanPageSpend(testDb.db, page.id);
-    await testDb.pool.query(
-      `
-        update page_fans
-        set last_seen_at = $1
-        where platform_account_id = $2
-          and fan_id = $3
-      `,
-      [new Date("2026-03-17T11:59:59.000Z"), page.id, fan.id],
-    );
-
-    const reactivation = await listCrmReactivation(testDb.db, {
-      platformAccountId: page.id,
-      limit: 10,
-      offset: 0,
-      now,
-    });
-
-    expect(reactivation.items).toHaveLength(1);
-    expect(reactivation.items[0]).toMatchObject({
-      platformConversationId: null,
-      noDmHistory: true,
-      silenceDays: 30,
-    });
-    expect(reactivation.items[0]?.reactivationScore).toBe(360);
-  });
-
-  it("treats wildcard characters literally in reactivation search", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-17T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-reactivation-wildcard");
-    const [targetFan, distractorFan] = await upsertFans(testDb.db, [
-      {
-        platform: "fansly",
-        platformUserId: "fan-reactivation-wildcard-target",
-        username: "wild_100%buyer",
-        displayName: "Wildcard Reactivation Target",
-      },
-      {
-        platform: "fansly",
-        platformUserId: "fan-reactivation-wildcard-distractor",
-        username: "wildX100buyer",
-        displayName: "Wildcard Reactivation Distractor",
-      },
-    ]);
-
-    await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: targetFan.platformUserId,
-      username: "reactivation-renamed",
-      displayName: "Wildcard Reactivation Target",
-    }]);
-
-    for (const fan of [targetFan, distractorFan]) {
-      await upsertFanPage(testDb.db, {
-        fanId: fan.id,
-        platformAccountId: page.id,
-        isSubscriber: false,
-        subscriberSince: new Date("2026-01-01T00:00:00.000Z"),
-        subscriptionExpiresAt: new Date("2026-02-01T00:00:00.000Z"),
-        autoRenew: false,
-      });
-      await upsertTransaction(testDb.db, {
-        platformAccountId: page.id,
-        fanId: fan.id,
-        transactionId: `tx-reactivation-wildcard-${fan.id}`,
-        rawType: 20001,
-        canonicalType: "tip",
-        transactionState: "posted",
-        rawStatus: 2,
-        grossAmountMills: 12000n,
-        sourceDestinationAmountMills: 12000n,
-        creatorNetAmountMills: 12000n,
-        occurredAt: new Date("2026-02-15T12:00:00.000Z"),
-      });
-    }
-    await recalculateFanPageSpend(testDb.db, page.id);
-
-    const reactivation = await listCrmReactivation(testDb.db, {
-      platformAccountId: page.id,
-      limit: 10,
-      offset: 0,
-      query: "wild_100%",
-      now,
-    });
-
-    expect(reactivation.total).toBe(1);
-    expect(reactivation.items).toHaveLength(1);
-    expect(reactivation.items[0]).toMatchObject({
-      platformUserId: "fan-reactivation-wildcard-target",
-      username: "reactivation-renamed",
-    });
-  });
-
   it("skips stale mismatched heads and falls through to pending backfill conversations", async (context) => {
     if (!testDb) {
       context.skip();
@@ -569,7 +64,7 @@ describe("crm repository integration", () => {
     }
 
     const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-dm-sync-stale");
+    const page = await createTestPage(testDb, "page-dm-sync-stale");
     const [staleFan, backlogFan] = await upsertFans(testDb.db, [
       {
         platform: "fansly",
@@ -656,7 +151,7 @@ describe("crm repository integration", () => {
     }
 
     const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-dm-sync-fresh");
+    const page = await createTestPage(testDb, "page-dm-sync-fresh");
     const [freshFan, backlogFan] = await upsertFans(testDb.db, [
       {
         platform: "fansly",
@@ -743,7 +238,7 @@ describe("crm repository integration", () => {
     }
 
     const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-dm-sync-excluded");
+    const page = await createTestPage(testDb, "page-dm-sync-excluded");
     const [fan] = await upsertFans(testDb.db, [{
       platform: "fansly",
       platformUserId: "fan-excluded",
@@ -797,7 +292,7 @@ describe("crm repository integration", () => {
     }
 
     const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-dm-sync-empty-complete");
+    const page = await createTestPage(testDb, "page-dm-sync-empty-complete");
     const [fan] = await upsertFans(testDb.db, [{
       platform: "fansly",
       platformUserId: "fan-empty-complete",
@@ -848,7 +343,7 @@ describe("crm repository integration", () => {
     }
 
     const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createCrmPage(testDb, "crm-dm-sync-null-last-message-at");
+    const page = await createTestPage(testDb, "page-dm-sync-null-last-message-at");
     const [fan] = await upsertFans(testDb.db, [{
       platform: "fansly",
       platformUserId: "fan-null-last-message-at",
@@ -893,13 +388,13 @@ describe("crm repository integration", () => {
     expect(candidate?.platformConversationId).toBe("null-last-message-at");
   });
 
-  it("does not count message-sync-excluded conversations in pending CRM backfill coverage", async (context) => {
+  it("does not count message-sync-excluded conversations in pending conversation backfill coverage", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
-    const page = await createCrmPage(testDb, "crm-freshness-excluded");
+    const page = await createTestPage(testDb, "page-dm-freshness-excluded");
     const [includedFan, excludedFan] = await upsertFans(testDb.db, [
       {
         platform: "fansly",
@@ -973,7 +468,7 @@ describe("crm repository integration", () => {
       },
     });
 
-    const freshness = await getCrmFreshnessCoverage(testDb.db, page.id);
+    const freshness = await getPageDmSyncCoverage(testDb.db, page.id);
 
     expect(freshness.pendingMessageBackfillCount).toBe(1);
   });
@@ -984,7 +479,7 @@ describe("crm repository integration", () => {
       return;
     }
 
-    const page = await createCrmPage(testDb, "crm-preview");
+    const page = await createTestPage(testDb, "page-dm-preview");
     const [fan] = await upsertFans(testDb.db, [{
       platform: "fansly",
       platformUserId: "fan-preview",
@@ -995,7 +490,7 @@ describe("crm repository integration", () => {
     const conversation = await upsertPageDmConversation(testDb.db, {
       platformAccountId: page.id,
       fanId: fan.id,
-      platformConversationId: "preview-conv",
+      platformConversationId: "preview-conversation",
       partnerPlatformUserId: "fan-preview",
       partnerUsername: "fan_preview",
       partnerDisplayName: "Fan Preview",
@@ -1046,14 +541,14 @@ describe("crm repository integration", () => {
       `,
       [conversation.id],
     );
-    const preview = await getCrmConversationPreview(testDb.db, {
+    const preview = await getPageConversationPreview(testDb.db, {
       platformAccountId: page.id,
-      platformConversationId: "preview-conv",
+      platformConversationId: "preview-conversation",
       limit: 10,
     });
     const newestFirst = await getPageConversationMessages(testDb.db, {
       platformAccountId: page.id,
-      platformConversationId: "preview-conv",
+      platformConversationId: "preview-conversation",
       limit: 10,
     });
 

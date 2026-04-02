@@ -361,7 +361,7 @@ function createAutoSyncFanslyAdapter(input: {
   } as AppContext["adapter"];
 }
 
-async function seedCrmApiFixture(input: {
+async function seedConversationApiFixture(input: {
   testDb: StartedTestDatabase;
   pageId: number;
 }) {
@@ -383,15 +383,15 @@ async function seedCrmApiFixture(input: {
   const conversation = await upsertPageDmConversation(input.testDb.db, {
     platformAccountId: input.pageId,
     fanId: subscriberFan.id,
-    platformConversationId: "crm-conv-001",
+    platformConversationId: "conversation-001",
     partnerPlatformUserId: "fan-001",
     partnerUsername: "buyer",
     partnerDisplayName: "Buyer One",
     conversationFlags: 0,
     unreadCount: 2,
     subscriptionTierId: null,
-    lastMessageId: "crm-msg-004",
-    lastUnreadMessageId: "crm-msg-004",
+    lastMessageId: "conversation-msg-004",
+    lastUnreadMessageId: "conversation-msg-004",
     lastMessageAt: new Date("2026-03-14T08:00:00.000Z"),
     lastMessageSenderId: "fan-001",
     lastMessageSenderRole: "fan",
@@ -407,7 +407,7 @@ async function seedCrmApiFixture(input: {
     {
       conversationId: conversation.id,
       platformAccountId: input.pageId,
-      platformMessageId: "crm-msg-001",
+      platformMessageId: "conversation-msg-001",
       senderPlatformUserId: "acct-lana",
       senderRole: "model",
       createdAt: new Date("2026-03-13T08:00:00.000Z"),
@@ -419,31 +419,31 @@ async function seedCrmApiFixture(input: {
     {
       conversationId: conversation.id,
       platformAccountId: input.pageId,
-      platformMessageId: "crm-msg-002",
+      platformMessageId: "conversation-msg-002",
       senderPlatformUserId: "fan-001",
       senderRole: "fan",
       createdAt: new Date("2026-03-13T08:15:00.000Z"),
       content: "hi!",
       totalTipAmountCents: 0,
-      inReplyToMessageId: "crm-msg-001",
-      inReplyToRootMessageId: "crm-msg-001",
+      inReplyToMessageId: "conversation-msg-001",
+      inReplyToRootMessageId: "conversation-msg-001",
     },
     {
       conversationId: conversation.id,
       platformAccountId: input.pageId,
-      platformMessageId: "crm-msg-003",
+      platformMessageId: "conversation-msg-003",
       senderPlatformUserId: "acct-lana",
       senderRole: "model",
       createdAt: new Date("2026-03-13T08:30:00.000Z"),
       content: "absolutely",
       totalTipAmountCents: 0,
-      inReplyToMessageId: "crm-msg-002",
-      inReplyToRootMessageId: "crm-msg-001",
+      inReplyToMessageId: "conversation-msg-002",
+      inReplyToRootMessageId: "conversation-msg-001",
     },
     {
       conversationId: conversation.id,
       platformAccountId: input.pageId,
-      platformMessageId: "crm-msg-004",
+      platformMessageId: "conversation-msg-004",
       senderPlatformUserId: "fan-001",
       senderRole: "fan",
       createdAt: new Date("2026-03-14T08:00:00.000Z"),
@@ -471,7 +471,7 @@ async function seedCrmApiFixture(input: {
   await upsertTransaction(input.testDb.db, {
     platformAccountId: input.pageId,
     fanId: reactivationFan.id,
-    transactionId: "tx-crm-reactivation",
+    transactionId: "tx-conversation-reactivation",
     rawType: 20001,
     canonicalType: "tip",
     transactionState: "posted",
@@ -3223,7 +3223,7 @@ describe("api integration", () => {
       return;
     }
 
-    await seedCrmApiFixture({
+    await seedConversationApiFixture({
       testDb,
       pageId: fixture.lanaPage.id,
     });
@@ -3231,14 +3231,14 @@ describe("api integration", () => {
     await upsertPageDmConversation(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
       fanId: null,
-      platformConversationId: "crm-conv-unmapped",
+      platformConversationId: "conversation-unmapped",
       partnerPlatformUserId: "ghost-fan",
       partnerUsername: "ghost_fan",
       partnerDisplayName: "Ghost Fan",
       conversationFlags: 0,
       unreadCount: 0,
       subscriptionTierId: null,
-      lastMessageId: "crm-msg-unmapped",
+      lastMessageId: "conversation-msg-unmapped",
       lastUnreadMessageId: null,
       lastMessageAt: new Date("2026-03-18T10:00:00.000Z"),
       lastMessageSenderId: "ghost-fan",
@@ -3284,7 +3284,7 @@ describe("api integration", () => {
 
     const latestConversationProfile = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/conversations/crm-conv-001/profile",
+      url: "/api/v1/pages/lana/conversations/conversation-001/profile",
       headers: {
         cookie: leadCookie,
       },
@@ -3308,7 +3308,7 @@ describe("api integration", () => {
 
     const unmappedConversation = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/conversations/crm-conv-unmapped/profile",
+      url: "/api/v1/pages/lana/conversations/conversation-unmapped/profile",
       headers: {
         cookie: leadCookie,
       },
@@ -3330,7 +3330,7 @@ describe("api integration", () => {
 
     const conversationByBearer = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/conversations/crm-conv-001/profile",
+      url: "/api/v1/pages/lana/conversations/conversation-001/profile",
       headers: {
         authorization: `Bearer ${key}`,
       },
@@ -6418,7 +6418,7 @@ describe("api integration", () => {
     expect(ofGrowth.newFollowers).toBe(0);
   });
 
-  it("serves CRM summary, queues, and previews from stored Fansly DM data", async (context) => {
+  it("serves conversation previews and message history from stored Fansly DM data", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -6427,7 +6427,7 @@ describe("api integration", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-03-17T12:00:00.000Z"));
 
-    await seedCrmApiFixture({
+    await seedConversationApiFixture({
       testDb,
       pageId: fixture.lanaPage.id,
     });
@@ -6439,102 +6439,19 @@ describe("api integration", () => {
     });
     const cookie = sessionCookieFrom(login);
 
-    const summary = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/crm/summary",
-      headers: { cookie },
-    });
-    expect(summary.statusCode).toBe(200);
-    expect(summary.json()).toMatchObject({
-      page: {
-        label: "lana",
-        platform: "fansly",
-      },
-      retention: {
-        total: 1,
-        countsByTouchpoint: {
-          "3d": 1,
-        },
-      },
-      reactivation: {
-        total: 1,
-      },
-      freshness: {
-        lastConversationChunkSucceededAt: "2026-03-17T11:50:00.000Z",
-        lastConversationFullSweepAt: "2026-03-17T09:00:00.000Z",
-        lastMessageChunkSucceededAt: "2026-03-17T11:45:00.000Z",
-      },
-      coverage: {
-        pendingMessageBackfillCount: 0,
-        previewReadyConversationCount: 1,
-      },
-      messageSyncUx: {
-        state: "healthy",
-        headline: "Conversation history is ready",
-        requiresAction: false,
-      },
-    });
-
-    const retention = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/crm/retention?limit=10&offset=0",
-      headers: { cookie },
-    });
-    expect(retention.statusCode).toBe(200);
-    expect(retention.json()).toMatchObject({
-      total: 1,
-      items: [
-        {
-          fan: {
-            platformUserId: "fan-001",
-          },
-          platformConversationId: "crm-conv-001",
-          touchpointCode: "3d",
-          isHandled: false,
-          conversation: {
-            unreadCount: 2,
-            storedMessageCount: 4,
-            messageBackfillComplete: true,
-          },
-        },
-      ],
-      summary: {
-        freshness: {
-          lastConversationChunkSucceededAt: "2026-03-17T11:50:00.000Z",
-        },
-      },
-    });
-
-    const reactivation = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/crm/reactivation?limit=10&offset=0",
-      headers: { cookie },
-    });
-    expect(reactivation.statusCode).toBe(200);
-    expect(reactivation.json()).toMatchObject({
-      total: 1,
-      items: [
-        {
-          fan: {
-            platformUserId: "fan-777",
-          },
-          platformConversationId: null,
-          noDmHistory: true,
-          silenceDays: 30,
-          reactivationScore: 360,
-        },
-      ],
-    });
-
     const preview = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/crm/conversations/crm-conv-001/preview?limit=3",
+      url: "/api/v1/pages/lana/conversations/conversation-001/preview?limit=3",
       headers: { cookie },
     });
     expect(preview.statusCode).toBe(200);
     expect(preview.json()).toMatchObject({
+      page: {
+        label: "lana",
+        platform: "fansly",
+      },
       conversation: {
-        platformConversationId: "crm-conv-001",
+        platformConversationId: "conversation-001",
         storedMessageCount: 4,
         messageBackfillComplete: true,
         lastMessageSyncAt: "2026-03-17T11:45:00.000Z",
@@ -6546,18 +6463,18 @@ describe("api integration", () => {
       },
     });
     expect(preview.json().messages.map((message: { platformMessageId: string }) => message.platformMessageId)).toEqual([
-      "crm-msg-002",
-      "crm-msg-003",
-      "crm-msg-004",
+      "conversation-msg-002",
+      "conversation-msg-003",
+      "conversation-msg-004",
     ]);
     expect(preview.json().messages[2]).toMatchObject({
-      platformMessageId: "crm-msg-004",
+      platformMessageId: "conversation-msg-004",
       totalTipAmountCents: 2000,
     });
 
     const messages = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/conversations/crm-conv-001/messages",
+      url: "/api/v1/pages/lana/conversations/conversation-001/messages",
       headers: { cookie },
     });
     expect(messages.statusCode).toBe(200);
@@ -6566,16 +6483,16 @@ describe("api integration", () => {
         label: "lana",
         platform: "fansly",
       },
-      conversationId: "crm-conv-001",
+      conversationId: "conversation-001",
     });
     expect(messages.json().messages.map((message: { messageId: string }) => message.messageId)).toEqual([
-      "crm-msg-004",
-      "crm-msg-003",
-      "crm-msg-002",
-      "crm-msg-001",
+      "conversation-msg-004",
+      "conversation-msg-003",
+      "conversation-msg-002",
+      "conversation-msg-001",
     ]);
     expect(messages.json().messages[0]).toMatchObject({
-      messageId: "crm-msg-004",
+      messageId: "conversation-msg-004",
       senderRole: "fan",
       tipAmountCents: 2000,
       createdAt: "2026-03-14T08:00:00.000Z",
@@ -6583,7 +6500,7 @@ describe("api integration", () => {
 
     const clampedMessages = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/conversations/crm-conv-001/messages?limit=999",
+      url: "/api/v1/pages/lana/conversations/conversation-001/messages?limit=999",
       headers: { cookie },
     });
     expect(clampedMessages.statusCode).toBe(200);
@@ -6591,7 +6508,7 @@ describe("api integration", () => {
 
     const missingPreview = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/crm/conversations/missing/preview?limit=3",
+      url: "/api/v1/pages/lana/conversations/missing/preview?limit=3",
       headers: { cookie },
     });
     expect(missingPreview.statusCode).toBe(404);
@@ -6602,6 +6519,34 @@ describe("api integration", () => {
       headers: { cookie },
     });
     expect(missingMessages.statusCode).toBe(404);
+
+    const removedSummary = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/summary",
+      headers: { cookie },
+    });
+    expect(removedSummary.statusCode).toBe(404);
+
+    const removedRetention = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/retention?limit=10&offset=0",
+      headers: { cookie },
+    });
+    expect(removedRetention.statusCode).toBe(404);
+
+    const removedReactivation = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/reactivation?limit=10&offset=0",
+      headers: { cookie },
+    });
+    expect(removedReactivation.statusCode).toBe(404);
+
+    const removedPreview = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/crm/conversations/conversation-001/preview?limit=3",
+      headers: { cookie },
+    });
+    expect(removedPreview.statusCode).toBe(404);
   });
 
   it("snoozes and unsnoozes workboard fans without hiding the rest of the queue", async (context) => {
@@ -6830,7 +6775,7 @@ describe("api integration", () => {
     });
   });
 
-  it("enforces CRM page access and rejects non-Fansly pages", async (context) => {
+  it("enforces conversation and workboard page access and rejects non-Fansly pages", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -6838,12 +6783,12 @@ describe("api integration", () => {
 
     const ofPage = await createOnlyFansPage(testDb.db, {
       modelId: fixture.lanaModel.id,
-      label: "lana-of-crm",
+      label: "lana-of-workboard",
     });
     await updatePageMetadata(testDb.db, ofPage.id, {
-      platformAccountIdValue: "of-crm",
-      username: "lana_of_crm",
-      displayName: "Lana OF CRM",
+      platformAccountIdValue: "of-workboard",
+      username: "lana_of_workboard",
+      displayName: "Lana OF Workboard",
       followerCount: 0,
       subscriberCount: 0,
       earningsBalanceMills: 0n,
@@ -6860,14 +6805,14 @@ describe("api integration", () => {
 
     const forbidden = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lily1/crm/summary",
+      url: "/api/v1/pages/lily1/workboard",
       headers: { cookie: leadCookie },
     });
     expect(forbidden.statusCode).toBe(403);
 
     const forbiddenMessages = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lily1/conversations/crm-conv-001/messages",
+      url: "/api/v1/pages/lily1/conversations/conversation-001/messages",
       headers: { cookie: leadCookie },
     });
     expect(forbiddenMessages.statusCode).toBe(403);
@@ -6881,22 +6826,22 @@ describe("api integration", () => {
 
     const nonFansly = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana-of-crm/crm/summary",
+      url: "/api/v1/pages/lana-of-workboard/workboard",
       headers: { cookie: ownerCookie },
     });
     expect(nonFansly.statusCode).toBe(400);
     expect(nonFansly.json()).toMatchObject({
-      message: "CRM is only supported for Fansly pages",
+      message: "Workboard is only supported for Fansly pages",
     });
 
     const nonFanslyMessages = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana-of-crm/conversations/any/messages",
+      url: "/api/v1/pages/lana-of-workboard/conversations/any/messages",
       headers: { cookie: ownerCookie },
     });
     expect(nonFanslyMessages.statusCode).toBe(400);
     expect(nonFanslyMessages.json()).toMatchObject({
-      message: "CRM is only supported for Fansly pages",
+      message: "Conversation history is only supported for Fansly pages",
     });
 
     const appContext = createTestAppContext(testDb);
@@ -6907,7 +6852,7 @@ describe("api integration", () => {
 
     const apiKeyMessages = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/conversations/crm-conv-001/messages",
+      url: "/api/v1/pages/lana/conversations/conversation-001/messages",
       headers: {
         authorization: `Bearer ${key}`,
       },
@@ -6917,45 +6862,21 @@ describe("api integration", () => {
       message: "Dashboard routes require a cookie session",
     });
 
-    const apiKeySummary = await server.inject({
+    const apiKeyWorkboard = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/crm/summary",
+      url: "/api/v1/pages/lana/workboard",
       headers: {
         authorization: `Bearer ${key}`,
       },
     });
-    expect(apiKeySummary.statusCode).toBe(403);
-    expect(apiKeySummary.json()).toMatchObject({
-      message: "Dashboard routes require a cookie session",
-    });
-
-    const apiKeyRetention = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/crm/retention?limit=10&offset=0",
-      headers: {
-        authorization: `Bearer ${key}`,
-      },
-    });
-    expect(apiKeyRetention.statusCode).toBe(403);
-    expect(apiKeyRetention.json()).toMatchObject({
-      message: "Dashboard routes require a cookie session",
-    });
-
-    const apiKeyReactivation = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/crm/reactivation?limit=10&offset=0",
-      headers: {
-        authorization: `Bearer ${key}`,
-      },
-    });
-    expect(apiKeyReactivation.statusCode).toBe(403);
-    expect(apiKeyReactivation.json()).toMatchObject({
+    expect(apiKeyWorkboard.statusCode).toBe(403);
+    expect(apiKeyWorkboard.json()).toMatchObject({
       message: "Dashboard routes require a cookie session",
     });
 
     const apiKeyPreview = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/crm/conversations/crm-conv-001/preview?limit=3",
+      url: "/api/v1/pages/lana/conversations/conversation-001/preview?limit=3",
       headers: {
         authorization: `Bearer ${key}`,
       },

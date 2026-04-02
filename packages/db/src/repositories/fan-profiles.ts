@@ -2,7 +2,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { fanPages, fanProfiles, fans } from "../schema.ts";
-import { findVisiblePageDmConversationByPlatformConversationId } from "./crm.ts";
+import { findVisiblePageDmConversationByPlatformConversationId } from "./page-dm.ts";
 
 export interface AppendFanProfileInput {
   fanId: number;

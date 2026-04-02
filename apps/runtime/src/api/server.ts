@@ -130,16 +130,15 @@ import {
   listPageSummaries,
 } from "../services/reporting.ts";
 import {
-  getCrmConversationPreviewReport,
   getPageConversationMessagesReport,
-  getCrmReactivationReport,
-  getCrmRetentionReport,
-  getCrmSummaryReport,
+  getPageConversationPreviewReport,
+} from "../services/conversations.ts";
+import { getPublicSyncHealth, getSystemHealth } from "../services/health.ts";
+import {
   getWorkboardReport,
   snoozeWorkboardFanReport,
   unsnoozeWorkboardFanReport,
-} from "../services/crm.ts";
-import { getPublicSyncHealth, getSystemHealth } from "../services/health.ts";
+} from "../services/workboard.ts";
 import {
   getPageConversationProfile,
   getPageFanProfile,
@@ -713,36 +712,11 @@ export async function buildApiServer(appContext: AppContext) {
     );
   });
 
-  server.get("/api/v1/pages/:pageLabel/crm/summary", {
-    schema: routeSchemas.crmSummary,
+  server.get("/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview", {
+    schema: routeSchemas.pageConversationPreview,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getCrmSummaryReport(appContext, principal, request.params.pageLabel);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/crm/retention", {
-    schema: routeSchemas.crmRetention,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getCrmRetentionReport(appContext, principal, request.params.pageLabel, request.query);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/crm/reactivation", {
-    schema: routeSchemas.crmReactivation,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getCrmReactivationReport(appContext, principal, request.params.pageLabel, request.query);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/crm/conversations/:platformConversationId/preview", {
-    schema: routeSchemas.crmConversationPreview,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getCrmConversationPreviewReport(appContext, principal, request.params, request.query);
+    return getPageConversationPreviewReport(appContext, principal, request.params, request.query);
   });
 
   server.get("/api/v1/pages/:pageLabel/conversations/:conversationId/messages", {

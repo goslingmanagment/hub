@@ -442,7 +442,7 @@ export function buildOverallSyncUx(items: SyncUxSummary[]): SyncUxSummary {
   });
 }
 
-export function buildCrmMessageSyncUx(input: {
+export function buildConversationHistorySyncUx(input: {
   conversationSyncUx: SyncUxSummary | null;
   messageSyncUx: SyncUxSummary | null;
   pendingMessageBackfillCount: number;
@@ -525,7 +525,7 @@ export function buildCrmMessageSyncUx(input: {
     return buildSummary("setup", {
       label: "Setting up",
       headline: "Preparing conversation history",
-      detail: "CRM previews will appear after the first message sync finishes.",
+      detail: "Conversation previews will appear after the first message sync finishes.",
       updatedAt,
     });
   }
@@ -533,7 +533,7 @@ export function buildCrmMessageSyncUx(input: {
   return buildSummary("healthy", {
     label: "Up to date",
     headline: "Conversation history is ready",
-    detail: "CRM previews are ready to use.",
+    detail: "Conversation previews are ready to use.",
     updatedAt,
   });
 }

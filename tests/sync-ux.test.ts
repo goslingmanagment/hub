@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildCrmMessageSyncUx,
+  buildConversationHistorySyncUx,
   buildOverallSyncUx,
   buildPageSyncUx,
   buildStreamSyncUx,
@@ -81,8 +81,8 @@ describe("sync UX summaries", () => {
     expect(summary.requiresAction).toBe(true);
   });
 
-  it("keeps CRM previews in catching-up state while message backfill is pending", () => {
-    const summary = buildCrmMessageSyncUx({
+  it("keeps conversation previews in catching-up state while message backfill is pending", () => {
+    const summary = buildConversationHistorySyncUx({
       conversationSyncUx: {
         state: "healthy",
         label: "Up to date",
@@ -168,8 +168,8 @@ describe("sync UX summaries", () => {
     expect(summary.headline).toBe("Some syncs are off");
   });
 
-  it("marks CRM summaries as off when a DM stream is off", () => {
-    const summary = buildCrmMessageSyncUx({
+  it("marks conversation history as off when a DM stream is off", () => {
+    const summary = buildConversationHistorySyncUx({
       conversationSyncUx: {
         state: "off",
         label: "Paused",

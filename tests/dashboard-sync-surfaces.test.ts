@@ -22,7 +22,6 @@ const queryMocks = vi.hoisted(() => ({
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
-import { CrmSummaryHeader } from "../apps/dashboard/src/components/page/crm/CrmSummaryHeader.tsx";
 import { OverviewPage } from "../apps/dashboard/src/pages/OverviewPage.tsx";
 import { PageDetailPage, PageSpendersSection } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
 
@@ -119,57 +118,6 @@ function buildOverviewPage(syncUx = buildSyncUx()): OverviewResponse {
       hasFanslyPages: true,
       hasOnlyFansPages: false,
     },
-  };
-}
-
-function buildCrmSummary(
-  overrides: Partial<{
-    pendingMessageBackfillCount: number;
-    previewReadyConversationCount: number;
-    messageSyncUx: ReturnType<typeof buildSyncUx>;
-  }> = {},
-) {
-  return {
-    page: {
-      id: 1,
-      label: "lana",
-      platform: "fansly" as const,
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana",
-      displayName: "Lana",
-      followerCount: buildPageMetric(34),
-      subscriberCount: buildPageMetric(12),
-      lastLightSyncAt: null,
-      lastFollowerSyncAt: null,
-    },
-    retention: {
-      total: 12,
-      countsByTouchpoint: {
-        "21d": 1,
-        "14d": 1,
-        "7d": 1,
-        "5d": 1,
-        "3d": 1,
-        "1d": 1,
-      },
-    },
-    reactivation: {
-      total: 5,
-    },
-    freshness: {
-      lastConversationChunkSucceededAt: null,
-      lastConversationFullSweepAt: null,
-      lastMessageChunkSucceededAt: null,
-    },
-    coverage: {
-      pendingMessageBackfillCount: overrides.pendingMessageBackfillCount ?? 0,
-      partialWindowConversationCount: 0,
-      excludedConversationCount: 0,
-      unresolvedConversationCount: 0,
-      previewReadyConversationCount: overrides.previewReadyConversationCount ?? 1,
-    },
-    messageSyncUx: overrides.messageSyncUx ?? buildSyncUx(),
   };
 }
 
@@ -517,39 +465,5 @@ describe("dashboard sync product surfaces", () => {
 
     expect(html).toContain("$1.23");
     expect(html).toContain(">—</td>");
-  });
-
-  it("uses CRM coverage language instead of generic sync chrome", () => {
-    const html = renderToStaticMarkup(createElement(CrmSummaryHeader, {
-      summary: buildCrmSummary({
-        pendingMessageBackfillCount: 3,
-        previewReadyConversationCount: 0,
-        messageSyncUx: buildSyncUx({
-          state: "retrying",
-          headline: "Conversation history is still syncing",
-        }),
-      }),
-    }));
-
-    expect(html).toContain("3 conversations are still loading. Previews will fill in automatically.");
-    expect(html).not.toContain("Conversation history is still syncing");
-    expect(html).not.toContain("Up to date");
-  });
-
-  it("shows CRM credential blockers in credential language", () => {
-    const html = renderToStaticMarkup(createElement(CrmSummaryHeader, {
-      summary: buildCrmSummary({
-        previewReadyConversationCount: 2,
-        messageSyncUx: buildSyncUx({
-          state: "attention",
-          requiresAction: true,
-          label: "Reconnect",
-          headline: "Reconnect to resume sync",
-        }),
-      }),
-    }));
-
-    expect(html).toContain("Reconnect credentials to keep conversation history current.");
-    expect(html).not.toContain("Reconnect to resume sync");
   });
 });
