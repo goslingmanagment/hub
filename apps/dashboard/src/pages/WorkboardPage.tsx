@@ -237,7 +237,10 @@ export function WorkboardPage() {
     isError,
     error,
   } = useWorkboard(resolvedPageLabel, { enabled: canLoad });
-  const presenceQuery = useWorkboardPresence(resolvedPageLabel, { enabled: canLoad });
+  const [isPresenceOpen, setIsPresenceOpen] = useState(false);
+  const presenceQuery = useWorkboardPresence(resolvedPageLabel, {
+    enabled: canLoad && isPresenceOpen,
+  });
   const snoozeMutation = useWorkboardSnooze(resolvedPageLabel);
   const unsnoozeMutation = useWorkboardUnsnooze(resolvedPageLabel);
 
@@ -426,16 +429,6 @@ export function WorkboardPage() {
         <ViewModeToggle mode={viewMode} onChange={setViewMode} />
       </div>
 
-      <PresencePanel
-        updatedAt={presenceQuery.data?.updatedAt ?? null}
-        loading={presenceQuery.isLoading}
-        unavailable={presenceQuery.isError}
-        activeNow={activeNowPresenceVms}
-        activeNowTotal={presenceQuery.data?.activeNow.total ?? 0}
-        recentlyActive={recentlyActivePresenceVms}
-        recentlyActiveTotal={presenceQuery.data?.recentlyActive.total ?? 0}
-      />
-
       {/* Tabs */}
       <div className="mb-5 flex items-center gap-1 border-b border-border">
         {TABS.map((t) => (
@@ -518,6 +511,20 @@ export function WorkboardPage() {
           pendingFanId={pendingUnsnoozeFanId}
         />
       )}
+
+      <div className="mt-8">
+        <PresencePanel
+          isOpen={isPresenceOpen}
+          onToggle={() => setIsPresenceOpen((current) => !current)}
+          updatedAt={presenceQuery.data?.updatedAt ?? null}
+          loading={presenceQuery.isLoading}
+          unavailable={presenceQuery.isError}
+          activeNow={activeNowPresenceVms}
+          activeNowTotal={presenceQuery.data?.activeNow.total ?? 0}
+          recentlyActive={recentlyActivePresenceVms}
+          recentlyActiveTotal={presenceQuery.data?.recentlyActive.total ?? 0}
+        />
+      </div>
     </div>
   );
 }

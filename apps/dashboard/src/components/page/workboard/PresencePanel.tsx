@@ -5,6 +5,8 @@ import { formatRelativeTime } from "@/lib/format";
 import type { WorkboardPresenceVm } from "@/pages/workboard/viewModel";
 
 interface PresencePanelProps {
+  isOpen: boolean;
+  onToggle: () => void;
   updatedAt: string | null;
   loading: boolean;
   unavailable: boolean;
@@ -121,6 +123,8 @@ function PresenceBucket({ title, total, items }: PresenceBucketProps) {
 }
 
 export function PresencePanel({
+  isOpen,
+  onToggle,
   updatedAt,
   loading,
   unavailable,
@@ -130,25 +134,37 @@ export function PresencePanel({
   recentlyActiveTotal,
 }: PresencePanelProps) {
   return (
-    <section className="mb-5 rounded-xl border border-border bg-hover/30 p-4">
+    <section className="rounded-xl border border-border bg-hover/30 p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-text-primary">Presence</h2>
-          <p className="mt-1 text-[12px] text-text-muted">
-            Inferred from Fansly follower activity.
-          </p>
+          {isOpen && (
+            <p className="mt-1 text-[12px] text-text-muted">
+              Inferred from Fansly follower activity.
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          <span className="inline-flex rounded-full bg-warning/10 px-2 py-1 font-semibold text-warning">
-            Best effort
-          </span>
-          {updatedAt && (
+          {isOpen && (
+            <span className="inline-flex rounded-full bg-warning/10 px-2 py-1 font-semibold text-warning">
+              Best effort
+            </span>
+          )}
+          {isOpen && updatedAt && (
             <span className="text-text-muted">Updated {formatRelativeTime(updatedAt)}</span>
           )}
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={isOpen}
+            className="rounded border border-border px-2 py-1 font-medium text-text-secondary transition-colors hover:bg-hover"
+          >
+            {isOpen ? "Скрыть" : "Показать"}
+          </button>
         </div>
       </div>
 
-      {unavailable ? (
+      {!isOpen ? null : unavailable ? (
         <div className="mt-4 rounded-lg border border-dashed border-border px-3 py-3 text-sm text-text-muted">
           Presence unavailable right now.
         </div>

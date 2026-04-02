@@ -262,10 +262,7 @@ describe("WorkboardPage", () => {
     expect(html).not.toContain("Deleted user");
   });
 
-  it("renders the best-effort presence panel above the queue", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-30T12:00:00.000Z"));
-
+  it("keeps the presence section collapsed and does not fetch it until opened", () => {
     queryMocks.useWorkboard.mockReturnValue({
       data: {
         subscribers: { total: 0, items: [] },
@@ -277,71 +274,17 @@ describe("WorkboardPage", () => {
       isError: false,
       error: undefined,
     });
-    queryMocks.useWorkboardPresence.mockReturnValue({
-      data: {
-        updatedAt: "2026-03-30T11:58:00.000Z",
-        bestEffort: true,
-        activeNow: {
-          total: 2,
-          items: [{
-            fanId: 301,
-            fan: {
-              platformUserId: "presence-301",
-              pageAlias: "Active Now Fan",
-              username: "active_now_fan",
-              displayName: "Active Now Fan",
-            },
-            presence: {
-              lastSeenAt: "2026-03-30T11:50:00.000Z",
-              observedAt: "2026-03-30T11:58:00.000Z",
-              source: "fansly_followers_last_seen",
-            },
-            ltv: { creatorNetAmountMills: 240000 },
-            isSubscriber: true,
-            platformConversationId: "presence-chat-301",
-            lastTransactionAt: "2026-03-30T11:00:00.000Z",
-          }],
-        },
-        recentlyActive: {
-          total: 1,
-          items: [{
-            fanId: 302,
-            fan: {
-              platformUserId: "presence-302",
-              pageAlias: "Recently Active Fan",
-              username: "recently_active_fan",
-              displayName: "Recently Active Fan",
-            },
-            presence: {
-              lastSeenAt: "2026-03-30T10:40:00.000Z",
-              observedAt: "2026-03-30T11:58:00.000Z",
-              source: "fansly_followers_last_seen",
-            },
-            ltv: { creatorNetAmountMills: 150000 },
-            isSubscriber: false,
-            platformConversationId: null,
-            lastTransactionAt: null,
-          }],
-        },
-      },
-      isLoading: false,
-      isError: false,
-      error: undefined,
-    });
 
     const html = renderPage();
 
     expect(html).toContain("Presence");
-    expect(html).toContain("Best effort");
-    expect(html).toContain("Updated 2m ago");
-    expect(html).toContain("Active now (2)");
-    expect(html).toContain("Recently active (1)");
-    expect(html).toContain("Subscriber");
-    expect(html).toContain("Active Now Fan");
-    expect(html).toContain("Recently Active Fan");
+    expect(html).toContain("Показать");
+    expect(html).not.toContain("Inferred from Fansly follower activity.");
+    expect(html).not.toContain("Active now");
+    expect(queryMocks.useWorkboardPresence).toHaveBeenCalledWith("lana", { enabled: false });
   });
 
-  it("degrades the presence panel without breaking the main queue when the presence query fails", () => {
+  it("keeps the main queue available while the presence section stays collapsed", () => {
     queryMocks.useWorkboard.mockReturnValue({
       data: {
         subscribers: { total: 0, items: [] },
@@ -362,7 +305,8 @@ describe("WorkboardPage", () => {
 
     const html = renderPage();
 
-    expect(html).toContain("Presence unavailable right now.");
+    expect(html).toContain("Presence");
+    expect(html).toContain("Показать");
     expect(html).not.toContain("Ошибка загрузки");
   });
 
