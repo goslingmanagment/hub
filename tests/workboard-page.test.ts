@@ -1,6 +1,6 @@
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { ApiError } from "../apps/dashboard/src/api/client.ts";
 import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/DashboardShellContext.tsx";
@@ -8,6 +8,7 @@ import { resolveLegacyWorkboardRedirect } from "../apps/dashboard/src/lib/naviga
 
 const queryMocks = vi.hoisted(() => ({
   useWorkboard: vi.fn(),
+  useWorkboardPresence: vi.fn(),
   useWorkboardSnooze: vi.fn(),
   useWorkboardUnsnooze: vi.fn(),
 }));
@@ -103,12 +104,23 @@ function renderPage({
 }
 
 describe("WorkboardPage", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     queryMocks.useWorkboard.mockReset();
+    queryMocks.useWorkboardPresence.mockReset();
     queryMocks.useWorkboardSnooze.mockReset();
     queryMocks.useWorkboardUnsnooze.mockReset();
 
     queryMocks.useWorkboard.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    });
+    queryMocks.useWorkboardPresence.mockReturnValue({
       data: undefined,
       isLoading: false,
       isError: false,
@@ -248,6 +260,110 @@ describe("WorkboardPage", () => {
     expect(html).toContain("1 скрыто");
     expect(html).toContain("Нет видимых фанов");
     expect(html).not.toContain("Deleted user");
+  });
+
+  it("renders the best-effort presence panel above the queue", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-30T12:00:00.000Z"));
+
+    queryMocks.useWorkboard.mockReturnValue({
+      data: {
+        subscribers: { total: 0, items: [] },
+        activeSpenders: { total: 0, items: [] },
+        inactiveSpenders: { total: 0, items: [] },
+        snoozed: { total: 0, items: [] },
+      },
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    });
+    queryMocks.useWorkboardPresence.mockReturnValue({
+      data: {
+        updatedAt: "2026-03-30T11:58:00.000Z",
+        bestEffort: true,
+        activeNow: {
+          total: 2,
+          items: [{
+            fanId: 301,
+            fan: {
+              platformUserId: "presence-301",
+              pageAlias: "Active Now Fan",
+              username: "active_now_fan",
+              displayName: "Active Now Fan",
+            },
+            presence: {
+              lastSeenAt: "2026-03-30T11:50:00.000Z",
+              observedAt: "2026-03-30T11:58:00.000Z",
+              source: "fansly_followers_last_seen",
+            },
+            ltv: { creatorNetAmountMills: 240000 },
+            isSubscriber: true,
+            platformConversationId: "presence-chat-301",
+            lastTransactionAt: "2026-03-30T11:00:00.000Z",
+          }],
+        },
+        recentlyActive: {
+          total: 1,
+          items: [{
+            fanId: 302,
+            fan: {
+              platformUserId: "presence-302",
+              pageAlias: "Recently Active Fan",
+              username: "recently_active_fan",
+              displayName: "Recently Active Fan",
+            },
+            presence: {
+              lastSeenAt: "2026-03-30T10:40:00.000Z",
+              observedAt: "2026-03-30T11:58:00.000Z",
+              source: "fansly_followers_last_seen",
+            },
+            ltv: { creatorNetAmountMills: 150000 },
+            isSubscriber: false,
+            platformConversationId: null,
+            lastTransactionAt: null,
+          }],
+        },
+      },
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    });
+
+    const html = renderPage();
+
+    expect(html).toContain("Presence");
+    expect(html).toContain("Best effort");
+    expect(html).toContain("Updated 2m ago");
+    expect(html).toContain("Active now (2)");
+    expect(html).toContain("Recently active (1)");
+    expect(html).toContain("Subscriber");
+    expect(html).toContain("Active Now Fan");
+    expect(html).toContain("Recently Active Fan");
+  });
+
+  it("degrades the presence panel without breaking the main queue when the presence query fails", () => {
+    queryMocks.useWorkboard.mockReturnValue({
+      data: {
+        subscribers: { total: 0, items: [] },
+        activeSpenders: { total: 0, items: [] },
+        inactiveSpenders: { total: 0, items: [] },
+        snoozed: { total: 0, items: [] },
+      },
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    });
+    queryMocks.useWorkboardPresence.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("presence failed"),
+    });
+
+    const html = renderPage();
+
+    expect(html).toContain("Presence unavailable right now.");
+    expect(html).not.toContain("Ошибка загрузки");
   });
 
   it("counts unique actionable fans when the spender tab includes the full spender pool", () => {

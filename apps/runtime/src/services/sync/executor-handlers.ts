@@ -23,6 +23,7 @@ import {
   upsertPageDmConversation,
   upsertPageDmMessages,
   upsertFanPages,
+  upsertFanPageExternalPresences,
   upsertFans,
   upsertPageFollows,
   upsertPageSubscriptions,
@@ -62,7 +63,11 @@ import {
   resolvePageContextById,
   type ResolvedPageContext,
 } from "../page-context.ts";
-import { parseFanslyMetadataAccountCreatedAt } from "../fansly.ts";
+import {
+  parseFanslyMetadataAccountCreatedAt,
+  resolveFanslyPlatformAccountId,
+} from "../fansly.ts";
+import { buildFanslyFollowerPresenceSignals } from "../fansly-presence.ts";
 import { syncOnlyFansTransactions } from "./onlyfans-transactions.ts";
 import {
   summarizeCheckpoint,
@@ -271,22 +276,6 @@ async function triggerFollowersReconcileAnomaly(
     streams: ["followers_reconcile"],
     source: "anomaly",
   });
-}
-
-function getFanslyPlatformAccountIdValue(pageContext: ResolvedPageContext) {
-  if (pageContext.platform !== "fansly") {
-    throw new Error("Expected a Fansly page context");
-  }
-
-  const platformAccountId = pageContext.page.platformAccountId ??
-    (typeof pageContext.page.metadata["platformAccountId"] === "string"
-      ? pageContext.page.metadata["platformAccountId"]
-      : null);
-  if (!platformAccountId) {
-    throw new Error(`Page "${pageContext.page.label}" is missing a Fansly platform account id`);
-  }
-
-  return platformAccountId;
 }
 
 function assertDmSharedRateLimitEnabled(app: AppContext) {
@@ -1289,7 +1278,7 @@ export async function executeFollowersChunk(
     await assertOwnedPageSyncLease(app.db);
     const page = await app.adapter.getFollowersPage(
       requestContext,
-      getFanslyPlatformAccountIdValue(input.pageContext),
+      resolveFanslyPlatformAccountId(input.pageContext.page),
       {
         offset: state.offset,
         limit: 100,
@@ -1328,9 +1317,14 @@ export async function executeFollowersChunk(
         platformAccountId: input.pageContext.page.id,
         accounts: page.accounts,
       });
+      const presenceSignals = buildFanslyFollowerPresenceSignals({
+        followers: page.items,
+        accounts: page.accounts,
+      });
 
       const followInputs: UpsertPageFollowInput[] = [];
       const fanPageInputs: UpsertFanPageInput[] = [];
+      const fanPagePresenceInputs = [];
       let pageSawKnownCheckpoint = false;
       let pageReachedBoundary = false;
 
@@ -1361,9 +1355,25 @@ export async function executeFollowersChunk(
         });
       }
 
+      for (const signal of presenceSignals) {
+        const fanId = fanMap.get(signal.platformUserId);
+        if (!fanId) {
+          continue;
+        }
+
+        fanPagePresenceInputs.push({
+          fanId,
+          platformAccountId: input.pageContext.page.id,
+          externalPresenceAt: signal.lastSeenAt,
+          externalPresenceObservedAt: signal.observedAt,
+          externalPresenceSource: signal.source,
+        });
+      }
+
       if (pageReachedBoundary || page.done) {
         await upsertPageFollows(dbTx, followInputs);
         await upsertFanPages(dbTx, fanPageInputs);
+        await upsertFanPageExternalPresences(dbTx, fanPagePresenceInputs);
         await rebuildFollowerRollups(dbTx, input.pageContext.page.id, state.sourceFollowerCount);
         await updatePageSyncTimestampCache(dbTx, {
           pageId: input.pageContext.page.id,
@@ -1386,6 +1396,7 @@ export async function executeFollowersChunk(
 
       await upsertPageFollows(dbTx, followInputs);
       await upsertFanPages(dbTx, fanPageInputs);
+      await upsertFanPageExternalPresences(dbTx, fanPagePresenceInputs);
       return {
         kind: "progress" as const,
         checkpoint: await upsertCheckpointProgress(dbTx, {
@@ -1505,7 +1516,7 @@ export async function executeFollowersReconcileChunk(
     await assertOwnedPageSyncLease(app.db);
     const page = await app.adapter.getFollowersPage(
       requestContext,
-      getFanslyPlatformAccountIdValue(input.pageContext),
+      resolveFanslyPlatformAccountId(input.pageContext.page),
       {
         offset: state.offset,
         limit: 100,
@@ -1559,9 +1570,14 @@ export async function executeFollowersReconcileChunk(
         platformAccountId: input.pageContext.page.id,
         accounts: page.accounts,
       });
+      const presenceSignals = buildFanslyFollowerPresenceSignals({
+        followers: page.items,
+        accounts: page.accounts,
+      });
 
       const followInputs: UpsertPageFollowInput[] = [];
       const fanPageInputs: UpsertFanPageInput[] = [];
+      const fanPagePresenceInputs = [];
       for (const follower of page.items) {
         const fanId = fanMap.get(follower.followerId);
         if (!fanId) {
@@ -1584,9 +1600,25 @@ export async function executeFollowersReconcileChunk(
         });
       }
 
+      for (const signal of presenceSignals) {
+        const fanId = fanMap.get(signal.platformUserId);
+        if (!fanId) {
+          continue;
+        }
+
+        fanPagePresenceInputs.push({
+          fanId,
+          platformAccountId: input.pageContext.page.id,
+          externalPresenceAt: signal.lastSeenAt,
+          externalPresenceObservedAt: signal.observedAt,
+          externalPresenceSource: signal.source,
+        });
+      }
+
       if (page.done) {
         await upsertPageFollows(dbTx, followInputs);
         await upsertFanPages(dbTx, fanPageInputs);
+        await upsertFanPageExternalPresences(dbTx, fanPagePresenceInputs);
         await deactivatePageFollowsByGeneration(dbTx, {
           platformAccountId: input.pageContext.page.id,
           generation: state.generation,
@@ -1611,6 +1643,7 @@ export async function executeFollowersReconcileChunk(
 
       await upsertPageFollows(dbTx, followInputs);
       await upsertFanPages(dbTx, fanPageInputs);
+      await upsertFanPageExternalPresences(dbTx, fanPagePresenceInputs);
       return {
         kind: "progress" as const,
         checkpoint: await upsertCheckpointProgress(dbTx, {
@@ -1695,7 +1728,7 @@ export async function executeDmConversationsChunk(
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_conversations");
   await input.telemetry.recordCheckpointLoaded("dm_conversations", summarizeCheckpoint(checkpoint));
 
-  const pageAccountId = getFanslyPlatformAccountIdValue(input.pageContext);
+  const pageAccountId = resolveFanslyPlatformAccountId(input.pageContext.page);
   const checkpointStateRecord = asRecord(checkpoint?.state);
   const existingState = parseDmConversationCursorState(checkpoint?.state);
   let state = existingState ?? {
@@ -2156,7 +2189,7 @@ export async function executeDmMessagesChunk(
     );
   }
 
-  const pageAccountId = getFanslyPlatformAccountIdValue(input.pageContext);
+  const pageAccountId = resolveFanslyPlatformAccountId(input.pageContext.page);
   let processedMessages = 0;
   let completedConversations = 0;
   let overlapHits = 0;

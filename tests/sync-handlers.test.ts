@@ -29,6 +29,7 @@ const dbMocks = vi.hoisted(() => ({
   upsertPageDmConversation: vi.fn(),
   upsertPageDmMessages: vi.fn(),
   upsertPageTopSpenders: vi.fn(),
+  upsertFanPageExternalPresences: vi.fn(),
   upsertFanPages: vi.fn(),
   upsertFans: vi.fn(),
   upsertPageFollows: vi.fn(),
@@ -219,6 +220,7 @@ describe("sync executor handlers", () => {
     dbMocks.upsertPageDmConversation.mockResolvedValue(undefined);
     dbMocks.upsertPageDmMessages.mockResolvedValue(undefined);
     dbMocks.upsertPageTopSpenders.mockResolvedValue(undefined);
+    dbMocks.upsertFanPageExternalPresences.mockResolvedValue(undefined);
     dbMocks.upsertFans.mockResolvedValue([]);
     dbMocks.upsertPageFollows.mockResolvedValue(undefined);
     dbMocks.upsertPageSubscriptions.mockResolvedValue(undefined);
@@ -819,12 +821,17 @@ describe("sync executor handlers", () => {
       },
       adapter: {
         getFollowersPage: vi.fn(async () => ({
-          items: [{ id: "1000", followerId: "fan-1" }],
+          items: [{
+            id: "1000",
+            followerId: "fan-1",
+            lastSeenAt: 1_775_782_500_000,
+          }],
           accounts: [{
             id: "fan-1",
             username: "fan_1",
             displayName: "Fan 1",
             createdAt: 1_770_000_000_000,
+            lastSeenAt: 1_775_782_500_000,
           }],
           done: true,
           raw: {},
@@ -870,6 +877,13 @@ describe("sync executor handlers", () => {
     expect(db.transaction).toHaveBeenCalledTimes(1);
     expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, expect.any(Array));
     expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, expect.any(Array));
+    expect(dbMocks.upsertFanPageExternalPresences).toHaveBeenCalledWith(tx, [{
+      fanId: 91,
+      platformAccountId: 12,
+      externalPresenceAt: expect.any(Date),
+      externalPresenceObservedAt: expect.any(Date),
+      externalPresenceSource: "fansly_followers_last_seen",
+    }]);
     expect(dbMocks.rebuildFollowerRollups).toHaveBeenCalledWith(tx, 12, 1);
     expect(dbMocks.updatePageSyncTimestampCache).toHaveBeenCalledWith(tx, {
       pageId: 12,
@@ -1007,6 +1021,7 @@ it("guards against empty first-page follower reconcile wipes when active followe
     expect(db.transaction).toHaveBeenCalledTimes(1);
     expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, []);
     expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, []);
+    expect(dbMocks.upsertFanPageExternalPresences).toHaveBeenCalledWith(tx, []);
     expect(dbMocks.deactivatePageFollowsByGeneration).toHaveBeenCalledWith(tx, {
       platformAccountId: 13,
       generation: 1,

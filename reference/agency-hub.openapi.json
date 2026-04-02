@@ -7693,9 +7693,6 @@
         "security": [
           {
             "cookieAuth": []
-          },
-          {
-            "bearerAuth": []
           }
         ],
         "responses": {
@@ -8672,6 +8669,462 @@
         }
       }
     },
+    "/api/v1/pages/{pageLabel}/workboard/presence": {
+      "get": {
+        "summary": "Get inferred Fansly presence for one workboard page",
+        "tags": [
+          "workboard"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "bestEffort": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "activeNow": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "fanId": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "fan": {
+                                "type": "object",
+                                "properties": {
+                                  "platformUserId": {
+                                    "type": "string"
+                                  },
+                                  "pageAlias": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "username": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "displayName": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "platformUserId",
+                                  "pageAlias",
+                                  "username",
+                                  "displayName"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "presence": {
+                                "type": "object",
+                                "properties": {
+                                  "lastSeenAt": {
+                                    "type": "string"
+                                  },
+                                  "observedAt": {
+                                    "type": "string"
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fansly_followers_last_seen"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "lastSeenAt",
+                                  "observedAt",
+                                  "source"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "ltv": {
+                                "type": "object",
+                                "properties": {
+                                  "creatorNetAmountMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "creatorNetAmountMills"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "isSubscriber": {
+                                "type": "boolean"
+                              },
+                              "platformConversationId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastTransactionAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "fanId",
+                              "fan",
+                              "presence",
+                              "ltv",
+                              "isSubscriber",
+                              "platformConversationId",
+                              "lastTransactionAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "items"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "recentlyActive": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "fanId": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "fan": {
+                                "type": "object",
+                                "properties": {
+                                  "platformUserId": {
+                                    "type": "string"
+                                  },
+                                  "pageAlias": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "username": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "displayName": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "platformUserId",
+                                  "pageAlias",
+                                  "username",
+                                  "displayName"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "presence": {
+                                "type": "object",
+                                "properties": {
+                                  "lastSeenAt": {
+                                    "type": "string"
+                                  },
+                                  "observedAt": {
+                                    "type": "string"
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fansly_followers_last_seen"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "lastSeenAt",
+                                  "observedAt",
+                                  "source"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "ltv": {
+                                "type": "object",
+                                "properties": {
+                                  "creatorNetAmountMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "creatorNetAmountMills"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "isSubscriber": {
+                                "type": "boolean"
+                              },
+                              "platformConversationId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastTransactionAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "fanId",
+                              "fan",
+                              "presence",
+                              "ltv",
+                              "isSubscriber",
+                              "platformConversationId",
+                              "lastTransactionAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "items"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "updatedAt",
+                    "bestEffort",
+                    "activeNow",
+                    "recentlyActive"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pages/{pageLabel}/workboard/snooze": {
       "post": {
         "summary": "Snooze a fan on the workboard",
@@ -8735,9 +9188,6 @@
         "security": [
           {
             "cookieAuth": []
-          },
-          {
-            "bearerAuth": []
           }
         ],
         "responses": {
@@ -8915,9 +9365,6 @@
         "security": [
           {
             "cookieAuth": []
-          },
-          {
-            "bearerAuth": []
           }
         ],
         "responses": {

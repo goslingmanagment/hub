@@ -92,6 +92,7 @@ describe("Fansly adapter query serialization", () => {
     await adapter.getFollowersPage(context, "acct-1", {
       offset: 0,
       limit: 0,
+      lastSeenAfter: 1_775_000_000_000,
     });
     await adapter.getMessagingGroupsPage(context, {
       offset: 0,
@@ -113,6 +114,7 @@ describe("Fansly adapter query serialization", () => {
     expect(urls[2]?.searchParams.get("before")).toBe(String(new Date("2026-03-08T00:00:00.000Z").getTime()));
     expect(urls[3]?.searchParams.get("offset")).toBe("0");
     expect(urls[3]?.searchParams.get("limit")).toBe("0");
+    expect(urls[3]?.searchParams.get("lastSeenAfter")).toBe("1775000000000");
     expect(urls[4]?.searchParams.get("offset")).toBe("0");
     expect(urls[4]?.searchParams.get("limit")).toBe("0");
     expect(urls[5]?.searchParams.get("limit")).toBe("0");

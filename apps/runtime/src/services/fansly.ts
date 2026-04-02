@@ -36,3 +36,18 @@ export function buildFanslyMetadata(
 export function parseFanslyMetadataAccountCreatedAt(metadata: Record<string, unknown>) {
   return parseMetadataDate(metadata, FANSLY_ACCOUNT_CREATED_AT_METADATA_KEY);
 }
+
+export function resolveFanslyPlatformAccountId(page: {
+  label: string;
+  platformAccountId: string | null;
+  metadata: Record<string, unknown>;
+}) {
+  const platformAccountId = page.platformAccountId ??
+    (typeof page.metadata.platformAccountId === "string" ? page.metadata.platformAccountId : null);
+
+  if (!platformAccountId) {
+    throw new Error(`Page "${page.label}" is missing a Fansly platform account id`);
+  }
+
+  return platformAccountId;
+}

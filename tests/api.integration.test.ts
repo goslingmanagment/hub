@@ -6775,6 +6775,274 @@ describe("api integration", () => {
     });
   });
 
+  it("returns inferred workboard presence for Fansly pages", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-30T12:00:00.000Z"));
+
+    const presencePage = await createFanslyPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-presence",
+    });
+
+    const appContext = createTestAppContext(testDb);
+    const encryptedSession = JSON.stringify(encryptJson(
+      {
+        platform: "fansly" as const,
+        session: {
+          authorization: "presence-token",
+        },
+      },
+      appContext.config.encryptionKey,
+      appContext.config.encryptionKeyVersion,
+    ));
+    await storeFanslySession(
+      testDb.db,
+      presencePage.id,
+      encryptedSession,
+      appContext.config.encryptionKeyVersion,
+    );
+    await updatePageMetadata(testDb.db, presencePage.id, {
+      platformAccountIdValue: "acct-lana-presence",
+      username: "lana_presence",
+      displayName: "Lana Presence",
+      followerCount: 2,
+      subscriberCount: 1,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    const [activeFan, recentFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "presence-fan-active",
+        username: "presence_active",
+        displayName: "Presence Active",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "presence-fan-recent",
+        username: "presence_recent",
+        displayName: "Presence Recent",
+      },
+    ]);
+    await upsertFanPage(testDb.db, {
+      fanId: activeFan.id,
+      platformAccountId: presencePage.id,
+      isSubscriber: true,
+      subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
+      pageAlias: "Presence Active Alias",
+    });
+    await upsertFanPage(testDb.db, {
+      fanId: recentFan.id,
+      platformAccountId: presencePage.id,
+      pageAlias: "Presence Recent Alias",
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: presencePage.id,
+      fanId: activeFan.id,
+      transactionId: "presence-api-tip-active",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 300000n,
+      sourceDestinationAmountMills: 300000n,
+      creatorNetAmountMills: 300000n,
+      occurredAt: new Date("2026-03-30T11:00:00.000Z"),
+    });
+    await recalculateFanPageSpend(testDb.db, presencePage.id);
+
+    const presenceAdapter: AppContext["adapter"] = {
+      ...createAutoSyncFanslyAdapter({
+        accountId: "acct-lana-presence",
+        username: "lana_presence",
+        displayName: "Lana Presence",
+      }),
+      async getFollowersPage(_context, accountId, params) {
+        expect(accountId).toBe("acct-lana-presence");
+        expect(params.lastSeenAfter).toBe(new Date("2026-03-30T10:00:00.000Z").getTime());
+
+        return {
+          total: 2,
+          offset: params.offset ?? 0,
+          done: true,
+          items: [
+            {
+              id: "follow-presence-active",
+              followerId: "presence-fan-active",
+              lastSeenAt: new Date("2026-03-30T11:50:00.000Z").getTime(),
+            },
+            {
+              id: "follow-presence-recent",
+              followerId: "presence-fan-recent",
+              lastSeenAt: new Date("2026-03-30T10:40:00.000Z").getTime(),
+            },
+          ],
+          accounts: [
+            {
+              id: "presence-fan-active",
+              username: "presence_active",
+              displayName: "Presence Active",
+              createdAt: 1_772_000_000_000,
+              lastSeenAt: new Date("2026-03-30T11:50:00.000Z").getTime(),
+            },
+            {
+              id: "presence-fan-recent",
+              username: "presence_recent",
+              displayName: "Presence Recent",
+              createdAt: 1_772_000_000_000,
+              lastSeenAt: new Date("2026-03-30T10:40:00.000Z").getTime(),
+            },
+          ],
+          raw: {
+            followers: [],
+            aggregationData: {
+              accounts: [],
+            },
+          },
+        };
+      },
+    };
+
+    if (server) {
+      await server.close();
+    }
+    server = await buildApiServer(createTestAppContext(testDb, {
+      adapter: presenceAdapter,
+    }));
+    await server.ready();
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-presence/workboard/presence",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      bestEffort: true,
+      activeNow: {
+        total: 1,
+        items: [expect.objectContaining({
+          fanId: activeFan.id,
+          isSubscriber: true,
+          presence: expect.objectContaining({
+            source: "fansly_followers_last_seen",
+            lastSeenAt: "2026-03-30T11:50:00.000Z",
+          }),
+        })],
+      },
+      recentlyActive: {
+        total: 1,
+        items: [expect.objectContaining({
+          fanId: recentFan.id,
+          isSubscriber: false,
+          presence: expect.objectContaining({
+            source: "fansly_followers_last_seen",
+            lastSeenAt: "2026-03-30T10:40:00.000Z",
+          }),
+        })],
+      },
+    });
+
+    const workboard = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-presence/workboard",
+      headers: { cookie },
+    });
+    expect(workboard.statusCode).toBe(200);
+  });
+
+  it("keeps the main workboard available when the presence endpoint fails", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const presencePage = await createFanslyPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-presence-failure",
+    });
+
+    const appContext = createTestAppContext(testDb);
+    const encryptedSession = JSON.stringify(encryptJson(
+      {
+        platform: "fansly" as const,
+        session: {
+          authorization: "presence-token",
+        },
+      },
+      appContext.config.encryptionKey,
+      appContext.config.encryptionKeyVersion,
+    ));
+    await storeFanslySession(
+      testDb.db,
+      presencePage.id,
+      encryptedSession,
+      appContext.config.encryptionKeyVersion,
+    );
+    await updatePageMetadata(testDb.db, presencePage.id, {
+      platformAccountIdValue: "acct-lana-presence-failure",
+      username: "lana_presence_failure",
+      displayName: "Lana Presence Failure",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {},
+      syncType: "light",
+    });
+
+    if (server) {
+      await server.close();
+    }
+    server = await buildApiServer(createTestAppContext(testDb, {
+      adapter: {
+        ...createAutoSyncFanslyAdapter({
+          accountId: "acct-lana-presence-failure",
+          username: "lana_presence_failure",
+          displayName: "Lana Presence Failure",
+        }),
+        async getFollowersPage() {
+          throw new Error("presence transport failed");
+        },
+      },
+    }));
+    await server.ready();
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const presence = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-presence-failure/workboard/presence",
+      headers: { cookie },
+    });
+    expect(presence.statusCode).toBe(500);
+
+    const workboard = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-presence-failure/workboard",
+      headers: { cookie },
+    });
+    expect(workboard.statusCode).toBe(200);
+  });
+
   it("enforces conversation and workboard page access and rejects non-Fansly pages", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
@@ -6810,6 +7078,13 @@ describe("api integration", () => {
     });
     expect(forbidden.statusCode).toBe(403);
 
+    const forbiddenPresence = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lily1/workboard/presence",
+      headers: { cookie: leadCookie },
+    });
+    expect(forbiddenPresence.statusCode).toBe(403);
+
     const forbiddenMessages = await server.inject({
       method: "GET",
       url: "/api/v1/pages/lily1/conversations/conversation-001/messages",
@@ -6832,6 +7107,16 @@ describe("api integration", () => {
     expect(nonFansly.statusCode).toBe(400);
     expect(nonFansly.json()).toMatchObject({
       message: "Workboard is only supported for Fansly pages",
+    });
+
+    const nonFanslyPresence = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana-of-workboard/workboard/presence",
+      headers: { cookie: ownerCookie },
+    });
+    expect(nonFanslyPresence.statusCode).toBe(400);
+    expect(nonFanslyPresence.json()).toMatchObject({
+      message: "Workboard presence is only supported for Fansly pages",
     });
 
     const nonFanslyMessages = await server.inject({
@@ -6871,6 +7156,18 @@ describe("api integration", () => {
     });
     expect(apiKeyWorkboard.statusCode).toBe(403);
     expect(apiKeyWorkboard.json()).toMatchObject({
+      message: "Dashboard routes require a cookie session",
+    });
+
+    const apiKeyWorkboardPresence = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/workboard/presence",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(apiKeyWorkboardPresence.statusCode).toBe(403);
+    expect(apiKeyWorkboardPresence.json()).toMatchObject({
       message: "Dashboard routes require a cookie session",
     });
 

@@ -1,5 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { WorkboardResponse, WorkboardSnoozeResponse } from "@agency_hub_core/contracts";
+import type {
+  WorkboardPresenceResponse,
+  WorkboardResponse,
+  WorkboardSnoozeResponse,
+} from "@agency_hub_core/contracts";
 import { api } from "./client.js";
 
 export function useWorkboard(
@@ -9,6 +13,17 @@ export function useWorkboard(
   return useQuery({
     queryKey: ["workboard", pageLabel],
     queryFn: () => api.get<WorkboardResponse>(`/api/v1/pages/${pageLabel}/workboard`),
+    enabled: options.enabled ?? true,
+  });
+}
+
+export function useWorkboardPresence(
+  pageLabel: string,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["workboard", "presence", pageLabel],
+    queryFn: () => api.get<WorkboardPresenceResponse>(`/api/v1/pages/${pageLabel}/workboard/presence`),
     enabled: options.enabled ?? true,
   });
 }
@@ -34,4 +49,3 @@ export function useWorkboardUnsnooze(pageLabel: string) {
     },
   });
 }
-

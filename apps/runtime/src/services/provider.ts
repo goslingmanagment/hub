@@ -36,6 +36,7 @@ export interface ProviderFollowersPageParams {
   limit?: number;
   after?: string | null;
   before?: string | null;
+  lastSeenAfter?: number | null;
   minDelayMs?: number;
 }
 

@@ -139,6 +139,7 @@ import {
   snoozeWorkboardFanReport,
   unsnoozeWorkboardFanReport,
 } from "../services/workboard.ts";
+import { getWorkboardPresenceReport } from "../services/workboard-presence.ts";
 import {
   getPageConversationProfile,
   getPageFanProfile,
@@ -734,6 +735,14 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     return getWorkboardReport(appContext, principal, request.params.pageLabel);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/workboard/presence", {
+    schema: routeSchemas.workboardPresence,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return getWorkboardPresenceReport(appContext, principal, request.params.pageLabel);
   });
 
   server.post("/api/v1/pages/:pageLabel/workboard/snooze", {

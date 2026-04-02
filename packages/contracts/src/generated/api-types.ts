@@ -2744,6 +2744,148 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pages/{pageLabel}/workboard/presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get inferred Fansly presence for one workboard page */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            updatedAt: string;
+                            /** @enum {boolean} */
+                            bestEffort: true;
+                            activeNow: {
+                                total: number;
+                                items: {
+                                    fanId: number;
+                                    fan: {
+                                        platformUserId: string;
+                                        pageAlias: string | null;
+                                        username: string | null;
+                                        displayName: string | null;
+                                    };
+                                    presence: {
+                                        lastSeenAt: string;
+                                        observedAt: string;
+                                        /** @enum {string} */
+                                        source: "fansly_followers_last_seen";
+                                    };
+                                    ltv: {
+                                        creatorNetAmountMills: number;
+                                    };
+                                    isSubscriber: boolean;
+                                    platformConversationId: string | null;
+                                    lastTransactionAt: string | null;
+                                }[];
+                            };
+                            recentlyActive: {
+                                total: number;
+                                items: {
+                                    fanId: number;
+                                    fan: {
+                                        platformUserId: string;
+                                        pageAlias: string | null;
+                                        username: string | null;
+                                        displayName: string | null;
+                                    };
+                                    presence: {
+                                        lastSeenAt: string;
+                                        observedAt: string;
+                                        /** @enum {string} */
+                                        source: "fansly_followers_last_seen";
+                                    };
+                                    ltv: {
+                                        creatorNetAmountMills: number;
+                                    };
+                                    isSubscriber: boolean;
+                                    platformConversationId: string | null;
+                                    lastTransactionAt: string | null;
+                                }[];
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pages/{pageLabel}/workboard/snooze": {
         parameters: {
             query?: never;

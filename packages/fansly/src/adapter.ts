@@ -258,6 +258,7 @@ export class FanslyAdapter {
       limit?: number;
       after?: string | null;
       before?: string | null;
+      lastSeenAfter?: number | null;
       minDelayMs?: number;
     },
   ) {
@@ -272,6 +273,7 @@ export class FanslyAdapter {
           limit: params.limit != null ? String(params.limit) : undefined,
           after: params.after ?? undefined,
           before: params.before ?? undefined,
+          lastSeenAfter: params.lastSeenAfter != null ? String(params.lastSeenAfter) : undefined,
         },
         category: "followers",
         minDelayMs: params.minDelayMs,
@@ -280,6 +282,7 @@ export class FanslyAdapter {
           limit: params.limit ?? 100,
           afterPresent: Boolean(params.after),
           beforePresent: Boolean(params.before),
+          lastSeenAfter: params.lastSeenAfter ?? null,
         },
         pagination: {
           offset: params.offset ?? 0,

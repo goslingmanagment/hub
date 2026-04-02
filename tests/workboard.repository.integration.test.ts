@@ -5,11 +5,13 @@ import {
   createModel,
   listWorkboardAllSpenders,
   listWorkboardActiveSpenders,
+  listWorkboardPresence,
   listWorkboardSnoozed,
   listWorkboardSubscribers,
   recalculateFanPageSpend,
   snoozeWorkboardFan,
   unsnoozeWorkboardFan,
+  upsertFanPageExternalPresences,
   upsertFanPage,
   upsertFans,
   upsertPageSubscription,
@@ -340,5 +342,138 @@ describe("workboard repository integration", () => {
     ].sort((left, right) => left - right));
     expect(subscribers.map((row) => row.fanId)).not.toContain(seeded.deletedSubscriber.id);
     expect(snoozed).toHaveLength(0);
+  });
+
+  it("lists active_now and recently_active buckets from explicit external presence fields", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date("2026-03-30T12:00:00.000Z");
+    const page = await createWorkboardPage(testDb, "workboard-presence");
+    const [activeNowFan, recentlyActiveFan, staleFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "presence-active-now",
+        username: "presence_active_now",
+        displayName: "Presence Active Now",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "presence-recently-active",
+        username: "presence_recently_active",
+        displayName: "Presence Recently Active",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "presence-stale",
+        username: "presence_stale",
+        displayName: "Presence Stale",
+      },
+    ]);
+
+    await upsertFanPage(testDb.db, {
+      fanId: activeNowFan.id,
+      platformAccountId: page.id,
+      isSubscriber: true,
+      pageAlias: "Active Now Alias",
+    });
+    await upsertFanPage(testDb.db, {
+      fanId: recentlyActiveFan.id,
+      platformAccountId: page.id,
+      pageAlias: "Recently Active Alias",
+    });
+    await upsertFanPage(testDb.db, {
+      fanId: staleFan.id,
+      platformAccountId: page.id,
+      pageAlias: "Stale Alias",
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: activeNowFan.id,
+      transactionId: "presence-active-now-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 300000n,
+      sourceDestinationAmountMills: 300000n,
+      creatorNetAmountMills: 300000n,
+      occurredAt: new Date("2026-03-30T11:30:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: recentlyActiveFan.id,
+      transactionId: "presence-recently-active-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 100000n,
+      sourceDestinationAmountMills: 100000n,
+      creatorNetAmountMills: 100000n,
+      occurredAt: new Date("2026-03-30T10:00:00.000Z"),
+    });
+    await recalculateFanPageSpend(testDb.db, page.id);
+
+    await upsertFanPageExternalPresences(testDb.db, [
+      {
+        fanId: activeNowFan.id,
+        platformAccountId: page.id,
+        externalPresenceAt: new Date("2026-03-30T11:50:00.000Z"),
+        externalPresenceObservedAt: now,
+        externalPresenceSource: "fansly_followers_last_seen",
+      },
+      {
+        fanId: recentlyActiveFan.id,
+        platformAccountId: page.id,
+        externalPresenceAt: new Date("2026-03-30T10:45:00.000Z"),
+        externalPresenceObservedAt: now,
+        externalPresenceSource: "fansly_followers_last_seen",
+      },
+      {
+        fanId: staleFan.id,
+        platformAccountId: page.id,
+        externalPresenceAt: new Date("2026-03-30T09:30:00.000Z"),
+        externalPresenceObservedAt: now,
+        externalPresenceSource: "fansly_followers_last_seen",
+      },
+    ]);
+
+    const [activeNow, recentlyActive] = await Promise.all([
+      listWorkboardPresence(testDb.db, {
+        platformAccountId: page.id,
+        bucket: "active_now",
+        now,
+        limit: 20,
+      }),
+      listWorkboardPresence(testDb.db, {
+        platformAccountId: page.id,
+        bucket: "recently_active",
+        now,
+        limit: 20,
+      }),
+    ]);
+
+    expect(activeNow.total).toBe(1);
+    expect(activeNow.items).toMatchObject([{
+      fanId: activeNowFan.id,
+      pageAlias: "Active Now Alias",
+      isSubscriber: true,
+      externalPresenceSource: "fansly_followers_last_seen",
+    }]);
+    expect(activeNow.items[0]?.externalPresenceAt.toISOString()).toBe("2026-03-30T11:50:00.000Z");
+
+    expect(recentlyActive.total).toBe(1);
+    expect(recentlyActive.items).toMatchObject([{
+      fanId: recentlyActiveFan.id,
+      pageAlias: "Recently Active Alias",
+      isSubscriber: false,
+      externalPresenceSource: "fansly_followers_last_seen",
+    }]);
+    expect(recentlyActive.items[0]?.externalPresenceAt.toISOString()).toBe("2026-03-30T10:45:00.000Z");
+    expect(recentlyActive.items.map((row) => row.fanId)).not.toContain(staleFan.id);
   });
 });

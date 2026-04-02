@@ -1,5 +1,9 @@
 import { sql } from "drizzle-orm";
-import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
+import {
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
+  FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN,
+  type FanslyExternalPresenceSource,
+} from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import type {
@@ -865,4 +869,134 @@ export async function listWorkboardSnoozed(
     creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),
     snoozedUntil: requireTimestamp(row.snoozedUntil, "snoozedUntil"),
   }));
+}
+
+export type WorkboardPresenceBucket = "active_now" | "recently_active";
+
+export interface WorkboardPresenceRow {
+  fanId: number;
+  platformUserId: string;
+  pageAlias: string | null;
+  username: string | null;
+  displayName: string | null;
+  creatorNetAmountMills: bigint;
+  isSubscriber: boolean;
+  platformConversationId: string | null;
+  lastTransactionAt: Date | null;
+  externalPresenceAt: Date;
+  externalPresenceObservedAt: Date;
+  externalPresenceSource: FanslyExternalPresenceSource;
+}
+
+export async function listWorkboardPresence(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    bucket: WorkboardPresenceBucket;
+    now?: Date;
+    limit?: number;
+  },
+): Promise<{ total: number; items: WorkboardPresenceRow[] }> {
+  const now = input.now ?? new Date();
+  const limit = input.limit ?? 20;
+  const activeNowCutoff = sql`${new Date(now.getTime() - 30 * 60 * 1000)}::timestamptz`;
+  const recentlyActiveCutoff = sql`${new Date(now.getTime() - 120 * 60 * 1000)}::timestamptz`;
+  const presenceFilter = input.bucket === "active_now"
+    ? sql`
+        fp.external_presence_at is not null
+        and fp.external_presence_at >= ${activeNowCutoff}
+      `
+    : sql`
+        fp.external_presence_at is not null
+        and fp.external_presence_at < ${activeNowCutoff}
+        and fp.external_presence_at >= ${recentlyActiveCutoff}
+      `;
+
+  const result = await db.execute<{
+    total: NumericValue;
+    fanId: NumericValue;
+    platformUserId: string;
+    pageAlias: string | null;
+    username: string | null;
+    displayName: string | null;
+    creatorNetAmountMills: NumericValue;
+    isSubscriber: boolean;
+    platformConversationId: string | null;
+    lastTransactionAt: TimestampValue;
+    externalPresenceAt: TimestampValue;
+    externalPresenceObservedAt: TimestampValue;
+    externalPresenceSource: string | null;
+  }>(sql`
+    with primary_conversation as (
+      select *
+      from (
+        select c.*,
+               row_number() over (
+                 partition by c.platform_account_id, c.fan_id
+                 order by c.last_message_at desc nulls last,
+                          c.platform_conversation_id desc
+               ) as rn
+        from page_dm_threads c
+        where c.platform_account_id = ${input.platformAccountId}
+          and c.is_visible = true
+          and c.fan_id is not null
+      ) ranked
+      where rn = 1
+    )
+    select count(*) over()::int as total,
+           fp.fan_id as "fanId",
+           f.platform_user_id as "platformUserId",
+           fp.page_alias as "pageAlias",
+           f.username as "username",
+           f.display_name as "displayName",
+           coalesce(slp.creator_net_amount_mills, 0)::bigint as "creatorNetAmountMills",
+           coalesce(fp.is_subscriber, false) as "isSubscriber",
+           pc.platform_conversation_id as "platformConversationId",
+           slp.last_transaction_at as "lastTransactionAt",
+           fp.external_presence_at as "externalPresenceAt",
+           fp.external_presence_observed_at as "externalPresenceObservedAt",
+           fp.external_presence_source as "externalPresenceSource"
+    from page_fans fp
+    inner join fans f on f.id = fp.fan_id
+    left join primary_conversation pc
+      on pc.platform_account_id = fp.platform_account_id
+     and pc.fan_id = fp.fan_id
+    left join fan_spend_lifetime slp
+      on slp.platform_account_id = fp.platform_account_id
+     and slp.fan_id = fp.fan_id
+    where fp.platform_account_id = ${input.platformAccountId}
+      and ${presenceFilter}
+      and ${hasVisibleFanIdentitySql({
+        pageAlias: sql.raw("fp.page_alias"),
+        username: sql.raw("f.username"),
+        displayName: sql.raw("f.display_name"),
+      })}
+    order by fp.external_presence_at desc,
+             coalesce(slp.creator_net_amount_mills, 0) desc,
+             fp.fan_id asc
+    limit ${limit}
+  `);
+
+  return {
+    total: normalizeNumber(result.rows[0]?.total ?? 0, "total"),
+    items: result.rows.map((row) => ({
+      fanId: normalizeNumber(row.fanId, "fanId"),
+      platformUserId: row.platformUserId,
+      pageAlias: row.pageAlias,
+      username: row.username,
+      displayName: row.displayName,
+      creatorNetAmountMills: normalizeBigInt(row.creatorNetAmountMills, "creatorNetAmountMills"),
+      isSubscriber: row.isSubscriber,
+      platformConversationId: row.platformConversationId,
+      lastTransactionAt: parseTimestamp(row.lastTransactionAt),
+      externalPresenceAt: requireTimestamp(row.externalPresenceAt, "externalPresenceAt"),
+      externalPresenceObservedAt: requireTimestamp(
+        row.externalPresenceObservedAt,
+        "externalPresenceObservedAt",
+      ),
+      externalPresenceSource: (
+        row.externalPresenceSource ?? FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN
+      ) as FanslyExternalPresenceSource,
+    })),
+  };
 }

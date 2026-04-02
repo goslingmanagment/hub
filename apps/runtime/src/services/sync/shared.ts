@@ -101,6 +101,7 @@ export function trimFanslyFollowerPayload(raw: unknown) {
       return [{
         id,
         followerId,
+        lastSeenAt: asNullableNumber(item.lastSeenAt),
       }];
     })
     : [];
@@ -121,6 +122,7 @@ export function trimFanslyFollowerPayload(raw: unknown) {
         username: asNullableString(item.username),
         displayName: asNullableString(item.displayName),
         createdAt: asNullableNumber(item.createdAt),
+        lastSeenAt: asNullableNumber(item.lastSeenAt),
       }];
     })
     : [];

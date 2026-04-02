@@ -1,13 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, Navigate } from "react-router";
 import type { WorkboardResponse } from "@agency_hub_core/contracts";
-import { useWorkboard, useWorkboardSnooze, useWorkboardUnsnooze } from "@/api/queries";
+import {
+  useWorkboard,
+  useWorkboardPresence,
+  useWorkboardSnooze,
+  useWorkboardUnsnooze,
+} from "@/api/queries";
 import { ApiError } from "@/api/client";
+import { PresencePanel } from "@/components/page/workboard/PresencePanel";
 import { WorkboardCard } from "@/components/page/workboard/WorkboardCard";
 import { WorkboardCompactRow } from "@/components/page/workboard/WorkboardCompactRow";
 import { SnoozedSection } from "@/components/page/workboard/SnoozedSection";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import {
+  mapPresenceVm,
   mapSubscriberVm,
   mapSpenderVm,
   mapSnoozedVm,
@@ -230,6 +237,7 @@ export function WorkboardPage() {
     isError,
     error,
   } = useWorkboard(resolvedPageLabel, { enabled: canLoad });
+  const presenceQuery = useWorkboardPresence(resolvedPageLabel, { enabled: canLoad });
   const snoozeMutation = useWorkboardSnooze(resolvedPageLabel);
   const unsnoozeMutation = useWorkboardUnsnooze(resolvedPageLabel);
 
@@ -263,6 +271,18 @@ export function WorkboardPage() {
   const snoozedVms = useMemo(
     () => data?.snoozed.items.map(mapSnoozedVm).filter(isPresent) ?? [],
     [data?.snoozed.items],
+  );
+  const activeNowPresenceVms = useMemo(
+    () => presenceQuery.data?.activeNow.items
+      .map((item) => mapPresenceVm(resolvedPageLabel, item))
+      .filter(isPresent) ?? [],
+    [presenceQuery.data?.activeNow.items, resolvedPageLabel],
+  );
+  const recentlyActivePresenceVms = useMemo(
+    () => presenceQuery.data?.recentlyActive.items
+      .map((item) => mapPresenceVm(resolvedPageLabel, item))
+      .filter(isPresent) ?? [],
+    [presenceQuery.data?.recentlyActive.items, resolvedPageLabel],
   );
 
   const tabCounts: Record<Tab, number> = {
@@ -405,6 +425,16 @@ export function WorkboardPage() {
         </div>
         <ViewModeToggle mode={viewMode} onChange={setViewMode} />
       </div>
+
+      <PresencePanel
+        updatedAt={presenceQuery.data?.updatedAt ?? null}
+        loading={presenceQuery.isLoading}
+        unavailable={presenceQuery.isError}
+        activeNow={activeNowPresenceVms}
+        activeNowTotal={presenceQuery.data?.activeNow.total ?? 0}
+        recentlyActive={recentlyActivePresenceVms}
+        recentlyActiveTotal={presenceQuery.data?.recentlyActive.total ?? 0}
+      />
 
       {/* Tabs */}
       <div className="mb-5 flex items-center gap-1 border-b border-border">

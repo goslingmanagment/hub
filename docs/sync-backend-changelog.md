@@ -1,5 +1,7 @@
 # Sync Backend Changelog
 
+- 2026-04-03: Added Workboard-only Fansly inferred presence using follower `lastSeenAt` + `lastSeenAfter`; this is best-effort activity inference, not a confirmed arbitrary-user online API, and FBuddy `/online-users/*` endpoints remain out of scope.
+
 ## Files changed
 
 ### Runtime

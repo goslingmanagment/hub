@@ -19,6 +19,25 @@
 | Website | `https://fansly.com` |
 | Emoji assets | `https://fansly.com/assets/emoji/{category}/{name}.svg` |
 
+### Presence / Online Status
+
+Fansly does expose real-time transports, but the reverse-engineered traffic does
+not show a first-class per-user presence API that emits explicit
+`online`/`offline` events for arbitrary accounts.
+
+What is confirmed in this spec:
+- **Real-time delivery exists** via DM and live chat WebSockets.
+- **Typing exists** via `POST /message/typing`.
+- **Live streaming presence exists** via `GET /streaming/followingstreams/online`
+  and chatroom APIs.
+- **Recent activity exists** via `lastSeenAt` fields observed in account/follower
+  payloads.
+
+Practical implication: "online status" can likely be approximated from
+`lastSeenAt`, DM activity, typing, or livestream/chat presence, but it should
+not be described as a confirmed dedicated presence API unless traffic shows a
+specific endpoint or WebSocket event for that.
+
 ### Response Envelope
 
 All REST API responses use a standard envelope:

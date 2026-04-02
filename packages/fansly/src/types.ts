@@ -15,6 +15,13 @@ export interface FanslyAccount {
   username: string | null;
   displayName: string | null;
   createdAt?: number;
+  statusId?: number;
+  lastSeenAt?: number;
+  streaming?: {
+    channel?: {
+      chatRoomId?: string | null;
+    } | null;
+  } | null;
   notes?: FanslyAccountNote[];
 }
 
@@ -109,6 +116,7 @@ export interface FanslySubscribersPage {
 export interface FanslyFollower {
   id: string;
   followerId: string;
+  lastSeenAt?: number;
 }
 
 export interface FanslyFollowersPage {

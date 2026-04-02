@@ -1,5 +1,10 @@
 import { and, eq, notInArray, sql } from "drizzle-orm";
 
+import {
+  FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN,
+  type FanslyExternalPresenceSource,
+} from "@agency_hub_core/shared";
+
 import type { Database } from "../client.ts";
 import {
   fanPages,
@@ -157,6 +162,14 @@ export interface UpsertFanPageInput {
   pageAliasSource?: string | null;
   pageAliasSourceNoteId?: string | null;
   pageAliasSyncedAt?: Date | null;
+}
+
+export interface UpsertFanPageExternalPresenceInput {
+  fanId: number;
+  platformAccountId: number;
+  externalPresenceAt: Date;
+  externalPresenceObservedAt: Date;
+  externalPresenceSource?: FanslyExternalPresenceSource;
 }
 
 function mergeUpsertFanPageInput(
@@ -342,6 +355,67 @@ export async function upsertFanPage(
     })
     .returning();
   return fanPage;
+}
+
+export async function upsertFanPageExternalPresences(
+  db: Database,
+  inputs: UpsertFanPageExternalPresenceInput[],
+) {
+  if (inputs.length === 0) {
+    return;
+  }
+
+  const deduped = dedupeByKey(
+    inputs,
+    (input) => `${input.platformAccountId}:${input.fanId}`,
+    (current, next) => ({
+      fanId: next.fanId,
+      platformAccountId: next.platformAccountId,
+      externalPresenceAt: next.externalPresenceAt > current.externalPresenceAt
+        ? next.externalPresenceAt
+        : current.externalPresenceAt,
+      externalPresenceObservedAt: next.externalPresenceObservedAt > current.externalPresenceObservedAt
+        ? next.externalPresenceObservedAt
+        : current.externalPresenceObservedAt,
+      externalPresenceSource: next.externalPresenceSource ?? current.externalPresenceSource,
+    }),
+  );
+  const lastSeenAt = new Date();
+
+  await db
+    .insert(fanPages)
+    .values(deduped.map((input) => ({
+      fanId: input.fanId,
+      platformAccountId: input.platformAccountId,
+      externalPresenceAt: input.externalPresenceAt,
+      externalPresenceObservedAt: input.externalPresenceObservedAt,
+      externalPresenceSource: input.externalPresenceSource ?? FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN,
+      lastSeenAt,
+    })))
+    .onConflictDoUpdate({
+      target: [fanPages.fanId, fanPages.platformAccountId],
+      set: {
+        externalPresenceAt: sql`
+          greatest(
+            coalesce(${fanPages.externalPresenceAt}, '-infinity'::timestamptz),
+            coalesce(excluded.external_presence_at, '-infinity'::timestamptz)
+          )
+        `,
+        externalPresenceObservedAt: sql`
+          greatest(
+            coalesce(${fanPages.externalPresenceObservedAt}, '-infinity'::timestamptz),
+            coalesce(excluded.external_presence_observed_at, '-infinity'::timestamptz)
+          )
+        `,
+        externalPresenceSource: sql`
+          coalesce(
+            excluded.external_presence_source,
+            ${fanPages.externalPresenceSource}
+          )
+        `,
+        lastSeenAt,
+      },
+    });
 }
 
 export interface UpsertPageFollowInput {

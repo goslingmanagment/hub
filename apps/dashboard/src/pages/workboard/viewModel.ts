@@ -1,4 +1,4 @@
-import type { WorkboardResponse } from "@agency_hub_core/contracts";
+import type { WorkboardPresenceResponse, WorkboardResponse } from "@agency_hub_core/contracts";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { resolveFanslyExternalLink, type FanslyExternalLinkKind } from "@/lib/platformUrls";
 import { formatMills, formatRelativeTime, formatDate, daysRemaining } from "@/lib/format";
@@ -7,7 +7,8 @@ import { resolveOverdueSeverity, type OverdueSeverity } from "./theme.js";
 type SubscriberItem = WorkboardResponse["subscribers"]["items"][number];
 type SpenderItem = WorkboardResponse["activeSpenders"]["items"][number];
 type SnoozedItem = WorkboardResponse["snoozed"]["items"][number];
-type WorkboardFan = SubscriberItem["fan"] | SpenderItem["fan"] | SnoozedItem["fan"];
+type PresenceItem = WorkboardPresenceResponse["activeNow"]["items"][number];
+type WorkboardFan = SubscriberItem["fan"] | SpenderItem["fan"] | SnoozedItem["fan"] | PresenceItem["fan"];
 
 function resolveVisibleWorkboardFan(fan: WorkboardFan) {
   const resolved = resolveFanLabelForScope({
@@ -161,5 +162,47 @@ export function mapSnoozedVm(item: SnoozedItem): WorkboardSnoozedVm | null {
     ltvMills: item.ltv.creatorNetAmountMills,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
     snoozedUntilLabel: formatDate(item.snoozedUntil),
+  };
+}
+
+export interface WorkboardPresenceVm {
+  fanId: number;
+  fanLabel: string;
+  fanSubLabel: string | null;
+  profileHref: string;
+  fanslyExternalUrl: string | null;
+  fanslyExternalKind: FanslyExternalLinkKind | null;
+  ltvMills: number;
+  ltvLabel: string;
+  presenceLabel: string;
+  isSubscriber: boolean;
+  lastTransactionLabel: string | null;
+}
+
+export function mapPresenceVm(pageLabel: string, item: PresenceItem): WorkboardPresenceVm | null {
+  const fan = resolveVisibleWorkboardFan(item.fan);
+  if (!fan) {
+    return null;
+  }
+
+  const fanslyExternalLink = resolveFanslyExternalLink({
+    platformConversationId: item.platformConversationId,
+    username: fan.username,
+  });
+
+  return {
+    fanId: item.fanId,
+    fanLabel: fan.label,
+    fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
+    profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
+    fanslyExternalUrl: fanslyExternalLink?.url ?? null,
+    fanslyExternalKind: fanslyExternalLink?.kind ?? null,
+    ltvMills: item.ltv.creatorNetAmountMills,
+    ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
+    presenceLabel: formatRelativeTime(item.presence.lastSeenAt),
+    isSubscriber: item.isSubscriber,
+    lastTransactionLabel: item.lastTransactionAt
+      ? formatRelativeTime(item.lastTransactionAt)
+      : null,
   };
 }

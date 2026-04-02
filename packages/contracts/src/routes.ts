@@ -938,6 +938,30 @@ const workboardConversationSchema = z.object({
   messageSyncEligibility: messageSyncEligibilitySchema,
 });
 
+const workboardPresenceItemSchema = z.object({
+  fanId: intId,
+  fan: z.object({
+    platformUserId: z.string(),
+    pageAlias: z.string().nullable(),
+    username: z.string().nullable(),
+    displayName: z.string().nullable(),
+  }),
+  presence: z.object({
+    lastSeenAt: isoTimestamp,
+    observedAt: isoTimestamp,
+    source: z.literal("fansly_followers_last_seen"),
+  }),
+  ltv: z.object({ creatorNetAmountMills: mills }),
+  isSubscriber: z.boolean(),
+  platformConversationId: z.string().nullable(),
+  lastTransactionAt: isoTimestamp.nullable(),
+});
+
+const workboardPresenceBucketSchema = z.object({
+  total: z.number().int(),
+  items: z.array(workboardPresenceItemSchema),
+});
+
 const workboardSubscriberItemSchema = z.object({
   fanId: intId,
   fan: z.object({
@@ -1013,6 +1037,13 @@ export const workboardResponseSchema = z.object({
     total: z.number().int(),
     items: z.array(workboardSnoozedItemSchema),
   }),
+});
+
+export const workboardPresenceResponseSchema = z.object({
+  updatedAt: isoTimestamp,
+  bestEffort: z.literal(true),
+  activeNow: workboardPresenceBucketSchema,
+  recentlyActive: workboardPresenceBucketSchema,
 });
 
 export const workboardSnoozeBodySchema = z.object({
@@ -2448,6 +2479,19 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  workboardPresence: {
+    tags: ["workboard"],
+    summary: "Get inferred Fansly presence for one workboard page",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    response: {
+      200: workboardPresenceResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   workboardSnooze: {
     tags: ["workboard"],
     summary: "Snooze a fan on the workboard",
@@ -3255,6 +3299,7 @@ export type NotificationsReportSendResponse = z.infer<typeof notificationsReport
 export type NotificationsDeliveryAttemptItem = z.infer<typeof notificationsDeliveryAttemptItemSchema>;
 export type NotificationsReportHistoryResponse = z.infer<typeof notificationsReportHistoryResponseSchema>;
 export type WorkboardResponse = z.infer<typeof workboardResponseSchema>;
+export type WorkboardPresenceResponse = z.infer<typeof workboardPresenceResponseSchema>;
 export type WorkboardSnoozeBody = z.infer<typeof workboardSnoozeBodySchema>;
 export type WorkboardSnoozeResponse = z.infer<typeof workboardSnoozeResponseSchema>;
 export type WorkboardUnsnoozeParams = z.infer<typeof workboardUnsnoozeParamsSchema>;

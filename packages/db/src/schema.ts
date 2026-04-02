@@ -545,11 +545,18 @@ export const pageFans = pgTable(
     pageAliasSourceNoteId: text("page_alias_source_note_id"),
     pageAliasSyncedAt: timestamp("page_alias_synced_at", { withTimezone: true }),
     lastTransactionAt: timestamp("last_transaction_at", { withTimezone: true }),
+    externalPresenceAt: timestamp("external_presence_at", { withTimezone: true }),
+    externalPresenceObservedAt: timestamp("external_presence_observed_at", { withTimezone: true }),
+    externalPresenceSource: text("external_presence_source"),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     uniq: unique("page_fans_fan_account_uniq").on(table.fanId, table.platformAccountId),
     platformAccountIdx: index("page_fans_platform_account_idx").on(table.platformAccountId),
+    externalPresenceIdx: index("page_fans_external_presence_idx").on(
+      table.platformAccountId,
+      table.externalPresenceAt,
+    ),
     pageAliasIdx: index("page_fans_platform_account_alias_idx").on(
       table.platformAccountId,
       table.pageAlias,

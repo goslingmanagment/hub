@@ -20,10 +20,15 @@ export const FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGA
   "partner_missing_from_aggregation_accounts" as const;
 export const FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP =
   "partner_unresolvable_from_account_lookup" as const;
+export const FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN =
+  "fansly_followers_last_seen" as const;
 
 export type FanslyDmMessageSyncExcludedReason =
   | typeof FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
   | typeof FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP;
+
+export type FanslyExternalPresenceSource =
+  typeof FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN;
 
 function normalizeFanNamePart(value: string | null | undefined) {
   if (typeof value !== "string") {
