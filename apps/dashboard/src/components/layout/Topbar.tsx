@@ -110,6 +110,7 @@ function shouldShowPeriodSelector(pathname: string): boolean {
     if (parts[2] === "fans" && parts[3] && parts[4]) return true;
     return false;
   }
+  if (parts[0] === "usage") return false;
   return false;
 }
 
@@ -123,6 +124,8 @@ function buildBreadcrumbs(
   if (parts.length === 0) return [{ label: "Overview" }];
 
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
+
+  if (parts[0] === "usage") return [{ label: "Overview", href: "/" }, { label: "Usage" }];
 
   if (parts[0] === "notifications") return [{ label: "Overview", href: "/" }, { label: "Notifications" }];
 

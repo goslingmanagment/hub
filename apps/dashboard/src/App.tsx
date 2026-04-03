@@ -12,6 +12,7 @@ const FollowersPage = lazy(() => import("./pages/FollowersPage.js").then((m) => 
 const FanProfilePage = lazy(() => import("./pages/FanProfilePage.js").then((m) => ({ default: m.FanProfilePage })));
 const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage.js").then((m) => ({ default: m.TopSupportersPage })));
 const WorkboardPage = lazy(() => import("./pages/WorkboardPage.js").then((m) => ({ default: m.WorkboardPage })));
+const UsagePage = lazy(() => import("./pages/UsagePage.js").then((m) => ({ default: m.UsagePage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage.js").then((m) => ({ default: m.SettingsPage })));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage.js").then((m) => ({ default: m.NotificationsPage })));
 const LogPage = lazy(() => import("./pages/dev/LogPage.js").then((m) => ({ default: m.LogPage })));
@@ -43,6 +44,7 @@ export function App() {
           <Route path="pages/:pageLabel/workboard" element={<WorkboardPage />} />
           <Route path="pages/:pageLabel/crm" element={<LegacyWorkboardRedirect />} />
           <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
+          <Route path="usage" element={<OwnerRoute><UsagePage /></OwnerRoute>} />
           <Route path="notifications" element={<OwnerRoute><NotificationsPage /></OwnerRoute>} />
           <Route
             path="settings"

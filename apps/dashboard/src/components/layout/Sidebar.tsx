@@ -177,6 +177,17 @@ export function Sidebar({ user }: SidebarProps) {
             </div>
           )}
           <NavLink
+            to="/usage"
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
+              }`
+            }
+          >
+            <BarChart3 size={16} />
+            Usage
+          </NavLink>
+          <NavLink
             to="/notifications"
             className={({ isActive }) =>
               `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${

@@ -414,6 +414,8 @@ describe("dashboard sync layout", () => {
 
     expect(html).not.toContain("Sync Monitor");
     expect(html).not.toContain("href=\"/sync\"");
+    expect(html).toContain("Usage");
+    expect(html).toContain("href=\"/usage\"");
     expect(html).toContain("Settings");
   });
 
@@ -429,12 +431,13 @@ describe("dashboard sync layout", () => {
   });
 
   it("does not enable the owner-only connections query for non-owner sidebars", () => {
-    renderWithRouter(
+    const html = renderWithRouter(
       createElement(Sidebar, { user: { username: "lead", role: "team_lead" } }),
       ["/"],
     );
 
     expect(queryMocks.useAdminConnections).toHaveBeenCalledWith({ enabled: false });
+    expect(html).not.toContain("href=\"/usage\"");
   });
 
   it("defaults settings to credentials when the tab query is absent", () => {
@@ -669,5 +672,15 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain(">Dev<");
     expect(html).toContain(">Sync Status<");
+  });
+
+  it("shows usage breadcrumbs in the owner workspace", () => {
+    const html = renderWithRouter(
+      createElement(Topbar, { user: { username: "owner", role: "owner" } }),
+      ["/usage"],
+    );
+
+    expect(html).toContain(">Usage<");
+    expect(html).toContain("href=\"/\"");
   });
 });

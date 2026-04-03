@@ -7,6 +7,7 @@ export * from "./repositories/auth.ts";
 export * from "./repositories/fan-page-identity.ts";
 export * from "./repositories/fan-profiles.ts";
 export * from "./repositories/fan-metadata.ts";
+export * from "./repositories/ai-usage.ts";
 export * from "./repositories/notifications.ts";
 export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";

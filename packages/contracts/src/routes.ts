@@ -2,6 +2,7 @@ import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
   SPENDER_SERIES_GRANULARITIES,
+  aiUsageFeatures,
   creatableUserRoles,
   fanFlagTypes,
   isValidBusinessDateString,
@@ -30,6 +31,7 @@ const transactionStateEnum = z.enum(transactionStates);
 const userRoleEnum = z.enum(userRoles);
 const creatableUserRoleEnum = z.enum(creatableUserRoles);
 const fanFlagEnum = z.enum(fanFlagTypes);
+const aiUsageFeatureEnum = z.enum(aiUsageFeatures);
 const spenderScopeKindEnum = z.enum(["page", "model", "agency"]);
 const sortDirEnum = z.enum(["asc", "desc"]);
 const spenderSortByEnum = z.enum([
@@ -1295,6 +1297,88 @@ export const fanFlagsResponseSchema = z.object({
   flags: z.array(fanFlagSchema),
 });
 
+export const aiUsageEventInputSchema = z.object({
+  clientEventId: z.string().min(1).max(255),
+  feature: aiUsageFeatureEnum,
+  model: z.string().min(1).max(100),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cacheWriteTokens: z.number().int().nonnegative(),
+  cacheReadTokens: z.number().int().nonnegative(),
+  conversationId: z.string().min(1).max(255).nullable().optional(),
+  durationMs: z.number().int().nonnegative().nullable().optional(),
+  isCacheHit: z.boolean(),
+  isRegeneration: z.boolean(),
+  completedAt: z.string().min(1),
+});
+
+export const aiUsageBatchBodySchema = z.object({
+  events: z.array(aiUsageEventInputSchema).min(1).max(100),
+});
+
+export const aiUsageBatchResponseSchema = z.object({
+  receivedCount: z.number().int().nonnegative(),
+  insertedCount: z.number().int().nonnegative(),
+  dedupedCount: z.number().int().nonnegative(),
+});
+
+export const adminChatterUsageQuerySchema = z.object({
+  from: businessDate.optional(),
+  to: businessDate.optional(),
+}).superRefine((value, ctx) => {
+  const hasFrom = value.from !== undefined;
+  const hasTo = value.to !== undefined;
+
+  if (hasFrom !== hasTo) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "`from` and `to` must be provided together",
+      path: [hasFrom ? "to" : "from"],
+    });
+  }
+
+  if (value.from && value.to && value.from > value.to) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "`from` must be on or before `to`",
+      path: ["to"],
+    });
+  }
+});
+
+export const aiUsageTokenCountsSchema = z.object({
+  input: z.number().int().nonnegative(),
+  output: z.number().int().nonnegative(),
+  cacheWrite: z.number().int().nonnegative(),
+  cacheRead: z.number().int().nonnegative(),
+  cacheTotal: z.number().int().nonnegative(),
+});
+
+export const aiUsageTopFeatureSchema = z.object({
+  feature: aiUsageFeatureEnum,
+  requestCount: z.number().int().nonnegative(),
+  sharePct: z.number().nonnegative(),
+});
+
+export const adminChatterUsageRowSchema = z.object({
+  userId: intId,
+  username: z.string(),
+  totalGenerations: z.number().int().nonnegative(),
+  tokenCounts: aiUsageTokenCountsSchema,
+  topFeature: aiUsageTopFeatureSchema.nullable(),
+  regenerateRatePct: z.number().nonnegative(),
+  warning: z.boolean(),
+});
+
+export const adminChatterUsageResponseSchema = z.object({
+  range: z.object({
+    from: businessDate,
+    to: businessDate,
+    timeZone: z.string().min(1),
+  }),
+  rows: z.array(adminChatterUsageRowSchema),
+});
+
 // Admin schemas
 export const adminCreateUserBodySchema = z.object({
   username: z.string().min(1).max(100),
@@ -2140,6 +2224,18 @@ export const routeSchemas = {
       401: errorResponseSchema,
     },
   },
+  aiUsageBatch: {
+    tags: ["usage"],
+    summary: "Ingest a batch of chatter AI usage events",
+    security: bearerOnlySecurity,
+    body: aiUsageBatchBodySchema,
+    response: {
+      200: aiUsageBatchResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   pages: {
     tags: ["pages"],
     summary: "List visible pages",
@@ -2706,6 +2802,18 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  adminChatterUsage: {
+    tags: ["admin"],
+    summary: "Get aggregated AI usage per chatter",
+    security: cookieOnlySecurity,
+    querystring: adminChatterUsageQuerySchema,
+    response: {
+      200: adminChatterUsageResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   adminCreateUser: {
     tags: ["admin"],
     summary: "Create a new user",
@@ -3185,6 +3293,11 @@ export type AuthUser = z.infer<typeof authUserSchema>;
 export type AdminUser = z.infer<typeof adminUserSchema>;
 export type AssignedPage = z.infer<typeof assignedPageSchema>;
 export type SyncUxSummary = z.infer<typeof syncUxSummarySchema>;
+export type AiUsageEventInput = z.infer<typeof aiUsageEventInputSchema>;
+export type AiUsageBatchBody = z.infer<typeof aiUsageBatchBodySchema>;
+export type AiUsageBatchResponse = z.infer<typeof aiUsageBatchResponseSchema>;
+export type AdminChatterUsageQuery = z.infer<typeof adminChatterUsageQuerySchema>;
+export type AdminChatterUsageResponse = z.infer<typeof adminChatterUsageResponseSchema>;
 export type CrossPageFanDetailResponse = z.infer<typeof crossPageFanDetailResponseSchema>;
 export type FanListQuery = z.infer<typeof fanListQuerySchema>;
 export type FanListResponse = z.infer<typeof fanListResponseSchema>;

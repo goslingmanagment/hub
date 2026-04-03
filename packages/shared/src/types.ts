@@ -109,6 +109,17 @@ export type CreatableUserRole = (typeof creatableUserRoles)[number];
 export const fanFlagTypes = ["whale", "vip", "risky"] as const;
 export type FanFlagType = (typeof fanFlagTypes)[number];
 
+export const aiUsageFeatures = [
+  "fast-reply",
+  "improve-draft",
+  "help-me",
+  "fan-summary",
+  "chat-review",
+  "ping",
+  "hi-greeting",
+] as const;
+export type AiUsageFeature = (typeof aiUsageFeatures)[number];
+
 export interface FanslySessionBundle {
   authorization: string;
   fanslyClientId?: string;

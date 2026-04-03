@@ -394,6 +394,107 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ai-usage{batch}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest a batch of chatter AI usage events */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    batch: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        events: {
+                            clientEventId: string;
+                            /** @enum {string} */
+                            feature: "fast-reply" | "improve-draft" | "help-me" | "fan-summary" | "chat-review" | "ping" | "hi-greeting";
+                            model: string;
+                            inputTokens: number;
+                            outputTokens: number;
+                            cacheWriteTokens: number;
+                            cacheReadTokens: number;
+                            conversationId?: string | null;
+                            durationMs?: number | null;
+                            isCacheHit: boolean;
+                            isRegeneration: boolean;
+                            completedAt: string;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            receivedCount: number;
+                            insertedCount: number;
+                            dedupedCount: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pages": {
         parameters: {
             query?: never;
@@ -6526,6 +6627,110 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/usage/chatters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get aggregated AI usage per chatter */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            range: {
+                                from: string;
+                                to: string;
+                                timeZone: string;
+                            };
+                            rows: {
+                                userId: number;
+                                username: string;
+                                totalGenerations: number;
+                                tokenCounts: {
+                                    input: number;
+                                    output: number;
+                                    cacheWrite: number;
+                                    cacheRead: number;
+                                    cacheTotal: number;
+                                };
+                                topFeature: {
+                                    /** @enum {string} */
+                                    feature: "fast-reply" | "improve-draft" | "help-me" | "fan-summary" | "chat-review" | "ping" | "hi-greeting";
+                                    requestCount: number;
+                                    sharePct: number;
+                                } | null;
+                                regenerateRatePct: number;
+                                warning: boolean;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;

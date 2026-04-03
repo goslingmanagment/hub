@@ -88,6 +88,7 @@ import {
   unassignPageFromUser,
   type AuthPrincipal,
 } from "../services/auth.ts";
+import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../services/ai-usage.ts";
 import { listConnectionStatuses, updatePageCredentials } from "../services/connections.ts";
 import {
   AppError,
@@ -482,6 +483,13 @@ export async function buildApiServer(appContext: AppContext) {
       authMethod: principal.authMethod,
       user: principal.user,
     };
+  });
+
+  server.post("/api/v1/ai-usage:batch", {
+    schema: routeSchemas.aiUsageBatch,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return ingestAiUsageBatch(appContext, principal, request.body);
   });
 
   server.get("/api/v1/pages", {
@@ -1441,6 +1449,14 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return listUsersDetailed(appContext);
+  });
+
+  server.get("/api/v1/admin/usage/chatters", {
+    schema: routeSchemas.adminChatterUsage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return getAdminChatterUsageReport(appContext, request.query);
   });
 
   server.post("/api/v1/admin/users", {

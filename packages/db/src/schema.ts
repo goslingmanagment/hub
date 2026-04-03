@@ -16,7 +16,7 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { fanFlagTypes, userRoles } from "@agency_hub_core/shared";
+import { aiUsageFeatures, fanFlagTypes, userRoles } from "@agency_hub_core/shared";
 
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
 export const syncRunOutcomeEnum = pgEnum("sync_run_outcome", [
@@ -92,6 +92,7 @@ export const transactionStateEnum = pgEnum("transaction_state", [
 ]);
 export const userRoleEnum = pgEnum("user_role", userRoles);
 export const fanFlagEnum = pgEnum("fan_flag", fanFlagTypes);
+export const aiUsageFeatureEnum = pgEnum("ai_usage_feature", aiUsageFeatures);
 export const dmSenderRoleEnum = pgEnum("dm_sender_role", ["fan", "model", "system", "unknown"]);
 export const dmMessageCoverageStatusEnum = pgEnum("dm_message_coverage_status", [
   "pending_backfill",
@@ -1164,6 +1165,51 @@ export const apiKeys = pgTable(
   },
   (table) => ({
     userIdx: index("api_keys_user_idx").on(table.userId),
+  }),
+);
+
+export const aiUsageEvents = pgTable(
+  "ai_usage_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    clientEventId: text("client_event_id").notNull(),
+    feature: aiUsageFeatureEnum("feature").notNull(),
+    model: text("model").notNull(),
+    inputTokens: integer("input_tokens").notNull(),
+    outputTokens: integer("output_tokens").notNull(),
+    cacheWriteTokens: integer("cache_write_tokens").notNull(),
+    cacheReadTokens: integer("cache_read_tokens").notNull(),
+    conversationId: text("conversation_id"),
+    durationMs: integer("duration_ms"),
+    isCacheHit: boolean("is_cache_hit").default(false).notNull(),
+    isRegeneration: boolean("is_regeneration").default(false).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+    ingestedAt: timestamp("ingested_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    uniq: unique("ai_usage_events_user_client_event_uniq").on(table.userId, table.clientEventId),
+    userCompletedIdx: index("ai_usage_events_user_completed_idx").on(
+      table.userId,
+      table.completedAt,
+    ),
+    completedIdx: index("ai_usage_events_completed_idx").on(table.completedAt),
+    inputNonnegative: check("ai_usage_events_input_tokens_nonnegative", sql`${table.inputTokens} >= 0`),
+    outputNonnegative: check("ai_usage_events_output_tokens_nonnegative", sql`${table.outputTokens} >= 0`),
+    cacheWriteNonnegative: check(
+      "ai_usage_events_cache_write_tokens_nonnegative",
+      sql`${table.cacheWriteTokens} >= 0`,
+    ),
+    cacheReadNonnegative: check(
+      "ai_usage_events_cache_read_tokens_nonnegative",
+      sql`${table.cacheReadTokens} >= 0`,
+    ),
+    durationNonnegative: check(
+      "ai_usage_events_duration_ms_nonnegative",
+      sql`${table.durationMs} is null or ${table.durationMs} >= 0`,
+    ),
   }),
 );
 

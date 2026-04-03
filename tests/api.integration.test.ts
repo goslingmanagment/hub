@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import {
   createOnlyFansPage,
+  createUser,
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
@@ -34,7 +35,13 @@ import {
   upsertTransaction,
 } from "@agency_hub_core/db";
 import { PgBoss } from "pg-boss";
-import { encryptJson, FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
+import {
+  encryptJson,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
+  MOSCOW_TIME_ZONE,
+  previousBusinessDate,
+  resolveBusinessDateRange,
+} from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -222,6 +229,19 @@ function setCookieHeaderFrom(response: {
 function sessionCookieFrom(response: { headers: Record<string, string | string[] | number | undefined> }) {
   const value = setCookieHeaderFrom(response);
   return value.split(";")[0]!;
+}
+
+async function loginOwnerCookie(server: Awaited<ReturnType<typeof buildApiServer>>) {
+  const login = await server.inject({
+    method: "POST",
+    url: "/api/v1/auth/login",
+    payload: {
+      username: "dima",
+      password: "owner-secret",
+    },
+  });
+
+  return sessionCookieFrom(login);
 }
 
 function createAutoSyncFanslyAdapter(input: {
@@ -1972,6 +1992,604 @@ describe("api integration", () => {
         revokedReason: "rotated",
       }),
     ]);
+  });
+
+  it("ingests ai usage batches for chatter api keys and stores rows against the authenticated chatter", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-04T12:00:00.000Z"));
+
+    const appContext = createTestAppContext(testDb);
+    const issuedKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers: {
+        authorization: `Bearer ${issuedKey.key}`,
+      },
+      payload: {
+        events: [
+          {
+            clientEventId: "evt-001",
+            feature: "fast-reply",
+            model: "gpt-4o",
+            inputTokens: 12,
+            outputTokens: 18,
+            cacheWriteTokens: 0,
+            cacheReadTokens: 0,
+            conversationId: "conversation-001",
+            durationMs: 420,
+            isCacheHit: false,
+            isRegeneration: false,
+            completedAt: "2026-04-04T09:00:00.000Z",
+          },
+          {
+            clientEventId: "evt-002",
+            feature: "fan-summary",
+            model: "gpt-4o-mini",
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheWriteTokens: 0,
+            cacheReadTokens: 0,
+            conversationId: null,
+            durationMs: null,
+            isCacheHit: true,
+            isRegeneration: false,
+            completedAt: "2026-04-04T09:05:00.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      receivedCount: 2,
+      insertedCount: 2,
+      dedupedCount: 0,
+    });
+
+    const rows = await testDb.pool.query<{
+      username: string;
+      client_event_id: string;
+      feature: string;
+      model: string;
+    }>(`
+      select u.username,
+             e.client_event_id,
+             e.feature::text,
+             e.model
+      from ai_usage_events e
+      inner join users u on u.id = e.user_id
+      order by e.client_event_id asc
+    `);
+
+    expect(rows.rows).toEqual([
+      {
+        username: "anton",
+        client_event_id: "evt-001",
+        feature: "fast-reply",
+        model: "gpt-4o",
+      },
+      {
+        username: "anton",
+        client_event_id: "evt-002",
+        feature: "fan-summary",
+        model: "gpt-4o-mini",
+      },
+    ]);
+  });
+
+  it("rejects ai usage ingestion without an api key principal", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const unauthenticated = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      payload: {
+        events: [{
+          clientEventId: "evt-unauth",
+          feature: "fast-reply",
+          model: "gpt-4o",
+          inputTokens: 1,
+          outputTokens: 1,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          conversationId: null,
+          durationMs: null,
+          isCacheHit: false,
+          isRegeneration: false,
+          completedAt: "2026-04-04T09:00:00.000Z",
+        }],
+      },
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const cookie = await loginOwnerCookie(server);
+    const sessionAuthenticated = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers: {
+        cookie,
+      },
+      payload: {
+        events: [{
+          clientEventId: "evt-session",
+          feature: "fast-reply",
+          model: "gpt-4o",
+          inputTokens: 1,
+          outputTokens: 1,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          conversationId: null,
+          durationMs: null,
+          isCacheHit: false,
+          isRegeneration: false,
+          completedAt: "2026-04-04T09:00:00.000Z",
+        }],
+      },
+    });
+    expect(sessionAuthenticated.statusCode).toBe(403);
+  });
+
+  it("dedupes repeated client event ids per chatter but keeps the same id separate across chatters", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-04T12:00:00.000Z"));
+
+    const appContext = createTestAppContext(testDb);
+    await createUser(appContext.db, {
+      username: "boris",
+      role: "chatter",
+      passwordHash: null,
+    });
+    const antonKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+    const borisKey = await issueChatterApiKey(appContext, {
+      username: "boris",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const payload = {
+      events: [{
+        clientEventId: "evt-shared",
+        feature: "help-me",
+        model: "gpt-4o",
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        conversationId: "conversation-007",
+        durationMs: 250,
+        isCacheHit: false,
+        isRegeneration: false,
+        completedAt: "2026-04-04T10:00:00.000Z",
+      }],
+    };
+
+    const firstAnton = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers: {
+        authorization: `Bearer ${antonKey.key}`,
+      },
+      payload,
+    });
+    expect(firstAnton.statusCode).toBe(200);
+    expect(firstAnton.json()).toEqual({
+      receivedCount: 1,
+      insertedCount: 1,
+      dedupedCount: 0,
+    });
+
+    const secondAnton = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers: {
+        authorization: `Bearer ${antonKey.key}`,
+      },
+      payload,
+    });
+    expect(secondAnton.statusCode).toBe(200);
+    expect(secondAnton.json()).toEqual({
+      receivedCount: 1,
+      insertedCount: 0,
+      dedupedCount: 1,
+    });
+
+    const boris = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers: {
+        authorization: `Bearer ${borisKey.key}`,
+      },
+      payload,
+    });
+    expect(boris.statusCode).toBe(200);
+    expect(boris.json()).toEqual({
+      receivedCount: 1,
+      insertedCount: 1,
+      dedupedCount: 0,
+    });
+
+    const grouped = await testDb.pool.query<{
+      username: string;
+      event_count: string;
+    }>(`
+      select u.username,
+             count(*)::text as event_count
+      from ai_usage_events e
+      inner join users u on u.id = e.user_id
+      group by u.username
+      order by u.username asc
+    `);
+
+    expect(grouped.rows).toEqual([
+      { username: "anton", event_count: "1" },
+      { username: "boris", event_count: "1" },
+    ]);
+  });
+
+  it("validates ai usage batches and rejects invalid feature, negative tokens, empty batches, and oversized batches", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const appContext = createTestAppContext(testDb);
+    const issuedKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const headers = {
+      authorization: `Bearer ${issuedKey.key}`,
+    };
+
+    const invalidFeature = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers,
+      payload: {
+        events: [{
+          clientEventId: "evt-invalid-feature",
+          feature: "wrong-feature",
+          model: "gpt-4o",
+          inputTokens: 1,
+          outputTokens: 1,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          conversationId: null,
+          durationMs: null,
+          isCacheHit: false,
+          isRegeneration: false,
+          completedAt: "2026-04-04T10:00:00.000Z",
+        }],
+      },
+    });
+    expect(invalidFeature.statusCode).toBe(400);
+
+    const negativeTokens = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers,
+      payload: {
+        events: [{
+          clientEventId: "evt-negative",
+          feature: "fast-reply",
+          model: "gpt-4o",
+          inputTokens: -1,
+          outputTokens: 1,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          conversationId: null,
+          durationMs: null,
+          isCacheHit: false,
+          isRegeneration: false,
+          completedAt: "2026-04-04T10:00:00.000Z",
+        }],
+      },
+    });
+    expect(negativeTokens.statusCode).toBe(400);
+
+    const emptyBatch = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers,
+      payload: {
+        events: [],
+      },
+    });
+    expect(emptyBatch.statusCode).toBe(400);
+
+    const oversizedBatch = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers,
+      payload: {
+        events: Array.from({ length: 101 }, (_, index) => ({
+          clientEventId: `evt-${index + 1}`,
+          feature: "fast-reply",
+          model: "gpt-4o",
+          inputTokens: 1,
+          outputTokens: 1,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          conversationId: null,
+          durationMs: null,
+          isCacheHit: false,
+          isRegeneration: false,
+          completedAt: "2026-04-04T10:00:00.000Z",
+        })),
+      },
+    });
+    expect(oversizedBatch.statusCode).toBe(400);
+
+    const count = await testDb.pool.query<{ count: string }>(`
+      select count(*)::text as count
+      from ai_usage_events
+    `);
+    expect(count.rows[0]?.count).toBe("0");
+  });
+
+  it("aggregates chatter ai usage for owners with default Moscow ranges, zero-usage chatters, and warning flags", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-04T12:00:00.000Z"));
+
+    const appContext = createTestAppContext(testDb);
+    await createUser(appContext.db, {
+      username: "boris",
+      role: "chatter",
+      passwordHash: null,
+    });
+    const antonKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const batch = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers: {
+        authorization: `Bearer ${antonKey.key}`,
+      },
+      payload: {
+        events: [
+          {
+            clientEventId: "evt-agg-1",
+            feature: "fast-reply",
+            model: "gpt-4o",
+            inputTokens: 100,
+            outputTokens: 40,
+            cacheWriteTokens: 5,
+            cacheReadTokens: 2,
+            conversationId: "conversation-101",
+            durationMs: 300,
+            isCacheHit: false,
+            isRegeneration: false,
+            completedAt: "2026-04-01T10:00:00.000Z",
+          },
+          {
+            clientEventId: "evt-agg-2",
+            feature: "fast-reply",
+            model: "gpt-4o",
+            inputTokens: 120,
+            outputTokens: 60,
+            cacheWriteTokens: 4,
+            cacheReadTokens: 1,
+            conversationId: "conversation-101",
+            durationMs: 320,
+            isCacheHit: false,
+            isRegeneration: true,
+            completedAt: "2026-04-02T10:00:00.000Z",
+          },
+          {
+            clientEventId: "evt-agg-3",
+            feature: "help-me",
+            model: "gpt-4o-mini",
+            inputTokens: 80,
+            outputTokens: 20,
+            cacheWriteTokens: 0,
+            cacheReadTokens: 10,
+            conversationId: null,
+            durationMs: null,
+            isCacheHit: false,
+            isRegeneration: false,
+            completedAt: "2026-04-03T10:00:00.000Z",
+          },
+        ],
+      },
+    });
+    expect(batch.statusCode).toBe(200);
+
+    const cookie = await loginOwnerCookie(server);
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/usage/chatters",
+      headers: {
+        cookie,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const expectedDefaultRange = resolveBusinessDateRange("7d", new Date(), undefined, MOSCOW_TIME_ZONE);
+    expect(response.json()).toEqual({
+      range: {
+        from: expectedDefaultRange.from,
+        to: previousBusinessDate(expectedDefaultRange.toExclusive!),
+        timeZone: MOSCOW_TIME_ZONE,
+      },
+      rows: [
+        {
+          userId: expect.any(Number),
+          username: "anton",
+          totalGenerations: 3,
+          tokenCounts: {
+            input: 300,
+            output: 120,
+            cacheWrite: 9,
+            cacheRead: 13,
+            cacheTotal: 22,
+          },
+          topFeature: {
+            feature: "fast-reply",
+            requestCount: 2,
+            sharePct: 66.67,
+          },
+          regenerateRatePct: 33.33,
+          warning: true,
+        },
+        {
+          userId: expect.any(Number),
+          username: "boris",
+          totalGenerations: 0,
+          tokenCounts: {
+            input: 0,
+            output: 0,
+            cacheWrite: 0,
+            cacheRead: 0,
+            cacheTotal: 0,
+          },
+          topFeature: null,
+          regenerateRatePct: 0,
+          warning: false,
+        },
+      ],
+    });
+  });
+
+  it("filters admin chatter usage by completedAt across Moscow day boundaries instead of ingestion time", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-04T22:00:00.000Z"));
+
+    const appContext = createTestAppContext(testDb);
+    const antonKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const batch = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage:batch",
+      headers: {
+        authorization: `Bearer ${antonKey.key}`,
+      },
+      payload: {
+        events: [
+          {
+            clientEventId: "evt-boundary-1",
+            feature: "fast-reply",
+            model: "gpt-4o",
+            inputTokens: 10,
+            outputTokens: 10,
+            cacheWriteTokens: 0,
+            cacheReadTokens: 0,
+            conversationId: "conversation-201",
+            durationMs: 200,
+            isCacheHit: false,
+            isRegeneration: false,
+            completedAt: "2026-04-03T20:59:59.000Z",
+          },
+          {
+            clientEventId: "evt-boundary-2",
+            feature: "help-me",
+            model: "gpt-4o",
+            inputTokens: 20,
+            outputTokens: 20,
+            cacheWriteTokens: 0,
+            cacheReadTokens: 0,
+            conversationId: "conversation-202",
+            durationMs: 240,
+            isCacheHit: false,
+            isRegeneration: false,
+            completedAt: "2026-04-03T21:00:00.000Z",
+          },
+        ],
+      },
+    });
+    expect(batch.statusCode).toBe(200);
+
+    const cookie = await loginOwnerCookie(server);
+    const aprilThird = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/usage/chatters?from=2026-04-03&to=2026-04-03",
+      headers: {
+        cookie,
+      },
+    });
+    expect(aprilThird.statusCode).toBe(200);
+    expect(aprilThird.json()).toEqual({
+      range: {
+        from: "2026-04-03",
+        to: "2026-04-03",
+        timeZone: MOSCOW_TIME_ZONE,
+      },
+      rows: [
+        expect.objectContaining({
+          username: "anton",
+          totalGenerations: 1,
+          topFeature: {
+            feature: "fast-reply",
+            requestCount: 1,
+            sharePct: 100,
+          },
+        }),
+      ],
+    });
+
+    const aprilFourth = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/usage/chatters?from=2026-04-04&to=2026-04-04",
+      headers: {
+        cookie,
+      },
+    });
+    expect(aprilFourth.statusCode).toBe(200);
+    expect(aprilFourth.json()).toEqual({
+      range: {
+        from: "2026-04-04",
+        to: "2026-04-04",
+        timeZone: MOSCOW_TIME_ZONE,
+      },
+      rows: [
+        expect.objectContaining({
+          username: "anton",
+          totalGenerations: 1,
+          topFeature: {
+            feature: "help-me",
+            requestCount: 1,
+            sharePct: 100,
+          },
+        }),
+      ],
+    });
   });
 
   it("scopes chatter API keys to assigned pages", async (context) => {
