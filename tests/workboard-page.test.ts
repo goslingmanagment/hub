@@ -1,3 +1,4 @@
+import * as React from "react";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -308,6 +309,71 @@ describe("WorkboardPage", () => {
     expect(html).toContain("Presence");
     expect(html).toContain("Показать");
     expect(html).not.toContain("Ошибка загрузки");
+  });
+
+  it("keeps stale presence data visible when a background refetch fails", () => {
+    const useStateSpy = vi.spyOn(React, "useState");
+    useStateSpy.mockImplementationOnce(() => [
+      true,
+      vi.fn(),
+    ] as [boolean, React.Dispatch<React.SetStateAction<boolean>>]);
+
+    try {
+      queryMocks.useWorkboard.mockReturnValue({
+        data: {
+          subscribers: { total: 0, items: [] },
+          activeSpenders: { total: 0, items: [] },
+          inactiveSpenders: { total: 0, items: [] },
+          snoozed: { total: 0, items: [] },
+        },
+        isLoading: false,
+        isError: false,
+        error: undefined,
+      });
+      queryMocks.useWorkboardPresence.mockReturnValue({
+        data: {
+          updatedAt: "2026-03-30T11:58:00.000Z",
+          bestEffort: true,
+          activeNow: {
+            total: 1,
+            items: [{
+              fanId: 301,
+              fan: {
+                platformUserId: "presence-active",
+                pageAlias: "Presence Active",
+                username: "presence_active",
+                displayName: "Presence Active",
+              },
+              presence: {
+                lastSeenAt: "2026-03-30T11:50:00.000Z",
+                observedAt: "2026-03-30T11:58:00.000Z",
+                source: "fansly_followers_last_seen",
+              },
+              ltv: {
+                creatorNetAmountMills: 240000,
+              },
+              isSubscriber: true,
+              platformConversationId: "conversation-301",
+              lastTransactionAt: "2026-03-30T11:00:00.000Z",
+            }],
+          },
+          recentlyActive: {
+            total: 0,
+            items: [],
+          },
+        },
+        isLoading: false,
+        isError: true,
+        error: new Error("presence refetch failed"),
+      });
+
+      const html = renderPage();
+
+      expect(html).toContain("Presence Active");
+      expect(html).not.toContain("Presence unavailable right now.");
+    } finally {
+      useStateSpy.mockRestore();
+    }
   });
 
   it("counts unique actionable fans when the spender tab includes the full spender pool", () => {

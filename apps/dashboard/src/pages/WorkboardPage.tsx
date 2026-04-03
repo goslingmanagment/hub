@@ -518,7 +518,7 @@ export function WorkboardPage() {
           onToggle={() => setIsPresenceOpen((current) => !current)}
           updatedAt={presenceQuery.data?.updatedAt ?? null}
           loading={presenceQuery.isLoading}
-          unavailable={presenceQuery.isError}
+          unavailable={presenceQuery.isError && !presenceQuery.data}
           activeNow={activeNowPresenceVms}
           activeNowTotal={presenceQuery.data?.activeNow.total ?? 0}
           recentlyActive={recentlyActivePresenceVms}
