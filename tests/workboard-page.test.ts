@@ -1,4 +1,3 @@
-import * as React from "react";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,8 +12,15 @@ const queryMocks = vi.hoisted(() => ({
   useWorkboardSnooze: vi.fn(),
   useWorkboardUnsnooze: vi.fn(),
 }));
+const presencePanelMock = vi.hoisted(() => vi.fn((props: {
+  isOpen: boolean;
+  unavailable: boolean;
+}) => `Presence ${props.isOpen ? "Скрыть" : "Показать"}${props.unavailable ? " Presence unavailable right now." : ""}`));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
+vi.mock("../apps/dashboard/src/components/page/workboard/PresencePanel.tsx", () => ({
+  PresencePanel: presencePanelMock,
+}));
 
 import { WorkboardPage } from "../apps/dashboard/src/pages/WorkboardPage.tsx";
 
@@ -114,6 +120,7 @@ describe("WorkboardPage", () => {
     queryMocks.useWorkboardPresence.mockReset();
     queryMocks.useWorkboardSnooze.mockReset();
     queryMocks.useWorkboardUnsnooze.mockReset();
+    presencePanelMock.mockClear();
 
     queryMocks.useWorkboard.mockReturnValue({
       data: undefined,
@@ -311,69 +318,63 @@ describe("WorkboardPage", () => {
     expect(html).not.toContain("Ошибка загрузки");
   });
 
-  it("keeps stale presence data visible when a background refetch fails", () => {
-    const useStateSpy = vi.spyOn(React, "useState");
-    useStateSpy.mockImplementationOnce(() => [
-      true,
-      vi.fn(),
-    ] as [boolean, React.Dispatch<React.SetStateAction<boolean>>]);
-
-    try {
-      queryMocks.useWorkboard.mockReturnValue({
-        data: {
-          subscribers: { total: 0, items: [] },
-          activeSpenders: { total: 0, items: [] },
-          inactiveSpenders: { total: 0, items: [] },
-          snoozed: { total: 0, items: [] },
+  it("keeps stale presence data available when a background refetch fails", () => {
+    queryMocks.useWorkboard.mockReturnValue({
+      data: {
+        subscribers: { total: 0, items: [] },
+        activeSpenders: { total: 0, items: [] },
+        inactiveSpenders: { total: 0, items: [] },
+        snoozed: { total: 0, items: [] },
+      },
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    });
+    queryMocks.useWorkboardPresence.mockReturnValue({
+      data: {
+        updatedAt: "2026-03-30T11:58:00.000Z",
+        bestEffort: true,
+        activeNow: {
+          total: 1,
+          items: [{
+            fanId: 301,
+            fan: {
+              platformUserId: "presence-active",
+              pageAlias: "Presence Active",
+              username: "presence_active",
+              displayName: "Presence Active",
+            },
+            presence: {
+              lastSeenAt: "2026-03-30T11:50:00.000Z",
+              observedAt: "2026-03-30T11:58:00.000Z",
+              source: "fansly_followers_last_seen",
+            },
+            ltv: {
+              creatorNetAmountMills: 240000,
+            },
+            isSubscriber: true,
+            platformConversationId: "conversation-301",
+            lastTransactionAt: "2026-03-30T11:00:00.000Z",
+          }],
         },
-        isLoading: false,
-        isError: false,
-        error: undefined,
-      });
-      queryMocks.useWorkboardPresence.mockReturnValue({
-        data: {
-          updatedAt: "2026-03-30T11:58:00.000Z",
-          bestEffort: true,
-          activeNow: {
-            total: 1,
-            items: [{
-              fanId: 301,
-              fan: {
-                platformUserId: "presence-active",
-                pageAlias: "Presence Active",
-                username: "presence_active",
-                displayName: "Presence Active",
-              },
-              presence: {
-                lastSeenAt: "2026-03-30T11:50:00.000Z",
-                observedAt: "2026-03-30T11:58:00.000Z",
-                source: "fansly_followers_last_seen",
-              },
-              ltv: {
-                creatorNetAmountMills: 240000,
-              },
-              isSubscriber: true,
-              platformConversationId: "conversation-301",
-              lastTransactionAt: "2026-03-30T11:00:00.000Z",
-            }],
-          },
-          recentlyActive: {
-            total: 0,
-            items: [],
-          },
+        recentlyActive: {
+          total: 0,
+          items: [],
         },
-        isLoading: false,
-        isError: true,
-        error: new Error("presence refetch failed"),
-      });
+      },
+      isLoading: false,
+      isError: true,
+      error: new Error("presence refetch failed"),
+    });
 
-      const html = renderPage();
+    renderPage();
 
-      expect(html).toContain("Presence Active");
-      expect(html).not.toContain("Presence unavailable right now.");
-    } finally {
-      useStateSpy.mockRestore();
-    }
+    const presenceProps = presencePanelMock.mock.calls.at(-1)?.[0];
+    expect(presenceProps).toMatchObject({
+      unavailable: false,
+      activeNowTotal: 1,
+    });
+    expect(presenceProps?.activeNow[0]?.fanLabel).toBe("Presence Active");
   });
 
   it("counts unique actionable fans when the spender tab includes the full spender pool", () => {
