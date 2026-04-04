@@ -15,6 +15,10 @@ const queryMocks = vi.hoisted(() => ({
 const presencePanelMock = vi.hoisted(() => vi.fn((props: {
   isOpen: boolean;
   unavailable: boolean;
+  activeNow: Array<{
+    fanLabel: string;
+  }>;
+  activeNowTotal: number;
 }) => `Presence ${props.isOpen ? "Скрыть" : "Показать"}${props.unavailable ? " Presence unavailable right now." : ""}`));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
@@ -374,7 +378,7 @@ describe("WorkboardPage", () => {
       unavailable: false,
       activeNowTotal: 1,
     });
-    expect(presenceProps?.activeNow[0]?.fanLabel).toBe("Presence Active");
+    expect(presenceProps?.activeNow?.[0]?.fanLabel).toBe("Presence Active");
   });
 
   it("counts unique actionable fans when the spender tab includes the full spender pool", () => {
