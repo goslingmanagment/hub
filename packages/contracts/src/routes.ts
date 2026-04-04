@@ -1360,12 +1360,21 @@ export const aiUsageTopFeatureSchema = z.object({
   sharePct: z.number().nonnegative(),
 });
 
+export const aiUsageFeatureBreakdownSchema = z.object({
+  feature: aiUsageFeatureEnum,
+  requestCount: z.number().int().nonnegative(),
+  sharePct: z.number().nonnegative(),
+  tokenCounts: aiUsageTokenCountsSchema,
+  regenerateRatePct: z.number().nonnegative(),
+});
+
 export const adminChatterUsageRowSchema = z.object({
   userId: intId,
   username: z.string(),
   totalGenerations: z.number().int().nonnegative(),
   tokenCounts: aiUsageTokenCountsSchema,
   topFeature: aiUsageTopFeatureSchema.nullable(),
+  featureBreakdown: z.array(aiUsageFeatureBreakdownSchema),
   regenerateRatePct: z.number().nonnegative(),
   warning: z.boolean(),
 });

@@ -1121,6 +1121,7 @@
                             "help-me",
                             "fan-summary",
                             "chat-review",
+                            "scan",
                             "ping",
                             "hi-greeting"
                           ]
@@ -25024,6 +25025,7 @@
                                       "help-me",
                                       "fan-summary",
                                       "chat-review",
+                                      "scan",
                                       "ping",
                                       "hi-greeting"
                                     ]
@@ -25050,6 +25052,86 @@
                               }
                             ]
                           },
+                          "featureBreakdown": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "feature": {
+                                  "type": "string",
+                                  "enum": [
+                                    "fast-reply",
+                                    "improve-draft",
+                                    "help-me",
+                                    "fan-summary",
+                                    "chat-review",
+                                    "scan",
+                                    "ping",
+                                    "hi-greeting"
+                                  ]
+                                },
+                                "requestCount": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "sharePct": {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                "tokenCounts": {
+                                  "type": "object",
+                                  "properties": {
+                                    "input": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "output": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "cacheWrite": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "cacheRead": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "cacheTotal": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "input",
+                                    "output",
+                                    "cacheWrite",
+                                    "cacheRead",
+                                    "cacheTotal"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "regenerateRatePct": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "feature",
+                                "requestCount",
+                                "sharePct",
+                                "tokenCounts",
+                                "regenerateRatePct"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "regenerateRatePct": {
                             "type": "number",
                             "minimum": 0
@@ -25064,6 +25146,7 @@
                           "totalGenerations",
                           "tokenCounts",
                           "topFeature",
+                          "featureBreakdown",
                           "regenerateRatePct",
                           "warning"
                         ],

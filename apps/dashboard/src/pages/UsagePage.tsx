@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import type { AdminChatterUsageResponse } from "@agency_hub_core/contracts";
-import { toast } from "sonner";
 import { useAdminChatterUsage } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 
@@ -10,175 +9,224 @@ const FEATURE_LABELS: Record<string, string> = {
   "help-me": "Help Me",
   "fan-summary": "Fan Summary",
   "chat-review": "Chat Review",
+  scan: "Scan",
   ping: "Ping",
   "hi-greeting": "Hi Greeting",
 };
 
 type UsageRow = AdminChatterUsageResponse["rows"][number];
 
-function formatInteger(value: number) {
-  return value.toLocaleString();
+function formatCompact(value: number): string {
+  if (value >= 1_000_000) {
+    const m = value / 1_000_000;
+    return m >= 10 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
+  }
+  if (value >= 1_000) {
+    const k = value / 1_000;
+    return k >= 10 ? `${Math.round(k)}K` : `${k.toFixed(1)}K`;
+  }
+  return String(value);
 }
 
-function formatPercent(value: number) {
+function formatPercent(value: number): string {
   const rounded = Math.round(value * 10) / 10;
-  return Number.isInteger(rounded) ? `${rounded.toFixed(0)}%` : `${rounded.toFixed(1)}%`;
+  return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`;
 }
 
-function formatFeatureLabel(feature: string) {
+function formatFeatureLabel(feature: string): string {
   return FEATURE_LABELS[feature] ?? feature;
 }
 
-function formatTopFeature(topFeature: UsageRow["topFeature"]) {
-  if (!topFeature) {
-    return "\u2014";
-  }
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
-  return `${formatFeatureLabel(topFeature.feature)} (${formatPercent(topFeature.sharePct)})`;
+function getFeatureCount(row: UsageRow, feature: string): number {
+  return row.featureBreakdown.find((f) => f.feature === feature)?.requestCount ?? 0;
 }
 
 export function UsagePage() {
-  const [submittedRange, setSubmittedRange] = useState<{ from?: string; to?: string } | null>(null);
-  const { data, isLoading, isError } = useAdminChatterUsage(submittedRange ?? {});
-  const [draftFrom, setDraftFrom] = useState(() => data?.range.from ?? "");
-  const [draftTo, setDraftTo] = useState(() => data?.range.to ?? "");
-  const [didHydrateRange, setDidHydrateRange] = useState(Boolean(data?.range));
+  const [selectedDate, setSelectedDate] = useState(todayISO);
+  const [expandedUsers, setExpandedUsers] = useState<Set<number>>(new Set());
 
-  useEffect(() => {
-    if (didHydrateRange || !data?.range) {
-      return;
+  const { data, isLoading, isError } = useAdminChatterUsage({
+    from: selectedDate,
+    to: selectedDate,
+  });
+
+  const rows = data?.rows ?? [];
+  const activeRows = rows.filter((r) => r.totalGenerations > 0);
+
+  const activeFeatures = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const row of activeRows) {
+      for (const fb of row.featureBreakdown) {
+        if (fb.requestCount > 0) {
+          totals.set(fb.feature, (totals.get(fb.feature) ?? 0) + fb.requestCount);
+        }
+      }
     }
+    return [...totals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([feature]) => feature);
+  }, [activeRows]);
 
-    setDraftFrom(data.range.from);
-    setDraftTo(data.range.to);
-    setDidHydrateRange(true);
-  }, [data, didHydrateRange]);
-
-  function handleApply() {
-    if (!draftFrom || !draftTo) {
-      toast.error("Select both from and to dates");
-      return;
-    }
-
-    if (draftFrom > draftTo) {
-      toast.error("From date must be on or before the to date");
-      return;
-    }
-
-    setSubmittedRange({ from: draftFrom, to: draftTo });
+  function toggleExpanded(userId: number) {
+    setExpandedUsers((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
   }
 
-  if (isLoading || !data) {
-    return isLoading ? (
-      <StatusPanel title="Loading usage" description="Fetching chatter AI usage for the selected period." />
-    ) : isError ? (
-      <StatusPanel title="Usage failed to load" description="The chatter AI usage report could not be fetched." tone="error" />
-    ) : (
-      <StatusPanel title="Usage unavailable" description="The chatter AI usage report did not return data." tone="error" />
+  if (isLoading) {
+    return <StatusPanel title="Loading usage" description="Fetching chatter AI usage." />;
+  }
+
+  if (isError) {
+    return (
+      <StatusPanel title="Usage failed to load" description="Could not fetch usage report." tone="error" />
     );
   }
 
-  const rows = data.rows ?? [];
+  if (!data) {
+    return <StatusPanel title="No data" description="The report returned no data." tone="error" />;
+  }
+
+  const colCount = activeFeatures.length + 3;
 
   return (
     <div>
-      <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div className="mb-5 flex items-end justify-between">
         <div>
           <h1 className="text-xl font-extrabold text-text-primary">Usage</h1>
-          <p className="mt-1 text-sm text-text-muted">
-            AI generations and token usage by chatter for the selected Moscow date range.
-          </p>
+          <p className="mt-1 text-sm text-text-muted">Daily AI usage by chatter and feature.</p>
         </div>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] font-semibold uppercase tracking-wider text-text-muted">From</span>
-            <input
-              type="date"
-              value={draftFrom}
-              onChange={(event) => setDraftFrom(event.target.value)}
-              className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] font-semibold uppercase tracking-wider text-text-muted">To</span>
-            <input
-              type="date"
-              value={draftTo}
-              onChange={(event) => setDraftTo(event.target.value)}
-              className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={handleApply}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:opacity-90"
-          >
-            Apply
-          </button>
-        </div>
+        <input
+          type="date"
+          value={selectedDate}
+          onChange={(e) => {
+            setSelectedDate(e.target.value);
+            setExpandedUsers(new Set());
+          }}
+          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent"
+        />
       </div>
 
       <section className="overflow-hidden rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
-              {["Name", "Total Generations", "Input Tokens", "Output Tokens", "Cache Tokens", "Top Feature", "Regenerate Rate"].map((column) => (
+              <th className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted">
+                Name
+              </th>
+              {activeFeatures.map((feature) => (
                 <th
-                  key={column}
-                  className={`px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted ${
-                    column === "Name" || column === "Top Feature" ? "text-left" : "text-right"
-                  }`}
+                  key={feature}
+                  className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted"
                 >
-                  {column}
+                  {formatFeatureLabel(feature)}
                 </th>
               ))}
+              <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
+                Total
+              </th>
+              <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
+                Regen
+              </th>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
+            {activeRows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No chatters found.
+                <td colSpan={colCount} className="px-4 py-8 text-center text-sm text-text-muted">
+                  No activity for this day.
                 </td>
               </tr>
             )}
-            {rows.map((row) => (
-              <tr
-                key={row.userId}
-                className={`border-t border-border ${
-                  row.warning ? "bg-warning/[0.06]" : "transition-colors hover:bg-hover"
-                }`}
-              >
-                <td className="px-4 py-3 text-sm font-medium text-text-primary">{row.username}</td>
-                <td className="px-4 py-3 text-right text-sm tabular-nums text-text-secondary">
-                  {formatInteger(row.totalGenerations)}
-                </td>
-                <td className="px-4 py-3 text-right text-sm tabular-nums text-text-secondary">
-                  {formatInteger(row.tokenCounts.input)}
-                </td>
-                <td className="px-4 py-3 text-right text-sm tabular-nums text-text-secondary">
-                  {formatInteger(row.tokenCounts.output)}
-                </td>
-                <td className="px-4 py-3 text-right text-sm tabular-nums text-text-secondary">
-                  {formatInteger(row.tokenCounts.cacheTotal)}
-                </td>
-                <td className="px-4 py-3 text-sm text-text-secondary">
-                  {formatTopFeature(row.topFeature)}
-                </td>
-                <td className="px-4 py-3 text-right text-sm tabular-nums">
-                  <div className="flex items-center justify-end gap-2">
-                    <span className={row.warning ? "font-semibold text-warning-dark" : "text-text-secondary"}>
-                      {formatPercent(row.regenerateRatePct)}
-                    </span>
-                    {row.warning && (
-                      <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-warning-dark">
-                        High
+            {activeRows.map((row) => {
+              const isExpanded = expandedUsers.has(row.userId);
+              return (
+                <Fragment key={row.userId}>
+                  <tr
+                    onClick={() => toggleExpanded(row.userId)}
+                    className={`cursor-pointer border-t border-border transition-colors hover:bg-hover ${
+                      row.warning ? "bg-warning/[0.06]" : ""
+                    }`}
+                  >
+                    <td className="px-4 py-3 text-sm font-medium text-text-primary">
+                      <span className="mr-1.5 inline-block w-3 text-text-muted">
+                        {isExpanded ? "▾" : "▸"}
                       </span>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
+                      {row.username}
+                    </td>
+                    {activeFeatures.map((feature) => {
+                      const count = getFeatureCount(row, feature);
+                      return (
+                        <td
+                          key={feature}
+                          className="px-4 py-3 text-right text-sm tabular-nums text-text-secondary"
+                        >
+                          {count > 0 ? count : "–"}
+                        </td>
+                      );
+                    })}
+                    <td className="px-4 py-3 text-right text-sm font-semibold tabular-nums text-text-primary">
+                      {row.totalGenerations}
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm tabular-nums">
+                      <span className={row.warning ? "font-semibold text-warning-dark" : "text-text-secondary"}>
+                        {formatPercent(row.regenerateRatePct)}
+                      </span>
+                      {row.warning && (
+                        <span className="ml-1.5 inline-block rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none text-warning-dark">
+                          !
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                  {isExpanded && (
+                    <tr className="border-t border-border-light">
+                      <td colSpan={colCount} className="bg-hover-alt/50 px-4 py-3">
+                        <div className="space-y-1 text-[13px] text-text-secondary">
+                          {row.featureBreakdown.map((fb, i) => (
+                            <div key={fb.feature} className="flex items-baseline gap-2">
+                              <span className="w-3 text-center text-text-muted">
+                                {i === row.featureBreakdown.length - 1 ? "└" : "├"}
+                              </span>
+                              <span className="min-w-[120px] font-medium text-text-primary">
+                                {formatFeatureLabel(fb.feature)}
+                              </span>
+                              <span className="tabular-nums">
+                                {formatCompact(fb.tokenCounts.input)} in
+                                {" · "}
+                                {formatCompact(fb.tokenCounts.output)} out
+                                {" · "}
+                                {formatCompact(fb.tokenCounts.cacheTotal)} cache
+                              </span>
+                              {fb.regenerateRatePct > 0 && (
+                                <span className="tabular-nums text-text-muted">
+                                  · {formatPercent(fb.regenerateRatePct)} regen
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                          <div className="mt-1.5 border-t border-border-light pt-1.5 text-[12px] tabular-nums text-text-muted">
+                            Total: {formatCompact(row.tokenCounts.input)} in
+                            {" · "}
+                            {formatCompact(row.tokenCounts.output)} out
+                            {" · "}
+                            {formatCompact(row.tokenCounts.cacheTotal)} cache
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </section>

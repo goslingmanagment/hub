@@ -417,7 +417,7 @@ export interface paths {
                         events: {
                             clientEventId: string;
                             /** @enum {string} */
-                            feature: "fast-reply" | "improve-draft" | "help-me" | "fan-summary" | "chat-review" | "ping" | "hi-greeting";
+                            feature: "fast-reply" | "improve-draft" | "help-me" | "fan-summary" | "chat-review" | "scan" | "ping" | "hi-greeting";
                             model: string;
                             inputTokens: number;
                             outputTokens: number;
@@ -6676,10 +6676,24 @@ export interface paths {
                                 };
                                 topFeature: {
                                     /** @enum {string} */
-                                    feature: "fast-reply" | "improve-draft" | "help-me" | "fan-summary" | "chat-review" | "ping" | "hi-greeting";
+                                    feature: "fast-reply" | "improve-draft" | "help-me" | "fan-summary" | "chat-review" | "scan" | "ping" | "hi-greeting";
                                     requestCount: number;
                                     sharePct: number;
                                 } | null;
+                                featureBreakdown: {
+                                    /** @enum {string} */
+                                    feature: "fast-reply" | "improve-draft" | "help-me" | "fan-summary" | "chat-review" | "scan" | "ping" | "hi-greeting";
+                                    requestCount: number;
+                                    sharePct: number;
+                                    tokenCounts: {
+                                        input: number;
+                                        output: number;
+                                        cacheWrite: number;
+                                        cacheRead: number;
+                                        cacheTotal: number;
+                                    };
+                                    regenerateRatePct: number;
+                                }[];
                                 regenerateRatePct: number;
                                 warning: boolean;
                             }[];

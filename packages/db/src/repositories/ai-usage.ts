@@ -43,6 +43,19 @@ export interface ChatterUsageSummaryRow {
     requestCount: number;
     sharePct: number;
   } | null;
+  featureBreakdown: {
+    feature: AiUsageFeature;
+    requestCount: number;
+    sharePct: number;
+    tokenCounts: {
+      input: number;
+      output: number;
+      cacheWrite: number;
+      cacheRead: number;
+      cacheTotal: number;
+    };
+    regenerateRatePct: number;
+  }[];
   regenerateRatePct: number;
   warning: boolean;
 }
@@ -77,6 +90,14 @@ function normalizeFeature(value: unknown, field: string): AiUsageFeature {
   }
 
   throw new Error(`Expected ${field} to be a valid AI usage feature`);
+}
+
+function roundPercentage(numerator: number, denominator: number) {
+  if (denominator === 0) {
+    return 0;
+  }
+
+  return Math.round((numerator / denominator) * 10000) / 100;
 }
 
 export async function insertAiUsageEvents(
@@ -119,7 +140,7 @@ export async function listChatterUsageSummary(
   db: Database,
   input: ListChatterUsageSummaryInput,
 ): Promise<ChatterUsageSummaryRow[]> {
-  const result = await db.execute(sql`
+  const totalsResult = await db.execute(sql`
     with chatter_users as (
       select ${users.id} as "userId",
              ${users.username} as username
@@ -151,23 +172,6 @@ export async function listChatterUsageSummary(
       from chatter_users cu
       left join filtered_events fe on fe."userId" = cu."userId"
       group by cu."userId", cu.username
-    ),
-    feature_counts as (
-      select fe."userId",
-             fe.feature,
-             count(fe.id)::int as "requestCount"
-      from filtered_events fe
-      group by fe."userId", fe.feature
-    ),
-    feature_rank as (
-      select fc."userId",
-             fc.feature,
-             fc."requestCount",
-             row_number() over (
-               partition by fc."userId"
-               order by fc."requestCount" desc, fc.feature asc
-             ) as rn
-      from feature_counts fc
     )
     select ut."userId",
            ut.username,
@@ -176,13 +180,6 @@ export async function listChatterUsageSummary(
            ut."outputTokens",
            ut."cacheWriteTokens",
            ut."cacheReadTokens",
-           fr.feature as "topFeature",
-           fr."requestCount" as "topFeatureRequestCount",
-           case
-             when fr.feature is null or ut."totalGenerations" = 0
-               then null
-             else round((fr."requestCount"::numeric / ut."totalGenerations"::numeric) * 100, 2)::double precision
-           end as "topFeatureSharePct",
            case
              when ut."totalGenerations" = 0
                then 0::double precision
@@ -194,24 +191,40 @@ export async function listChatterUsageSummary(
              else ((ut."regenerationCount"::double precision / ut."totalGenerations"::double precision) * 100) > 30
            end as warning
     from usage_totals ut
-    left join feature_rank fr
-      on fr."userId" = ut."userId"
-     and fr.rn = 1
     order by ut."totalGenerations" desc, ut.username asc
   `);
 
-  return result.rows.map((row) => {
+  const featureBreakdownResult = await db.execute(sql`
+    with filtered_events as (
+      select ${aiUsageEvents.userId} as "userId",
+             ${aiUsageEvents.feature} as feature,
+             ${aiUsageEvents.inputTokens} as "inputTokens",
+             ${aiUsageEvents.outputTokens} as "outputTokens",
+             ${aiUsageEvents.cacheWriteTokens} as "cacheWriteTokens",
+             ${aiUsageEvents.cacheReadTokens} as "cacheReadTokens",
+             ${aiUsageEvents.isRegeneration} as "isRegeneration"
+      from ${aiUsageEvents}
+      where ${aiUsageEvents.completedAt} >= ${input.from}
+        and ${aiUsageEvents.completedAt} < ${input.toExclusive}
+    )
+    select fe."userId",
+           fe.feature,
+           count(*)::int as "requestCount",
+           coalesce(sum(fe."inputTokens"), 0)::bigint as "inputTokens",
+           coalesce(sum(fe."outputTokens"), 0)::bigint as "outputTokens",
+           coalesce(sum(fe."cacheWriteTokens"), 0)::bigint as "cacheWriteTokens",
+           coalesce(sum(fe."cacheReadTokens"), 0)::bigint as "cacheReadTokens",
+           count(*) filter (where fe."isRegeneration")::int as "regenerationCount"
+    from filtered_events fe
+    group by fe."userId", fe.feature
+    order by fe."userId" asc, "requestCount" desc, fe.feature asc
+  `);
+
+  const summaries = totalsResult.rows.map((row) => {
     const inputTokens = normalizeNumber((row as any).inputTokens, "inputTokens");
     const outputTokens = normalizeNumber((row as any).outputTokens, "outputTokens");
     const cacheWriteTokens = normalizeNumber((row as any).cacheWriteTokens, "cacheWriteTokens");
     const cacheReadTokens = normalizeNumber((row as any).cacheReadTokens, "cacheReadTokens");
-    const topFeature = (row as any).topFeature === null || (row as any).topFeature === undefined
-      ? null
-      : {
-        feature: normalizeFeature((row as any).topFeature, "topFeature"),
-        requestCount: normalizeNumber((row as any).topFeatureRequestCount, "topFeatureRequestCount"),
-        sharePct: normalizeNumber((row as any).topFeatureSharePct, "topFeatureSharePct"),
-      };
 
     return {
       userId: normalizeNumber((row as any).userId, "userId"),
@@ -224,9 +237,61 @@ export async function listChatterUsageSummary(
         cacheRead: cacheReadTokens,
         cacheTotal: cacheWriteTokens + cacheReadTokens,
       },
-      topFeature,
       regenerateRatePct: normalizeNumber((row as any).regenerateRatePct, "regenerateRatePct"),
       warning: Boolean((row as any).warning),
+    };
+  });
+
+  const totalGenerationsByUser = new Map(
+    summaries.map((summary) => [summary.userId, summary.totalGenerations]),
+  );
+  const featureBreakdownByUser = new Map<
+    number,
+    ChatterUsageSummaryRow["featureBreakdown"]
+  >();
+
+  for (const row of featureBreakdownResult.rows) {
+    const userId = normalizeNumber((row as any).userId, "userId");
+    const requestCount = normalizeNumber((row as any).requestCount, "requestCount");
+    const inputTokens = normalizeNumber((row as any).inputTokens, "inputTokens");
+    const outputTokens = normalizeNumber((row as any).outputTokens, "outputTokens");
+    const cacheWriteTokens = normalizeNumber((row as any).cacheWriteTokens, "cacheWriteTokens");
+    const cacheReadTokens = normalizeNumber((row as any).cacheReadTokens, "cacheReadTokens");
+    const regenerationCount = normalizeNumber((row as any).regenerationCount, "regenerationCount");
+    const totalGenerations = totalGenerationsByUser.get(userId) ?? 0;
+    const breakdown = featureBreakdownByUser.get(userId) ?? [];
+
+    breakdown.push({
+      feature: normalizeFeature((row as any).feature, "feature"),
+      requestCount,
+      sharePct: roundPercentage(requestCount, totalGenerations),
+      tokenCounts: {
+        input: inputTokens,
+        output: outputTokens,
+        cacheWrite: cacheWriteTokens,
+        cacheRead: cacheReadTokens,
+        cacheTotal: cacheWriteTokens + cacheReadTokens,
+      },
+      regenerateRatePct: roundPercentage(regenerationCount, requestCount),
+    });
+
+    featureBreakdownByUser.set(userId, breakdown);
+  }
+
+  return summaries.map((summary) => {
+    const featureBreakdown = featureBreakdownByUser.get(summary.userId) ?? [];
+    const topFeature = featureBreakdown[0]
+      ? {
+        feature: featureBreakdown[0].feature,
+        requestCount: featureBreakdown[0].requestCount,
+        sharePct: featureBreakdown[0].sharePct,
+      }
+      : null;
+
+    return {
+      ...summary,
+      topFeature,
+      featureBreakdown,
     } satisfies ChatterUsageSummaryRow;
   });
 }

@@ -115,6 +115,7 @@ export const aiUsageFeatures = [
   "help-me",
   "fan-summary",
   "chat-review",
+  "scan",
   "ping",
   "hi-greeting",
 ] as const;
