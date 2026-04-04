@@ -482,11 +482,12 @@ function parseOnlyFansIncrementalResumeState(value: unknown): ParsedOnlyFansIncr
     return null;
   }
 
-  const parsedState = {
+  const phase: OnlyFansIncrementalResumeState["phase"] = state.phase;
+  const parsedState: Omit<OnlyFansIncrementalResumeState, "scanToken"> = {
     mode: "incremental",
     completed: false,
     provider: "onlyfans",
-    phase: state.phase,
+    phase,
     start,
     end,
     cursor,
@@ -502,16 +503,18 @@ function parseOnlyFansIncrementalResumeState(value: unknown): ParsedOnlyFansIncr
   };
 
   if (scanToken !== null) {
-    return {
+    const parsedStateWithScanToken: OnlyFansIncrementalResumeState = {
       ...parsedState,
       scanToken,
     };
+    return parsedStateWithScanToken;
   }
 
-  return {
+  const legacyState: LegacyOnlyFansIncrementalResumeState = {
     ...parsedState,
     keepTransactionIds: keepTransactionIds ?? [],
   };
+  return legacyState;
 }
 
 function buildOnlyFansIncrementalResumeState(input: {
@@ -565,14 +568,26 @@ function normalizeOnlyFansIncrementalResumeState(
   state: OnlyFansIncrementalResumeState;
 } {
   const legacyKeepTransactionIds = getLegacyOnlyFansKeepTransactionIds(state);
-  const { keepTransactionIds: _keepTransactionIds, ...normalizedState } = state as ParsedOnlyFansIncrementalResumeState & {
-    keepTransactionIds?: string[];
-  };
 
   return {
     legacyKeepTransactionIds,
     state: {
-      ...normalizedState,
+      mode: "incremental",
+      completed: false,
+      provider: "onlyfans",
+      phase: state.phase,
+      start: state.start,
+      end: state.end,
+      cursor: state.cursor,
+      newestSeenAt: state.newestSeenAt,
+      oldestSeenAt: state.oldestSeenAt,
+      dirtyFrom: state.dirtyFrom,
+      processedTransactions: state.processedTransactions,
+      processedChargebacks: state.processedChargebacks,
+      transactionPages: state.transactionPages,
+      chargebackPages: state.chargebackPages,
+      olderThanBoundaryItems: state.olderThanBoundaryItems,
+      olderThanBoundaryPages: state.olderThanBoundaryPages,
       scanToken,
     },
   };
@@ -725,8 +740,8 @@ async function syncOnlyFansTransactionsIncremental(
     new Date(Date.now() - app.config.transactionRescanCapDays * DAY_MS),
     UTC_TIME_ZONE,
   );
-  let state = existingState;
-  if (!state) {
+  let state: OnlyFansIncrementalResumeState;
+  if (!existingState) {
     const start = input.rescanStart ?? (
       earliestRescanStart && earliestRescanStart < rescanCapStart
         ? rescanCapStart
@@ -761,7 +776,7 @@ async function syncOnlyFansTransactionsIncremental(
       scanToken: randomUUID(),
     });
   } else {
-    const normalized = normalizeOnlyFansIncrementalResumeState(state);
+    const normalized = normalizeOnlyFansIncrementalResumeState(existingState);
     state = normalized.state;
 
     if (normalized.legacyKeepTransactionIds.length > 0 || !("scanToken" in existingState)) {

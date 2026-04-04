@@ -498,9 +498,10 @@ describe("sync executor", () => {
   it("fences the lease when heartbeat persistence fails", async () => {
     vi.useFakeTimers();
 
+    const logger = { warn: vi.fn(), error: vi.fn() };
     const app = {
       db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
+      logger,
     } as never;
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
@@ -525,7 +526,7 @@ describe("sync executor", () => {
     expect(telemetryMocks.instances[0]?.recordSkipped).toHaveBeenCalledWith("Page sync lease lost");
     expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
     expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
-    expect(app.logger.warn).toHaveBeenCalledWith(
+    expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         err: expect.any(Error),
         platformAccountId: 55,
