@@ -485,7 +485,7 @@ export async function buildApiServer(appContext: AppContext) {
     };
   });
 
-  server.post("/api/v1/ai-usage:batch", {
+  server.post("/api/v1/ai-usage/batch", {
     schema: routeSchemas.aiUsageBatch,
   }, async (request) => {
     const principal = await requirePrincipal(request);

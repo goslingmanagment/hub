@@ -394,7 +394,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/ai-usage{batch}": {
+    "/api/v1/ai-usage/batch": {
         parameters: {
             query?: never;
             header?: never;
@@ -408,9 +408,7 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: never;
-                path: {
-                    batch: string;
-                };
+                path?: never;
                 cookie?: never;
             };
             requestBody: {

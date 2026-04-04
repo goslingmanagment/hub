@@ -2011,7 +2011,7 @@ describe("api integration", () => {
 
     const response = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers: {
         authorization: `Bearer ${issuedKey.key}`,
       },
@@ -2095,7 +2095,7 @@ describe("api integration", () => {
 
     const unauthenticated = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       payload: {
         events: [{
           clientEventId: "evt-unauth",
@@ -2118,7 +2118,7 @@ describe("api integration", () => {
     const cookie = await loginOwnerCookie(server);
     const sessionAuthenticated = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers: {
         cookie,
       },
@@ -2185,7 +2185,7 @@ describe("api integration", () => {
 
     const firstAnton = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers: {
         authorization: `Bearer ${antonKey.key}`,
       },
@@ -2200,7 +2200,7 @@ describe("api integration", () => {
 
     const secondAnton = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers: {
         authorization: `Bearer ${antonKey.key}`,
       },
@@ -2215,7 +2215,7 @@ describe("api integration", () => {
 
     const boris = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers: {
         authorization: `Bearer ${borisKey.key}`,
       },
@@ -2264,7 +2264,7 @@ describe("api integration", () => {
 
     const invalidFeature = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers,
       payload: {
         events: [{
@@ -2287,7 +2287,7 @@ describe("api integration", () => {
 
     const negativeTokens = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers,
       payload: {
         events: [{
@@ -2310,7 +2310,7 @@ describe("api integration", () => {
 
     const emptyBatch = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers,
       payload: {
         events: [],
@@ -2320,7 +2320,7 @@ describe("api integration", () => {
 
     const oversizedBatch = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers,
       payload: {
         events: Array.from({ length: 101 }, (_, index) => ({
@@ -2370,7 +2370,7 @@ describe("api integration", () => {
 
     const batch = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers: {
         authorization: `Bearer ${antonKey.key}`,
       },
@@ -2497,7 +2497,7 @@ describe("api integration", () => {
 
     const batch = await server.inject({
       method: "POST",
-      url: "/api/v1/ai-usage:batch",
+      url: "/api/v1/ai-usage/batch",
       headers: {
         authorization: `Bearer ${antonKey.key}`,
       },

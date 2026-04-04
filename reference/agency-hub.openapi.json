@@ -1088,7 +1088,7 @@
         }
       }
     },
-    "/api/v1/ai-usage{batch}": {
+    "/api/v1/ai-usage/batch": {
       "post": {
         "summary": "Ingest a batch of chatter AI usage events",
         "tags": [
@@ -1210,16 +1210,6 @@
         "security": [
           {
             "bearerAuth": []
-          }
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string"
-            },
-            "in": "path",
-            "name": "batch",
-            "required": true
           }
         ],
         "responses": {
