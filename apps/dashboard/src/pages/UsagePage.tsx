@@ -1,18 +1,24 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useState } from "react";
 import type { AdminChatterUsageResponse } from "@agency_hub_core/contracts";
 import { useAdminChatterUsage } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { UsageDateNav } from "@/components/shared/UsageDateNav";
+import { type UsagePeriod, usageRange, shiftAnchor, usageDateLabel } from "@/lib/format";
 
-const FEATURE_LABELS: Record<string, string> = {
-  "fast-reply": "Fast Reply",
-  "improve-draft": "Improve Draft",
-  "help-me": "Help Me",
-  "fan-summary": "Fan Summary",
-  "chat-review": "Chat Review",
-  scan: "Scan",
-  ping: "Ping",
-  "hi-greeting": "Hi Greeting",
-};
+const FEATURE_ORDER: { key: string; label: string }[] = [
+  { key: "fast-reply", label: "Fast Reply" },
+  { key: "fan-summary", label: "Fan Summary" },
+  { key: "improve-draft", label: "Improve Draft" },
+  { key: "help-me", label: "Help Me" },
+  { key: "chat-review", label: "Chat Review" },
+  { key: "scan", label: "Scan" },
+  { key: "ping", label: "Ping" },
+  { key: "hi-greeting", label: "Hi Greeting" },
+];
+
+const FEATURE_LABELS: Record<string, string> = Object.fromEntries(
+  FEATURE_ORDER.map((f) => [f.key, f.label]),
+);
 
 type UsageRow = AdminChatterUsageResponse["rows"][number];
 
@@ -46,31 +52,27 @@ function getFeatureCount(row: UsageRow, feature: string): number {
   return row.featureBreakdown.find((f) => f.feature === feature)?.requestCount ?? 0;
 }
 
+const SUBTITLE: Record<UsagePeriod, string> = {
+  day: "Daily AI usage by chatter and feature.",
+  week: "Weekly AI usage by chatter and feature.",
+  month: "Monthly AI usage by chatter and feature.",
+};
+
 export function UsagePage() {
-  const [selectedDate, setSelectedDate] = useState(todayISO);
+  const [mode, setMode] = useState<UsagePeriod>("day");
+  const [anchor, setAnchor] = useState(todayISO);
   const [expandedUsers, setExpandedUsers] = useState<Set<number>>(new Set());
 
-  const { data, isLoading, isError } = useAdminChatterUsage({
-    from: selectedDate,
-    to: selectedDate,
-  });
+  const range = usageRange(anchor, mode);
+  const today = todayISO();
+  const canGoNext = range.to < today;
+
+  const { data, isLoading, isError } = useAdminChatterUsage(range);
 
   const rows = data?.rows ?? [];
   const activeRows = rows.filter((r) => r.totalGenerations > 0);
 
-  const activeFeatures = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const row of activeRows) {
-      for (const fb of row.featureBreakdown) {
-        if (fb.requestCount > 0) {
-          totals.set(fb.feature, (totals.get(fb.feature) ?? 0) + fb.requestCount);
-        }
-      }
-    }
-    return [...totals.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([feature]) => feature);
-  }, [activeRows]);
+  const visibleFeatures = FEATURE_ORDER.map((f) => f.key);
 
   function toggleExpanded(userId: number) {
     setExpandedUsers((prev) => {
@@ -95,23 +97,31 @@ export function UsagePage() {
     return <StatusPanel title="No data" description="The report returned no data." tone="error" />;
   }
 
-  const colCount = activeFeatures.length + 3;
+  const colCount = visibleFeatures.length + 3;
 
   return (
     <div>
       <div className="mb-5 flex items-end justify-between">
         <div>
           <h1 className="text-xl font-extrabold text-text-primary">Usage</h1>
-          <p className="mt-1 text-sm text-text-muted">Daily AI usage by chatter and feature.</p>
+          <p className="mt-1 text-sm text-text-muted">{SUBTITLE[mode]}</p>
         </div>
-        <input
-          type="date"
-          value={selectedDate}
-          onChange={(e) => {
-            setSelectedDate(e.target.value);
+        <UsageDateNav
+          mode={mode}
+          onModeChange={(m) => {
+            setMode(m);
             setExpandedUsers(new Set());
           }}
-          className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent"
+          label={usageDateLabel(anchor, mode)}
+          onPrev={() => {
+            setAnchor(shiftAnchor(anchor, mode, -1));
+            setExpandedUsers(new Set());
+          }}
+          onNext={() => {
+            setAnchor(shiftAnchor(anchor, mode, 1));
+            setExpandedUsers(new Set());
+          }}
+          canGoNext={canGoNext}
         />
       </div>
 
@@ -122,7 +132,7 @@ export function UsagePage() {
               <th className="px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted">
                 Name
               </th>
-              {activeFeatures.map((feature) => (
+              {visibleFeatures.map((feature) => (
                 <th
                   key={feature}
                   className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted"
@@ -162,7 +172,7 @@ export function UsagePage() {
                       </span>
                       {row.username}
                     </td>
-                    {activeFeatures.map((feature) => {
+                    {visibleFeatures.map((feature) => {
                       const count = getFeatureCount(row, feature);
                       return (
                         <td
