@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const queryMocks = vi.hoisted(() => ({
   useAdminChatterUsage: vi.fn(),
@@ -15,6 +15,10 @@ function renderPage() {
 }
 
 describe("UsagePage", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     queryMocks.useAdminChatterUsage.mockReset();
   });
@@ -141,5 +145,36 @@ describe("UsagePage", () => {
 
     expect(html).toContain("active");
     expect(html).not.toContain("idle");
+  });
+
+  it("uses the Moscow business date when choosing the default range", () => {
+    const previousTz = process.env.TZ;
+    process.env.TZ = "UTC";
+
+    try {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-04-04T21:30:00.000Z"));
+      queryMocks.useAdminChatterUsage.mockReturnValue({
+        data: {
+          range: { from: "2026-04-05", to: "2026-04-05", timeZone: "Europe/Moscow" },
+          rows: [],
+        },
+        isLoading: false,
+        isError: false,
+      });
+
+      renderPage();
+
+      expect(queryMocks.useAdminChatterUsage).toHaveBeenCalledWith({
+        from: "2026-04-05",
+        to: "2026-04-05",
+      });
+    } finally {
+      if (previousTz === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previousTz;
+      }
+    }
   });
 });

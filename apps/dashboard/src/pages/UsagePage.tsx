@@ -1,5 +1,6 @@
 import { Fragment, useState } from "react";
 import type { AdminChatterUsageResponse } from "@agency_hub_core/contracts";
+import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import { useAdminChatterUsage } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { UsageDateNav } from "@/components/shared/UsageDateNav";
@@ -44,8 +45,7 @@ function formatFeatureLabel(feature: string): string {
 }
 
 function todayISO(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return toBusinessDate(new Date(), MOSCOW_TIME_ZONE);
 }
 
 function getFeatureCount(row: UsageRow, feature: string): number {
