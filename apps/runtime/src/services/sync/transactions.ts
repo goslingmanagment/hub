@@ -20,6 +20,7 @@ import {
 import { calculateGrossMillsFromNet, toMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import type { SyncChunkBudget, SyncChunkYieldReason } from "./chunk-budget.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
@@ -34,6 +35,160 @@ type ActiveSyncLease = {
   requestSeq: number;
   leaseToken: string;
 };
+
+type FanslyTransactionSyncResult = {
+  satisfied: boolean;
+  yieldReason: SyncChunkYieldReason | null;
+  processed: number;
+  processedTransactions: number;
+  newestSeenAt: Date;
+};
+
+type FanslyTransactionIncrementalState = {
+  mode: "incremental";
+  completed: false;
+  provider: "fansly";
+  phase: "transactions";
+  snapshotEnd: string;
+  after: string | null;
+  lookbackStart: string | null;
+  oldestPendingAt: string | null;
+  rescanCapStart: string;
+  providerReportedTotal: number | null;
+  newestSeenAt: string | null;
+  oldestSeenAt: string | null;
+  dirtyFrom: string | null;
+  processedTransactions: number;
+  transactionPages: number;
+  offset: number;
+  olderThanBoundaryItems: number;
+  olderThanBoundaryPages: number;
+  consecutiveAllOlderPages: number;
+  firstPageOlderThanBoundaryItems: number;
+  earlyStoppedBeyondBoundary: boolean;
+};
+
+type FanslyTransactionProgressState =
+  | FanslyTransactionBackfillState
+  | FanslyTransactionIncrementalState;
+
+type FanslyTransactionPage = Awaited<ReturnType<AppContext["adapter"]["getTransactionsPage"]>>;
+type FanslyTransactionItem = FanslyTransactionPage["items"][number];
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asIsoString(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function asNullableIsoString(value: unknown) {
+  if (value === null) {
+    return null;
+  }
+  return asIsoString(value);
+}
+
+function asNonNegativeInt(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function asNullableNonNegativeInt(value: unknown) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return asNonNegativeInt(value);
+}
+
+function asBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : null;
+}
+
+function parseFanslyTransactionIncrementalState(value: unknown): FanslyTransactionIncrementalState | null {
+  const state = asRecord(value);
+  if (
+    !state ||
+    state.mode !== "incremental" ||
+    state.completed !== false ||
+    state.provider !== "fansly" ||
+    state.phase !== "transactions"
+  ) {
+    return null;
+  }
+
+  const snapshotEnd = asIsoString(state.snapshotEnd);
+  const after = asNullableIsoString(state.after);
+  const lookbackStart = asNullableIsoString(state.lookbackStart);
+  const oldestPendingAt = asNullableIsoString(state.oldestPendingAt);
+  const rescanCapStart = asIsoString(state.rescanCapStart);
+  const providerReportedTotal = asNullableNonNegativeInt(state.providerReportedTotal);
+  const newestSeenAt = asNullableIsoString(state.newestSeenAt);
+  const oldestSeenAt = asNullableIsoString(state.oldestSeenAt);
+  const dirtyFrom = asNullableIsoString(state.dirtyFrom);
+  const processedTransactions = asNonNegativeInt(state.processedTransactions);
+  const transactionPages = asNonNegativeInt(state.transactionPages);
+  const offset = asNonNegativeInt(state.offset);
+  const olderThanBoundaryItems = asNonNegativeInt(state.olderThanBoundaryItems);
+  const olderThanBoundaryPages = asNonNegativeInt(state.olderThanBoundaryPages);
+  const consecutiveAllOlderPages = asNonNegativeInt(state.consecutiveAllOlderPages);
+  const firstPageOlderThanBoundaryItems = asNonNegativeInt(state.firstPageOlderThanBoundaryItems);
+  const earlyStoppedBeyondBoundary = asBoolean(state.earlyStoppedBeyondBoundary);
+
+  if (
+    snapshotEnd === null ||
+    after === undefined ||
+    lookbackStart === undefined ||
+    oldestPendingAt === undefined ||
+    rescanCapStart === null ||
+    providerReportedTotal === undefined ||
+    newestSeenAt === undefined ||
+    oldestSeenAt === undefined ||
+    dirtyFrom === undefined ||
+    processedTransactions === null ||
+    transactionPages === null ||
+    offset === null ||
+    olderThanBoundaryItems === null ||
+    olderThanBoundaryPages === null ||
+    consecutiveAllOlderPages === null ||
+    firstPageOlderThanBoundaryItems === null ||
+    earlyStoppedBeyondBoundary === null
+  ) {
+    return null;
+  }
+
+  return {
+    mode: "incremental",
+    completed: false,
+    provider: "fansly",
+    phase: "transactions",
+    snapshotEnd,
+    after,
+    lookbackStart,
+    oldestPendingAt,
+    rescanCapStart,
+    providerReportedTotal,
+    newestSeenAt,
+    oldestSeenAt,
+    dirtyFrom,
+    processedTransactions,
+    transactionPages,
+    offset,
+    olderThanBoundaryItems,
+    olderThanBoundaryPages,
+    consecutiveAllOlderPages,
+    firstPageOlderThanBoundaryItems,
+    earlyStoppedBeyondBoundary,
+  };
+}
 
 function resolveFanslyCommissionRate(
   destinationTax: number | null,
@@ -119,152 +274,28 @@ async function recordUnknownFanslyTransactionType(
   });
 }
 
-async function syncTransactionsIncremental(
+async function persistFanslyTransactionsPage(
   app: AppContext,
   input: {
     pageLabel: string;
     platformAccountId: number;
     commissionRate: number;
     requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
-    syncRunId: number;
     telemetry: SyncRunTelemetry;
+    activeLease?: ActiveSyncLease;
   },
-  checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
+  items: FanslyTransactionItem[],
+  state: FanslyTransactionProgressState,
+  processedTransactionsThisRun: number,
+  seenUnknownRawTypes: Set<number>,
 ) {
-  const oldestPendingAt = await getOldestPendingTransactionAt(app.db, input.platformAccountId);
-  const lookbackStart = checkpoint?.cursorTimestamp
-    ? new Date(
-      checkpoint.cursorTimestamp.getTime() -
-        app.config.transactionLookbackDays * DAY_MS,
-    )
-    : null;
-  const earliestRescanStart = lookbackStart && oldestPendingAt
-    ? (oldestPendingAt < lookbackStart ? oldestPendingAt : lookbackStart)
-    : (lookbackStart ?? oldestPendingAt);
-  const rescanCapStart = new Date(Date.now() - app.config.transactionRescanCapDays * DAY_MS);
-  const after = earliestRescanStart && earliestRescanStart < rescanCapStart
-    ? rescanCapStart
-    : earliestRescanStart;
-
-  if (oldestPendingAt && oldestPendingAt < rescanCapStart) {
-    app.logger.warn(
-      {
-        pageLabel: input.pageLabel,
-        platformAccountId: input.platformAccountId,
-        oldestPendingAt: oldestPendingAt.toISOString(),
-        rescanCapStart: rescanCapStart.toISOString(),
-      },
-      "Pending transaction is older than transaction rescan cap; clamping rescan window",
-    );
-    await input.telemetry.addAnomaly({
-      code: "rescan_cap_clamped",
-      severity: "warn",
-      message: "Transaction rescan window was clamped by the configured rescan cap",
-      details: {
-        oldestPendingAt: oldestPendingAt.toISOString(),
-        rescanCapStart: rescanCapStart.toISOString(),
-      },
-    });
-  }
-
-  let offset = 0;
-  let processed = 0;
-  let newestSeenAt: Date | null = checkpoint?.cursorTimestamp ?? null;
-  let oldestSeenAt: Date | null = null;
-  let pageCount = 0;
-  let olderThanBoundaryItems = 0;
-  let olderThanBoundaryPages = 0;
-  let consecutiveAllOlderPages = 0;
-  let firstPageOlderThanBoundaryItems = 0;
-  let earlyStoppedBeyondBoundary = false;
-  const collectedItems: Awaited<ReturnType<AppContext["adapter"]["getTransactionsPage"]>>["items"] = [];
-  const seenUnknownRawTypes = new Set<number>();
-  let providerReportedTotal: number | null = null;
-
-  while (true) {
-    await assertOwnedPageSyncLease(app.db);
-    const page = await app.adapter.getTransactionsPage(
-      input.requestContext,
-      { after, limit: 100, offset },
-    );
-    pageCount += 1;
-    providerReportedTotal ??= page.total ?? null;
-
-    await persistRawPayload(app.db, {
-      platformAccountId: input.platformAccountId,
-      syncRunId: input.syncRunId,
-      endpoint: "earnings_transactions",
-      requestParams: { after: after?.toISOString() ?? null, offset, limit: 100 },
-      responsePayload: page.raw,
-      mapperVersion: FANSLY_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: "inserting earnings_transactions raw payload",
-    });
-
-    for (const item of page.items) {
-      const occurredAt = new Date(item.createdAt);
-      collectedItems.push(item);
-
-      if (!oldestSeenAt || occurredAt < oldestSeenAt) {
-        oldestSeenAt = occurredAt;
-      }
-      if (!newestSeenAt || occurredAt > newestSeenAt) {
-        newestSeenAt = occurredAt;
-      }
-    }
-
-    if (after) {
-      const olderItemsInPage = page.items.filter((item) => item.createdAt < after.getTime()).length;
-      olderThanBoundaryItems += olderItemsInPage;
-      if (pageCount === 1) {
-        firstPageOlderThanBoundaryItems = olderItemsInPage;
-      }
-      if (olderItemsInPage > 0 && olderItemsInPage === page.items.length) {
-        olderThanBoundaryPages += 1;
-        consecutiveAllOlderPages += 1;
-      } else {
-        consecutiveAllOlderPages = 0;
-      }
-    }
-
-    processed += page.items.length;
-    if (page.done) {
-      break;
-    }
-
-    // The upstream API returns transactions newest-first. If we see two
-    // consecutive full pages where every item is older than the requested
-    // lower bound, the API is not honoring the `after` filter and all
-    // subsequent pages will only contain even older data. Stop early to
-    // avoid exhaustively scanning the full transaction history.
-    if (after && consecutiveAllOlderPages >= 2) {
-      earlyStoppedBeyondBoundary = true;
-      app.logger.warn(
-        {
-          pageLabel: input.pageLabel,
-          platformAccountId: input.platformAccountId,
-          after: after.toISOString(),
-          pageCount,
-          olderThanBoundaryItems,
-          olderThanBoundaryPages,
-        },
-        "Early-stopping transaction scan: upstream API is not honoring the after filter",
-      );
-      break;
-    }
-
-    offset += 100;
-  }
-
-  let checkpointAfter = null;
-  for (const item of collectedItems) {
+  for (const item of items) {
     await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
   }
+
   const hydratedFans = await lookupHydratedFans(app, {
     requestContext: input.requestContext,
-    platformUserIds: collectedItems
+    platformUserIds: items
       .map((item) => item.correlationAccountId)
       .filter((value): value is string => Boolean(value)),
     telemetry: input.telemetry,
@@ -277,7 +308,7 @@ async function syncTransactionsIncremental(
       fallbackIds: hydratedFans.fallbackIds,
     });
 
-    for (const item of collectedItems) {
+    for (const item of items) {
       const fanId = item.correlationAccountId
         ? (fanMap.get(item.correlationAccountId) ?? null)
         : null;
@@ -317,41 +348,396 @@ async function syncTransactionsIncremental(
       });
     }
 
-    if (oldestSeenAt) {
-      await rebuildSpenderProjections(dbTx, input.platformAccountId, oldestSeenAt);
-      await rebuildRevenueRollups(dbTx, input.platformAccountId, oldestSeenAt);
-    }
+    await upsertCheckpointProgress(dbTx, {
+      platformAccountId: input.platformAccountId,
+      stream: "transactions",
+      state,
+    });
 
-    if (newestSeenAt) {
-      checkpointAfter = await upsertCheckpoint(dbTx, {
-        platformAccountId: input.platformAccountId,
-        stream: "transactions",
-        cursorTimestamp: newestSeenAt,
-        state: { pageLabel: input.pageLabel },
-        lastSuccessfulRunId: input.syncRunId,
+    await recordTransactionsRuntimeProgress(dbTx, {
+      platformAccountId: input.platformAccountId,
+      activeLease: input.activeLease,
+    }, state, processedTransactionsThisRun);
+  });
+}
+
+async function flushAndClearFanslyDirtyRange<TState extends FanslyTransactionProgressState>(
+  app: AppContext,
+  platformAccountId: number,
+  state: TState,
+) {
+  const dirtyFrom = state.dirtyFrom ? new Date(state.dirtyFrom) : null;
+  await flushFanslyDirtyRange(app, platformAccountId, dirtyFrom);
+
+  if (!dirtyFrom) {
+    return state;
+  }
+
+  const nextState = {
+    ...state,
+    dirtyFrom: null,
+  } as TState;
+  await upsertCheckpointProgress(app.db, {
+    platformAccountId,
+    stream: "transactions",
+    state: nextState,
+  });
+
+  return nextState;
+}
+
+async function syncTransactionsIncremental(
+  app: AppContext,
+  input: {
+    pageLabel: string;
+    platformAccountId: number;
+    commissionRate: number;
+    requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
+    syncRunId: number;
+    telemetry: SyncRunTelemetry;
+    budget?: SyncChunkBudget;
+    activeLease?: ActiveSyncLease;
+  },
+  checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
+  existingState: FanslyTransactionIncrementalState | null,
+): Promise<FanslyTransactionSyncResult> {
+  let state: FanslyTransactionIncrementalState;
+
+  if (existingState) {
+    state = existingState;
+  } else {
+    const oldestPendingAt = await getOldestPendingTransactionAt(app.db, input.platformAccountId);
+    const lookbackStart = checkpoint?.cursorTimestamp
+      ? new Date(
+        checkpoint.cursorTimestamp.getTime() -
+          app.config.transactionLookbackDays * DAY_MS,
+      )
+      : null;
+    const earliestRescanStart = lookbackStart && oldestPendingAt
+      ? (oldestPendingAt < lookbackStart ? oldestPendingAt : lookbackStart)
+      : (lookbackStart ?? oldestPendingAt);
+    const rescanCapStart = new Date(Date.now() - app.config.transactionRescanCapDays * DAY_MS);
+    const after = earliestRescanStart && earliestRescanStart < rescanCapStart
+      ? rescanCapStart
+      : earliestRescanStart;
+
+    if (oldestPendingAt && oldestPendingAt < rescanCapStart) {
+      app.logger.warn(
+        {
+          pageLabel: input.pageLabel,
+          platformAccountId: input.platformAccountId,
+          oldestPendingAt: oldestPendingAt.toISOString(),
+          rescanCapStart: rescanCapStart.toISOString(),
+        },
+        "Pending transaction is older than transaction rescan cap; clamping rescan window",
+      );
+      await input.telemetry.addAnomaly({
+        code: "rescan_cap_clamped",
+        severity: "warn",
+        message: "Transaction rescan window was clamped by the configured rescan cap",
+        details: {
+          oldestPendingAt: oldestPendingAt.toISOString(),
+          rescanCapStart: rescanCapStart.toISOString(),
+        },
       });
     }
+
+    state = {
+      mode: "incremental",
+      completed: false,
+      provider: "fansly",
+      phase: "transactions",
+      snapshotEnd: new Date().toISOString(),
+      after: isoDateOrNull(after),
+      lookbackStart: isoDateOrNull(lookbackStart),
+      oldestPendingAt: isoDateOrNull(oldestPendingAt),
+      rescanCapStart: rescanCapStart.toISOString(),
+      providerReportedTotal: null,
+      newestSeenAt: isoDateOrNull(checkpoint?.cursorTimestamp ?? null),
+      oldestSeenAt: null,
+      dirtyFrom: null,
+      processedTransactions: 0,
+      transactionPages: 0,
+      offset: 0,
+      olderThanBoundaryItems: 0,
+      olderThanBoundaryPages: 0,
+      consecutiveAllOlderPages: 0,
+      firstPageOlderThanBoundaryItems: 0,
+      earlyStoppedBeyondBoundary: false,
+    };
+  }
+
+  const after = state.after ? new Date(state.after) : null;
+  const snapshotEnd = new Date(state.snapshotEnd);
+  const lookbackStart = state.lookbackStart ? new Date(state.lookbackStart) : null;
+  const oldestPendingAt = state.oldestPendingAt ? new Date(state.oldestPendingAt) : null;
+  const rescanCapStart = new Date(state.rescanCapStart);
+  let newestSeenAt: Date | null = state.newestSeenAt
+    ? new Date(state.newestSeenAt)
+    : (checkpoint?.cursorTimestamp ?? null);
+  let oldestSeenAt: Date | null = state.oldestSeenAt ? new Date(state.oldestSeenAt) : null;
+  let currentRunProcessed = 0;
+  const seenUnknownRawTypes = new Set<number>();
+
+  await input.telemetry.addNote(
+    existingState
+      ? "Resuming incomplete Fansly incremental transaction scan"
+      : "Starting Fansly incremental transaction scan",
+    {
+      snapshotEnd: state.snapshotEnd,
+      after: state.after,
+      offset: state.offset,
+      processedTransactions: state.processedTransactions,
+      transactionPages: state.transactionPages,
+    },
+  );
+
+  input.telemetry.setBoundarySummary({
+    kind: "after",
+    requestedLowerBound: state.after,
+    end: state.snapshotEnd,
+    lookbackStart: state.lookbackStart,
+    oldestPendingAt: state.oldestPendingAt,
+    rescanCapStart: state.rescanCapStart,
+    lowerBoundClamped: Boolean(
+      after &&
+      lookbackStart &&
+      after.getTime() !== lookbackStart.getTime() &&
+      (!oldestPendingAt || oldestPendingAt >= lookbackStart)
+    ),
+    olderThanBoundaryItems: state.olderThanBoundaryItems,
+    olderThanBoundaryPages: state.olderThanBoundaryPages,
+    earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
   });
+  input.telemetry.setScanSummary({
+    transactionPages: state.transactionPages,
+    processedTransactions: state.processedTransactions,
+    processedTransactionsThisRun: currentRunProcessed,
+    oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+    newestSeenAt: newestSeenAt?.toISOString() ?? null,
+    mode: "incremental",
+    snapshotEnd: state.snapshotEnd,
+    earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
+  });
+
+  try {
+    while (true) {
+      await assertOwnedPageSyncLease(app.db);
+      const requestOffset = state.offset;
+      const page = await app.adapter.getTransactionsPage(
+        input.requestContext,
+        { after, before: snapshotEnd, limit: 100, offset: requestOffset },
+      );
+
+      await persistRawPayload(app.db, {
+        platformAccountId: input.platformAccountId,
+        syncRunId: input.syncRunId,
+        endpoint: "earnings_transactions",
+        requestParams: {
+          after: after?.toISOString() ?? null,
+          before: snapshotEnd.toISOString(),
+          offset: requestOffset,
+          limit: 100,
+        },
+        responsePayload: page.raw,
+        mapperVersion: FANSLY_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
+      }, {
+        action: "inserting earnings_transactions raw payload",
+      });
+
+      const pageOldestSeenAt = page.items.reduce<Date | null>(
+        (oldest, item) => minDate(oldest, new Date(item.createdAt)),
+        null,
+      );
+      const pageNewestSeenAt = page.items.reduce<Date | null>(
+        (latest, item) => maxDate(latest, new Date(item.createdAt)),
+        null,
+      );
+      oldestSeenAt = minDate(oldestSeenAt, pageOldestSeenAt);
+      newestSeenAt = maxDate(newestSeenAt, pageNewestSeenAt);
+
+      let olderThanBoundaryItems = state.olderThanBoundaryItems;
+      let olderThanBoundaryPages = state.olderThanBoundaryPages;
+      let consecutiveAllOlderPages = state.consecutiveAllOlderPages;
+      let firstPageOlderThanBoundaryItems = state.firstPageOlderThanBoundaryItems;
+      const nextPageCount = state.transactionPages + 1;
+      if (after) {
+        const olderItemsInPage = page.items.filter((item) => item.createdAt < after.getTime()).length;
+        olderThanBoundaryItems += olderItemsInPage;
+        if (nextPageCount === 1) {
+          firstPageOlderThanBoundaryItems = olderItemsInPage;
+        }
+        if (olderItemsInPage > 0 && olderItemsInPage === page.items.length) {
+          olderThanBoundaryPages += 1;
+          consecutiveAllOlderPages += 1;
+        } else {
+          consecutiveAllOlderPages = 0;
+        }
+      }
+
+      const earlyStoppedBeyondBoundary = state.earlyStoppedBeyondBoundary ||
+        Boolean(after && consecutiveAllOlderPages >= 2);
+      const nextState: FanslyTransactionIncrementalState = {
+        ...state,
+        providerReportedTotal: state.providerReportedTotal ?? page.total ?? null,
+        offset: state.offset + page.items.length,
+        transactionPages: nextPageCount,
+        processedTransactions: state.processedTransactions + page.items.length,
+        newestSeenAt: isoDateOrNull(newestSeenAt),
+        oldestSeenAt: isoDateOrNull(oldestSeenAt),
+        dirtyFrom: isoDateOrNull(minDate(
+          state.dirtyFrom ? new Date(state.dirtyFrom) : null,
+          pageOldestSeenAt,
+        )),
+        olderThanBoundaryItems,
+        olderThanBoundaryPages,
+        consecutiveAllOlderPages,
+        firstPageOlderThanBoundaryItems,
+        earlyStoppedBeyondBoundary,
+      };
+
+      await persistFanslyTransactionsPage(
+        app,
+        input,
+        page.items,
+        nextState,
+        currentRunProcessed + page.items.length,
+        seenUnknownRawTypes,
+      );
+
+      state = nextState;
+      currentRunProcessed += page.items.length;
+
+      input.telemetry.setScanSummary({
+        transactionPages: state.transactionPages,
+        processedTransactions: state.processedTransactions,
+        processedTransactionsThisRun: currentRunProcessed,
+        oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+        newestSeenAt: newestSeenAt?.toISOString() ?? null,
+        mode: "incremental",
+        snapshotEnd: state.snapshotEnd,
+        earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
+      });
+
+      if (page.done) {
+        break;
+      }
+
+      // The upstream API returns transactions newest-first. If we see two
+      // consecutive full pages where every item is older than the requested
+      // lower bound, the API is not honoring the `after` filter and all
+      // subsequent pages will only contain even older data. Stop early to
+      // avoid exhaustively scanning the full transaction history.
+      if (earlyStoppedBeyondBoundary) {
+        app.logger.warn(
+          {
+            pageLabel: input.pageLabel,
+            platformAccountId: input.platformAccountId,
+            after: after?.toISOString() ?? null,
+            pageCount: state.transactionPages,
+            olderThanBoundaryItems: state.olderThanBoundaryItems,
+            olderThanBoundaryPages: state.olderThanBoundaryPages,
+          },
+          "Early-stopping transaction scan: upstream API is not honoring the after filter",
+        );
+        break;
+      }
+
+      if (input.budget?.shouldYield()) {
+        state = await flushAndClearFanslyDirtyRange(app, input.platformAccountId, state);
+        input.telemetry.setBoundarySummary({
+          kind: "after",
+          requestedLowerBound: state.after,
+          end: state.snapshotEnd,
+          lookbackStart: state.lookbackStart,
+          oldestPendingAt: state.oldestPendingAt,
+          rescanCapStart: state.rescanCapStart,
+          lowerBoundClamped: Boolean(
+            after &&
+            lookbackStart &&
+            after.getTime() !== lookbackStart.getTime() &&
+            (!oldestPendingAt || oldestPendingAt >= lookbackStart)
+          ),
+          olderThanBoundaryItems: state.olderThanBoundaryItems,
+          olderThanBoundaryPages: state.olderThanBoundaryPages,
+          earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
+        });
+        return {
+          satisfied: false,
+          yieldReason: input.budget.resolveYieldReason(),
+          processed: currentRunProcessed,
+          processedTransactions: currentRunProcessed,
+          newestSeenAt: newestSeenAt ?? snapshotEnd,
+        };
+      }
+    }
+  } catch (error) {
+    if (error instanceof PageSyncLeaseLostError) {
+      throw error;
+    }
+
+    try {
+      state = await flushAndClearFanslyDirtyRange(app, input.platformAccountId, state);
+    } catch (cleanupError) {
+      app.logger.warn({
+        err: cleanupError,
+        originalErr: error,
+        pageLabel: input.pageLabel,
+        platformAccountId: input.platformAccountId,
+        provider: "fansly",
+        stream: "transactions",
+      }, "Failed to flush Fansly dirty range after incremental error");
+    }
+
+    throw error;
+  }
+
+  await flushFanslyDirtyRange(
+    app,
+    input.platformAccountId,
+    state.dirtyFrom ? new Date(state.dirtyFrom) : null,
+  );
+
+  let checkpointAfter = null;
+  if (newestSeenAt) {
+    checkpointAfter = await upsertCheckpoint(app.db, {
+      platformAccountId: input.platformAccountId,
+      stream: "transactions",
+      cursorTimestamp: newestSeenAt,
+      state: { pageLabel: input.pageLabel },
+      lastSuccessfulRunId: input.syncRunId,
+    });
+  }
 
   await input.telemetry.recordCheckpointAdvanced("transactions", summarizeCheckpoint(checkpointAfter));
   input.telemetry.setBoundarySummary({
     kind: "after",
-    requestedLowerBound: after?.toISOString() ?? null,
-    lookbackStart: lookbackStart?.toISOString() ?? null,
-    oldestPendingAt: oldestPendingAt?.toISOString() ?? null,
-    rescanCapStart: rescanCapStart.toISOString(),
-    lowerBoundClamped: Boolean(after && earliestRescanStart && after.getTime() !== earliestRescanStart.getTime()),
-    olderThanBoundaryItems,
-    olderThanBoundaryPages,
-    earlyStoppedBeyondBoundary,
+    requestedLowerBound: state.after,
+    end: state.snapshotEnd,
+    lookbackStart: state.lookbackStart,
+    oldestPendingAt: state.oldestPendingAt,
+    rescanCapStart: state.rescanCapStart,
+    lowerBoundClamped: Boolean(
+      after &&
+      lookbackStart &&
+      after.getTime() !== lookbackStart.getTime() &&
+      (!oldestPendingAt || oldestPendingAt >= lookbackStart)
+    ),
+    olderThanBoundaryItems: state.olderThanBoundaryItems,
+    olderThanBoundaryPages: state.olderThanBoundaryPages,
+    earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
   });
   input.telemetry.setScanSummary({
-    transactionPages: pageCount,
-    processedTransactions: processed,
+    transactionPages: state.transactionPages,
+    processedTransactions: state.processedTransactions,
+    processedTransactionsThisRun: currentRunProcessed,
     oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
     mode: "incremental",
-    earlyStoppedBeyondBoundary,
+    snapshotEnd: state.snapshotEnd,
+    earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
   });
 
   if (after && lookbackStart && after.getTime() < lookbackStart.getTime() - DAY_MS) {
@@ -370,13 +756,13 @@ async function syncTransactionsIncremental(
     checkpoint?.cursorTimestamp &&
     newestSeenAt &&
     newestSeenAt.getTime() <= checkpoint.cursorTimestamp.getTime() &&
-    processed > 0
+    state.processedTransactions > 0
   ) {
     // When the scan was early-stopped because the upstream API ignored the
     // `after` filter, a stalled checkpoint is the expected outcome — all the
     // scanned items were older than the checkpoint so there is nothing to
     // advance. Downgrade to warn so it doesn't page.
-    const severity = earlyStoppedBeyondBoundary ? "warn" : "error";
+    const severity = state.earlyStoppedBeyondBoundary ? "warn" : "error";
     await input.telemetry.addAnomaly({
       code: "checkpoint_stalled",
       severity,
@@ -384,8 +770,8 @@ async function syncTransactionsIncremental(
       details: {
         checkpointTimestamp: checkpoint.cursorTimestamp.toISOString(),
         newestSeenAt: newestSeenAt.toISOString(),
-        processed,
-        earlyStoppedBeyondBoundary,
+        processed: state.processedTransactions,
+        earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
       },
     });
   }
@@ -393,8 +779,8 @@ async function syncTransactionsIncremental(
   if (
     after &&
     (
-      (firstPageOlderThanBoundaryItems > 0 && olderThanBoundaryItems > 100) ||
-      olderThanBoundaryPages > 1 ||
+      (state.firstPageOlderThanBoundaryItems > 0 && state.olderThanBoundaryItems > 100) ||
+      state.olderThanBoundaryPages > 1 ||
       (
         oldestSeenAt &&
         oldestSeenAt.getTime() < after.getTime() &&
@@ -404,36 +790,42 @@ async function syncTransactionsIncremental(
       )
     )
   ) {
-    const severity = earlyStoppedBeyondBoundary ? "warn" : "error";
+    const severity = state.earlyStoppedBeyondBoundary ? "warn" : "error";
     await input.telemetry.addAnomaly({
       code: "after_ineffective",
       severity,
       message: "The lower-bound transaction filter behaved ineffectively and scanned materially old data",
       details: {
         after: after.toISOString(),
-        firstPageOlderThanBoundaryItems,
-        olderThanBoundaryItems,
-        olderThanBoundaryPages,
+        firstPageOlderThanBoundaryItems: state.firstPageOlderThanBoundaryItems,
+        olderThanBoundaryItems: state.olderThanBoundaryItems,
+        olderThanBoundaryPages: state.olderThanBoundaryPages,
         oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
-        earlyStoppedBeyondBoundary,
+        earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
       },
     });
   }
 
-  if (providerReportedTotal !== null && providerReportedTotal !== processed) {
+  if (state.providerReportedTotal !== null && state.providerReportedTotal !== state.processedTransactions) {
     await input.telemetry.addAnomaly({
       code: "transactions_total_mismatch",
       severity: "warn",
       message: "Provider-reported transaction total differed from the fetched transaction rows",
       details: {
-        providerReportedTotal,
-        fetchedRows: processed,
-        pageCount,
+        providerReportedTotal: state.providerReportedTotal,
+        fetchedRows: state.processedTransactions,
+        pageCount: state.transactionPages,
       },
     });
   }
 
-  return { processed, newestSeenAt };
+  return {
+    satisfied: true,
+    yieldReason: null,
+    processed: currentRunProcessed,
+    processedTransactions: currentRunProcessed,
+    newestSeenAt: newestSeenAt ?? snapshotEnd,
+  };
 }
 
 async function recordTransactionsRuntimeProgress(
@@ -442,7 +834,7 @@ async function recordTransactionsRuntimeProgress(
     platformAccountId: number;
     activeLease?: ActiveSyncLease;
   },
-  state: FanslyTransactionBackfillState,
+  state: FanslyTransactionProgressState,
   processedTransactionsThisRun: number,
 ) {
   if (!input.activeLease) {
@@ -456,7 +848,7 @@ async function recordTransactionsRuntimeProgress(
     leaseToken: input.activeLease.leaseToken,
     progressedAt: new Date(),
     phase: state.phase,
-    workClass: "history",
+    workClass: state.mode === "backfill" ? "history" : "live",
     progress: {
       ...state,
       processedTransactionsThisRun,
@@ -473,11 +865,12 @@ async function syncTransactionsBackfill(
     requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;
+    budget?: SyncChunkBudget;
     activeLease?: ActiveSyncLease;
   },
   checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
   existingState: FanslyTransactionBackfillState | null,
-) {
+): Promise<FanslyTransactionSyncResult> {
   let state: FanslyTransactionBackfillState = existingState ?? {
     mode: "backfill",
     completed: false,
@@ -499,7 +892,7 @@ async function syncTransactionsBackfill(
   let newestSeenAt = state.newestSeenAt ? new Date(state.newestSeenAt) : null;
   let currentRunProcessed = 0;
   const seenUnknownRawTypes = new Set<number>();
-  let providerReportedTotal: number | null = null;
+  let providerReportedTotal: number | null = state.providerReportedTotal ?? null;
 
   await input.telemetry.addNote(
     existingState
@@ -536,6 +929,7 @@ async function syncTransactionsBackfill(
       const page = await app.adapter.getTransactionsPage(
         input.requestContext,
         {
+          before: snapshotEnd,
           limit: 100,
           offset: state.offset,
         },
@@ -566,7 +960,7 @@ async function syncTransactionsBackfill(
         endpoint: "earnings_transactions",
         requestParams: {
           after: null,
-          before: null,
+          before: snapshotEnd.toISOString(),
           offset: state.offset,
           limit: 100,
         },
@@ -602,76 +996,14 @@ async function syncTransactionsBackfill(
         )),
       };
 
-      for (const item of page.items) {
-        await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
-      }
-
-      const hydratedFans = await lookupHydratedFans(app, {
-        requestContext: input.requestContext,
-        platformUserIds: page.items
-          .map((item) => item.correlationAccountId)
-          .filter((value): value is string => Boolean(value)),
-        telemetry: input.telemetry,
-      });
-
-      await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-        const fanMap = await upsertHydratedFansForPage(dbTx, {
-          platformAccountId: input.platformAccountId,
-          accounts: hydratedFans.accounts,
-          fallbackIds: hydratedFans.fallbackIds,
-        });
-
-        for (const item of page.items) {
-          const fanId = item.correlationAccountId
-            ? (fanMap.get(item.correlationAccountId) ?? null)
-            : null;
-          const sourceAmountMills = toMills(item.amount);
-          const destinationAmountMills = toMills(item.destinationAmount);
-          const creatorNetAmountMills = destinationAmountMills;
-          const commissionRate = resolveFanslyCommissionRate(
-            item.destinationTax,
-            input.commissionRate,
-          );
-          const grossAmountMills = sourceAmountMills === destinationAmountMills
-            ? calculateGrossMillsFromNet(creatorNetAmountMills, commissionRate)
-            : sourceAmountMills;
-
-          await upsertTransaction(dbTx, {
-            platformAccountId: input.platformAccountId,
-            fanId,
-            transactionId: item.transactionId,
-            walletId: item.walletId,
-            accountId: item.accountId,
-            correlationId: item.correlationId,
-            correlationAccountId: item.correlationAccountId,
-            rawType: item.type,
-            canonicalType: mapFanslyTransactionType(item.type),
-            transactionState: mapFanslyTransactionState(item.status),
-            destination: item.destination,
-            rawStatus: item.status,
-            grossAmountMills,
-            sourceDestinationAmountMills: destinationAmountMills,
-            creatorNetAmountMills,
-            rawDestinationTax: item.destinationTax,
-            newBalanceMills: item.newBalance64 ? toMills(item.newBalance64) : null,
-            senderId: item.senderId,
-            receiverId: item.receiverId,
-            occurredAt: new Date(item.createdAt),
-            sourceUpdatedAt: item.updatedAt ? new Date(item.updatedAt) : null,
-          });
-        }
-
-        await upsertCheckpointProgress(dbTx, {
-          platformAccountId: input.platformAccountId,
-          stream: "transactions",
-          state: nextState,
-        });
-
-        await recordTransactionsRuntimeProgress(dbTx, {
-          platformAccountId: input.platformAccountId,
-          activeLease: input.activeLease,
-        }, nextState, currentRunProcessed + page.items.length);
-      });
+      await persistFanslyTransactionsPage(
+        app,
+        input,
+        page.items,
+        nextState,
+        currentRunProcessed + page.items.length,
+        seenUnknownRawTypes,
+      );
 
       state = nextState;
       currentRunProcessed += page.items.length;
@@ -716,26 +1048,36 @@ async function syncTransactionsBackfill(
       if (page.done) {
         break;
       }
+
+      if (input.budget?.shouldYield()) {
+        state = await flushAndClearFanslyDirtyRange(app, input.platformAccountId, state);
+        input.telemetry.setScanSummary({
+          mode: "backfill",
+          strategy: "offset_head_scan",
+          phase: "transactions",
+          transactionPages: state.transactionPages,
+          processedTransactions: state.processedTransactions,
+          processedTransactionsThisRun: currentRunProcessed,
+          oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
+          newestSeenAt: newestSeenAt?.toISOString() ?? null,
+          snapshotEnd: snapshotEnd.toISOString(),
+        });
+        return {
+          satisfied: false,
+          yieldReason: input.budget.resolveYieldReason(),
+          processed: currentRunProcessed,
+          processedTransactions: currentRunProcessed,
+          newestSeenAt: newestSeenAt ?? snapshotEnd,
+        };
+      }
     }
   } catch (error) {
     if (error instanceof PageSyncLeaseLostError) {
       throw error;
     }
 
-    const dirtyFrom = state.dirtyFrom ? new Date(state.dirtyFrom) : null;
     try {
-      await flushFanslyDirtyRange(app, input.platformAccountId, dirtyFrom);
-      if (dirtyFrom) {
-        state = {
-          ...state,
-          dirtyFrom: null,
-        };
-        await upsertCheckpointProgress(app.db, {
-          platformAccountId: input.platformAccountId,
-          stream: "transactions",
-          state,
-        });
-      }
+      state = await flushAndClearFanslyDirtyRange(app, input.platformAccountId, state);
     } catch (cleanupError) {
       app.logger.warn({
         err: cleanupError,
@@ -791,7 +1133,10 @@ async function syncTransactionsBackfill(
   }
 
   return {
+    satisfied: true,
+    yieldReason: null,
     processed: currentRunProcessed,
+    processedTransactions: currentRunProcessed,
     newestSeenAt: newestSeenAt ?? snapshotEnd,
   };
 }
@@ -805,9 +1150,10 @@ export async function syncTransactions(
     requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;
+    budget?: SyncChunkBudget;
     activeLease?: ActiveSyncLease;
   },
-) {
+): Promise<FanslyTransactionSyncResult> {
   const checkpoint = await getCheckpoint(app.db, input.platformAccountId, "transactions");
   await input.telemetry.recordCheckpointLoaded("transactions", summarizeCheckpoint(checkpoint));
 
@@ -816,8 +1162,13 @@ export async function syncTransactions(
     return syncTransactionsBackfill(app, input, checkpoint, backfillState);
   }
 
+  const incrementalState = parseFanslyTransactionIncrementalState(checkpoint?.state);
+  if (incrementalState) {
+    return syncTransactionsIncremental(app, input, checkpoint, incrementalState);
+  }
+
   if (checkpoint?.cursorTimestamp) {
-    return syncTransactionsIncremental(app, input, checkpoint);
+    return syncTransactionsIncremental(app, input, checkpoint, null);
   }
 
   return syncTransactionsBackfill(app, input, checkpoint, null);

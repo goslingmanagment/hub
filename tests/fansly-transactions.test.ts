@@ -45,6 +45,7 @@ vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
   };
 });
 
+import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import { syncTransactions } from "../apps/runtime/src/services/sync/transactions.ts";
 
 function createTelemetry() {
@@ -429,7 +430,7 @@ describe("syncTransactions", () => {
       telemetry: createTelemetry() as never,
     });
 
-    expect(order).toEqual([
+    expect(order.slice(0, 5)).toEqual([
       "lookup",
       "transaction-start",
       "upsert-in-transaction",
@@ -444,6 +445,135 @@ describe("syncTransactions", () => {
       expect.objectContaining({
         platformAccountId: 1,
         fallbackIds: ["fan-1"],
+      }),
+    );
+  });
+
+  it("yields and resumes multi-page incremental Fansly scans from durable page progress", async () => {
+    const checkpoint = {
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    };
+    dbMocks.getCheckpoint.mockResolvedValue(checkpoint);
+
+    const getTransactionsPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-14T12:00:00.000Z")],
+        total: 2,
+        done: false,
+        raw: { page: 1 },
+      })
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-2", "2026-03-13T00:00:00.000Z")],
+        total: 2,
+        done: true,
+        raw: { page: 2 },
+      });
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+    const firstTelemetry = createTelemetry();
+
+    const firstResult = await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: firstTelemetry as never,
+      budget: new SyncChunkBudget(0),
+    });
+
+    expect(firstResult).toMatchObject({
+      satisfied: false,
+      yieldReason: "request_budget",
+      processedTransactions: 1,
+    });
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(getTransactionsPage).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      expect.objectContaining({
+        after: new Date("2026-03-07T00:00:00.000Z"),
+        before: new Date("2026-03-15T00:00:00.000Z"),
+        offset: 0,
+      }),
+    );
+    expect(sharedMocks.persistRawPayload.mock.calls[0]?.[1]).toMatchObject({
+      requestParams: {
+        after: "2026-03-07T00:00:00.000Z",
+        before: "2026-03-15T00:00:00.000Z",
+        offset: 0,
+        limit: 100,
+      },
+    });
+
+    const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1].state;
+    expect(yieldedState).toMatchObject({
+      mode: "incremental",
+      provider: "fansly",
+      offset: 1,
+      transactionPages: 1,
+      processedTransactions: 1,
+      dirtyFrom: null,
+      snapshotEnd: "2026-03-15T00:00:00.000Z",
+    });
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: checkpoint.cursorTimestamp,
+      state: yieldedState,
+    });
+    dbMocks.upsertCheckpoint.mockClear();
+    const secondTelemetry = createTelemetry();
+
+    const secondResult = await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 124,
+      telemetry: secondTelemetry as never,
+    });
+
+    expect(secondResult).toMatchObject({
+      satisfied: true,
+      processedTransactions: 1,
+    });
+    expect(getTransactionsPage).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({
+        before: new Date("2026-03-15T00:00:00.000Z"),
+        offset: 1,
+      }),
+    );
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        cursorTimestamp: new Date("2026-03-14T12:00:00.000Z"),
+        lastSuccessfulRunId: 124,
       }),
     );
   });
@@ -530,6 +660,138 @@ describe("syncTransactions", () => {
         }),
       }),
     );
+  });
+
+  it("uses the same snapshot boundary when yielding and resuming Fansly backfills", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+
+    const liveRows = [
+      buildTransaction("tx-future-head", "2026-03-16T00:00:00.000Z"),
+      buildTransaction("tx-1", "2026-03-10T00:00:00.000Z"),
+      buildTransaction("tx-2", "2026-03-09T00:00:00.000Z"),
+    ];
+    const getTransactionsPage = vi.fn(async (
+      _requestContext: unknown,
+      params: { before?: Date | null; offset?: number; limit?: number },
+    ) => {
+      if (getTransactionsPage.mock.calls.length === 2) {
+        liveRows.shift();
+        liveRows.unshift(buildTransaction("tx-new-future-head", "2026-03-16T01:00:00.000Z"));
+      }
+
+      const offset = params.offset ?? 0;
+      const visibleRows = params.before
+        ? liveRows.filter((row) => row.createdAt < params.before!.getTime())
+        : liveRows;
+      const items = visibleRows[offset] ? [visibleRows[offset]] : [];
+      return {
+        items,
+        total: visibleRows.length,
+        done: offset + items.length >= visibleRows.length,
+        raw: {
+          before: params.before?.toISOString() ?? null,
+          offset,
+        },
+      };
+    });
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    const firstResult = await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: createTelemetry() as never,
+      budget: new SyncChunkBudget(0),
+    });
+
+    expect(firstResult).toMatchObject({
+      satisfied: false,
+      yieldReason: "request_budget",
+      processedTransactions: 1,
+    });
+    expect(getTransactionsPage).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      expect.objectContaining({
+        before: new Date("2026-03-15T00:00:00.000Z"),
+        offset: 0,
+      }),
+    );
+    expect(sharedMocks.persistRawPayload.mock.calls[0]?.[1]).toMatchObject({
+      requestParams: {
+        after: null,
+        before: "2026-03-15T00:00:00.000Z",
+        offset: 0,
+        limit: 100,
+      },
+    });
+
+    const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1].state;
+    expect(yieldedState).toMatchObject({
+      mode: "backfill",
+      provider: "fansly",
+      offset: 1,
+      transactionPages: 1,
+      processedTransactions: 1,
+      dirtyFrom: null,
+      snapshotEnd: "2026-03-15T00:00:00.000Z",
+    });
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: null,
+      state: yieldedState,
+    });
+
+    const secondResult = await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 124,
+      telemetry: createTelemetry() as never,
+    });
+
+    expect(secondResult).toMatchObject({
+      satisfied: true,
+      processedTransactions: 1,
+    });
+    expect(getTransactionsPage).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({
+        before: new Date("2026-03-15T00:00:00.000Z"),
+        offset: 1,
+      }),
+    );
+    expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual([
+      "tx-1",
+      "tx-2",
+    ]);
   });
 
   it("looks up backfill Fansly fan hydration before opening each DB transaction", async () => {

@@ -1188,7 +1188,10 @@ it("guards against empty first-page follower reconcile wipes when active followe
       },
     } as never;
     transactionMocks.syncTransactions.mockResolvedValue({
+      satisfied: true,
+      yieldReason: null,
       processed: 2,
+      processedTransactions: 2,
       newestSeenAt: new Date("2026-03-10T00:00:00.000Z"),
     });
 
@@ -1220,6 +1223,50 @@ it("guards against empty first-page follower reconcile wipes when active followe
       },
     }));
     expect(result.satisfied).toBe(true);
+  });
+
+  it("propagates yielded Fansly transaction chunks", async () => {
+    const telemetry = createTelemetry();
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+    } as never;
+    transactionMocks.syncTransactions.mockResolvedValue({
+      satisfied: false,
+      yieldReason: "request_budget",
+      processed: 1,
+      processedTransactions: 1,
+      newestSeenAt: new Date("2026-03-10T00:00:00.000Z"),
+    });
+
+    const result = await executeTransactionsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 77,
+          label: "fansly-page",
+          commissionRate: 0.2,
+        },
+        session: { authorization: "secret" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 7,
+        leasedSeq: 7,
+        leaseToken: "lease-token",
+      },
+      syncRunId: 200,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(transactionMocks.syncTransactions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      budget: expect.any(SyncChunkBudget),
+    }));
+    expect(result.satisfied).toBe(false);
+    expect(result.yieldReason).toBe("request_budget");
   });
 
   it("propagates yielded OnlyFans transaction chunks", async () => {

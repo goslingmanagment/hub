@@ -965,6 +965,7 @@ export async function executeTransactionsChunk(
       },
       syncRunId: input.syncRunId,
       telemetry: input.telemetry,
+      budget: input.budget,
       activeLease: input.streamState.leaseToken
         ? {
           requestSeq: input.streamState.leasedSeq ?? input.streamState.requestSeq,
@@ -974,8 +975,8 @@ export async function executeTransactionsChunk(
     });
 
     return {
-      satisfied: true,
-      yieldReason: null,
+      satisfied: result.satisfied,
+      yieldReason: result.yieldReason,
       stats: result as Record<string, unknown>,
     } satisfies StreamChunkResult;
   }
