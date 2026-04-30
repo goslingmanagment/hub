@@ -42,6 +42,7 @@ import {
   FanslyApiError,
   mapFanslySubscriptionStatus,
   type FanslyAccount,
+  type FanslyFollower,
 } from "@agency_hub_core/fansly";
 import {
   buildFanslyDmConversationMetadata,
@@ -275,6 +276,109 @@ async function triggerFollowersReconcileAnomaly(
     pageId: platformAccountId,
     streams: ["followers_reconcile"],
     source: "anomaly",
+  });
+}
+
+type FollowerMappingStream = "followers" | "followers_reconcile";
+
+function uniqueFollowerIds(followers: FanslyFollower[]) {
+  return Array.from(new Set(
+    followers
+      .map((follower) => follower.followerId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  ));
+}
+
+async function hydrateFanslyFollowerRows(
+  app: AppContext,
+  input: {
+    requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
+    followers: FanslyFollower[];
+    accounts: FanslyAccount[];
+    telemetry: SyncRunTelemetry;
+    stream: FollowerMappingStream;
+    offset: number;
+  },
+) {
+  const sourceFollowerIds = uniqueFollowerIds(input.followers);
+  const hydratedAccountsById = new Map<string, FanslyAccount>();
+
+  for (const account of input.accounts) {
+    if (account.id) {
+      hydratedAccountsById.set(account.id, account);
+    }
+  }
+
+  const missingAggregationIds = sourceFollowerIds.filter((id) => !hydratedAccountsById.has(id));
+  const fallbackHydration = missingAggregationIds.length > 0
+    ? await lookupHydratedFans(app, {
+      requestContext: input.requestContext,
+      platformUserIds: missingAggregationIds,
+      telemetry: input.telemetry,
+    })
+    : {
+      accounts: [] satisfies FanslyAccount[],
+      fallbackIds: [] as string[],
+    };
+
+  for (const account of fallbackHydration.accounts) {
+    if (account.id) {
+      hydratedAccountsById.set(account.id, account);
+    }
+  }
+
+  const fallbackIds = fallbackHydration.fallbackIds.filter(
+    (id) => !hydratedAccountsById.has(id),
+  );
+
+  if (missingAggregationIds.length > 0) {
+    await input.telemetry.addAnomaly({
+      code: "followers_missing_aggregation_accounts",
+      severity: "warn",
+      message: "Follower page omitted aggregation account data for source follower rows; hydrated by ID fallback",
+      details: {
+        stream: input.stream,
+        offset: input.offset,
+        sourceFollowerCount: sourceFollowerIds.length,
+        missingAggregationAccountCount: missingAggregationIds.length,
+        fallbackHydrationMisses: fallbackIds.length,
+        examples: missingAggregationIds.slice(0, 5),
+      },
+    });
+  }
+
+  return {
+    sourceFollowerIds,
+    accounts: Array.from(hydratedAccountsById.values()),
+    fallbackIds,
+  };
+}
+
+function findUnmappedFollowerIds(
+  sourceFollowerIds: string[],
+  fanMap: Map<string, number>,
+) {
+  return sourceFollowerIds.filter((id) => !fanMap.has(id));
+}
+
+async function recordFollowerMappingBlockedAnomaly(
+  telemetry: SyncRunTelemetry,
+  input: {
+    stream: FollowerMappingStream;
+    offset: number;
+    unmappedFollowerIds: string[];
+  },
+) {
+  await telemetry.addAnomaly({
+    code: "followers_unmapped_source_rows",
+    severity: "error",
+    message: "Follower page contained source rows that could not be mapped after fallback hydration",
+    details: {
+      stream: input.stream,
+      offset: input.offset,
+      unmappedFollowerCount: input.unmappedFollowerIds.length,
+      examples: input.unmappedFollowerIds.slice(0, 5),
+    },
   });
 }
 
@@ -1313,14 +1417,34 @@ export async function executeFollowersChunk(
         ...state,
         offset: state.offset + 100,
       };
+    const hydratedFollowers = await hydrateFanslyFollowerRows(app, {
+      requestContext,
+      followers: page.items,
+      accounts: page.accounts,
+      telemetry: input.telemetry,
+      stream: "followers",
+      offset: state.offset,
+    });
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
-        accounts: page.accounts,
+        accounts: hydratedFollowers.accounts,
+        fallbackIds: hydratedFollowers.fallbackIds,
       });
+      const unmappedFollowerIds = findUnmappedFollowerIds(
+        hydratedFollowers.sourceFollowerIds,
+        fanMap,
+      );
+      if (unmappedFollowerIds.length > 0) {
+        return {
+          kind: "blocked" as const,
+          unmappedFollowerIds,
+        };
+      }
+
       const presenceSignals = buildFanslyFollowerPresenceSignals({
         followers: page.items,
-        accounts: page.accounts,
+        accounts: hydratedFollowers.accounts,
       });
 
       const followInputs: UpsertPageFollowInput[] = [];
@@ -1410,6 +1534,15 @@ export async function executeFollowersChunk(
         reachedBoundary: pageReachedBoundary,
       };
     });
+    if (pageWrite.kind === "blocked") {
+      await recordFollowerMappingBlockedAnomaly(input.telemetry, {
+        stream: "followers",
+        offset: state.offset,
+        unmappedFollowerIds: pageWrite.unmappedFollowerIds,
+      });
+      throw new Error("Follower sync left source follower rows unmapped; refusing checkpoint advancement");
+    }
+
     processedThisChunk += pageWrite.processedThisPage;
     sawKnownCheckpoint ||= pageWrite.sawKnownCheckpoint;
 
@@ -1566,14 +1699,34 @@ export async function executeFollowersReconcileChunk(
         ...state,
         offset: state.offset + 100,
       };
+    const hydratedFollowers = await hydrateFanslyFollowerRows(app, {
+      requestContext,
+      followers: page.items,
+      accounts: page.accounts,
+      telemetry: input.telemetry,
+      stream: "followers_reconcile",
+      offset: state.offset,
+    });
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
-        accounts: page.accounts,
+        accounts: hydratedFollowers.accounts,
+        fallbackIds: hydratedFollowers.fallbackIds,
       });
+      const unmappedFollowerIds = findUnmappedFollowerIds(
+        hydratedFollowers.sourceFollowerIds,
+        fanMap,
+      );
+      if (unmappedFollowerIds.length > 0) {
+        return {
+          kind: "blocked" as const,
+          unmappedFollowerIds,
+        };
+      }
+
       const presenceSignals = buildFanslyFollowerPresenceSignals({
         followers: page.items,
-        accounts: page.accounts,
+        accounts: hydratedFollowers.accounts,
       });
 
       const followInputs: UpsertPageFollowInput[] = [];
@@ -1655,6 +1808,15 @@ export async function executeFollowersReconcileChunk(
         processedThisPage: followInputs.length,
       };
     });
+    if (pageWrite.kind === "blocked") {
+      await recordFollowerMappingBlockedAnomaly(input.telemetry, {
+        stream: "followers_reconcile",
+        offset: state.offset,
+        unmappedFollowerIds: pageWrite.unmappedFollowerIds,
+      });
+      throw new Error("Follower reconcile left source follower rows unmapped; refusing destructive finalization");
+    }
+
     processedThisChunk += pageWrite.processedThisPage;
 
     if (pageWrite.kind === "complete") {

@@ -972,6 +972,270 @@ it("guards against empty first-page follower reconcile wipes when active followe
   expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
 });
 
+  it("hydrates incremental follower rows by fallback ID when aggregation accounts are missing", async () => {
+    const telemetry = createTelemetry();
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
+    const app = {
+      db,
+      config: {
+        followerPageDelayMs: 0,
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getFollowersPage: vi.fn(async () => ({
+          items: [{
+            id: "1000",
+            followerId: "fan-1",
+            lastSeenAt: 1_775_782_500_000,
+          }],
+          accounts: [],
+          done: true,
+          raw: {},
+        })),
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    sharedMocks.refreshPageMetadata.mockResolvedValue({
+      parsed: {
+        account: {
+          followCount: 1,
+        },
+      },
+    });
+    fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
+      accounts: [],
+      fallbackIds: ["fan-1"],
+    });
+    dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
+    dbMocks.countActivePageFollows.mockResolvedValue(1);
+
+    const result = await executeFollowersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 12,
+          label: "fansly-page",
+          platformAccountId: "acct-12",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 3,
+      },
+      syncRunId: 101,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(fanHydrationMocks.lookupHydratedFans).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformUserIds: ["fan-1"],
+    }));
+    expect(fanHydrationMocks.upsertHydratedFansForPage).toHaveBeenCalledWith(tx, {
+      platformAccountId: 12,
+      accounts: [],
+      fallbackIds: ["fan-1"],
+    });
+    expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, [
+      expect.objectContaining({
+        platformAccountId: 12,
+        fanId: 91,
+        platformFollowId: "1000",
+      }),
+    ]);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "followers_missing_aggregation_accounts",
+      severity: "warn",
+    }));
+  });
+
+  it("maps partially aggregated follower reconcile rows before generation finalization", async () => {
+    const telemetry = createTelemetry();
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
+    const app = {
+      db,
+      config: {
+        followerPageDelayMs: 0,
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getFollowersPage: vi.fn(async () => ({
+          items: [
+            {
+              id: "1002",
+              followerId: "fan-1",
+              lastSeenAt: 1_775_782_500_000,
+            },
+            {
+              id: "1001",
+              followerId: "fan-2",
+              lastSeenAt: 1_775_782_400_000,
+            },
+          ],
+          accounts: [{
+            id: "fan-1",
+            username: "fan_1",
+            displayName: "Fan 1",
+            createdAt: 1_770_000_000_000,
+            lastSeenAt: 1_775_782_500_000,
+          }],
+          done: true,
+          raw: {},
+        })),
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    sharedMocks.refreshPageMetadata.mockResolvedValue({
+      parsed: {
+        account: {
+          followCount: 2,
+        },
+      },
+    });
+    fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
+      accounts: [],
+      fallbackIds: ["fan-2"],
+    });
+    dbMocks.upsertFans.mockResolvedValue([
+      { id: 91, platformUserId: "fan-1" },
+      { id: 92, platformUserId: "fan-2" },
+    ]);
+
+    const result = await executeFollowersReconcileChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 13,
+          label: "fansly-page",
+          platformAccountId: "acct-13",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 4,
+      },
+      syncRunId: 102,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(fanHydrationMocks.lookupHydratedFans).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformUserIds: ["fan-2"],
+    }));
+    expect(fanHydrationMocks.upsertHydratedFansForPage).toHaveBeenCalledWith(tx, {
+      platformAccountId: 13,
+      accounts: [expect.objectContaining({ id: "fan-1" })],
+      fallbackIds: ["fan-2"],
+    });
+    expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, [
+      expect.objectContaining({
+        fanId: 91,
+        platformFollowId: "1002",
+        lastSeenGeneration: 1,
+      }),
+      expect.objectContaining({
+        fanId: 92,
+        platformFollowId: "1001",
+        lastSeenGeneration: 1,
+      }),
+    ]);
+    expect(dbMocks.upsertPageFollows.mock.invocationCallOrder[0]).toBeLessThan(
+      dbMocks.deactivatePageFollowsByGeneration.mock.invocationCallOrder[0],
+    );
+    expect(dbMocks.deactivatePageFollowsByGeneration).toHaveBeenCalledWith(tx, {
+      platformAccountId: 13,
+      generation: 1,
+    });
+  });
+
+  it("blocks follower reconcile finalization when fallback hydration still leaves source rows unmapped", async () => {
+    const telemetry = createTelemetry();
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
+    const app = {
+      db,
+      config: {
+        followerPageDelayMs: 0,
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getFollowersPage: vi.fn(async () => ({
+          items: [{
+            id: "1000",
+            followerId: "fan-1",
+            lastSeenAt: 1_775_782_500_000,
+          }],
+          accounts: [],
+          done: true,
+          raw: {},
+        })),
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    sharedMocks.refreshPageMetadata.mockResolvedValue({
+      parsed: {
+        account: {
+          followCount: 1,
+        },
+      },
+    });
+    fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
+      accounts: [],
+      fallbackIds: ["fan-1"],
+    });
+    fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValueOnce(new Map());
+
+    await expect(executeFollowersReconcileChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 13,
+          label: "fansly-page",
+          platformAccountId: "acct-13",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 4,
+      },
+      syncRunId: 102,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never)).rejects.toThrow("refusing destructive finalization");
+
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "followers_unmapped_source_rows",
+      severity: "error",
+      details: expect.objectContaining({
+        stream: "followers_reconcile",
+        unmappedFollowerCount: 1,
+      }),
+    }));
+    expect(dbMocks.upsertPageFollows).not.toHaveBeenCalled();
+    expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
+    expect(dbMocks.refreshFanPageFollowerState).not.toHaveBeenCalled();
+    expect(dbMocks.rebuildFollowerRollups).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+  });
+
   it("runs follower reconcile finalization against generation-based state", async () => {
     const telemetry = createTelemetry();
     const tx = {};
