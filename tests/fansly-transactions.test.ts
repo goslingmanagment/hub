@@ -22,7 +22,8 @@ const sharedMocks = vi.hoisted(() => ({
 }));
 
 const fanHydrationMocks = vi.hoisted(() => ({
-  hydrateFans: vi.fn(),
+  lookupHydratedFans: vi.fn(),
+  upsertHydratedFansForPage: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", async () => {
@@ -39,7 +40,8 @@ vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
   );
   return {
     ...actual,
-    hydrateFans: fanHydrationMocks.hydrateFans,
+    lookupHydratedFans: fanHydrationMocks.lookupHydratedFans,
+    upsertHydratedFansForPage: fanHydrationMocks.upsertHydratedFansForPage,
   };
 });
 
@@ -87,11 +89,16 @@ describe("syncTransactions", () => {
     }
     sharedMocks.persistRawPayload.mockReset();
     sharedMocks.retentionDate.mockReset();
-    fanHydrationMocks.hydrateFans.mockReset();
+    fanHydrationMocks.lookupHydratedFans.mockReset();
+    fanHydrationMocks.upsertHydratedFansForPage.mockReset();
 
     sharedMocks.persistRawPayload.mockResolvedValue(undefined);
     sharedMocks.retentionDate.mockReturnValue(new Date("2026-09-10T00:00:00.000Z"));
-    fanHydrationMocks.hydrateFans.mockResolvedValue(new Map());
+    fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
+      accounts: [],
+      fallbackIds: [],
+    });
+    fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map());
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
     dbMocks.recordRunningPageSyncProgress.mockResolvedValue(true);
     dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);
@@ -356,6 +363,91 @@ describe("syncTransactions", () => {
     }));
   });
 
+  it("looks up incremental Fansly fan hydration before opening the DB transaction", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    });
+
+    const order: string[] = [];
+    const tx = {};
+    fanHydrationMocks.lookupHydratedFans.mockImplementation(async () => {
+      order.push("lookup");
+      return {
+        accounts: [],
+        fallbackIds: ["fan-1"],
+      };
+    });
+    fanHydrationMocks.upsertHydratedFansForPage.mockImplementation(async (db) => {
+      order.push(db === tx ? "upsert-in-transaction" : "upsert-outside-transaction");
+      return new Map([["fan-1", 99]]);
+    });
+    dbMocks.upsertTransaction.mockImplementation(async () => {
+      order.push("transaction-write");
+    });
+
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (transactionDb: object) => Promise<unknown>) => {
+          order.push("transaction-start");
+          const result = await callback(tx);
+          order.push("transaction-end");
+          return result;
+        }),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi.fn(async () => ({
+          items: [{
+            ...buildTransaction("tx-1", "2026-03-10T00:00:00.000Z"),
+            correlationAccountId: "fan-1",
+          }],
+          total: 1,
+          done: true,
+          raw: {},
+        })),
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: createTelemetry() as never,
+    });
+
+    expect(order).toEqual([
+      "lookup",
+      "transaction-start",
+      "upsert-in-transaction",
+      "transaction-write",
+      "transaction-end",
+    ]);
+    expect(fanHydrationMocks.lookupHydratedFans).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformUserIds: ["fan-1"],
+    }));
+    expect(fanHydrationMocks.upsertHydratedFansForPage).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        platformAccountId: 1,
+        fallbackIds: ["fan-1"],
+      }),
+    );
+  });
+
   it("records runtime progress for each Fansly backfill page while the lease is active", async () => {
     dbMocks.getCheckpoint.mockResolvedValue(null);
 
@@ -436,6 +528,92 @@ describe("syncTransactions", () => {
           transactionPages: 2,
           offset: 2,
         }),
+      }),
+    );
+  });
+
+  it("looks up backfill Fansly fan hydration before opening each DB transaction", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+
+    const order: string[] = [];
+    const tx = {};
+    fanHydrationMocks.lookupHydratedFans.mockImplementation(async () => {
+      order.push("lookup");
+      return {
+        accounts: [],
+        fallbackIds: ["fan-1"],
+      };
+    });
+    fanHydrationMocks.upsertHydratedFansForPage.mockImplementation(async (db) => {
+      order.push(db === tx ? "upsert-in-transaction" : "upsert-outside-transaction");
+      return new Map([["fan-1", 99]]);
+    });
+    dbMocks.upsertTransaction.mockImplementation(async () => {
+      order.push("transaction-write");
+    });
+
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (transactionDb: object) => Promise<unknown>) => {
+          order.push("transaction-start");
+          const result = await callback(tx);
+          order.push("transaction-end");
+          return result;
+        }),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi.fn(async () => ({
+          items: [{
+            ...buildTransaction("tx-1", "2026-03-10T00:00:00.000Z"),
+            correlationAccountId: "fan-1",
+          }],
+          total: 1,
+          done: true,
+          raw: {},
+        })),
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: createTelemetry() as never,
+      activeLease: {
+        requestSeq: 5,
+        leaseToken: "lease-token",
+      },
+    });
+
+    expect(order.slice(0, 5)).toEqual([
+      "lookup",
+      "transaction-start",
+      "upsert-in-transaction",
+      "transaction-write",
+      "transaction-end",
+    ]);
+    expect(fanHydrationMocks.lookupHydratedFans).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformUserIds: ["fan-1"],
+    }));
+    expect(fanHydrationMocks.upsertHydratedFansForPage).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        platformAccountId: 1,
+        fallbackIds: ["fan-1"],
       }),
     );
   });

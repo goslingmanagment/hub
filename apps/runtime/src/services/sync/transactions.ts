@@ -20,7 +20,7 @@ import {
 import { calculateGrossMillsFromNet, toMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { hydrateFans } from "./fan-hydration.ts";
+import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
 import {
@@ -262,15 +262,19 @@ async function syncTransactionsIncremental(
   for (const item of collectedItems) {
     await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
   }
+  const hydratedFans = await lookupHydratedFans(app, {
+    requestContext: input.requestContext,
+    platformUserIds: collectedItems
+      .map((item) => item.correlationAccountId)
+      .filter((value): value is string => Boolean(value)),
+    telemetry: input.telemetry,
+  });
+
   await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-    const fanMap = await hydrateFans(app, {
-      db: dbTx,
+    const fanMap = await upsertHydratedFansForPage(dbTx, {
       platformAccountId: input.platformAccountId,
-      requestContext: input.requestContext,
-      platformUserIds: collectedItems
-        .map((item) => item.correlationAccountId)
-        .filter((value): value is string => Boolean(value)),
-      telemetry: input.telemetry,
+      accounts: hydratedFans.accounts,
+      fallbackIds: hydratedFans.fallbackIds,
     });
 
     for (const item of collectedItems) {
@@ -602,15 +606,19 @@ async function syncTransactionsBackfill(
         await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
       }
 
+      const hydratedFans = await lookupHydratedFans(app, {
+        requestContext: input.requestContext,
+        platformUserIds: page.items
+          .map((item) => item.correlationAccountId)
+          .filter((value): value is string => Boolean(value)),
+        telemetry: input.telemetry,
+      });
+
       await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-        const fanMap = await hydrateFans(app, {
-          db: dbTx,
+        const fanMap = await upsertHydratedFansForPage(dbTx, {
           platformAccountId: input.platformAccountId,
-          requestContext: input.requestContext,
-          platformUserIds: page.items
-            .map((item) => item.correlationAccountId)
-            .filter((value): value is string => Boolean(value)),
-          telemetry: input.telemetry,
+          accounts: hydratedFans.accounts,
+          fallbackIds: hydratedFans.fallbackIds,
         });
 
         for (const item of page.items) {
