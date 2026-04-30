@@ -13,6 +13,8 @@
     "db:generate": "drizzle-kit generate --config=packages/db/drizzle.config.ts",
     "db:migrate": "node --import tsx/esm packages/db/src/migrate.ts",
     "test": "NODE_OPTIONS=--max-old-space-size=8192 vitest run",
+    "test:unit": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --exclude tests/**/*.integration.test.ts --exclude tests/schema-guard.test.ts --exclude tests/http-client.test.ts --exclude tests/network.test.ts",
+    "test:prerequisites": "NODE_OPTIONS=--max-old-space-size=8192 vitest run \"tests/**/*.integration.test.ts\" tests/schema-guard.test.ts tests/http-client.test.ts tests/network.test.ts",
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "dev:db": "docker compose up -d postgres",
