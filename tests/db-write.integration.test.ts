@@ -12,6 +12,7 @@ import {
   deleteTransactionsMissingFromWindow,
   getFollowersForPage,
   recalculateFanPageSpend,
+  refreshFanPageFollowerState,
   rebuildRevenueRollups,
   startSyncRun,
   storeFanslySession,
@@ -1218,6 +1219,125 @@ describe("db write safety", () => {
     ).toEqual([
       "2026-03-05T00:00:00.000Z",
       "2026-03-03T00:00:00.000Z",
+    ]);
+  });
+
+  it("refreshes follower projection state safely when called directly", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "direct-refresh",
+      name: "Direct Refresh",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "direct-refresh-main",
+    });
+    const otherPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "direct-refresh-other",
+    });
+    const [activeFan, inactiveFan, scopedFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-direct-active",
+        username: "direct_active",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-direct-inactive",
+        username: "direct_inactive",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-direct-scoped",
+        username: "direct_scoped",
+      },
+    ]);
+
+    await upsertFanPage(testDb.db, {
+      platformAccountId: page.id,
+      fanId: activeFan!.id,
+      isFollower: false,
+      followerSince: null,
+    });
+    await upsertFanPage(testDb.db, {
+      platformAccountId: page.id,
+      fanId: inactiveFan!.id,
+      isFollower: true,
+      followerSince: new Date("2026-03-01T00:00:00.000Z"),
+    });
+    await upsertFanPage(testDb.db, {
+      platformAccountId: otherPage.id,
+      fanId: scopedFan!.id,
+      isFollower: true,
+      followerSince: new Date("2026-03-02T00:00:00.000Z"),
+    });
+
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: activeFan!.id,
+      platformFollowId: "follow-direct-active-later",
+      followedAt: new Date("2026-03-05T00:00:00.000Z"),
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: activeFan!.id,
+      platformFollowId: "follow-direct-active-earlier",
+      followedAt: new Date("2026-03-04T00:00:00.000Z"),
+    });
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: inactiveFan!.id,
+      platformFollowId: "follow-direct-inactive",
+      followedAt: new Date("2026-03-03T00:00:00.000Z"),
+    });
+    await testDb.pool.query(`
+      update page_follows
+      set is_active = false
+      where platform_account_id = ${page.id}
+        and platform_follow_id = 'follow-direct-inactive'
+    `);
+
+    await refreshFanPageFollowerState(testDb.db, page.id);
+
+    const rows = await testDb.pool.query<{
+      platform_user_id: string;
+      is_follower: boolean;
+      follower_since: Date | null;
+    }>(`
+      select f.platform_user_id,
+             fp.is_follower,
+             fp.follower_since
+      from page_fans fp
+      join fans f on f.id = fp.fan_id
+      where fp.platform_account_id in (${page.id}, ${otherPage.id})
+      order by f.platform_user_id asc
+    `);
+
+    expect(rows.rows.map((row) => ({
+      platformUserId: row.platform_user_id,
+      isFollower: row.is_follower,
+      followerSince: row.follower_since?.toISOString() ?? null,
+    }))).toEqual([
+      {
+        platformUserId: "fan-direct-active",
+        isFollower: true,
+        followerSince: "2026-03-04T00:00:00.000Z",
+      },
+      {
+        platformUserId: "fan-direct-inactive",
+        isFollower: false,
+        followerSince: null,
+      },
+      {
+        platformUserId: "fan-direct-scoped",
+        isFollower: true,
+        followerSince: "2026-03-02T00:00:00.000Z",
+      },
     ]);
   });
 

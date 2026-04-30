@@ -526,33 +526,27 @@ export async function deactivatePageFollowsMissingFromSnapshot(
 
 export async function refreshFanPageFollowerState(db: Database, platformAccountId: number) {
   await db.execute(sql`
-    update page_fans fp
-    set is_follower = active.active_followed_at is not null,
-        follower_since = active.active_followed_at,
-        last_seen_at = now()
-    from (
+    with active as (
       select fan_id,
              min(followed_at) as active_followed_at
       from page_follows
       where platform_account_id = ${platformAccountId}
         and is_active = true
       group by fan_id
-    ) active
-    where fp.platform_account_id = ${platformAccountId}
-      and fp.fan_id = active.fan_id
-  `);
-  await db.execute(sql`
-    update page_fans
-    set is_follower = false,
-        follower_since = null,
+    ),
+    resolved as (
+      select fp.id,
+             active.active_followed_at
+      from page_fans fp
+      left join active on active.fan_id = fp.fan_id
+      where fp.platform_account_id = ${platformAccountId}
+    )
+    update page_fans fp
+    set is_follower = resolved.active_followed_at is not null,
+        follower_since = resolved.active_followed_at,
         last_seen_at = now()
-    where platform_account_id = ${platformAccountId}
-      and fan_id not in (
-        select fan_id
-        from page_follows
-        where platform_account_id = ${platformAccountId}
-          and is_active = true
-      )
+    from resolved
+    where fp.id = resolved.id
   `);
 }
 
