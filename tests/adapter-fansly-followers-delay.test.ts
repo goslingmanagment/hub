@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   captureEvents,
@@ -13,6 +13,9 @@ afterEach(() => {
 
 describe("adapter hardening", () => {
   it("keeps follower pacing above the host-global delay", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T00:00:00.000Z"));
+
     const {
       FanslyAdapter,
       fetchMock,
@@ -37,19 +40,21 @@ describe("adapter hardening", () => {
       limit: 100,
       minDelayMs: 5_000,
     });
-    await adapter.getFollowersPage(context, "acct-1", {
+    const delayedRequest = adapter.getFollowersPage(context, "acct-1", {
       offset: 100,
       limit: 100,
       minDelayMs: 50,
     });
+    await vi.advanceTimersByTimeAsync(50);
+    await delayedRequest;
 
     const startedEvents = events.filter((event) => event.state === "started");
     expect(startedEvents).toHaveLength(2);
     expect(startedEvents[0]?.rateLimitWaitMs).toBeNull();
-    expect(Number(startedEvents[1]?.rateLimitWaitMs)).toBeGreaterThanOrEqual(45);
+    expect(startedEvents[1]?.rateLimitWaitMs).toBe(50);
     expect(
       new Date(String(startedEvents[1]?.timestamp)).getTime() -
       new Date(String(startedEvents[0]?.timestamp)).getTime(),
-    ).toBeGreaterThanOrEqual(45);
+    ).toBe(50);
   });
 });

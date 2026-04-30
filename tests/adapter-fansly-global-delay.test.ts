@@ -14,6 +14,9 @@ afterEach(() => {
 
 describe("adapter hardening", () => {
   it("serializes Fansly requests from different categories behind the global delay", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T00:00:00.000Z"));
+
     const {
       FanslyAdapter,
       fetchMock,
@@ -45,19 +48,21 @@ describe("adapter hardening", () => {
     };
 
     await adapter.getAccountMe(context);
-    await adapter.getTransactionsPage(context, {
+    const delayedRequest = adapter.getTransactionsPage(context, {
       limit: 1,
       offset: 0,
     });
+    await vi.advanceTimersByTimeAsync(105);
+    await delayedRequest;
 
     const startedEvents = events.filter((event) => event.state === "started");
     expect(startedEvents).toHaveLength(2);
     expect(startedEvents[0]?.rateLimitWaitMs).toBeNull();
-    expect(Number(startedEvents[1]?.rateLimitWaitMs)).toBeGreaterThanOrEqual(95);
+    expect(startedEvents[1]?.rateLimitWaitMs).toBe(105);
     expect(
       new Date(String(startedEvents[1]?.timestamp)).getTime() -
       new Date(String(startedEvents[0]?.timestamp)).getTime(),
-    ).toBeGreaterThanOrEqual(95);
+    ).toBe(105);
     expect(events.some((event) => event.state === "retry")).toBe(false);
   });
 
