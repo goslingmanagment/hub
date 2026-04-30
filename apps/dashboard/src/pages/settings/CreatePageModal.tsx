@@ -86,7 +86,11 @@ export function CreatePageModal({
 
     try {
       const result = await createPage.mutateAsync(body);
-      toast.success("Page created — initial sync queued");
+      if (result.syncQueued) {
+        toast.success("Page created — initial sync queued");
+      } else {
+        toast.warning(result.syncWarning?.message ?? "Page created, but initial sync was not queued");
+      }
       onClose();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to create page");

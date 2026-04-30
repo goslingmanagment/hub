@@ -2167,6 +2167,16 @@ export const verifyPageResponseSchema = z.object({
 export const adminCreatePageResponseSchema = z.object({
   page: assignedPageSchema,
   verified: z.boolean(),
+  syncQueued: z.boolean(),
+  syncWarning: z.object({
+    code: z.literal("initial_sync_enqueue_failed"),
+    message: z.string(),
+  }).nullable(),
+  syncRetry: z.object({
+    method: z.literal("POST"),
+    path: z.literal("/api/v1/admin/sync/trigger"),
+    body: syncTriggerBodySchema,
+  }).nullable(),
 });
 
 export const adminUpdatePageResponseSchema = z.object({
@@ -3097,7 +3107,6 @@ export const routeSchemas = {
       403: errorResponseSchema,
       404: errorResponseSchema,
       409: errorResponseSchema,
-      503: errorResponseSchema,
     },
   },
   adminUpdatePage: {

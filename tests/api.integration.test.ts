@@ -5282,6 +5282,9 @@ describe("api integration", () => {
           username: "auto_sync_user",
         },
         verified: true,
+        syncQueued: true,
+        syncWarning: null,
+        syncRetry: null,
       });
 
       const expectedStreams = [
@@ -5336,7 +5339,7 @@ describe("api integration", () => {
     }
   }, 20_000);
 
-  it("returns 503 when page creation succeeds but the initial sync cannot be queued", async (context) => {
+  it("returns page creation success with a retry path when the initial sync cannot be queued", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -5381,11 +5384,27 @@ describe("api integration", () => {
       },
     });
 
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toEqual({
-      error: "service_unavailable",
-      message: 'Page "enqueue-fail-page" was created, but the automatic sync could not be queued',
-      statusCode: 503,
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      page: {
+        label: "enqueue-fail-page",
+        platform: "fansly",
+        username: "enqueue_fail_user",
+      },
+      verified: true,
+      syncQueued: false,
+      syncWarning: {
+        code: "initial_sync_enqueue_failed",
+        message: 'Page "enqueue-fail-page" was created, but initial sync was not queued. Retry by triggering an all sync for this page.',
+      },
+      syncRetry: {
+        method: "POST",
+        path: "/api/v1/admin/sync/trigger",
+        body: {
+          pageLabel: "enqueue-fail-page",
+          scope: "all",
+        },
+      },
     });
 
     const pageRows = await activeTestDb.pool.query<{ count: string }>(`
@@ -5394,6 +5413,34 @@ describe("api integration", () => {
       where label = 'enqueue-fail-page'
     `);
     expect(pageRows.rows[0]?.count).toBe("1");
+
+    const duplicateCreate = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/pages",
+      headers: { cookie },
+      payload: {
+        platform: "fansly",
+        modelSlug: "lana-model",
+        label: "enqueue-fail-page",
+        session: {
+          authorization: "token",
+        },
+      },
+    });
+
+    expect(duplicateCreate.statusCode).toBe(409);
+    expect(duplicateCreate.json()).toEqual({
+      error: "conflict",
+      message: 'Page "enqueue-fail-page" already exists',
+      statusCode: 409,
+    });
+
+    const pageRowsAfterRetry = await activeTestDb.pool.query<{ count: string }>(`
+      select count(*)::text as count
+      from pages
+      where label = 'enqueue-fail-page'
+    `);
+    expect(pageRowsAfterRetry.rows[0]?.count).toBe("1");
   });
 
   it("uses the latest light sync run for connection health", async (context) => {

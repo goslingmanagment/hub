@@ -8670,6 +8670,23 @@ export interface paths {
                                 lastFollowerSyncAt: string | null;
                             };
                             verified: boolean;
+                            syncQueued: boolean;
+                            syncWarning: {
+                                /** @enum {string} */
+                                code: "initial_sync_enqueue_failed";
+                                message: string;
+                            } | null;
+                            syncRetry: {
+                                /** @enum {string} */
+                                method: "POST";
+                                /** @enum {string} */
+                                path: "/api/v1/admin/sync/trigger";
+                                body: {
+                                    pageLabel: string;
+                                    /** @enum {string} */
+                                    scope: "light" | "followers" | "all" | "data" | "messages";
+                                };
+                            } | null;
                         };
                     };
                 };
@@ -8714,19 +8731,6 @@ export interface paths {
                 };
                 /** @description Default Response */
                 409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                            message: string;
-                            statusCode: number;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
                     headers: {
                         [name: string]: unknown;
                     };

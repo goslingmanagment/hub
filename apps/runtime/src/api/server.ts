@@ -883,6 +883,58 @@ export async function buildApiServer(appContext: AppContext) {
     });
   }
 
+  function initialSyncRetryFor(pageLabel: string) {
+    return {
+      method: "POST" as const,
+      path: "/api/v1/admin/sync/trigger" as const,
+      body: {
+        pageLabel,
+        scope: "all" as const,
+      },
+    };
+  }
+
+  function initialSyncWarningFor(pageLabel: string) {
+    return {
+      code: "initial_sync_enqueue_failed" as const,
+      message: `Page "${pageLabel}" was created, but initial sync was not queued. Retry by triggering an all sync for this page.`,
+    };
+  }
+
+  async function queueInitialOnboardingSync(
+    pageLabel: string,
+    log: Pick<typeof server.log, "error" | "warn">,
+  ) {
+    if (!boss) {
+      log.warn({ pageLabel }, "Initial sync for created page was not queued because the job queue is unavailable");
+      return {
+        syncQueued: false,
+        syncWarning: initialSyncWarningFor(pageLabel),
+        syncRetry: initialSyncRetryFor(pageLabel),
+      };
+    }
+
+    try {
+      await requestPageSync(appContext, boss, {
+        pageLabel,
+        scope: "all",
+        reason: "onboarding",
+      });
+      return {
+        syncQueued: true,
+        syncWarning: null,
+        syncRetry: null,
+      };
+    } catch (error) {
+      log.error({ err: error, pageLabel }, "Failed to queue initial sync for created page");
+      return {
+        syncQueued: false,
+        syncWarning: initialSyncWarningFor(pageLabel),
+        syncRetry: initialSyncRetryFor(pageLabel),
+      };
+    }
+  }
+
   // GET /api/v1/overview
   server.get("/api/v1/overview", {
     schema: routeSchemas.overview,
@@ -1803,23 +1855,12 @@ export async function buildApiServer(appContext: AppContext) {
         session: body.session,
         proxy: body.proxy ?? null,
       });
-      if (!boss) throw new Error("Job queue not available");
-      try {
-        await requestPageSync(appContext, boss, {
-          pageLabel: body.label,
-          scope: "all",
-          reason: "onboarding",
-        });
-      } catch (error) {
-        request.log.error({ err: error, pageLabel: body.label }, "Failed to queue initial sync for created page");
-        throw new ServiceUnavailableError(
-          `Page "${body.label}" was created, but the automatic sync could not be queued`,
-        );
-      }
+      const syncQueueState = await queueInitialOnboardingSync(body.label, request.log);
       const page = await getPageSummary(appContext, body.label);
       return {
         page: serializeAssignedPage(page),
         verified: true,
+        ...syncQueueState,
       };
     } else {
       await onboardOnlyFansPage(appContext, {
@@ -1829,23 +1870,12 @@ export async function buildApiServer(appContext: AppContext) {
         username: body.username,
         proxy: body.proxy ?? null,
       });
-      if (!boss) throw new Error("Job queue not available");
-      try {
-        await requestPageSync(appContext, boss, {
-          pageLabel: body.label,
-          scope: "all",
-          reason: "onboarding",
-        });
-      } catch (error) {
-        request.log.error({ err: error, pageLabel: body.label }, "Failed to queue initial sync for created page");
-        throw new ServiceUnavailableError(
-          `Page "${body.label}" was created, but the automatic sync could not be queued`,
-        );
-      }
+      const syncQueueState = await queueInitialOnboardingSync(body.label, request.log);
       const page = await getPageSummary(appContext, body.label);
       return {
         page: serializeAssignedPage(page),
         verified: true,
+        ...syncQueueState,
       };
     }
   });

@@ -29768,11 +29768,97 @@
                     },
                     "verified": {
                       "type": "boolean"
+                    },
+                    "syncQueued": {
+                      "type": "boolean"
+                    },
+                    "syncWarning": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "enum": [
+                                "initial_sync_enqueue_failed"
+                              ]
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "syncRetry": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "method": {
+                              "type": "string",
+                              "enum": [
+                                "POST"
+                              ]
+                            },
+                            "path": {
+                              "type": "string",
+                              "enum": [
+                                "/api/v1/admin/sync/trigger"
+                              ]
+                            },
+                            "body": {
+                              "type": "object",
+                              "properties": {
+                                "pageLabel": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "scope": {
+                                  "type": "string",
+                                  "enum": [
+                                    "light",
+                                    "followers",
+                                    "all",
+                                    "data",
+                                    "messages"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "pageLabel",
+                                "scope"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "method",
+                            "path",
+                            "body"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
                     "page",
-                    "verified"
+                    "verified",
+                    "syncQueued",
+                    "syncWarning",
+                    "syncRetry"
                   ],
                   "additionalProperties": false
                 }
@@ -29867,35 +29953,6 @@
             }
           },
           "409": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "503": {
             "description": "Default Response",
             "content": {
               "application/json": {
