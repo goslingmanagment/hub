@@ -34,3 +34,6 @@ jobs:
 
       - name: Reliable unit tests
         run: pnpm test:unit
+
+      - name: Sync-critical DB/schema/network tests
+        run: pnpm test:prerequisites
