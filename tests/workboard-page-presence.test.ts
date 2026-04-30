@@ -11,7 +11,7 @@ const queryMocks = vi.hoisted(() => ({
   useWorkboardUnsnooze: vi.fn(),
 }));
 
-const presencePanelMock = vi.hoisted(() => vi.fn(() => "presence"));
+const presencePanelMock = vi.hoisted(() => vi.fn((_props: unknown) => "presence"));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 vi.mock("../apps/dashboard/src/components/page/workboard/PresencePanel.tsx", () => ({

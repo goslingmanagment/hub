@@ -808,6 +808,9 @@ describe("sync executor handlers", () => {
   });
 
   it("promotes followers_reconcile when follower drift is detected", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-10T01:00:00.000Z"));
+
     const telemetry = createTelemetry();
     const tx = {};
     const db = {
@@ -853,53 +856,57 @@ describe("sync executor handlers", () => {
     dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
     dbMocks.countActivePageFollows.mockResolvedValue(0);
 
-    const result = await executeFollowersChunk(app, {
-      pageContext: {
-        platform: "fansly",
-        page: {
-          id: 12,
-          label: "fansly-page",
-          platformAccountId: "acct-12",
-          metadata: {},
+    try {
+      const result = await executeFollowersChunk(app, {
+        pageContext: {
+          platform: "fansly",
+          page: {
+            id: 12,
+            label: "fansly-page",
+            platformAccountId: "acct-12",
+            metadata: {},
+          },
+          session: { authorization: "token" },
+          proxy: null,
         },
-        session: { authorization: "token" },
-        proxy: null,
-      },
-      streamState: {
-        requestSeq: 3,
-      },
-      syncRunId: 101,
-      telemetry: telemetry as never,
-      budget: new SyncChunkBudget(),
-    } as never);
+        streamState: {
+          requestSeq: 3,
+        },
+        syncRunId: 101,
+        telemetry: telemetry as never,
+        budget: new SyncChunkBudget(),
+      } as never);
 
-    expect(result.satisfied).toBe(true);
-    expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, expect.any(Array));
-    expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, expect.any(Array));
-    expect(dbMocks.upsertFanPageExternalPresences).toHaveBeenCalledWith(tx, [{
-      fanId: 91,
-      platformAccountId: 12,
-      externalPresenceAt: expect.any(Date),
-      externalPresenceObservedAt: expect.any(Date),
-      externalPresenceSource: "fansly_followers_last_seen",
-    }]);
-    expect(dbMocks.rebuildFollowerRollups).toHaveBeenCalledWith(tx, 12, 1);
-    expect(dbMocks.updatePageSyncTimestampCache).toHaveBeenCalledWith(tx, {
-      pageId: 12,
-      syncType: "followers",
-    });
-    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
-      platformAccountId: 12,
-      stream: "followers",
-    }));
-    expect(dbMocks.countActivePageFollows).toHaveBeenCalledWith(db, 12);
-  expect(dbMocks.requestPageSync).toHaveBeenCalledWith(db, {
-    pageId: 12,
-    streams: ["followers_reconcile"],
-    source: "anomaly",
+      expect(result.satisfied).toBe(true);
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, expect.any(Array));
+      expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, expect.any(Array));
+      expect(dbMocks.upsertFanPageExternalPresences).toHaveBeenCalledWith(tx, [{
+        fanId: 91,
+        platformAccountId: 12,
+        externalPresenceAt: expect.any(Date),
+        externalPresenceObservedAt: expect.any(Date),
+        externalPresenceSource: "fansly_followers_last_seen",
+      }]);
+      expect(dbMocks.rebuildFollowerRollups).toHaveBeenCalledWith(tx, 12, 1);
+      expect(dbMocks.updatePageSyncTimestampCache).toHaveBeenCalledWith(tx, {
+        pageId: 12,
+        syncType: "followers",
+      });
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+        platformAccountId: 12,
+        stream: "followers",
+      }));
+      expect(dbMocks.countActivePageFollows).toHaveBeenCalledWith(db, 12);
+      expect(dbMocks.requestPageSync).toHaveBeenCalledWith(db, {
+        pageId: 12,
+        streams: ["followers_reconcile"],
+        source: "anomaly",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
-});
 
 it("guards against empty first-page follower reconcile wipes when active followers already exist", async () => {
   const telemetry = createTelemetry();
