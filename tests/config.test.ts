@@ -136,10 +136,21 @@ describe("config", () => {
       FANSLY_DEFAULT_DELAY_MS: "",
       FANSLY_GLOBAL_DELAY_MS: " ",
       FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "",
+      HEALTH_SYNC_MONITORING_TOKEN: " ",
     });
 
     expect(config.syncHttpTraceFile).toBeNull();
     expect(config.fanslyDefaultDelayMs).toBe(2500);
+    expect(config.healthSyncMonitoringToken).toBeNull();
+  });
+
+  it("accepts an explicit sync health monitoring token", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      HEALTH_SYNC_MONITORING_TOKEN: "health-monitor-secret",
+    });
+
+    expect(config.healthSyncMonitoringToken).toBe("health-monitor-secret");
   });
 
   it("accepts an explicit Telegram report hour", () => {

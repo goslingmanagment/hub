@@ -54,6 +54,7 @@ const bootstrapMocks = vi.hoisted(() => {
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,
       healthSyncFollowerMaxAgeMinutes: 1080,
+      healthSyncMonitoringToken: null,
       telegramBotToken: null,
       telegramChatId: null,
       telegramEnabled: false,

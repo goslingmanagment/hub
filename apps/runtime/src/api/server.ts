@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
@@ -316,6 +318,11 @@ export async function buildApiServer(appContext: AppContext) {
             type: "http",
             scheme: "bearer",
           },
+          monitoringTokenAuth: {
+            type: "apiKey",
+            in: "header",
+            name: "x-monitoring-token",
+          },
         },
       },
     },
@@ -324,10 +331,6 @@ export async function buildApiServer(appContext: AppContext) {
     }),
     transformObject: jsonSchemaTransformObject,
   });
-  await server.register(swaggerUi, {
-    routePrefix: "/documentation",
-  });
-
   async function resolvePrincipal(request: {
     auth?: AuthPrincipal | null;
     headers: Record<string, string | string[] | undefined>;
@@ -362,6 +365,53 @@ export async function buildApiServer(appContext: AppContext) {
     }
     return principal;
   }
+
+  function safeStringEquals(left: string, right: string) {
+    const leftBuffer = Buffer.from(left);
+    const rightBuffer = Buffer.from(right);
+    return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+  }
+
+  function hasValidSyncHealthMonitoringToken(request: {
+    headers: Record<string, string | string[] | undefined>;
+  }) {
+    const configuredToken = appContext.config.healthSyncMonitoringToken;
+    if (!configuredToken) {
+      return false;
+    }
+
+    const token = request.headers["x-monitoring-token"];
+    return typeof token === "string" && safeStringEquals(token, configuredToken);
+  }
+
+  async function requireSyncHealthAccess(request: {
+    auth?: AuthPrincipal | null;
+    headers: Record<string, string | string[] | undefined>;
+    cookies: Record<string, string | undefined>;
+  }) {
+    if (hasValidSyncHealthMonitoringToken(request)) {
+      return;
+    }
+
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+  }
+
+  async function requireOpenApiDocsOwner(request: {
+    auth?: AuthPrincipal | null;
+    headers: Record<string, string | string[] | undefined>;
+    cookies: Record<string, string | undefined>;
+  }) {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+  }
+
+  await server.register(swaggerUi, {
+    routePrefix: "/documentation",
+    uiHooks: {
+      onRequest: requireOpenApiDocsOwner,
+    },
+  });
 
   function isAdminPageVerifyBadRequest(error: unknown) {
     if (error instanceof BadRequestError) {
@@ -441,7 +491,8 @@ export async function buildApiServer(appContext: AppContext) {
 
   server.get("/api/v1/health/sync", {
     schema: routeSchemas.healthSync,
-  }, async (_request, reply) => {
+  }, async (request, reply) => {
+    await requireSyncHealthAccess(request);
     const health = await getPublicSyncHealth(appContext);
     reply.code(health.statusCode as 200 | 503);
     return health.body;
@@ -1432,7 +1483,8 @@ export async function buildApiServer(appContext: AppContext) {
   // OpenAPI JSON
   server.get("/api/v1/openapi.json", {
     schema: routeSchemas.openApiJson,
-  }, async () => {
+  }, async (request) => {
+    await requireOpenApiDocsOwner(request);
     return server.swagger();
   });
 

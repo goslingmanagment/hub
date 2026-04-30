@@ -43,6 +43,7 @@ describe("health service", () => {
       config: {
         healthSyncLightMaxAgeMinutes: 180,
         healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
       },
     } as never, {
       now: new Date("2026-03-23T12:00:00.000Z"),

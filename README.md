@@ -7,7 +7,9 @@ For v1.0 production:
 - the production container runs compiled Node.js output, not `tsx`
 - migrations run automatically on API and worker startup under a Postgres advisory lock
 - crashed services restart automatically through Docker restart policies
-- public monitoring endpoints are available at `/api/v1/health` and `/api/v1/health/sync`
+- public process/database health is available at `/api/v1/health`
+- detailed sync health at `/api/v1/health/sync` requires an owner or dashboard session, or a configured `HEALTH_SYNC_MONITORING_TOKEN` sent as `x-monitoring-token`
+- Swagger/OpenAPI docs at `/documentation` and `/api/v1/openapi.json` require an owner dashboard session
 
 Backups are intentionally deferred in this release hardening pass. Do not assume built-in backup or restore scripts exist yet.
 
@@ -65,10 +67,9 @@ docker compose -f docker-compose.production.yml up -d --build
 
 ```bash
 curl http://127.0.0.1:3000/api/v1/health
-curl http://127.0.0.1:3000/api/v1/health/sync
 ```
 
-`/api/v1/health` should return HTTP `200`. `/api/v1/health/sync` is public and may return HTTP `200` or `503`, because it reports real per-page sync state rather than simple process liveness.
+`/api/v1/health` should return HTTP `200`. If external monitoring needs detailed per-page sync state, set `HEALTH_SYNC_MONITORING_TOKEN` in the runtime environment and call `/api/v1/health/sync` with that value in the `x-monitoring-token` header. That endpoint may return HTTP `200` or `503`, because it reports real per-page sync state rather than simple process liveness.
 
 7. Create the first owner account:
 

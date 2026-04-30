@@ -5511,7 +5511,7 @@ describe("api integration", () => {
     expect(typeof degraded.json().checks.database.latencyMs).toBe("number");
   });
 
-  it("serves public sync health for external monitoring without requiring auth", async (context) => {
+  it("requires dashboard auth or a monitoring token for detailed sync health", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -5519,9 +5519,28 @@ describe("api integration", () => {
 
     await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, new Date());
 
+    const anonymous = await server.inject({
+      method: "GET",
+      url: "/api/v1/health/sync",
+    });
+
+    expect(anonymous.statusCode).toBe(401);
+    expect(JSON.stringify(anonymous.json())).not.toContain("lana");
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
     const response = await server.inject({
       method: "GET",
       url: "/api/v1/health/sync",
+      headers: { cookie },
     });
 
     expect(response.statusCode).toBe(503);
@@ -5560,6 +5579,37 @@ describe("api integration", () => {
         issues: expect.arrayContaining([
           "follower_sync_missing",
         ]),
+      }),
+    ]));
+
+    await server.close();
+    const monitoredContext = createTestAppContext(testDb, {
+      healthSyncMonitoringToken: "health-monitor-secret",
+    });
+    server = await buildApiServer(monitoredContext);
+    await server.ready();
+
+    const badToken = await server.inject({
+      method: "GET",
+      url: "/api/v1/health/sync",
+      headers: {
+        "x-monitoring-token": "wrong-token",
+      },
+    });
+    expect(badToken.statusCode).toBe(401);
+
+    const monitored = await server.inject({
+      method: "GET",
+      url: "/api/v1/health/sync",
+      headers: {
+        "x-monitoring-token": "health-monitor-secret",
+      },
+    });
+    expect(monitored.statusCode).toBe(503);
+    expect(monitored.json().pages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        pageLabel: "lana",
+        platform: "fansly",
       }),
     ]));
   });
@@ -6568,7 +6618,7 @@ describe("api integration", () => {
     expect(proxyRows.rows[0]?.count).toBe(0);
   });
 
-  it("serves follower and subscriber daily series plus swagger security schemes", async (context) => {
+  it("serves follower and subscriber daily series plus protected swagger security schemes", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -6612,6 +6662,32 @@ describe("api integration", () => {
       ]),
     );
 
+    const anonymousSpec = await server.inject({
+      method: "GET",
+      url: "/api/v1/openapi.json",
+    });
+    expect(anonymousSpec.statusCode).toBe(401);
+
+    const anonymousDocs = await server.inject({
+      method: "GET",
+      url: "/documentation/",
+    });
+    expect(anonymousDocs.statusCode).toBe(401);
+
+    const specResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/openapi.json",
+      headers: { cookie },
+    });
+    expect(specResponse.statusCode).toBe(200);
+
+    const docsResponse = await server.inject({
+      method: "GET",
+      url: "/documentation/",
+      headers: { cookie },
+    });
+    expect(docsResponse.statusCode).toBe(200);
+
     const spec = server.swagger() as {
       components?: {
         securitySchemes?: Record<string, unknown>;
@@ -6620,6 +6696,7 @@ describe("api integration", () => {
     expect(spec.components?.securitySchemes).toMatchObject({
       cookieAuth: expect.any(Object),
       bearerAuth: expect.any(Object),
+      monitoringTokenAuth: expect.any(Object),
     });
   });
 

@@ -69,6 +69,7 @@ const envSchema = z.object({
   SYNC_OBSERVABILITY_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(180),
   HEALTH_SYNC_FOLLOWER_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(1080),
+  HEALTH_SYNC_MONITORING_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
@@ -99,6 +100,7 @@ export interface AppConfig {
   syncObservabilityRetentionDays: number;
   healthSyncLightMaxAgeMinutes: number;
   healthSyncFollowerMaxAgeMinutes: number;
+  healthSyncMonitoringToken: string | null;
   telegramBotToken: string | null;
   telegramChatId: string | null;
   telegramEnabled: boolean;
@@ -173,6 +175,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     syncObservabilityRetentionDays: parsed.SYNC_OBSERVABILITY_RETENTION_DAYS,
     healthSyncLightMaxAgeMinutes: parsed.HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES,
     healthSyncFollowerMaxAgeMinutes: parsed.HEALTH_SYNC_FOLLOWER_MAX_AGE_MINUTES,
+    healthSyncMonitoringToken: parsed.HEALTH_SYNC_MONITORING_TOKEN ?? null,
     telegramBotToken,
     telegramChatId,
     telegramEnabled,

@@ -85,7 +85,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Public sync health for external monitoring */
+        /** Detailed sync health */
         get: {
             parameters: {
                 query?: never;
@@ -141,6 +141,32 @@ export interface paths {
                                 lastErrorSummary: string | null;
                                 issues: string[];
                             }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
                         };
                     };
                 };
@@ -6470,6 +6496,32 @@ export interface paths {
                     };
                     content: {
                         "application/json": unknown;
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
                     };
                 };
             };

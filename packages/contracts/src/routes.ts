@@ -2188,6 +2188,10 @@ const cookieOrBearerSecurity: Array<Record<string, string[]>> = [
   { cookieAuth: [] },
   { bearerAuth: [] },
 ];
+const dashboardOrMonitoringTokenSecurity: Array<Record<string, string[]>> = [
+  { cookieAuth: [] },
+  { monitoringTokenAuth: [] },
+];
 
 export const routeSchemas = {
   health: {
@@ -2200,9 +2204,12 @@ export const routeSchemas = {
   },
   healthSync: {
     tags: ["system"],
-    summary: "Public sync health for external monitoring",
+    summary: "Detailed sync health",
+    security: dashboardOrMonitoringTokenSecurity,
     response: {
       200: syncHealthResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
       503: syncHealthResponseSchema,
     },
   },
@@ -2796,8 +2803,11 @@ export const routeSchemas = {
   openApiJson: {
     tags: ["system"],
     summary: "Get the OpenAPI specification",
+    security: cookieOnlySecurity,
     response: {
       200: z.any(),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
   // Admin routes

@@ -19,6 +19,7 @@ export function createTestAppContext(
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
     syncSharedRateLimitEnabled?: boolean;
+    healthSyncMonitoringToken?: string | null;
     trustProxy?: boolean;
   },
 ) {
@@ -58,6 +59,7 @@ export function createTestAppContext(
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,
       healthSyncFollowerMaxAgeMinutes: 1080,
+      healthSyncMonitoringToken: overrides?.healthSyncMonitoringToken ?? null,
       telegramBotToken: null,
       telegramChatId: null,
       telegramEnabled: false,
