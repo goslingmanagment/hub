@@ -1,16 +1,21 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-describe("dashboard period store", () => {
-  it("removes custom ranges and migrates invalid persisted values back to 30d", () => {
-    const source = readFileSync(
-      new URL("../apps/dashboard/src/stores/periodStore.ts", import.meta.url),
-      "utf8",
-    );
+import { migratePeriodState } from "../apps/dashboard/src/stores/periodStore.ts";
 
-    expect(source).toContain('export type PeriodOption = "today" | "7d" | "30d" | "all";');
-    expect(source).toContain("version: 2");
-    expect(source).toContain("SUPPORTED_PERIODS.has(persistedState.period as PeriodOption)");
-    expect(source).toContain(": DEFAULT_PERIOD;");
+describe("dashboard period store", () => {
+  it("defaults to 7d and migrates invalid persisted values back to 7d", () => {
+    expect(migratePeriodState(null, 3)).toEqual({ period: "7d" });
+    expect(migratePeriodState({ period: "custom" }, 3)).toEqual({ period: "7d" });
+  });
+
+  it("migrates the old persisted 30d default to 7d", () => {
+    expect(migratePeriodState({ period: "30d" }, 2)).toEqual({ period: "7d" });
+  });
+
+  it("preserves supported non-default persisted values and new 30d selections", () => {
+    expect(migratePeriodState({ period: "today" }, 2)).toEqual({ period: "today" });
+    expect(migratePeriodState({ period: "7d" }, 2)).toEqual({ period: "7d" });
+    expect(migratePeriodState({ period: "all" }, 2)).toEqual({ period: "all" });
+    expect(migratePeriodState({ period: "30d" }, 3)).toEqual({ period: "30d" });
   });
 });

@@ -20,7 +20,7 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
 import { buildFanProfileNavigation, buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
-import { usePeriodStore } from "@/stores/periodStore";
+import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import {
   formatDate,
@@ -34,12 +34,22 @@ import type { SpenderListResponse, SubscriberListResponse, TransactionListRespon
 type TabKey = "transactions" | "spenders" | "followers";
 
 const PAGE_SIZE = 50;
+const PERIOD_LABELS = {
+  today: "Today",
+  "7d": "7 Days",
+  "30d": "30 Days",
+  all: "All Time",
+} satisfies Record<PeriodOption, string>;
 const PageActivityChart = lazy(() =>
   import("@/components/page/PageActivityChart").then((m) => ({ default: m.PageActivityChart })),
 );
 
 function isRecent(iso: string | null) {
   return iso ? Date.now() - new Date(iso).getTime() < 86_400_000 : false;
+}
+
+function getAudienceChartPeriod(period: PeriodOption): PeriodOption {
+  return period === "today" ? "7d" : period;
 }
 
 function getPageExceptionMessage(
@@ -61,6 +71,7 @@ export function PageDetailPage() {
   const { data: auth } = useAuthMe();
   const { period } = usePeriodStore();
   const selectedPeriod = period;
+  const audienceChartPeriod = getAudienceChartPeriod(selectedPeriod);
 
   const { findPageByLabel, pageCatalogState, pageCatalogError } = useDashboardShell();
   const resolvedPageLabel = pageLabel ?? "";
@@ -72,10 +83,10 @@ export function PageDetailPage() {
   });
 
   const isFansly = page?.platform === "fansly";
-  const { data: dailyData } = usePageFollowersDaily(resolvedPageLabel, selectedPeriod, {
+  const { data: dailyData } = usePageFollowersDaily(resolvedPageLabel, audienceChartPeriod, {
     enabled: canLoadPageData && isFansly,
   });
-  const { data: subsDailyData } = usePageSubscribersDaily(resolvedPageLabel, selectedPeriod, {
+  const { data: subsDailyData } = usePageSubscribersDaily(resolvedPageLabel, audienceChartPeriod, {
     enabled: canLoadPageData,
   });
   const { data: revenueDailyData } = usePageRevenueDaily(resolvedPageLabel, selectedPeriod, {
@@ -163,13 +174,8 @@ export function PageDetailPage() {
     businessDate: item.businessDate,
     value: item.netAmountMills,
   }));
-  const selectedPeriodLabel = selectedPeriod === "today"
-    ? "Today"
-    : selectedPeriod === "7d"
-      ? "7 Days"
-      : selectedPeriod === "all"
-        ? "All Time"
-        : "30 Days";
+  const selectedPeriodLabel = PERIOD_LABELS[selectedPeriod];
+  const audienceChartPeriodLabel = PERIOD_LABELS[audienceChartPeriod];
   const syncMode = getSyncUxDisplayMode(page.syncUx, "page_detail");
   const exceptionKind = getSyncUxExceptionKind(page.syncUx);
   const syncTone = getSyncUxTone(page.syncUx.state);
@@ -275,8 +281,8 @@ export function PageDetailPage() {
       >
         <PageActivityChart
           title={chartTitle}
-          selectedPeriod={selectedPeriod}
-          selectedPeriodLabel={selectedPeriodLabel}
+          selectedPeriod={audienceChartPeriod}
+          selectedPeriodLabel={audienceChartPeriodLabel}
           points={activityPoints}
           color="#5b8def"
         />

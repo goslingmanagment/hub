@@ -339,10 +339,10 @@ describe("dashboard sync product surfaces", () => {
     );
 
     expect(html).toContain("Page not found");
-    expect(queryMocks.usePageRevenue).toHaveBeenCalledWith("missing", "30d", { enabled: false });
-    expect(queryMocks.usePageFollowersDaily).toHaveBeenCalledWith("missing", "30d", { enabled: false });
-    expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("missing", "30d", { enabled: false });
-    expect(queryMocks.usePageRevenueDaily).toHaveBeenCalledWith("missing", "30d", { enabled: false });
+    expect(queryMocks.usePageRevenue).toHaveBeenCalledWith("missing", "7d", { enabled: false });
+    expect(queryMocks.usePageFollowersDaily).toHaveBeenCalledWith("missing", "7d", { enabled: false });
+    expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("missing", "7d", { enabled: false });
+    expect(queryMocks.usePageRevenueDaily).toHaveBeenCalledWith("missing", "7d", { enabled: false });
     expect(queryMocks.usePageSubscribers).toHaveBeenCalledWith("missing", { limit: 6 }, { enabled: false });
     expect(queryMocks.usePageTransactions).toHaveBeenCalledWith("missing", {
       limit: 50,
@@ -354,7 +354,7 @@ describe("dashboard sync product surfaces", () => {
     expect(queryMocks.useSpenders).toHaveBeenCalledWith({
       scope: "page",
       pageLabel: "missing",
-      period: "30d",
+      period: "7d",
       limit: 50,
       offset: 0,
       sortBy: "creatorNetAmountMills",
@@ -378,10 +378,10 @@ describe("dashboard sync product surfaces", () => {
       overview.pages,
     );
 
-    expect(queryMocks.usePageRevenue).toHaveBeenCalledWith("lana", "30d", { enabled: true });
-    expect(queryMocks.usePageFollowersDaily).toHaveBeenCalledWith("lana", "30d", { enabled: true });
-    expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("lana", "30d", { enabled: true });
-    expect(queryMocks.usePageRevenueDaily).toHaveBeenCalledWith("lana", "30d", { enabled: true });
+    expect(queryMocks.usePageRevenue).toHaveBeenCalledWith("lana", "7d", { enabled: true });
+    expect(queryMocks.usePageFollowersDaily).toHaveBeenCalledWith("lana", "7d", { enabled: true });
+    expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("lana", "7d", { enabled: true });
+    expect(queryMocks.usePageRevenueDaily).toHaveBeenCalledWith("lana", "7d", { enabled: true });
     expect(queryMocks.usePageSubscribers).toHaveBeenCalledWith("lana", { limit: 6 }, { enabled: true });
     expect(queryMocks.usePageTransactions).toHaveBeenCalledWith("lana", {
       limit: 50,
@@ -393,7 +393,7 @@ describe("dashboard sync product surfaces", () => {
     expect(queryMocks.useSpenders).toHaveBeenCalledWith({
       scope: "page",
       pageLabel: "lana",
-      period: "30d",
+      period: "7d",
       limit: 50,
       offset: 0,
       sortBy: "creatorNetAmountMills",
