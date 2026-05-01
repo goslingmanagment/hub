@@ -5607,6 +5607,11 @@ describe("api integration", () => {
     expect(typeof body.timestamp).toBe("string");
     expect(body.overall.failedStreams).toBeGreaterThan(0);
     expect(body.overall.stalledStreams).toBeGreaterThan(0);
+    expect(body.overall).toMatchObject({
+      recentFailedRuns: 1,
+      recent429s: 1,
+      recent5xxs: 1,
+    });
 
     expect(body.pages).toEqual(expect.arrayContaining([
       expect.objectContaining({

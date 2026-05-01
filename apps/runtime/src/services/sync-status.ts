@@ -156,7 +156,29 @@ export interface SyncStatusPage {
 
 export interface SyncStatusSnapshot {
   generatedAt: string;
+  recentCounters: {
+    failedRuns: number;
+    http429s: number;
+    http5xxs: number;
+  };
   pages: SyncStatusPage[];
+}
+
+function emptyRecentCounters(): SyncStatusSnapshot["recentCounters"] {
+  return {
+    failedRuns: 0,
+    http429s: 0,
+    http5xxs: 0,
+  };
+}
+
+function recentCountersFor(rows: SyncMonitorStreamRow[]): SyncStatusSnapshot["recentCounters"] {
+  return rows.reduce<SyncStatusSnapshot["recentCounters"]>((acc, row) => {
+    acc.failedRuns += row.recentFailedCount;
+    acc.http429s += row.recent429Count;
+    acc.http5xxs += row.recent5xxCount;
+    return acc;
+  }, emptyRecentCounters());
 }
 
 function iso(value: Date | null | undefined) {
@@ -1189,6 +1211,7 @@ export async function getSyncStatusSnapshot(
   if (scopedPageIds.length === 0) {
     return {
       generatedAt: now.toISOString(),
+      recentCounters: emptyRecentCounters(),
       pages: [],
     };
   }
@@ -1244,6 +1267,7 @@ export async function getSyncStatusSnapshot(
 
   return {
     generatedAt: now.toISOString(),
+    recentCounters: recentCountersFor(monitorRows),
     pages: scopedPages.map((page) => {
       const supportedTasks = getSyncStreamsForPlatform(page.platform);
       const blocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) => {

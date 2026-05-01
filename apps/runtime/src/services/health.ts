@@ -29,6 +29,14 @@ function firstErrorSummary(
   return first?.statusReason?.summary ?? first?.error?.summary ?? null;
 }
 
+function recentCountersFromSnapshot(snapshot: Awaited<ReturnType<typeof getSyncStatusSnapshot>>) {
+  return snapshot.recentCounters ?? {
+    failedRuns: 0,
+    http429s: 0,
+    http5xxs: 0,
+  };
+}
+
 export async function getSystemHealth(app: AppContext) {
   const timestamp = new Date().toISOString();
   const startedAt = Date.now();
@@ -92,6 +100,7 @@ export async function getPublicSyncHealth(
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
   const snapshotPagesById = new Map(snapshot.pages.map((page) => [page.pageId, page]));
+  const recentCounters = recentCountersFromSnapshot(snapshot);
   const allPageIds = new Set([
     ...connectionsById.keys(),
     ...snapshotPagesById.keys(),
@@ -208,9 +217,9 @@ export async function getPublicSyncHealth(
         failedStreams,
         stalledStreams,
         pendingStreams,
-        recentFailedRuns: 0,
-        recent429s: 0,
-        recent5xxs: 0,
+        recentFailedRuns: recentCounters.failedRuns,
+        recent429s: recentCounters.http429s,
+        recent5xxs: recentCounters.http5xxs,
       },
       pages,
     },

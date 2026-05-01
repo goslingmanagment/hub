@@ -156,6 +156,35 @@ describe("sync status service", () => {
     vi.clearAllMocks();
   });
 
+  it("aggregates recent monitor counters for health reporting", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "transactions",
+        recentFailedCount: 1,
+        recent429Count: 2,
+      }),
+      buildMonitorRow({
+        stream: "followers",
+        recentFailedCount: 3,
+        recent5xxCount: 4,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.recentCounters).toEqual({
+      failedRuns: 4,
+      http429s: 2,
+      http5xxs: 4,
+    });
+  });
+
   it("does not report message history as up_to_date while backlog remains", async () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{

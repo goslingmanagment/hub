@@ -78,6 +78,61 @@ describe("health service", () => {
     });
   });
 
+  it("reports recent sync failure counters from the sync status snapshot", async () => {
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 7,
+        label: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        connectionStatus: "active",
+        lastLightSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      recentCounters: {
+        failedRuns: 2,
+        http429s: 3,
+        http5xxs: 4,
+      },
+      pages: [{
+        pageId: 7,
+        pageLabel: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        blocks: {
+          connection: { state: "up_to_date", statusReason: null, error: null },
+          financials: { state: "up_to_date", statusReason: null, error: null },
+          audience: { state: "up_to_date", statusReason: null, error: null },
+          messages_live: { state: "up_to_date", statusReason: null, error: null },
+          messages_history: { state: "not_available", statusReason: null, error: null },
+        },
+      }],
+    });
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body.overall).toMatchObject({
+      recentFailedRuns: 2,
+      recent429s: 3,
+      recent5xxs: 4,
+    });
+  });
+
   it("sanitizes database probe failures in the public health response", async () => {
     const app = {
       pool: {
