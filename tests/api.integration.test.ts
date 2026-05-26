@@ -4172,6 +4172,315 @@ describe("api integration", () => {
     });
   });
 
+  it("lists page spender auto-list buckets from lifetime gross spend", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const [zeroFan, subCentFan, oneCentFan, nonFollowerFan, deletedFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-zero",
+        username: "zero",
+        displayName: "Zero Spend",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-sub-cent",
+        username: "sub_cent",
+        displayName: "Sub Cent",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-one-cent",
+        username: "one_cent",
+        displayName: "One Cent",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-non-follower",
+        username: "non_follower",
+        displayName: "Non Follower",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-deleted",
+        username: "deleted_before",
+        displayName: "Deleted Before",
+      },
+    ]);
+    for (const fan of [zeroFan, subCentFan, oneCentFan, deletedFan]) {
+      await upsertFanPage(testDb.db, {
+        fanId: fan.id,
+        platformAccountId: fixture.lanaPage.id,
+        isFollower: true,
+        isSubscriber: false,
+      });
+    }
+    await upsertFanPage(testDb.db, {
+      fanId: nonFollowerFan.id,
+      platformAccountId: fixture.lanaPage.id,
+      isFollower: false,
+      isSubscriber: false,
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: subCentFan.id,
+      transactionId: "tx-sub-cent-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 5n,
+      sourceDestinationAmountMills: 5n,
+      creatorNetAmountMills: 5n,
+      occurredAt: new Date("2026-03-06T14:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: oneCentFan.id,
+      transactionId: "tx-one-cent-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 10n,
+      sourceDestinationAmountMills: 10n,
+      creatorNetAmountMills: 10n,
+      occurredAt: new Date("2026-03-06T14:01:00.000Z"),
+    });
+    await upsertPageSubscription(testDb.db, {
+      platformSubscriptionId: "sub-non-follower-expired",
+      platformAccountId: fixture.lanaPage.id,
+      fanId: nonFollowerFan.id,
+      rawStatus: 4,
+      canonicalStatus: "expired",
+      priceMills: 5000n,
+      renewPriceMills: 5000n,
+      autoRenew: false,
+      sourceCreatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      endsAt: new Date("2026-02-01T00:00:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: nonFollowerFan.id,
+      transactionId: "tx-non-follower-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 20000n,
+      sourceDestinationAmountMills: 20000n,
+      creatorNetAmountMills: 20000n,
+      occurredAt: new Date("2026-03-06T14:02:00.000Z"),
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: deletedFan.id,
+      transactionId: "tx-deleted-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 15000n,
+      sourceDestinationAmountMills: 15000n,
+      creatorNetAmountMills: 15000n,
+      occurredAt: new Date("2026-03-06T14:03:00.000Z"),
+    });
+    await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-deleted",
+      metadata: {},
+      deletedDetectedAt: new Date("2026-03-07T10:00:00.000Z"),
+    }]);
+    await recalculateFanPageSpend(testDb.db, fixture.lanaPage.id);
+
+    const ownerCookie = await loginOwnerCookie(server);
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/spender-autolists",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      page: {
+        label: "lana",
+        platform: "fansly",
+      },
+      currency: "USD",
+      metric: "lifetimeGrossAmountMills",
+      totalEntries: 3,
+      lists: [
+        {
+          key: "0-25",
+          label: "[FB] $0-$25 Spenders",
+          minAmountMills: 10,
+          maxAmountMillsExclusive: 25000,
+          entryCount: 3,
+        },
+        {
+          key: "25-50",
+          label: "[FB] $25-$50 Spenders",
+          minAmountMills: 25000,
+          maxAmountMillsExclusive: 50000,
+          entryCount: 0,
+        },
+        {
+          key: "50-150",
+          label: "[FB] $50-$150 Spenders",
+          minAmountMills: 50000,
+          maxAmountMillsExclusive: 150000,
+          entryCount: 0,
+        },
+        {
+          key: "150-350",
+          label: "[FB] $150-$350 Spenders",
+          minAmountMills: 150000,
+          maxAmountMillsExclusive: 350000,
+          entryCount: 0,
+        },
+        {
+          key: "350-600",
+          label: "[FB] $350-$600 Spenders",
+          minAmountMills: 350000,
+          maxAmountMillsExclusive: 600000,
+          entryCount: 0,
+        },
+        {
+          key: "600-plus",
+          label: "[FB] $600+ Spenders",
+          minAmountMills: 600000,
+          maxAmountMillsExclusive: null,
+          entryCount: 0,
+        },
+      ],
+    });
+    expect(response.json().asOf).toBeTruthy();
+
+    const detailResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/spender-autolists/0-25?limit=10&offset=0",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+
+    expect(detailResponse.statusCode).toBe(200);
+    expect(detailResponse.json()).toMatchObject({
+      page: {
+        label: "lana",
+        platform: "fansly",
+      },
+      bucket: {
+        key: "0-25",
+        minAmountMills: 10,
+        maxAmountMillsExclusive: 25000,
+        entryCount: 3,
+      },
+      total: 3,
+      limit: 10,
+      offset: 0,
+    });
+    expect(detailResponse.json().items.map((item: { fan: { platformUserId: string } }) => item.fan.platformUserId)).toEqual([
+      "fan-non-follower",
+      "fan-001",
+      "fan-one-cent",
+    ]);
+    expect(detailResponse.json().items[0]).toMatchObject({
+      fan: {
+        platformUserId: "fan-non-follower",
+      },
+      isFollower: false,
+      isSubscriber: false,
+      subscriptionStatus: "expired",
+      subscriptionExpiresAt: null,
+      lastSubscriptionEndedAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    const followerOnlyDetailResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/spender-autolists/0-25?limit=10&offset=0&excludeNonFollowers=true",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+
+    expect(followerOnlyDetailResponse.statusCode).toBe(200);
+    expect(followerOnlyDetailResponse.json()).toMatchObject({
+      bucket: {
+        key: "0-25",
+        entryCount: 2,
+      },
+      total: 2,
+    });
+    expect(followerOnlyDetailResponse.json().items.map((item: { fan: { platformUserId: string } }) => item.fan.platformUserId)).toEqual([
+      "fan-001",
+      "fan-one-cent",
+    ]);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
+    try {
+      const todayBucketsResponse = await server.inject({
+        method: "GET",
+        url: "/api/v1/pages/lana/spender-autolists?period=today",
+        headers: {
+          cookie: ownerCookie,
+        },
+      });
+
+      expect(todayBucketsResponse.statusCode).toBe(200);
+      expect(todayBucketsResponse.json()).toMatchObject({
+        metric: "grossAmountMills",
+        totalEntries: 0,
+        period: {
+          fromBusinessDate: "2026-03-08",
+          toBusinessDateInclusive: "2026-03-08",
+        },
+      });
+
+      const todayDetailResponse = await server.inject({
+        method: "GET",
+        url: "/api/v1/pages/lana/spender-autolists/0-25?period=today&limit=10&offset=0",
+        headers: {
+          cookie: ownerCookie,
+        },
+      });
+
+      expect(todayDetailResponse.statusCode).toBe(200);
+      expect(todayDetailResponse.json()).toMatchObject({
+        metric: "grossAmountMills",
+        total: 0,
+        items: [],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const deletedFansResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/deleted-fans?limit=10&offset=0",
+      headers: {
+        cookie: ownerCookie,
+      },
+    });
+
+    expect(deletedFansResponse.statusCode).toBe(200);
+    expect(deletedFansResponse.json()).toMatchObject({
+      total: 1,
+      items: [{
+        platformUserId: "fan-deleted",
+        latestKnownLabel: "deleted_before",
+        latestHistoricalUsername: "deleted_before",
+        deletedDetectedAt: "2026-03-07T10:00:00.000Z",
+      }],
+    });
+  });
+
   it("preserves spender totals when paginating past the last row", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

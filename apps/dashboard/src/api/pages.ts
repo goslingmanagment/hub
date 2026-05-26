@@ -10,7 +10,10 @@ import type {
   FollowerDailyResponse,
   FollowerListResponse,
   PageFanDetailResponse,
+  PageDeletedFansResponse,
   PageRevenueResponse,
+  PageSpenderAutoListDetailResponse,
+  PageSpenderAutoListsResponse,
   RevenueDailyResponse,
   SpenderBatchBody,
   SpenderBatchResponse,
@@ -110,6 +113,63 @@ export function usePageTransactions(
     queryKey: ["pageTransactions", pageLabel, params],
     queryFn: () =>
       api.get<TransactionListResponse>(`/api/v1/pages/${pageLabel}/transactions${qs(params)}`),
+    enabled: options.enabled ?? true,
+  });
+}
+
+export function usePageSpenderAutoLists(
+  pageLabel: string,
+  params: {
+    period?: string;
+    from?: string;
+    to?: string;
+  } = {},
+  options: QueryOptions = {},
+) {
+  return useQuery({
+    queryKey: ["pageSpenderAutoLists", pageLabel, params],
+    queryFn: () =>
+      api.get<PageSpenderAutoListsResponse>(`/api/v1/pages/${pageLabel}/spender-autolists${qs(params)}`),
+    enabled: options.enabled ?? true,
+  });
+}
+
+export function usePageSpenderAutoList(
+  pageLabel: string,
+  bucketKey: string,
+  params: {
+    limit?: number;
+    offset?: number;
+    query?: string;
+    excludeNonFollowers?: boolean;
+    period?: string;
+    from?: string;
+    to?: string;
+  } = {},
+  options: QueryOptions = {},
+) {
+  return useQuery({
+    queryKey: ["pageSpenderAutoList", pageLabel, bucketKey, params],
+    queryFn: () =>
+      api.get<PageSpenderAutoListDetailResponse>(
+        `/api/v1/pages/${pageLabel}/spender-autolists/${bucketKey}${qs(params)}`,
+      ),
+    enabled: options.enabled ?? true,
+  });
+}
+
+export function usePageDeletedFans(
+  pageLabel: string,
+  params: {
+    limit?: number;
+    offset?: number;
+  } = {},
+  options: QueryOptions = {},
+) {
+  return useQuery({
+    queryKey: ["pageDeletedFans", pageLabel, params],
+    queryFn: () =>
+      api.get<PageDeletedFansResponse>(`/api/v1/pages/${pageLabel}/deleted-fans${qs(params)}`),
     enabled: options.enabled ?? true,
   });
 }

@@ -21,6 +21,10 @@ export function buildPageSectionRoute(pageLabel: string, section: string) {
   return `${buildPageRoute(pageLabel)}/${section}`;
 }
 
+export function buildPageSpenderAutoListRoute(pageLabel: string, bucketKey: string) {
+  return `${buildPageSectionRoute(pageLabel, "spender-autolists")}/${bucketKey}`;
+}
+
 export function buildWorkboardRoute(pageLabel: string) {
   return buildPageSectionRoute(pageLabel, "workboard");
 }

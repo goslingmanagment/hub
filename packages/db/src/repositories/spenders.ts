@@ -15,6 +15,7 @@ import {
   fanUsernameAliases,
   fans,
   models,
+  pageSubscriptions,
   pages,
   spenderDailyFacts,
   spenderLifetimePage,
@@ -399,6 +400,7 @@ export async function findVisibleFanByIdentity(
     .where(and(
       eq(fans.platform, input.platform),
       eq(fans.platformUserId, input.platformUserId),
+      sql`${fans.deletedDetectedAt} is null`,
       inArray(fanPages.platformAccountId, input.pageIds),
     ))
     .limit(1);
@@ -454,6 +456,140 @@ export interface RankedSpenderRow {
   lastTransactionAt: Date | null;
   lifetimeGrossAmountMills: bigint;
   lifetimeCreatorNetAmountMills: bigint;
+}
+
+export interface SpenderAutoListBucketInput {
+  key: string;
+  minAmountMills: bigint;
+  maxAmountMillsExclusive: bigint | null;
+}
+
+export async function countPageFansByLifetimeGrossBuckets(
+  db: Database,
+  input: {
+    pageId: number;
+    buckets: readonly SpenderAutoListBucketInput[];
+  },
+) {
+  const amountSql = sql<bigint>`greatest(coalesce(${spenderLifetimePage.grossAmountMills}, 0::bigint), 0::bigint)::bigint`;
+
+  return Promise.all(input.buckets.map(async (bucket) => {
+    const clauses = [
+      eq(fanPages.platformAccountId, input.pageId),
+      sql`${fans.deletedDetectedAt} is null`,
+      sql`${amountSql} >= ${bucket.minAmountMills}`,
+    ];
+
+    if (bucket.maxAmountMillsExclusive !== null) {
+      clauses.push(sql`${amountSql} < ${bucket.maxAmountMillsExclusive}`);
+    }
+
+    const [row] = await db.select({
+      entryCount: sql<number>`count(*)::int`,
+    }).from(fanPages)
+      .innerJoin(fans, eq(fans.id, fanPages.fanId))
+      .leftJoin(spenderLifetimePage, and(
+        eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
+        eq(spenderLifetimePage.fanId, fanPages.fanId),
+      ))
+      .where(and(...clauses));
+
+    return {
+      key: bucket.key,
+      entryCount: row?.entryCount ?? 0,
+    };
+  }));
+}
+
+export async function countPageFansByWindowGrossBuckets(
+  db: Database,
+  input: {
+    pageId: number;
+    fromBusinessDate: string;
+    toBusinessDateExclusive: string;
+    buckets: readonly SpenderAutoListBucketInput[];
+  },
+) {
+  return Promise.all(input.buckets.map(async (bucket) => {
+    const windowMetrics = db.select({
+      fanId: spenderDailyFacts.fanId,
+      grossAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.grossAmountMills}), 0)::bigint`.as("gross_amount_mills"),
+    }).from(spenderDailyFacts)
+      .where(and(
+        eq(spenderDailyFacts.platformAccountId, input.pageId),
+        gte(spenderDailyFacts.businessDate, input.fromBusinessDate),
+        lt(spenderDailyFacts.businessDate, input.toBusinessDateExclusive),
+      ))
+      .groupBy(spenderDailyFacts.fanId)
+      .as("auto_list_window_metrics");
+    const amountSql = sql<bigint>`greatest(coalesce(${qualifiedSubqueryColumn<bigint>("auto_list_window_metrics", "gross_amount_mills")}, 0::bigint), 0::bigint)::bigint`;
+    const clauses = [
+      eq(fanPages.platformAccountId, input.pageId),
+      sql`${fans.deletedDetectedAt} is null`,
+      sql`${amountSql} >= ${bucket.minAmountMills}`,
+    ];
+
+    if (bucket.maxAmountMillsExclusive !== null) {
+      clauses.push(sql`${amountSql} < ${bucket.maxAmountMillsExclusive}`);
+    }
+
+    const [row] = await db.select({
+      entryCount: sql<number>`count(*)::int`,
+    }).from(windowMetrics)
+      .innerJoin(fanPages, and(
+        eq(fanPages.platformAccountId, input.pageId),
+        eq(fanPages.fanId, windowMetrics.fanId),
+      ))
+      .innerJoin(fans, eq(fans.id, windowMetrics.fanId))
+      .where(and(...clauses));
+
+    return {
+      key: bucket.key,
+      entryCount: row?.entryCount ?? 0,
+    };
+  }));
+}
+
+export interface PageSpenderAutoListFanRow {
+  fanId: number;
+  platform: Platform;
+  platformUserId: string;
+  pageAlias: string | null;
+  username: string | null;
+  displayName: string | null;
+  createdAtExternal: Date | null;
+  isFollower: boolean;
+  isSubscriber: boolean;
+  subscriptionStatus: "active" | "expired" | "never";
+  subscriptionExpiresAt: Date | null;
+  lastSubscriptionEndedAt: Date | null;
+  grossAmountMills: bigint;
+  creatorNetAmountMills: bigint;
+  lifetimeGrossAmountMills: bigint;
+  lifetimeCreatorNetAmountMills: bigint;
+  lastTransactionAt: Date | null;
+}
+
+function lastSubscriptionEndedAtSql(pageId: number) {
+  return sql<Date | null>`(
+    select max(${pageSubscriptions.endsAt})
+    from ${pageSubscriptions}
+    where ${pageSubscriptions.platformAccountId} = ${pageId}
+      and ${pageSubscriptions.fanId} = ${fanPages.fanId}
+  )`;
+}
+
+function subscriptionStatusSql(pageId: number) {
+  return sql<"active" | "expired" | "never">`case
+    when ${fanPages.isSubscriber} then 'active'
+    when exists (
+      select 1
+      from ${pageSubscriptions}
+      where ${pageSubscriptions.platformAccountId} = ${pageId}
+        and ${pageSubscriptions.fanId} = ${fanPages.fanId}
+    ) then 'expired'
+    else 'never'
+  end`;
 }
 
 export async function getSpenderWindowMetrics(
@@ -646,8 +782,195 @@ function buildSpenderQueryClause(
 
   return and(
     eq(fans.platform, input.platform),
+    sql`${fans.deletedDetectedAt} is null`,
     or(...matchConditions)!,
   )!;
+}
+
+export async function listPageFansByLifetimeGrossBucket(
+  db: Database,
+  input: {
+    pageId: number;
+    platform: Platform;
+    minAmountMills: bigint;
+    maxAmountMillsExclusive: bigint | null;
+    query?: string;
+    excludeNonFollowers?: boolean;
+    limit: number;
+    offset: number;
+  },
+) {
+  const amountSql = sql<bigint>`greatest(coalesce(${spenderLifetimePage.grossAmountMills}, 0::bigint), 0::bigint)::bigint`;
+  const creatorNetAmountSql = sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0::bigint)::bigint`;
+  const clauses = [
+    eq(fanPages.platformAccountId, input.pageId),
+    sql`${fans.deletedDetectedAt} is null`,
+    buildSpenderQueryClause(input.query, {
+      platform: input.platform,
+      pageIds: [input.pageId],
+    }),
+    sql`${amountSql} >= ${input.minAmountMills}`,
+  ];
+
+  if (input.maxAmountMillsExclusive !== null) {
+    clauses.push(sql`${amountSql} < ${input.maxAmountMillsExclusive}`);
+  }
+  if (input.excludeNonFollowers) {
+    clauses.push(eq(fanPages.isFollower, true));
+  }
+
+  const rows = await db.select({
+    total: sql<number>`count(*) over()::int`,
+    fanId: fans.id,
+    platform: fans.platform,
+    platformUserId: fans.platformUserId,
+    pageAlias: fanPages.pageAlias,
+    username: fans.username,
+    displayName: fans.displayName,
+    createdAtExternal: fans.createdAtExternal,
+    isFollower: fanPages.isFollower,
+    isSubscriber: fanPages.isSubscriber,
+    subscriptionStatus: subscriptionStatusSql(input.pageId),
+    subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
+    lastSubscriptionEndedAt: lastSubscriptionEndedAtSql(input.pageId),
+    grossAmountMills: amountSql,
+    creatorNetAmountMills: creatorNetAmountSql,
+    lifetimeGrossAmountMills: amountSql,
+    lifetimeCreatorNetAmountMills: creatorNetAmountSql,
+    lastTransactionAt: spenderLifetimePage.lastTransactionAt,
+  }).from(fanPages)
+    .innerJoin(fans, eq(fans.id, fanPages.fanId))
+    .leftJoin(spenderLifetimePage, and(
+      eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
+      eq(spenderLifetimePage.fanId, fanPages.fanId),
+    ))
+    .where(and(...clauses))
+    .orderBy(desc(amountSql), asc(fans.platformUserId), asc(fans.id))
+    .limit(input.limit)
+    .offset(input.offset);
+
+  const total = await resolvePagedTotal(input, rows, async () => {
+    const [countRow] = await db.select({
+      total: sql<number>`count(*)::int`,
+    }).from(fanPages)
+      .innerJoin(fans, eq(fans.id, fanPages.fanId))
+      .leftJoin(spenderLifetimePage, and(
+        eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
+        eq(spenderLifetimePage.fanId, fanPages.fanId),
+      ))
+      .where(and(...clauses));
+
+    return countRow?.total ?? 0;
+  });
+
+  return {
+    total,
+    items: rows.map(({ total: _total, ...item }) => item satisfies PageSpenderAutoListFanRow),
+  };
+}
+
+export async function listPageFansByWindowGrossBucket(
+  db: Database,
+  input: {
+    pageId: number;
+    platform: Platform;
+    fromBusinessDate: string;
+    toBusinessDateExclusive: string;
+    minAmountMills: bigint;
+    maxAmountMillsExclusive: bigint | null;
+    query?: string;
+    excludeNonFollowers?: boolean;
+    limit: number;
+    offset: number;
+  },
+) {
+  const windowMetrics = db.select({
+    fanId: spenderDailyFacts.fanId,
+    grossAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.grossAmountMills}), 0)::bigint`.as("gross_amount_mills"),
+    creatorNetAmountMills: sql<bigint>`coalesce(sum(${spenderDailyFacts.creatorNetAmountMills}), 0)::bigint`.as("creator_net_amount_mills"),
+    lastTransactionAt: sql<Date | null>`max(${spenderDailyFacts.lastTransactionAt})`.as("last_transaction_at"),
+  }).from(spenderDailyFacts)
+    .where(and(
+      eq(spenderDailyFacts.platformAccountId, input.pageId),
+      gte(spenderDailyFacts.businessDate, input.fromBusinessDate),
+      lt(spenderDailyFacts.businessDate, input.toBusinessDateExclusive),
+    ))
+    .groupBy(spenderDailyFacts.fanId)
+    .as("auto_list_window_metrics");
+  const amountSql = sql<bigint>`greatest(coalesce(${qualifiedSubqueryColumn<bigint>("auto_list_window_metrics", "gross_amount_mills")}, 0::bigint), 0::bigint)::bigint`;
+  const creatorNetAmountSql = sql<bigint>`coalesce(${qualifiedSubqueryColumn<bigint>("auto_list_window_metrics", "creator_net_amount_mills")}, 0::bigint)::bigint`;
+  const lastTransactionAtSql = qualifiedSubqueryColumn<Date | null>("auto_list_window_metrics", "last_transaction_at");
+  const lifetimeGrossAmountSql = sql<bigint>`coalesce(${spenderLifetimePage.grossAmountMills}, 0::bigint)::bigint`;
+  const lifetimeCreatorNetAmountSql = sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0::bigint)::bigint`;
+  const clauses = [
+    eq(fanPages.platformAccountId, input.pageId),
+    sql`${fans.deletedDetectedAt} is null`,
+    buildSpenderQueryClause(input.query, {
+      platform: input.platform,
+      pageIds: [input.pageId],
+    }),
+    sql`${amountSql} >= ${input.minAmountMills}`,
+  ];
+
+  if (input.maxAmountMillsExclusive !== null) {
+    clauses.push(sql`${amountSql} < ${input.maxAmountMillsExclusive}`);
+  }
+  if (input.excludeNonFollowers) {
+    clauses.push(eq(fanPages.isFollower, true));
+  }
+
+  const rows = await db.select({
+    total: sql<number>`count(*) over()::int`,
+    fanId: fans.id,
+    platform: fans.platform,
+    platformUserId: fans.platformUserId,
+    pageAlias: fanPages.pageAlias,
+    username: fans.username,
+    displayName: fans.displayName,
+    createdAtExternal: fans.createdAtExternal,
+    isFollower: fanPages.isFollower,
+    isSubscriber: fanPages.isSubscriber,
+    subscriptionStatus: subscriptionStatusSql(input.pageId),
+    subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
+    lastSubscriptionEndedAt: lastSubscriptionEndedAtSql(input.pageId),
+    grossAmountMills: amountSql,
+    creatorNetAmountMills: creatorNetAmountSql,
+    lifetimeGrossAmountMills: lifetimeGrossAmountSql,
+    lifetimeCreatorNetAmountMills: lifetimeCreatorNetAmountSql,
+    lastTransactionAt: lastTransactionAtSql,
+  }).from(windowMetrics)
+    .innerJoin(fanPages, and(
+      eq(fanPages.platformAccountId, input.pageId),
+      eq(fanPages.fanId, windowMetrics.fanId),
+    ))
+    .innerJoin(fans, eq(fans.id, windowMetrics.fanId))
+    .leftJoin(spenderLifetimePage, and(
+      eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
+      eq(spenderLifetimePage.fanId, fanPages.fanId),
+    ))
+    .where(and(...clauses))
+    .orderBy(desc(amountSql), asc(fans.platformUserId), asc(fans.id))
+    .limit(input.limit)
+    .offset(input.offset);
+
+  const total = await resolvePagedTotal(input, rows, async () => {
+    const [countRow] = await db.select({
+      total: sql<number>`count(*)::int`,
+    }).from(windowMetrics)
+      .innerJoin(fanPages, and(
+        eq(fanPages.platformAccountId, input.pageId),
+        eq(fanPages.fanId, windowMetrics.fanId),
+      ))
+      .innerJoin(fans, eq(fans.id, windowMetrics.fanId))
+      .where(and(...clauses));
+
+    return countRow?.total ?? 0;
+  });
+
+  return {
+    total,
+    items: rows.map(({ total: _total, ...item }) => item satisfies PageSpenderAutoListFanRow),
+  };
 }
 
 async function resolvePagedTotal(
@@ -937,6 +1260,7 @@ export async function findVisibleFansByPlatformUserIds(
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
     .where(and(
       eq(fans.platform, input.platform),
+      sql`${fans.deletedDetectedAt} is null`,
       inArray(fans.platformUserId, input.platformUserIds),
       inArray(fanPages.platformAccountId, input.pageIds),
     ))
@@ -1169,6 +1493,7 @@ export async function searchFansInScope(
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
     .where(and(
       eq(fans.platform, input.platform),
+      sql`${fans.deletedDetectedAt} is null`,
       inArray(fanPages.platformAccountId, input.pageIds),
       matchClauses,
     ));
@@ -1205,6 +1530,7 @@ export async function searchFansInScope(
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
     .where(and(
       eq(fans.platform, input.platform),
+      sql`${fans.deletedDetectedAt} is null`,
       inArray(fanPages.platformAccountId, input.pageIds),
       matchClauses,
     ))

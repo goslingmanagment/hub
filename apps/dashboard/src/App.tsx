@@ -7,6 +7,8 @@ import { resolveLegacyWorkboardRedirect } from "./lib/navigation.js";
 const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
 const OverviewPage = lazy(() => import("./pages/OverviewPage.js").then((m) => ({ default: m.OverviewPage })));
 const PageDetailPage = lazy(() => import("./pages/PageDetailPage.js").then((m) => ({ default: m.PageDetailPage })));
+const SpenderAutoListPage = lazy(() => import("./pages/SpenderAutoListPage.js").then((m) => ({ default: m.SpenderAutoListPage })));
+const DeletedFansPage = lazy(() => import("./pages/DeletedFansPage.js").then((m) => ({ default: m.DeletedFansPage })));
 const SubscribersPage = lazy(() => import("./pages/SubscribersPage.js").then((m) => ({ default: m.SubscribersPage })));
 const FollowersPage = lazy(() => import("./pages/FollowersPage.js").then((m) => ({ default: m.FollowersPage })));
 const FanProfilePage = lazy(() => import("./pages/FanProfilePage.js").then((m) => ({ default: m.FanProfilePage })));
@@ -38,6 +40,8 @@ export function App() {
         <Route element={<ProtectedLayout />}>
           <Route index element={<OverviewPage />} />
           <Route path="pages/:pageLabel" element={<PageDetailPage />} />
+          <Route path="pages/:pageLabel/spender-autolists/:bucketKey" element={<SpenderAutoListPage />} />
+          <Route path="pages/:pageLabel/deleted-fans" element={<DeletedFansPage />} />
           <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
           <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />
           <Route path="pages/:pageLabel/top-supporters" element={<TopSupportersPage />} />

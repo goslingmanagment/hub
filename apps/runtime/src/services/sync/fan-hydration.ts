@@ -88,6 +88,7 @@ export async function prepareHydratedFans(
   },
 ) {
   const { accounts, fallbackIds } = await lookupHydratedFans(app, input);
+  const deletedDetectedAt = new Date();
 
   return [
     ...accounts.map(normalizeHydratedFan),
@@ -95,6 +96,7 @@ export async function prepareHydratedFans(
       platform: "fansly" as const,
       platformUserId: id,
       metadata: {},
+      deletedDetectedAt,
     })),
   ] satisfies UpsertFanInput[];
 }
@@ -119,12 +121,14 @@ export async function upsertHydratedFansForPageDetailed(
     fallbackIds?: string[];
   },
 ) {
+  const deletedDetectedAt = new Date();
   const fans = await upsertFans(db, [
     ...input.accounts.map(normalizeHydratedFan),
     ...(input.fallbackIds ?? []).map((platformUserId) => ({
       platform: "fansly" as const,
       platformUserId,
       metadata: {},
+      deletedDetectedAt,
     })),
   ]);
   const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id] as const));
@@ -187,6 +191,7 @@ export async function hydrateFans(
 ) {
   const { accounts, fallbackIds } = await lookupHydratedFans(app, input);
   const db = input.db ?? app.db;
+  const deletedDetectedAt = new Date();
 
   if (input.platformAccountId !== undefined) {
     return upsertHydratedFansForPage(db, {
@@ -202,6 +207,7 @@ export async function hydrateFans(
       platform: "fansly" as const,
       platformUserId,
       metadata: {},
+      deletedDetectedAt,
     })),
   ]);
   return new Map(fans.map((fan) => [fan.platformUserId, fan.id]));

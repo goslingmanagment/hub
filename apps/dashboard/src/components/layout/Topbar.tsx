@@ -19,7 +19,7 @@ export function Topbar({ user }: TopbarProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const breadcrumbs = buildBreadcrumbs(location.pathname, pages, location.state);
-  const showPeriodSelector = shouldShowPeriodSelector(location.pathname);
+  const periodSelectorMode = getPeriodSelectorMode(location.pathname);
 
   useEffect(() => {
     if (!menuOpen) {
@@ -65,7 +65,7 @@ export function Topbar({ user }: TopbarProps) {
       </div>
 
       <div className="flex items-center gap-2">
-        {showPeriodSelector && <PeriodSelector />}
+        {periodSelectorMode && <PeriodSelector mode={periodSelectorMode} />}
 
         <div className="relative ml-2.5" ref={menuRef}>
           <button
@@ -101,17 +101,18 @@ export function Topbar({ user }: TopbarProps) {
   );
 }
 
-function shouldShowPeriodSelector(pathname: string): boolean {
+function getPeriodSelectorMode(pathname: string): "dashboard" | "spender" | null {
   const parts = pathname.split("/").filter(Boolean);
-  if (parts.length === 0) return true; // Overview
+  if (parts.length === 0) return "dashboard"; // Overview
   if (parts[0] === "pages" && parts[1]) {
-    if (!parts[2]) return true; // PageDetail
-    if (parts[2] === "top-supporters") return true;
-    if (parts[2] === "fans" && parts[3] && parts[4]) return true;
-    return false;
+    if (!parts[2]) return "dashboard"; // PageDetail
+    if (parts[2] === "top-supporters") return "spender";
+    if (parts[2] === "spender-autolists") return "spender";
+    if (parts[2] === "fans" && parts[3] && parts[4]) return "spender";
+    return null;
   }
-  if (parts[0] === "usage") return false;
-  return false;
+  if (parts[0] === "usage") return null;
+  return null;
 }
 
 function buildBreadcrumbs(
@@ -164,6 +165,8 @@ function buildBreadcrumbs(
       crumbs.push({ label: "Followers" });
     } else if (parts[2] === "top-supporters") {
       crumbs.push({ label: "Top Supporters" });
+    } else if (parts[2] === "deleted-fans") {
+      crumbs.push({ label: "Deleted Fans" });
     } else if (parts[2] === "workboard" || parts[2] === "crm") {
       crumbs.push({ label: "Workboard" });
     } else if (parts[2] === "fans" && parts[3] && parts[4]) {

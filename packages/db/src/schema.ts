@@ -496,9 +496,12 @@ export const fans = pgTable(
     metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    deletedDetectedAt: timestamp("deleted_detected_at", { withTimezone: true }),
+    deletedLastDetectedAt: timestamp("deleted_last_detected_at", { withTimezone: true }),
   },
   (table) => ({
     uniq: unique("fans_platform_user_uniq").on(table.platform, table.platformUserId),
+    deletedIdx: index("fans_deleted_detected_idx").on(table.platform, table.deletedDetectedAt),
   }),
 );
 

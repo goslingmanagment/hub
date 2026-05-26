@@ -10,6 +10,7 @@ import {
   type ModelRevenueResponse,
   type OverviewGrowthResponse,
   type OverviewRevenueResponse,
+  type PageDeletedFansResponse,
   type PageFanDetailResponse,
   type PageRevenueResponse,
   type SubscriberDailyResponse,
@@ -33,6 +34,7 @@ import {
   listFollowersForPage,
   listFollowerTotalsForPages,
   listFanPageContexts,
+  listDeletedFansForPage,
   listSubscribersForPage,
   listSubscriberDailyForPage,
   listSubscriberTotalsForPages,
@@ -753,6 +755,42 @@ export async function getPageFansReport(
       subscriptionExpiresAt: serializeTimestamp(row.subscriptionExpiresAt),
       autoRenew: row.autoRenew,
       lastTransactionAt: serializeTimestamp(row.lastTransactionAt),
+    })),
+    limit: input.limit,
+    offset: input.offset,
+    total: rows.total,
+  };
+}
+
+export async function getPageDeletedFansReport(
+  app: AppContext,
+  pageLabel: string,
+  input: FanListQuery,
+): Promise<PageDeletedFansResponse> {
+  const page = await getPageSummary(app, pageLabel);
+  const rows = await listDeletedFansForPage(app.db, {
+    pageId: page.id,
+    limit: input.limit,
+    offset: input.offset,
+  });
+
+  return {
+    page: serializePage(page),
+    items: rows.items.map((row) => ({
+      platformUserId: row.platformUserId,
+      latestKnownLabel: row.latestHistoricalPageAlias ??
+        row.latestHistoricalUsername ??
+        row.pageAlias ??
+        row.displayName ??
+        row.username,
+      pageAlias: row.pageAlias,
+      username: row.username,
+      displayName: row.displayName,
+      latestHistoricalPageAlias: row.latestHistoricalPageAlias,
+      latestHistoricalUsername: row.latestHistoricalUsername,
+      deletedDetectedAt: serializeTimestamp(row.deletedDetectedAt)!,
+      deletedLastDetectedAt: serializeTimestamp(row.deletedLastDetectedAt),
+      lastSeenAt: serializeTimestamp(row.lastSeenAt)!,
     })),
     limit: input.limit,
     offset: input.offset,

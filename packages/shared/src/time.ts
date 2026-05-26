@@ -8,6 +8,7 @@ export const SPENDER_PERIOD_OPTIONS = [
   "7d",
   "30d",
   "90d",
+  "180d",
   "mtd",
   "custom",
   "lifetime",
@@ -45,6 +46,7 @@ interface TrailingPeriodOffsets {
 
 interface SpenderTrailingPeriodOffsets extends TrailingPeriodOffsets {
   "90d": number;
+  "180d": number;
 }
 
 const DEFAULT_TRAILING_PERIOD_OFFSETS: TrailingPeriodOffsets = {
@@ -56,6 +58,7 @@ const DEFAULT_SPENDER_TRAILING_PERIOD_OFFSETS: SpenderTrailingPeriodOffsets = {
   "7d": 6,
   "30d": 29,
   "90d": 89,
+  "180d": 179,
 };
 
 const ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS: TrailingPeriodOffsets = {
@@ -419,7 +422,7 @@ function resolveSpenderPeriodBounds(
     return { from: todayStart, to: addUtcDays(todayStart, 1) };
   }
 
-  if (period === "7d" || period === "30d" || period === "90d") {
+  if (period === "7d" || period === "30d" || period === "90d" || period === "180d") {
     return {
       from: addUtcDays(todayStart, -DEFAULT_SPENDER_TRAILING_PERIOD_OFFSETS[period]),
       to: addUtcDays(todayStart, 1),

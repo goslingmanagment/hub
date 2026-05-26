@@ -13,12 +13,12 @@ const queryMocks = vi.hoisted(() => ({
   useSpenderDetail: vi.fn(),
 }));
 const storeMocks = vi.hoisted(() => ({
-  period: "30d" as "today" | "7d" | "30d" | "all",
+  period: "30d" as "today" | "7d" | "30d" | "90d" | "180d" | "all",
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
-vi.mock("@/stores/periodStore", () => ({
-  usePeriodStore: () => ({
+vi.mock("@/stores/spenderPeriodStore", () => ({
+  useSpenderPeriodStore: () => ({
     period: storeMocks.period,
     setPeriod: vi.fn(),
   }),

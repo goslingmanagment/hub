@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Bell, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Code2, ChevronDown } from "lucide-react";
+import { BarChart3, Bell, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Code2, ChevronDown, UserX } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -118,6 +118,16 @@ export function Sidebar({ user }: SidebarProps) {
                         }
                       >
                         <Trophy size={12} /> Top Supporters
+                      </NavLink>
+                      <NavLink
+                        to={`/pages/${page.label}/deleted-fans`}
+                        className={({ isActive }) =>
+                          `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
+                            isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
+                          }`
+                        }
+                      >
+                        <UserX size={12} /> Deleted Fans
                       </NavLink>
                       {page.platform === "fansly" && (
                         <NavLink

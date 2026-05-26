@@ -13,6 +13,7 @@ import {
   dailyRevenue,
   dailyFollowers,
   dailySubscribers,
+  fanPageAliases,
   fanPages,
   fans,
   fanUsernameAliases,
@@ -327,10 +328,10 @@ export async function listTransactionsForPage(
     correlationAccountId: transactions.correlationAccountId,
     occurredAt: transactions.occurredAt,
     sourceUpdatedAt: transactions.sourceUpdatedAt,
-    fanPlatformUserId: fans.platformUserId,
-    fanUsername: fans.username,
-    fanDisplayName: fans.displayName,
-    fanPageAlias: fanPages.pageAlias,
+    fanPlatformUserId: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.platformUserId} else null end`,
+    fanUsername: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.username} else null end`,
+    fanDisplayName: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.displayName} else null end`,
+    fanPageAlias: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fanPages.pageAlias} else null end`,
   }).from(transactions)
     .leftJoin(fans, eq(fans.id, transactions.fanId))
     .leftJoin(fanPages, and(
@@ -363,6 +364,7 @@ export async function listSubscribersForPage(
   const conditions = [
     eq(pageSubscriptions.platformAccountId, input.pageId),
     eq(pageSubscriptions.isCurrent, true),
+    sql`${fans.deletedDetectedAt} is null`,
   ];
 
   if (input.query) {
@@ -529,6 +531,7 @@ export async function listFollowersForPage(
   const clauses = [
     eq(pageFollows.platformAccountId, input.pageId),
     eq(pageFollows.isActive, true),
+    sql`${fans.deletedDetectedAt} is null`,
   ];
 
   if (input.query) {
@@ -622,7 +625,10 @@ export async function listFansForPage(
     query?: string;
   },
 ) {
-  const clauses = [eq(fanPages.platformAccountId, input.pageId)];
+  const clauses = [
+    eq(fanPages.platformAccountId, input.pageId),
+    sql`${fans.deletedDetectedAt} is null`,
+  ];
   if (input.query) {
     const pattern = buildContainsSearchPattern(input.query);
     if (pattern) {
@@ -685,6 +691,54 @@ export async function listFansForPage(
   };
 }
 
+export async function listDeletedFansForPage(
+  db: Database,
+  input: {
+    pageId: number;
+    limit: number;
+    offset: number;
+  },
+) {
+  const rows = await db.select({
+    total: sql<number>`count(*) over()::int`,
+    platformUserId: fans.platformUserId,
+    username: fans.username,
+    displayName: fans.displayName,
+    pageAlias: fanPages.pageAlias,
+    latestHistoricalUsername: sql<string | null>`(
+      select fua.username
+      from ${fanUsernameAliases} fua
+      where fua.fan_id = ${fans.id}
+      order by fua.last_seen_at desc, fua.username asc
+      limit 1
+    )`,
+    latestHistoricalPageAlias: sql<string | null>`(
+      select fpa.alias
+      from ${fanPageAliases} fpa
+      where fpa.platform_account_id = ${input.pageId}
+        and fpa.fan_id = ${fans.id}
+      order by fpa.last_seen_at desc, fpa.alias asc
+      limit 1
+    )`,
+    deletedDetectedAt: fans.deletedDetectedAt,
+    deletedLastDetectedAt: fans.deletedLastDetectedAt,
+    lastSeenAt: fans.lastSeenAt,
+  }).from(fanPages)
+    .innerJoin(fans, eq(fans.id, fanPages.fanId))
+    .where(and(
+      eq(fanPages.platformAccountId, input.pageId),
+      sql`${fans.deletedDetectedAt} is not null`,
+    ))
+    .orderBy(desc(fans.deletedDetectedAt), asc(fans.platformUserId))
+    .limit(input.limit)
+    .offset(input.offset);
+
+  return {
+    total: rows[0]?.total ?? 0,
+    items: rows.map(({ total: _total, ...item }) => item),
+  };
+}
+
 export async function findPlatformFan(
   db: Database,
   platform: "fansly" | "onlyfans",
@@ -731,6 +785,7 @@ export async function findFanOnPage(db: Database, pageId: number, platformUserId
     .where(and(
       eq(fanPages.platformAccountId, pageId),
       eq(fans.platformUserId, platformUserId),
+      sql`${fans.deletedDetectedAt} is null`,
     ));
 
   return row ?? null;
@@ -741,7 +796,10 @@ export async function listFanPageContexts(
   fanId: number,
   pageIds?: number[],
 ) {
-  const clauses = [eq(fanPages.fanId, fanId)];
+  const clauses = [
+    eq(fanPages.fanId, fanId),
+    sql`${fans.deletedDetectedAt} is null`,
+  ];
   if (pageIds !== undefined) {
     if (pageIds.length === 0) {
       return [];
@@ -790,7 +848,11 @@ export async function countDistinctFansForPages(db: Database, pageIds: number[])
   const [row] = await db.select({
     count: sql<number>`count(distinct ${fanPages.fanId})::int`,
   }).from(fanPages)
-    .where(inArray(fanPages.platformAccountId, pageIds));
+    .innerJoin(fans, eq(fans.id, fanPages.fanId))
+    .where(and(
+      inArray(fanPages.platformAccountId, pageIds),
+      sql`${fans.deletedDetectedAt} is null`,
+    ));
 
   return row?.count ?? 0;
 }
@@ -890,9 +952,9 @@ export async function listTransactionsForScope(
     correlationAccountId: transactions.correlationAccountId,
     occurredAt: transactions.occurredAt,
     sourceUpdatedAt: transactions.sourceUpdatedAt,
-    fanPlatformUserId: fans.platformUserId,
-    fanUsername: fans.username,
-    fanDisplayName: fans.displayName,
+    fanPlatformUserId: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.platformUserId} else null end`,
+    fanUsername: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.username} else null end`,
+    fanDisplayName: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.displayName} else null end`,
     pageLabel: pages.label,
     platform: pages.platform,
   }).from(transactions)

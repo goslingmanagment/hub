@@ -4,7 +4,7 @@ import { useSpenders, useSpenderBatch } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
-import { usePeriodStore } from "@/stores/periodStore";
+import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { formatRelativeTime } from "@/lib/format";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
@@ -43,7 +43,7 @@ function whaleBadge(lifetimeScopeCreatorNetMills: number) {
 export function TopSupportersPage() {
   const { pageLabel } = useParams();
   const navigate = useNavigate();
-  const selectedPeriod = usePeriodStore((s) => s.period);
+  const selectedPeriod = useSpenderPeriodStore((s) => s.period);
   const [searchQuery, setSearchQuery] = useState("");
   const [offset, setOffset] = useState(0);
 

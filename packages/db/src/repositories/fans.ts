@@ -23,6 +23,7 @@ export interface UpsertFanInput {
   displayName?: string | null;
   createdAtExternal?: Date | null;
   metadata?: Record<string, unknown>;
+  deletedDetectedAt?: Date | null;
 }
 
 function dedupeByKey<T>(items: T[], keyFor: (item: T) => string, merge: (current: T, next: T) => T) {
@@ -60,6 +61,9 @@ function mergeUpsertFanInput(current: UpsertFanInput, next: UpsertFanInput): Ups
       ? next.createdAtExternal
       : current.createdAtExternal,
     metadata: next.metadata !== undefined ? next.metadata : current.metadata,
+    deletedDetectedAt: next.deletedDetectedAt !== undefined
+      ? next.deletedDetectedAt
+      : current.deletedDetectedAt,
   };
 }
 
@@ -69,7 +73,13 @@ function fanUpsertPresenceKey(item: UpsertFanInput) {
     item.displayName !== undefined ? "displayName" : "",
     item.createdAtExternal !== undefined ? "createdAtExternal" : "",
     item.metadata !== undefined ? "metadata" : "",
+    item.deletedDetectedAt !== undefined ? "deletedDetectedAt" : "",
   ].join("|");
+}
+
+function hasPresentIdentity(input: UpsertFanInput) {
+  return (input.username?.trim().length ?? 0) > 0 ||
+    (input.displayName?.trim().length ?? 0) > 0;
 }
 
 export async function upsertFans(db: Database, items: UpsertFanInput[]) {
@@ -104,6 +114,28 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
     if (template.metadata !== undefined) {
       updateSet.metadata = sql`excluded.metadata`;
     }
+    if (template.deletedDetectedAt !== undefined || hasPresentIdentity(template)) {
+      updateSet.deletedDetectedAt = sql`
+        case
+          when nullif(btrim(coalesce(excluded.username, '')), '') is not null
+            or nullif(btrim(coalesce(excluded.display_name, '')), '') is not null
+            then null
+          when excluded.deleted_detected_at is not null
+            then coalesce(${fans.deletedDetectedAt}, excluded.deleted_detected_at)
+          else ${fans.deletedDetectedAt}
+        end
+      `;
+      updateSet.deletedLastDetectedAt = sql`
+        case
+          when nullif(btrim(coalesce(excluded.username, '')), '') is not null
+            or nullif(btrim(coalesce(excluded.display_name, '')), '') is not null
+            then null
+          when excluded.deleted_detected_at is not null
+            then excluded.deleted_last_detected_at
+          else ${fans.deletedLastDetectedAt}
+        end
+      `;
+    }
 
     const rows = await db
       .insert(fans)
@@ -114,6 +146,8 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
         displayName: item.displayName ?? null,
         createdAtExternal: item.createdAtExternal ?? null,
         metadata: item.metadata ?? {},
+        deletedDetectedAt: hasPresentIdentity(item) ? null : item.deletedDetectedAt ?? null,
+        deletedLastDetectedAt: hasPresentIdentity(item) ? null : item.deletedDetectedAt ?? null,
       })))
       .onConflictDoUpdate({
         target: [fans.platform, fans.platformUserId],

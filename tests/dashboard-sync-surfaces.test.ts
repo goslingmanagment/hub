@@ -14,6 +14,7 @@ const queryMocks = vi.hoisted(() => ({
   usePageFollowersDaily: vi.fn(),
   usePageRevenue: vi.fn(),
   usePageRevenueDaily: vi.fn(),
+  usePageSpenderAutoLists: vi.fn(),
   usePageSubscribers: vi.fn(),
   usePageSubscribersDaily: vi.fn(),
   usePageTransactions: vi.fn(),
@@ -23,7 +24,11 @@ const queryMocks = vi.hoisted(() => ({
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
 import { OverviewPage } from "../apps/dashboard/src/pages/OverviewPage.tsx";
-import { PageDetailPage, PageSpendersSection } from "../apps/dashboard/src/pages/PageDetailPage.tsx";
+import {
+  PageDetailPage,
+  PageSpenderAutoListsSection,
+  PageSpendersSection,
+} from "../apps/dashboard/src/pages/PageDetailPage.tsx";
 
 type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
 type DashboardPage = DashboardShellValue["pages"][number];
@@ -156,6 +161,7 @@ describe("dashboard sync product surfaces", () => {
     queryMocks.usePageFollowersDaily.mockReset();
     queryMocks.usePageRevenue.mockReset();
     queryMocks.usePageRevenueDaily.mockReset();
+    queryMocks.usePageSpenderAutoLists.mockReset();
     queryMocks.usePageSubscribers.mockReset();
     queryMocks.usePageSubscribersDaily.mockReset();
     queryMocks.usePageTransactions.mockReset();
@@ -190,6 +196,28 @@ describe("dashboard sync product surfaces", () => {
     queryMocks.usePageFollowersDaily.mockReturnValue({ data: { items: [] } });
     queryMocks.usePageSubscribersDaily.mockReturnValue({ data: { items: [] } });
     queryMocks.usePageRevenueDaily.mockReturnValue({ data: { series: [] } });
+    queryMocks.usePageSpenderAutoLists.mockReturnValue({
+      data: {
+        page: {
+          id: 1,
+          label: "lana",
+          platform: "fansly",
+          modelSlug: "lana",
+          modelName: "Lana",
+        },
+        currency: "USD",
+        metric: "lifetimeGrossAmountMills",
+        period: {
+          timeZone: "UTC",
+          fromBusinessDate: null,
+          toBusinessDateInclusive: null,
+          asOf: "2026-03-24T11:55:00.000Z",
+        },
+        asOf: "2026-03-24T11:55:00.000Z",
+        totalEntries: 0,
+        lists: [],
+      },
+    });
     queryMocks.usePageSubscribers.mockReturnValue({ data: { total: 0, items: [] } });
     queryMocks.usePageTransactions.mockReturnValue({ data: { total: 0, items: [] } });
     queryMocks.useSpenders.mockReturnValue({ data: { total: 0, items: [] } });
@@ -344,6 +372,9 @@ describe("dashboard sync product surfaces", () => {
     expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("missing", "7d", { enabled: false });
     expect(queryMocks.usePageRevenueDaily).toHaveBeenCalledWith("missing", "7d", { enabled: false });
     expect(queryMocks.usePageSubscribers).toHaveBeenCalledWith("missing", { limit: 6 }, { enabled: false });
+    expect(queryMocks.usePageSpenderAutoLists).toHaveBeenCalledWith("missing", {
+      period: "7d",
+    }, { enabled: false });
     expect(queryMocks.usePageTransactions).toHaveBeenCalledWith("missing", {
       limit: 50,
       offset: 0,
@@ -383,6 +414,9 @@ describe("dashboard sync product surfaces", () => {
     expect(queryMocks.usePageSubscribersDaily).toHaveBeenCalledWith("lana", "7d", { enabled: true });
     expect(queryMocks.usePageRevenueDaily).toHaveBeenCalledWith("lana", "7d", { enabled: true });
     expect(queryMocks.usePageSubscribers).toHaveBeenCalledWith("lana", { limit: 6 }, { enabled: true });
+    expect(queryMocks.usePageSpenderAutoLists).toHaveBeenCalledWith("lana", {
+      period: "7d",
+    }, { enabled: true });
     expect(queryMocks.usePageTransactions).toHaveBeenCalledWith("lana", {
       limit: 50,
       offset: 0,
@@ -465,5 +499,57 @@ describe("dashboard sync product surfaces", () => {
 
     expect(html).toContain("$1.23");
     expect(html).toContain(">—</td>");
+  });
+
+  it("renders page spender auto-list buckets with entry counts", () => {
+    const html = renderToStaticMarkup(createElement(
+      MemoryRouter,
+      undefined,
+      createElement(PageSpenderAutoListsSection, {
+        pageLabel: "lana",
+        autoLists: {
+          page: {
+            id: 1,
+            label: "lana",
+            platform: "fansly",
+            modelSlug: "lana",
+            modelName: "Lana",
+          },
+          currency: "USD",
+          metric: "lifetimeGrossAmountMills",
+          period: {
+            timeZone: "UTC",
+            fromBusinessDate: null,
+            toBusinessDateInclusive: null,
+            asOf: "2026-03-24T11:55:00.000Z",
+          },
+          asOf: "2026-03-24T11:55:00.000Z",
+          totalEntries: 3,
+          lists: [
+            {
+              key: "0-25",
+              label: "[FB] $0-$25 Spenders",
+              minAmountMills: 10,
+              maxAmountMillsExclusive: 25000,
+              entryCount: 2,
+            },
+            {
+              key: "600-plus",
+              label: "[FB] $600+ Spenders",
+              minAmountMills: 600000,
+              maxAmountMillsExclusive: null,
+              entryCount: 1,
+            },
+          ],
+        },
+      }),
+    ));
+
+    expect(html).toContain("Spender Auto Lists");
+    expect(html).toContain('href="/pages/lana/spender-autolists/0-25"');
+    expect(html).toContain("[FB] $0-$25 Spenders");
+    expect(html).toContain("2 Entries");
+    expect(html).toContain("[FB] $600+ Spenders");
+    expect(html).toContain("1 Entries");
   });
 });

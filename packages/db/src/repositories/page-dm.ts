@@ -909,7 +909,10 @@ export async function getPageConversationPreview(
           eq(fanPages.platformAccountId, input.platformAccountId),
           eq(fanPages.fanId, fans.id),
         ))
-        .where(eq(fans.id, conversation.fanId))
+        .where(and(
+          eq(fans.id, conversation.fanId),
+          sql`${fans.deletedDetectedAt} is null`,
+        ))
         .limit(1)
       : Promise.resolve([]),
     db.execute<{

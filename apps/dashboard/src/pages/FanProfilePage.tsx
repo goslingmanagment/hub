@@ -17,7 +17,7 @@ import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/sh
 import { RemainingBar } from "@/components/shared/RemainingBar";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatDate, formatDateTime, transactionTypeLabel, daysRemaining } from "@/lib/format";
-import { usePeriodStore } from "@/stores/periodStore";
+import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import { toast } from "sonner";
 import { TRANSACTION_STATE_COLORS } from "@/lib/constants";
 import { resolveFanProfileBackTarget } from "@/lib/navigation";
@@ -46,7 +46,7 @@ export function FanProfilePage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
-  const { period } = usePeriodStore();
+  const { period } = useSpenderPeriodStore();
   const selectedPeriod = period;
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 

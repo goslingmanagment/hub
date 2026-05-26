@@ -1,6 +1,8 @@
 import type {
   FansSearchQuery,
   FansSearchResponse,
+  PageSpenderAutoListDetailResponse,
+  PageSpenderAutoListsResponse,
   SpenderBatchBody,
   SpenderBatchResponse,
   SpenderDetailQuery,
@@ -14,6 +16,8 @@ import {
   findPageSummaryByLabel,
   findVisibleFanByIdentity,
   findVisibleFansByPlatformUserIds,
+  countPageFansByLifetimeGrossBuckets,
+  countPageFansByWindowGrossBuckets,
   getEarliestSpenderBusinessDateForFan,
   getScopedLifetimeTotalsForFan,
   getSpenderDailySeriesRows,
@@ -24,6 +28,8 @@ import {
   getSpenderTypeBreakdownBatch,
   getSpenderWindowMetrics,
   getVisibleFanPageMemberships,
+  listPageFansByLifetimeGrossBucket,
+  listPageFansByWindowGrossBucket,
   listRankedSpenders,
   listVisibleScopePages,
   searchFansInScope,
@@ -48,6 +54,45 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
+
+const SPENDER_AUTO_LIST_BUCKETS = [
+  {
+    key: "0-25",
+    label: "[FB] $0-$25 Spenders",
+    minAmountMills: 10n,
+    maxAmountMillsExclusive: 25_000n,
+  },
+  {
+    key: "25-50",
+    label: "[FB] $25-$50 Spenders",
+    minAmountMills: 25_000n,
+    maxAmountMillsExclusive: 50_000n,
+  },
+  {
+    key: "50-150",
+    label: "[FB] $50-$150 Spenders",
+    minAmountMills: 50_000n,
+    maxAmountMillsExclusive: 150_000n,
+  },
+  {
+    key: "150-350",
+    label: "[FB] $150-$350 Spenders",
+    minAmountMills: 150_000n,
+    maxAmountMillsExclusive: 350_000n,
+  },
+  {
+    key: "350-600",
+    label: "[FB] $350-$600 Spenders",
+    minAmountMills: 350_000n,
+    maxAmountMillsExclusive: 600_000n,
+  },
+  {
+    key: "600-plus",
+    label: "[FB] $600+ Spenders",
+    minAmountMills: 600_000n,
+    maxAmountMillsExclusive: null,
+  },
+] as const;
 
 type ScopeFields = {
   scope: "page" | "model" | "agency";
@@ -368,6 +413,176 @@ async function resolveAsOf(app: AppContext, scope: ResolvedScope) {
     pageIds: scope.pageIds,
     platform: scope.platform,
   });
+}
+
+function getSpenderAutoListBucket(bucketKey: string) {
+  return SPENDER_AUTO_LIST_BUCKETS.find((bucket) => bucket.key === bucketKey) ?? null;
+}
+
+function serializeSpenderAutoListBucket(
+  bucket: typeof SPENDER_AUTO_LIST_BUCKETS[number],
+  entryCount: number,
+) {
+  return {
+    key: bucket.key,
+    label: bucket.label,
+    minAmountMills: millsToNumber(bucket.minAmountMills),
+    maxAmountMillsExclusive: bucket.maxAmountMillsExclusive === null
+      ? null
+      : millsToNumber(bucket.maxAmountMillsExclusive),
+    entryCount,
+  };
+}
+
+export async function getPageSpenderAutoLists(
+  app: AppContext,
+  pageLabel: string,
+  query: PeriodFields = {},
+): Promise<PageSpenderAutoListsResponse> {
+  const page = await findPageSummaryByLabel(app.db, pageLabel);
+  if (!page) {
+    throw new NotFoundError(`Page "${pageLabel}" not found`);
+  }
+
+  const { period, custom } = normalizePeriodInput(query);
+  const isLifetime = period === "lifetime";
+  const { fromBusinessDate, toBusinessDateInclusive } = resolveSpenderBusinessDateRangeForPlatform(
+    page.platform,
+    period,
+    new Date(),
+    custom,
+  );
+  const [counts, asOf] = await Promise.all([
+    isLifetime
+      ? countPageFansByLifetimeGrossBuckets(app.db, {
+        pageId: page.id,
+        buckets: SPENDER_AUTO_LIST_BUCKETS,
+      })
+      : countPageFansByWindowGrossBuckets(app.db, {
+        pageId: page.id,
+        fromBusinessDate: fromBusinessDate!,
+        toBusinessDateExclusive: nextBusinessDate(toBusinessDateInclusive!),
+        buckets: SPENDER_AUTO_LIST_BUCKETS,
+      }),
+    getSpenderProjectionAsOf(app.db, {
+      pageIds: [page.id],
+      platform: page.platform,
+    }),
+  ]);
+  const periodMeta = toPeriodMetadata(page.platform, period, custom, asOf);
+  const countsByKey = new Map(counts.map((row) => [row.key, row.entryCount]));
+  const lists = SPENDER_AUTO_LIST_BUCKETS.map((bucket) =>
+    serializeSpenderAutoListBucket(bucket, countsByKey.get(bucket.key) ?? 0)
+  );
+
+  return {
+    page: {
+      id: page.id,
+      label: page.label,
+      platform: page.platform,
+      modelSlug: page.modelSlug,
+      modelName: page.modelName,
+    },
+    currency: "USD",
+    metric: isLifetime ? "lifetimeGrossAmountMills" : "grossAmountMills",
+    period: periodMeta,
+    asOf: serializeTimestamp(asOf),
+    totalEntries: lists.reduce((total, item) => total + item.entryCount, 0),
+    lists,
+  };
+}
+
+export async function getPageSpenderAutoListDetail(
+  app: AppContext,
+  pageLabel: string,
+  bucketKey: string,
+  query: {
+    limit: number;
+    offset: number;
+    query?: string;
+    excludeNonFollowers?: boolean;
+    period?: SpenderPeriod;
+    from?: string;
+    to?: string;
+  },
+): Promise<PageSpenderAutoListDetailResponse> {
+  const page = await findPageSummaryByLabel(app.db, pageLabel);
+  if (!page) {
+    throw new NotFoundError(`Page "${pageLabel}" not found`);
+  }
+
+  const bucket = getSpenderAutoListBucket(bucketKey);
+  if (!bucket) {
+    throw new NotFoundError(`Spender auto-list "${bucketKey}" not found`);
+  }
+
+  const { period, custom } = normalizePeriodInput(query);
+  const isLifetime = period === "lifetime";
+  const { fromBusinessDate, toBusinessDateInclusive } = resolveSpenderBusinessDateRangeForPlatform(
+    page.platform,
+    period,
+    new Date(),
+    custom,
+  );
+  const [result, asOf] = await Promise.all([
+    isLifetime
+      ? listPageFansByLifetimeGrossBucket(app.db, {
+        pageId: page.id,
+        platform: page.platform,
+        minAmountMills: bucket.minAmountMills,
+        maxAmountMillsExclusive: bucket.maxAmountMillsExclusive,
+        query: query.query,
+        excludeNonFollowers: query.excludeNonFollowers,
+        limit: query.limit,
+        offset: query.offset,
+      })
+      : listPageFansByWindowGrossBucket(app.db, {
+        pageId: page.id,
+        platform: page.platform,
+        fromBusinessDate: fromBusinessDate!,
+        toBusinessDateExclusive: nextBusinessDate(toBusinessDateInclusive!),
+        minAmountMills: bucket.minAmountMills,
+        maxAmountMillsExclusive: bucket.maxAmountMillsExclusive,
+        query: query.query,
+        excludeNonFollowers: query.excludeNonFollowers,
+        limit: query.limit,
+        offset: query.offset,
+      }),
+    getSpenderProjectionAsOf(app.db, {
+      pageIds: [page.id],
+      platform: page.platform,
+    }),
+  ]);
+
+  return {
+    page: {
+      id: page.id,
+      label: page.label,
+      platform: page.platform,
+      modelSlug: page.modelSlug,
+      modelName: page.modelName,
+    },
+    currency: "USD",
+    metric: isLifetime ? "lifetimeGrossAmountMills" : "grossAmountMills",
+    period: toPeriodMetadata(page.platform, period, custom, asOf),
+    bucket: serializeSpenderAutoListBucket(bucket, result.total),
+    items: result.items.map((item) => ({
+      fan: serializeFan(item),
+      isFollower: item.isFollower,
+      isSubscriber: item.isSubscriber,
+      subscriptionStatus: item.subscriptionStatus,
+      subscriptionExpiresAt: serializeTimestamp(item.subscriptionExpiresAt),
+      lastSubscriptionEndedAt: serializeTimestamp(item.lastSubscriptionEndedAt),
+      grossAmountMills: millsToNumber(item.grossAmountMills),
+      creatorNetAmountMills: millsToNumber(item.creatorNetAmountMills),
+      lifetimeGrossAmountMills: millsToNumber(item.lifetimeGrossAmountMills),
+      lifetimeCreatorNetAmountMills: millsToNumber(item.lifetimeCreatorNetAmountMills),
+      lastTransactionAt: serializeTimestamp(item.lastTransactionAt),
+    })),
+    limit: query.limit,
+    offset: query.offset,
+    total: result.total,
+  };
 }
 
 function normalizeSortBy(

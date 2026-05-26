@@ -49,6 +49,14 @@ const spenderSortByEnum = z.enum([
   "displayName",
 ]);
 const fanSearchMatchKindEnum = z.enum(["platformUserId", "username", "alias", "displayName"]);
+const pageSpenderAutoListBucketKeyEnum = z.enum([
+  "0-25",
+  "25-50",
+  "50-150",
+  "150-350",
+  "350-600",
+  "600-plus",
+]);
 const workboardTouchpointEnum = z.enum(["21d", "14d", "7d", "5d", "3d", "1d"]);
 const queryBooleanSchema = z.preprocess((value) => {
   if (typeof value === "string") {
@@ -201,6 +209,10 @@ export const paginationQuerySchema = z.object({
 
 export const pageParamsSchema = z.object({
   pageLabel: z.string().min(1),
+});
+
+export const pageSpenderAutoListParamsSchema = pageParamsSchema.extend({
+  bucketKey: pageSpenderAutoListBucketKeyEnum,
 });
 
 export const modelParamsSchema = z.object({
@@ -394,6 +406,14 @@ export const spenderBatchBodySchema = spenderScopeFieldsSchema
   .merge(spenderOptionalPeriodFieldsSchema)
   .extend({
     fans: z.array(fanLookupParamsSchema).min(1).max(200),
+  });
+
+export const pageSpenderAutoListsQuerySchema = spenderOptionalPeriodFieldsSchema;
+
+export const pageSpenderAutoListQuerySchema = fanListQuerySchema
+  .merge(spenderOptionalPeriodFieldsSchema)
+  .extend({
+    excludeNonFollowers: queryBooleanSchema.optional(),
   });
 
 export const fansSearchQuerySchema = spenderScopeFieldsSchema
@@ -653,6 +673,27 @@ export const fanListResponseSchema = z.object({
   total: z.number().int(),
 });
 
+const deletedFanItemSchema = z.object({
+  platformUserId: z.string(),
+  latestKnownLabel: z.string().nullable(),
+  pageAlias: z.string().nullable(),
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+  latestHistoricalPageAlias: z.string().nullable(),
+  latestHistoricalUsername: z.string().nullable(),
+  deletedDetectedAt: isoTimestamp,
+  deletedLastDetectedAt: isoTimestamp.nullable(),
+  lastSeenAt: isoTimestamp,
+});
+
+export const pageDeletedFansResponseSchema = z.object({
+  page: assignedPageSchema,
+  items: z.array(deletedFanItemSchema),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  total: z.number().int(),
+});
+
 const fanBaseSchema = z.object({
   platform: platformEnum,
   platformUserId: z.string(),
@@ -794,6 +835,50 @@ export const spenderListResponseSchema = z.object({
   period: spenderPeriodMetadataSchema,
   diagnostics: spenderDiagnosticsSchema,
   items: z.array(spenderListItemSchema),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  total: z.number().int(),
+});
+
+const pageSpenderAutoListItemSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  minAmountMills: mills.nonnegative(),
+  maxAmountMillsExclusive: mills.positive().nullable(),
+  entryCount: z.number().int().nonnegative(),
+});
+
+export const pageSpenderAutoListsResponseSchema = z.object({
+  page: pageRefSchema,
+  currency: z.literal("USD"),
+  metric: z.enum(["grossAmountMills", "lifetimeGrossAmountMills"]),
+  period: spenderPeriodMetadataSchema,
+  asOf: isoTimestamp.nullable(),
+  totalEntries: z.number().int().nonnegative(),
+  lists: z.array(pageSpenderAutoListItemSchema),
+});
+
+const pageSpenderAutoListFanSchema = z.object({
+  fan: spenderFanSchema,
+  isFollower: z.boolean(),
+  isSubscriber: z.boolean(),
+  subscriptionStatus: z.enum(["active", "expired", "never"]),
+  subscriptionExpiresAt: isoTimestamp.nullable(),
+  lastSubscriptionEndedAt: isoTimestamp.nullable(),
+  grossAmountMills: mills,
+  creatorNetAmountMills: mills,
+  lifetimeGrossAmountMills: mills,
+  lifetimeCreatorNetAmountMills: mills,
+  lastTransactionAt: isoTimestamp.nullable(),
+});
+
+export const pageSpenderAutoListDetailResponseSchema = z.object({
+  page: pageRefSchema,
+  currency: z.literal("USD"),
+  metric: z.enum(["grossAmountMills", "lifetimeGrossAmountMills"]),
+  period: spenderPeriodMetadataSchema,
+  bucket: pageSpenderAutoListItemSchema,
+  items: z.array(pageSpenderAutoListFanSchema),
   limit: z.number().int(),
   offset: z.number().int(),
   total: z.number().int(),
@@ -2407,6 +2492,46 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  pageDeletedFans: {
+    tags: ["fans"],
+    summary: "List deleted fans for one page",
+    security: cookieOrBearerSecurity,
+    params: pageParamsSchema,
+    querystring: paginationQuerySchema,
+    response: {
+      200: pageDeletedFansResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  pageSpenderAutoLists: {
+    tags: ["spenders"],
+    summary: "List spender auto-list buckets for one page",
+    security: cookieOrBearerSecurity,
+    params: pageParamsSchema,
+    querystring: pageSpenderAutoListsQuerySchema,
+    response: {
+      200: pageSpenderAutoListsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  pageSpenderAutoListDetail: {
+    tags: ["spenders"],
+    summary: "List fans inside one spender auto-list bucket",
+    security: cookieOrBearerSecurity,
+    params: pageSpenderAutoListParamsSchema,
+    querystring: pageSpenderAutoListQuerySchema,
+    response: {
+      200: pageSpenderAutoListDetailResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   pageFanDetail: {
     tags: ["fans"],
     summary: "Get one fan within one page",
@@ -3374,12 +3499,16 @@ export type SetFanFlagsBody = z.infer<typeof setFanFlagsBodySchema>;
 export type FanFlagsResponse = z.infer<typeof fanFlagsResponseSchema>;
 export type FansSearchQuery = z.infer<typeof fansSearchQuerySchema>;
 export type FansSearchResponse = z.infer<typeof fansSearchResponseSchema>;
+export type PageDeletedFansResponse = z.infer<typeof pageDeletedFansResponseSchema>;
 export type PageConversationPreviewParams = z.infer<typeof pageConversationPreviewParamsSchema>;
 export type PageConversationPreviewQuery = z.infer<typeof pageConversationPreviewQuerySchema>;
 export type PageConversationPreviewResponse = z.infer<typeof pageConversationPreviewResponseSchema>;
 export type PageConversationMessagesParams = z.infer<typeof pageConversationMessagesParamsSchema>;
 export type PageConversationMessagesQuery = z.infer<typeof pageConversationMessagesQuerySchema>;
 export type PageConversationMessagesResponse = z.infer<typeof pageConversationMessagesResponseSchema>;
+export type PageSpenderAutoListParams = z.infer<typeof pageSpenderAutoListParamsSchema>;
+export type PageSpenderAutoListDetailResponse = z.infer<typeof pageSpenderAutoListDetailResponseSchema>;
+export type PageSpenderAutoListsResponse = z.infer<typeof pageSpenderAutoListsResponseSchema>;
 export type SpenderBatchBody = z.infer<typeof spenderBatchBodySchema>;
 export type SpenderBatchResponse = z.infer<typeof spenderBatchResponseSchema>;
 export type SpenderDetailQuery = z.infer<typeof spenderDetailQuerySchema>;

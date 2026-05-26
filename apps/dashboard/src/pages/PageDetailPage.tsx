@@ -6,6 +6,7 @@ import {
   usePageSubscribers,
   usePageTransactions,
   useSpenders,
+  usePageSpenderAutoLists,
   usePageFollowersDaily,
   usePageSubscribersDaily,
   usePageRevenueDaily,
@@ -19,8 +20,14 @@ import { RemainingBar } from "@/components/shared/RemainingBar";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
-import { buildFanProfileNavigation, buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
+import {
+  buildFanProfileNavigation,
+  buildPageRoute,
+  buildPageSpenderAutoListRoute,
+  buildSettingsRoute,
+} from "@/lib/navigation";
 import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
+import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import {
   formatDate,
@@ -30,7 +37,12 @@ import {
   daysRemaining,
 } from "@/lib/format";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext";
-import type { SpenderListResponse, SubscriberListResponse, TransactionListResponse } from "@agency_hub_core/contracts";
+import type {
+  PageSpenderAutoListsResponse,
+  SpenderListResponse,
+  SubscriberListResponse,
+  TransactionListResponse,
+} from "@agency_hub_core/contracts";
 type TabKey = "transactions" | "spenders" | "followers";
 
 const PAGE_SIZE = 50;
@@ -70,7 +82,9 @@ export function PageDetailPage() {
   const navigate = useNavigate();
   const { data: auth } = useAuthMe();
   const { period } = usePeriodStore();
+  const setSpenderPeriod = useSpenderPeriodStore((s) => s.setPeriod);
   const selectedPeriod = period;
+  const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
   const audienceChartPeriod = getAudienceChartPeriod(selectedPeriod);
 
   const { findPageByLabel, pageCatalogState, pageCatalogError } = useDashboardShell();
@@ -96,6 +110,11 @@ export function PageDetailPage() {
   const { data: subscribers } = usePageSubscribers(resolvedPageLabel, { limit: 6 }, {
     enabled: canLoadPageData,
   });
+  const { data: spenderAutoLists } = usePageSpenderAutoLists(resolvedPageLabel, {
+    period: spenderPeriod,
+  }, {
+    enabled: canLoadPageData,
+  });
 
   const [activeTab, setActiveTab] = useState<TabKey>("transactions");
   const [txOffset, setTxOffset] = useState(0);
@@ -109,7 +128,6 @@ export function PageDetailPage() {
   }, {
     enabled: canLoadPageData,
   });
-  const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
   const { data: spenders } = useSpenders({
     scope: "page",
     pageLabel: resolvedPageLabel,
@@ -125,6 +143,10 @@ export function PageDetailPage() {
   useEffect(() => {
     setSpendersOffset(0);
   }, [pageLabel, selectedPeriod]);
+
+  useEffect(() => {
+    setSpenderPeriod(selectedPeriod);
+  }, [selectedPeriod, setSpenderPeriod]);
 
   useEffect(() => {
     setTxOffset(0);
@@ -302,6 +324,8 @@ export function PageDetailPage() {
         onOpenFanProfile={openFanProfile}
       />
 
+      <PageSpenderAutoListsSection pageLabel={pageLabel!} autoLists={spenderAutoLists} />
+
       <div className="flex gap-0 border-b border-border mb-6">
         {tabs.map(({ key, label }) => (
           <button
@@ -467,6 +491,50 @@ function PageSubscribersSection({
           )}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+export function PageSpenderAutoListsSection({
+  pageLabel,
+  autoLists,
+}: {
+  pageLabel: string;
+  autoLists: PageSpenderAutoListsResponse | undefined;
+}) {
+  const lists = autoLists?.lists ?? [];
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden mb-6">
+      <div className="flex items-center justify-between p-4 px-[22px] border-b border-border bg-hover-alt">
+        <div className="font-bold text-[15px] text-text-primary">
+          Spender Auto Lists
+        </div>
+        <span className="text-[12px] text-text-muted">
+          {autoLists?.totalEntries ?? 0} total
+        </span>
+      </div>
+      <div className="divide-y divide-border-light">
+        {lists.map((item) => (
+          <Link
+            key={item.key}
+            to={buildPageSpenderAutoListRoute(pageLabel, item.key)}
+            className="block px-[22px] py-4 transition-colors hover:bg-hover"
+          >
+            <div className="text-[15px] font-extrabold text-text-primary">
+              {item.label}
+            </div>
+            <div className="mt-1 text-sm text-text-muted tabular-nums">
+              {item.entryCount} Entries
+            </div>
+          </Link>
+        ))}
+        {lists.length === 0 && (
+          <div className="px-[22px] py-8 text-center text-sm text-text-muted">
+            No auto lists found
+          </div>
+        )}
+      </div>
     </div>
   );
 }

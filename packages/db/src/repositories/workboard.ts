@@ -243,6 +243,7 @@ function subscribersBaseQuery(platformAccountId: number, now: Date) {
        and slp.fan_id = fp.fan_id
       where fp.platform_account_id = ${platformAccountId}
         and fp.is_subscriber = true
+        and f.deleted_detected_at is null
         and fp.subscription_expires_at > ${nowSql}
         and fp.subscription_expires_at <= ${nowPlus21Days}
     ),
@@ -359,6 +360,7 @@ function spenderBaseQuery(
         on pc.platform_account_id = slp.platform_account_id
        and pc.fan_id = slp.fan_id
       where slp.platform_account_id = ${input.platformAccountId}
+        and f.deleted_detected_at is null
         and slp.creator_net_amount_mills >= ${minimumSpendMills}
         and ${hasVisibleFanIdentitySql({
           pageAlias: sql.raw("fp.page_alias"),
@@ -852,6 +854,7 @@ export async function listWorkboardSnoozed(
      and slp.fan_id = ws.fan_id
     where ws.platform_account_id = ${input.platformAccountId}
       and ws.snoozed_until > now()
+      and f.deleted_detected_at is null
       and ${hasVisibleFanIdentitySql({
         pageAlias: sql.raw("fp.page_alias"),
         username: sql.raw("f.username"),
@@ -966,6 +969,7 @@ export async function listWorkboardPresence(
      and slp.fan_id = fp.fan_id
     where fp.platform_account_id = ${input.platformAccountId}
       and ${presenceFilter}
+      and f.deleted_detected_at is null
       and ${hasVisibleFanIdentitySql({
         pageAlias: sql.raw("fp.page_alias"),
         username: sql.raw("f.username"),

@@ -121,6 +121,7 @@ import {
   getOverviewGrowthReport,
   getOverviewRevenueReport,
   getPageFanDetailReport,
+  getPageDeletedFansReport,
   getPageFansReport,
   getPageFollowersDailyReport,
   getPageFollowersReport,
@@ -165,6 +166,8 @@ import {
   getSpenderBatch,
   getSpenderDetail,
   getSpenderList,
+  getPageSpenderAutoListDetail,
+  getPageSpenderAutoLists,
   getSpenderSeries,
   searchVisibleFans,
 } from "../services/spenders.ts";
@@ -692,6 +695,44 @@ export async function buildApiServer(appContext: AppContext) {
       throw new ForbiddenError("Page access denied");
     }
     return getPageFansReport(appContext, request.params.pageLabel, query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/deleted-fans", {
+    schema: routeSchemas.pageDeletedFans,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageDeletedFansReport(appContext, request.params.pageLabel, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/spender-autolists", {
+    schema: routeSchemas.pageSpenderAutoLists,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageSpenderAutoLists(appContext, request.params.pageLabel, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/spender-autolists/:bucketKey", {
+    schema: routeSchemas.pageSpenderAutoListDetail,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageSpenderAutoListDetail(
+      appContext,
+      request.params.pageLabel,
+      request.params.bucketKey,
+      request.query,
+    );
   });
 
   server.get("/api/v1/pages/:pageLabel/fans/:platformUserId", {
