@@ -1669,6 +1669,125 @@ it("guards against empty first-page follower reconcile wipes when active followe
     }));
   });
 
+  it("requests a dm_messages follow-up when conversation heads advance", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async () => ({
+      total: 1,
+      items: [{
+        groupId: "group-1",
+        partnerAccountId: "fan-1",
+        partnerUsername: "fan_1",
+        flags: 0,
+        unreadCount: 2,
+        subscriptionTierId: null,
+        lastMessageId: "msg-80",
+        lastUnreadMessageId: "msg-80",
+      }],
+      accounts: [{
+        id: "fan-1",
+        username: "fan_1",
+        displayName: "Fan 1",
+        createdAt: 1_770_000_000_000,
+      }],
+      groups: [{
+        id: "group-1",
+        users: [
+          { groupId: "group-1", userId: "acct-dm", type: 1, permissionFlags: 0 },
+          { groupId: "group-1", userId: "fan-1", type: 1, permissionFlags: 0 },
+        ],
+        lastMessage: {
+          id: "msg-80",
+          type: 1,
+          dataVersion: 1,
+          content: "new head",
+          groupId: "group-1",
+          senderId: "fan-1",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_770_000_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 0,
+        },
+      }],
+      offset: 0,
+      done: true,
+      raw: {
+        data: [],
+        aggregationData: {
+          total: 1,
+          accounts: [],
+          groups: [],
+        },
+      },
+    }));
+    const db = {};
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([
+      buildDmConversation({
+        lastMessageId: "msg-79",
+        lastUnreadMessageId: "msg-79",
+        newestStoredMessageId: "msg-79",
+        oldestStoredMessageId: "msg-55",
+        storedMessageCount: 25,
+        messageCoverageStatus: "complete",
+        messageBackfillComplete: true,
+        lastMessageSyncAt: new Date("2026-01-01T00:00:00.000Z"),
+      }),
+    ]);
+    dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-1" }]);
+    dbMocks.upsertPageDmConversation.mockImplementation(async (_db, input) => ({
+      ...buildDmConversation(),
+      ...input,
+      id: 777,
+      platformAccountId: input.platformAccountId,
+      fanId: input.fanId,
+      isVisible: input.isVisible ?? true,
+      messageCoverageStatus: input.messageCoverageStatus ?? "pending_backfill",
+      metadata: input.metadata ?? {},
+    }));
+
+    const result = await executeDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 42,
+      },
+      syncRunId: 901,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(1),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(db, {
+      pageId: 55,
+      streams: ["dm_messages"],
+      source: "scheduled",
+    });
+  });
+
   it("resumes dm_messages from checkpoint state regardless of desired revision", async () => {
     const telemetry = createTelemetry();
     const getMessagesPage = vi.fn(async (requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {

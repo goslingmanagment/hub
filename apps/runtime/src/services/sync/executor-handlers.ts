@@ -138,6 +138,36 @@ function resolveDmConversationCoverageStatus(input: {
   return input.existingStatus;
 }
 
+function shouldRequestDmMessagesFollowup(conversation: {
+  fanId: number | null;
+  isVisible: boolean;
+  lastMessageId: string | null;
+  newestStoredMessageId: string | null;
+  lastMessageAt: Date | null;
+  lastMessageSyncAt: Date | null;
+  messageCoverageStatus: MessageCoverageStatus;
+  metadata: Record<string, unknown>;
+}) {
+  if (
+    !conversation.isVisible ||
+    conversation.fanId === null ||
+    getFanslyDmMessageSyncExcludedReason(conversation.metadata) !== null
+  ) {
+    return false;
+  }
+
+  if (conversation.messageCoverageStatus === "pending_backfill") {
+    return true;
+  }
+
+  if (conversation.lastMessageId === conversation.newestStoredMessageId) {
+    return false;
+  }
+
+  return conversation.lastMessageSyncAt === null ||
+    (conversation.lastMessageAt !== null && conversation.lastMessageSyncAt < conversation.lastMessageAt);
+}
+
 function createPageRateLimitWaiter(
   app: AppContext,
   pageContext: ResolvedPageContext,
@@ -2198,6 +2228,7 @@ export async function executeDmConversationsChunk(
       offset: page.done ? state.offset : state.offset + 100,
     };
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+      let dmMessagesFollowupNeeded = false;
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
         accounts: [...hydratedAccountsById.values()],
@@ -2208,7 +2239,7 @@ export async function executeDmConversationsChunk(
         const fanId = conversationWrite.partnerPlatformUserId && conversationWrite.existingFanId === null
           ? (fanMap.get(conversationWrite.partnerPlatformUserId) ?? null)
           : conversationWrite.existingFanId;
-        await upsertPageDmConversation(dbTx, {
+        const upsertedConversation = await upsertPageDmConversation(dbTx, {
           platformAccountId: input.pageContext.page.id,
           fanId,
           platformConversationId: conversationWrite.platformConversationId,
@@ -2236,6 +2267,9 @@ export async function executeDmConversationsChunk(
           lastSeenGeneration: conversationWrite.lastSeenGeneration,
           metadata: conversationWrite.metadata,
         });
+        if (upsertedConversation && shouldRequestDmMessagesFollowup(upsertedConversation)) {
+          dmMessagesFollowupNeeded = true;
+        }
       }
 
       if (page.done) {
@@ -2250,6 +2284,7 @@ export async function executeDmConversationsChunk(
         };
         return {
           kind: "complete" as const,
+          dmMessagesFollowupNeeded,
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "dm_conversations",
@@ -2261,6 +2296,7 @@ export async function executeDmConversationsChunk(
 
       return {
         kind: "progress" as const,
+        dmMessagesFollowupNeeded,
         checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "dm_conversations",
@@ -2272,6 +2308,14 @@ export async function executeDmConversationsChunk(
       "dm_conversations",
       summarizeCheckpoint(pageWrite.checkpoint),
     );
+
+    if (pageWrite.dmMessagesFollowupNeeded) {
+      await requestPageSync(app.db, {
+        pageId: input.pageContext.page.id,
+        streams: ["dm_messages"],
+        source: "scheduled",
+      });
+    }
 
     if (pageWrite.kind === "complete") {
       return {

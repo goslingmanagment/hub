@@ -865,7 +865,7 @@ export async function reclaimExpiredPageSync(
 ) {
   const rows = await listPageSyncStates(db);
   const reclaimable = rows.filter((row) =>
-    row.status === "running" &&
+    row.leasedSeq !== null &&
     row.leaseExpiresAt !== null &&
     row.leaseExpiresAt.getTime() < now.getTime()
   );

@@ -1486,7 +1486,10 @@ export async function listSyncMonitorStreamRows(
                where c.is_visible = true
                  and c.fan_id is not null
                  and ${dmMessageSyncEligibleSql("c")}
-                 and c.message_backfill_complete = true
+                 and c.message_coverage_status in (
+                   'complete'::dm_message_coverage_status,
+                   'partial_window'::dm_message_coverage_status
+                 )
              )::int as "dmBackfillCompleteConversationCount",
              count(*) filter (
                where c.is_visible = true

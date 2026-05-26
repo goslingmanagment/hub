@@ -174,4 +174,60 @@ describe("page sync lease fencing", () => {
       await testDb.stop();
     }
   }, 30_000);
+
+  it("reclaims expired leases even when stale rows are already marked pending", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "reclaim-pending-model",
+        name: "Reclaim Pending Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "reclaim-pending-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+
+      await testDb.pool.query(
+        `
+          update page_sync_states
+          set status = 'pending',
+              request_seq = 2,
+              applied_seq = 1,
+              leased_seq = 1,
+              lease_owner = 'worker-1',
+              lease_token = 'lease-1',
+              lease_heartbeat_at = $1,
+              lease_expires_at = $2,
+              updated_at = $1
+          where page_id = $3
+            and stream = 'followers_reconcile'
+        `,
+        [now, new Date(now.getTime() - 1_000), page.id],
+      );
+
+      await reclaimExpiredPageSync(testDb.db, now);
+
+      const state = await getPageSyncState(testDb.db, page.id, "followers_reconcile");
+      expect(state).toMatchObject({
+        status: "pending",
+        requestSeq: 2,
+        appliedSeq: 1,
+        leasedSeq: null,
+        leaseToken: null,
+      });
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
 });
