@@ -256,10 +256,7 @@ The production work did not replace the existing dev flow.
 
 ```bash
 pnpm install
-cp .env.example .env
-pnpm dev:db
-pnpm db:migrate
-pnpm api
-pnpm worker
-pnpm dev:dashboard
+pnpm dev
 ```
+
+`pnpm dev` creates a local `.env` from `.env.example` if needed, generates a local `APP_ENCRYPTION_KEY`, starts the Docker Postgres service, waits for it, runs migrations, then starts the API, worker, and dashboard in one terminal. Use `Ctrl+C` to stop the local Node/Vite processes.

@@ -20,6 +20,7 @@
     "test:sync-critical:api": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/api.integration.test.ts --testNamePattern \"auto-queues|initial sync|retry path|latest light sync|detailed sync health|stored proxy|sync runs|page credentials|admin verify|inline proxy|sync monitor|sync block|manual block controls|recent sync requests|sync request limits|system health\"",
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
+    "dev": "bash scripts/dev-local.sh",
     "dev:db": "docker compose up -d postgres",
     "dev:dashboard": "cd apps/dashboard && npx vite"
   },
