@@ -685,6 +685,9 @@ export async function getPageFollowersReport(
     offset: input.offset,
     query: input.query,
     followedWithinHours: input.followedWithinHours,
+    subscriber: input.subscriber,
+    dmStatus: input.dmStatus,
+    activeWithinMinutes: input.activeWithinMinutes,
   });
 
   return {
@@ -695,6 +698,26 @@ export async function getPageFollowersReport(
       username: row.username,
       displayName: row.displayName,
       followedAt: serializeTimestamp(row.followedAt)!,
+      isSubscriber: row.isSubscriber,
+      subscriberSince: serializeTimestamp(row.subscriberSince),
+      subscriptionExpiresAt: serializeTimestamp(row.subscriptionExpiresAt),
+      autoRenew: row.autoRenew,
+      totalSpentCents: millsToRoundedCents(row.totalCreatorNetAmountMills),
+      lastTransactionAt: serializeTimestamp(row.lastTransactionAt),
+      dm: {
+        hasConversation: row.platformConversationId !== null,
+        platformConversationId: row.platformConversationId,
+        unreadCount: row.unreadCount ?? 0,
+        lastMessageAt: serializeTimestamp(row.lastMessageAt),
+        lastFanMessageAt: serializeTimestamp(row.lastFanMessageAt),
+        lastModelMessageAt: serializeTimestamp(row.lastModelMessageAt),
+        lastMessagePreview: row.lastMessagePreview,
+      },
+      presence: {
+        status: row.presenceStatus,
+        lastSeenAt: serializeTimestamp(row.externalPresenceAt),
+        observedAt: serializeTimestamp(row.externalPresenceObservedAt),
+      },
     })),
     limit: input.limit,
     offset: input.offset,

@@ -25,6 +25,7 @@ import type {
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
 import { qs } from "./utils.js";
+import { pathSegment } from "@/lib/path";
 
 type QueryOptions = { enabled?: boolean };
 
@@ -32,7 +33,7 @@ export function usePageRevenue(pageLabel: string, period: string, options: Query
   return useQuery({
     queryKey: ["pageRevenue", pageLabel, period],
     queryFn: () =>
-      api.get<PageRevenueResponse>(`/api/v1/pages/${pageLabel}/revenue?period=${period}`),
+      api.get<PageRevenueResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/revenue?period=${period}`),
     enabled: options.enabled ?? true,
   });
 }
@@ -41,7 +42,7 @@ export function usePageRevenueDaily(pageLabel: string, period = "30d", options: 
   return useQuery({
     queryKey: ["pageRevenueDaily", pageLabel, period],
     queryFn: () =>
-      api.get<RevenueDailyResponse>(`/api/v1/pages/${pageLabel}/revenue/daily?period=${period}`),
+      api.get<RevenueDailyResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/revenue/daily?period=${period}`),
     enabled: options.enabled ?? true,
   });
 }
@@ -61,7 +62,7 @@ export function usePageSubscribers(
   return useQuery({
     queryKey: ["pageSubscribers", pageLabel, params],
     queryFn: () =>
-      api.get<SubscriberListResponse>(`/api/v1/pages/${pageLabel}/subscribers${qs(params)}`),
+      api.get<SubscriberListResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/subscribers${qs(params)}`),
     enabled: options.enabled ?? true,
   });
 }
@@ -70,7 +71,7 @@ export function usePageSubscribersDaily(pageLabel: string, period = "30d", optio
   return useQuery({
     queryKey: ["pageSubscribersDaily", pageLabel, period],
     queryFn: () =>
-      api.get<SubscriberDailyResponse>(`/api/v1/pages/${pageLabel}/subscribers/daily?period=${period}`),
+      api.get<SubscriberDailyResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/subscribers/daily?period=${period}`),
     enabled: options.enabled ?? true,
   });
 }
@@ -82,12 +83,15 @@ export function usePageFollowers(
     offset?: number;
     query?: string;
     followedWithinHours?: number;
+    subscriber?: boolean;
+    dmStatus?: "none" | "has_dm";
+    activeWithinMinutes?: number;
   } = {},
 ) {
   return useQuery({
     queryKey: ["pageFollowers", pageLabel, params],
     queryFn: () =>
-      api.get<FollowerListResponse>(`/api/v1/pages/${pageLabel}/followers${qs(params)}`),
+      api.get<FollowerListResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/followers${qs(params)}`),
   });
 }
 
@@ -99,7 +103,7 @@ export function usePageFollowersDaily(
   return useQuery({
     queryKey: ["pageFollowersDaily", pageLabel, period],
     queryFn: () =>
-      api.get<FollowerDailyResponse>(`/api/v1/pages/${pageLabel}/followers/daily?period=${period}`),
+      api.get<FollowerDailyResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/followers/daily?period=${period}`),
     enabled: options.enabled ?? true,
   });
 }
@@ -112,7 +116,7 @@ export function usePageTransactions(
   return useQuery({
     queryKey: ["pageTransactions", pageLabel, params],
     queryFn: () =>
-      api.get<TransactionListResponse>(`/api/v1/pages/${pageLabel}/transactions${qs(params)}`),
+      api.get<TransactionListResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/transactions${qs(params)}`),
     enabled: options.enabled ?? true,
   });
 }
@@ -129,7 +133,7 @@ export function usePageSpenderAutoLists(
   return useQuery({
     queryKey: ["pageSpenderAutoLists", pageLabel, params],
     queryFn: () =>
-      api.get<PageSpenderAutoListsResponse>(`/api/v1/pages/${pageLabel}/spender-autolists${qs(params)}`),
+      api.get<PageSpenderAutoListsResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/spender-autolists${qs(params)}`),
     enabled: options.enabled ?? true,
   });
 }
@@ -152,7 +156,7 @@ export function usePageSpenderAutoList(
     queryKey: ["pageSpenderAutoList", pageLabel, bucketKey, params],
     queryFn: () =>
       api.get<PageSpenderAutoListDetailResponse>(
-        `/api/v1/pages/${pageLabel}/spender-autolists/${bucketKey}${qs(params)}`,
+        `/api/v1/pages/${pathSegment(pageLabel)}/spender-autolists/${pathSegment(bucketKey)}${qs(params)}`,
       ),
     enabled: options.enabled ?? true,
   });
@@ -169,7 +173,7 @@ export function usePageDeletedFans(
   return useQuery({
     queryKey: ["pageDeletedFans", pageLabel, params],
     queryFn: () =>
-      api.get<PageDeletedFansResponse>(`/api/v1/pages/${pageLabel}/deleted-fans${qs(params)}`),
+      api.get<PageDeletedFansResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/deleted-fans${qs(params)}`),
     enabled: options.enabled ?? true,
   });
 }
@@ -183,7 +187,7 @@ export function usePageFanTransactions(
     queryKey: ["pageFanTransactions", pageLabel, platformUserId, params],
     queryFn: () =>
       api.get<FanTransactionListResponse>(
-        `/api/v1/pages/${pageLabel}/fans/${platformUserId}/transactions${qs(params)}`,
+        `/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/transactions${qs(params)}`,
       ),
     enabled: !!platformUserId,
   });
@@ -198,7 +202,7 @@ export function useFanTransactions(
     queryKey: ["fanTransactions", platform, platformUserId, params],
     queryFn: () =>
       api.get<CrossPageFanTransactionListResponse>(
-        `/api/v1/fans/${platform}/${platformUserId}/transactions${qs(params)}`,
+        `/api/v1/fans/${pathSegment(platform)}/${pathSegment(platformUserId)}/transactions${qs(params)}`,
       ),
     enabled: !!platformUserId,
   });
@@ -208,7 +212,7 @@ export function usePageFanDetail(pageLabel: string, platformUserId: string) {
   return useQuery({
     queryKey: ["pageFanDetail", pageLabel, platformUserId],
     queryFn: () =>
-      api.get<PageFanDetailResponse>(`/api/v1/pages/${pageLabel}/fans/${platformUserId}`),
+      api.get<PageFanDetailResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}`),
     enabled: !!platformUserId,
   });
 }
@@ -221,7 +225,7 @@ export function usePageFanProfile(
   return useQuery({
     queryKey: ["pageFanProfile", pageLabel, platformUserId],
     queryFn: () =>
-      api.get<FanProfileResponse>(`/api/v1/pages/${pageLabel}/fans/${platformUserId}/profile`),
+      api.get<FanProfileResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/profile`),
     enabled: !!platformUserId && (options.enabled ?? true),
   });
 }
@@ -235,7 +239,7 @@ export function usePageFanProfileVersions(
     queryKey: ["pageFanProfileVersions", pageLabel, platformUserId],
     queryFn: () =>
       api.get<FanProfileVersionListResponse>(
-        `/api/v1/pages/${pageLabel}/fans/${platformUserId}/profile/versions`,
+        `/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/profile/versions`,
       ),
     enabled: !!platformUserId && (options.enabled ?? true),
   });
@@ -251,7 +255,7 @@ export function usePageFanProfileVersion(
     queryKey: ["pageFanProfileVersion", pageLabel, platformUserId, version],
     queryFn: () =>
       api.get<FanProfileDocument>(
-        `/api/v1/pages/${pageLabel}/fans/${platformUserId}/profile/versions/${version}`,
+        `/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/profile/versions/${version}`,
       ),
     enabled: !!platformUserId && version !== null && (options.enabled ?? true),
   });
@@ -262,7 +266,7 @@ export function useCreateFanNote(pageLabel: string, platformUserId: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: { body: string }) =>
-      api.post<FanNoteResponse>(`/api/v1/pages/${pageLabel}/fans/${platformUserId}/notes`, body),
+      api.post<FanNoteResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/notes`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["pageFanDetail", pageLabel, platformUserId] });
     },
@@ -279,6 +283,7 @@ export function useSpenders(params: {
   sortBy?: string;
   sortDir?: string;
   query?: string;
+  retentionStatus?: string;
 }, options: QueryOptions = {}) {
   return useQuery({
     queryKey: ["spenders", params],
@@ -295,7 +300,7 @@ export function useSpenderDetail(
   return useQuery({
     queryKey: ["spenderDetail", platform, platformUserId, params],
     queryFn: () =>
-      api.get<SpenderDetailResponse>(`/api/v2/spenders/${platform}/${platformUserId}${qs(params)}`),
+      api.get<SpenderDetailResponse>(`/api/v2/spenders/${pathSegment(platform)}/${pathSegment(platformUserId)}${qs(params)}`),
     enabled: !!platformUserId,
   });
 }

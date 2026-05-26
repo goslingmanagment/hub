@@ -45,7 +45,7 @@ export interface AdminDbStatsResponse {
 }
 
 export interface AdminIncidentSummary {
-  code: string;
+  code: string | null;
   count: number;
   severity: string | null;
 }

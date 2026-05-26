@@ -101,12 +101,12 @@ export function Topbar({ user }: TopbarProps) {
   );
 }
 
-function getPeriodSelectorMode(pathname: string): "dashboard" | "spender" | null {
+function getPeriodSelectorMode(pathname: string): "dashboard" | "spender" | "topSupporters" | null {
   const parts = pathname.split("/").filter(Boolean);
   if (parts.length === 0) return "dashboard"; // Overview
   if (parts[0] === "pages" && parts[1]) {
     if (!parts[2]) return "dashboard"; // PageDetail
-    if (parts[2] === "top-supporters") return "spender";
+    if (parts[2] === "top-supporters") return "topSupporters";
     if (parts[2] === "spender-autolists") return "spender";
     if (parts[2] === "fans" && parts[3] && parts[4]) return "spender";
     return null;

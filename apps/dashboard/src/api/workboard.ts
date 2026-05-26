@@ -5,6 +5,7 @@ import type {
   WorkboardSnoozeResponse,
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
+import { pathSegment } from "@/lib/path";
 
 export function useWorkboard(
   pageLabel: string,
@@ -12,7 +13,7 @@ export function useWorkboard(
 ) {
   return useQuery({
     queryKey: ["workboard", pageLabel],
-    queryFn: () => api.get<WorkboardResponse>(`/api/v1/pages/${pageLabel}/workboard`),
+    queryFn: () => api.get<WorkboardResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard`),
     enabled: options.enabled ?? true,
   });
 }
@@ -23,7 +24,7 @@ export function useWorkboardPresence(
 ) {
   return useQuery({
     queryKey: ["workboard", "presence", pageLabel],
-    queryFn: () => api.get<WorkboardPresenceResponse>(`/api/v1/pages/${pageLabel}/workboard/presence`),
+    queryFn: () => api.get<WorkboardPresenceResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/presence`),
     enabled: options.enabled ?? true,
   });
 }
@@ -32,7 +33,7 @@ export function useWorkboardSnooze(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { fanId: number; days: number }) =>
-      api.post<WorkboardSnoozeResponse>(`/api/v1/pages/${pageLabel}/workboard/snooze`, body),
+      api.post<WorkboardSnoozeResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/snooze`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard", pageLabel] });
     },
@@ -43,7 +44,7 @@ export function useWorkboardUnsnooze(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (fanId: number) =>
-      api.del<{ ok: true }>(`/api/v1/pages/${pageLabel}/workboard/snooze/${fanId}`),
+      api.del<{ ok: true }>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/snooze/${fanId}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard", pageLabel] });
     },

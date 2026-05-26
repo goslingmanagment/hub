@@ -32,6 +32,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Production build
+        run: pnpm build:production
+
+      - name: Production Docker image build
+        run: docker build --target runtime -t agency_hub_core/runtime:ci .
+
       - name: Reliable unit tests
         run: pnpm test:unit
 

@@ -17,17 +17,28 @@ const spenderOptions: { key: SpenderPeriodOption; label: string }[] = [
   { key: "all", label: "All" },
 ];
 
+type PeriodSelectorMode = "dashboard" | "spender" | "topSupporters";
+
 interface PeriodSelectorProps {
-  mode?: "dashboard" | "spender";
+  mode?: PeriodSelectorMode;
 }
 
 export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
   const dashboardPeriod = usePeriodStore();
   const spenderPeriod = useSpenderPeriodStore();
-  const periodState = mode === "spender" ? spenderPeriod : dashboardPeriod;
-  const options = mode === "spender" ? spenderOptions : dashboardOptions;
+
+  const selectedKey = mode === "topSupporters"
+    ? spenderPeriod.topSupportersPeriod
+    : mode === "spender"
+      ? spenderPeriod.period
+      : dashboardPeriod.period;
+  const options = mode === "dashboard" ? dashboardOptions : spenderOptions;
 
   function handleSelect(key: PeriodOption | SpenderPeriodOption) {
+    if (mode === "topSupporters") {
+      spenderPeriod.setTopSupportersPeriod(key as SpenderPeriodOption);
+      return;
+    }
     if (mode === "spender") {
       spenderPeriod.setPeriod(key as SpenderPeriodOption);
       return;
@@ -38,7 +49,7 @@ export function PeriodSelector({ mode = "dashboard" }: PeriodSelectorProps) {
   return (
     <div className="flex items-center gap-1">
       {options.map((opt) => {
-        const isActive = periodState.period === opt.key;
+        const isActive = selectedKey === opt.key;
         return (
           <button
             key={opt.key}

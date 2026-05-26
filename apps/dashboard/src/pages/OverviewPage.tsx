@@ -5,7 +5,7 @@ import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
-import { buildSettingsRoute } from "@/lib/navigation";
+import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
 import { PLATFORM_COLORS } from "@/lib/constants";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
@@ -102,8 +102,16 @@ export function OverviewPage() {
   const selectedPeriod = period;
 
   const { data, isLoading: isOverviewLoading, isError: isOverviewError } = useOverview();
-  const { data: revenueData } = useOverviewRevenue(selectedPeriod);
-  const { data: revenueDailyData } = useOverviewRevenueDaily(selectedPeriod);
+  const {
+    data: revenueData,
+    isLoading: isRevenueLoading,
+    isError: isRevenueError,
+  } = useOverviewRevenue(selectedPeriod);
+  const {
+    data: revenueDailyData,
+    isLoading: isRevenueDailyLoading,
+    isError: isRevenueDailyError,
+  } = useOverviewRevenueDaily(selectedPeriod);
   const {
     data: growthData,
     isLoading: isGrowthLoading,
@@ -153,6 +161,8 @@ export function OverviewPage() {
   }
 
   const totalRevenue = revenueData?.netEarningsMills ?? 0;
+  const revenueReady = Boolean(revenueData) && !isRevenueLoading && !isRevenueError;
+  const revenueDailyReady = Boolean(revenueDailyData) && !isRevenueDailyLoading && !isRevenueDailyError;
   const totalSubs = sumPageMetrics(pages.map((page) => page.subscriberCount));
   const totalNewSubs = growthReady
     ? pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
@@ -200,6 +210,7 @@ export function OverviewPage() {
               group={group}
               navigate={navigate}
               revenueByPageId={revenueByPageId}
+              revenueReady={revenueReady}
               followersByPageId={followersByPageId}
               subsByPageId={subsByPageId}
               growthReady={growthReady}
@@ -210,7 +221,7 @@ export function OverviewPage() {
             <td className="px-4 py-3 text-[15px] font-bold text-text-primary">Agency Total</td>
             <td className="px-4 py-3 text-right tabular-nums text-lg font-bold text-text-primary">
               <div className="flex items-center justify-end gap-2">
-                {formatUsdFromMills(totalRevenue)}
+                {revenueReady ? formatUsdFromMills(totalRevenue) : "—"}
                 {selectedPeriod !== "all" && (
                   <DeltaIndicator pct={revenueData?.comparison?.deltaPct ?? null} />
                 )}
@@ -246,7 +257,7 @@ export function OverviewPage() {
           </div>
         }
       >
-        {(revenueDailyData?.series ?? []).length > 0 && (
+        {revenueDailyReady && (revenueDailyData?.series ?? []).length > 0 && (
           <div className="mt-5">
             <PageActivityChart
               title="AGENCY REVENUE"
@@ -271,6 +282,7 @@ function ModelGroupRows({
   group,
   navigate,
   revenueByPageId,
+  revenueReady,
   followersByPageId,
   subsByPageId,
   growthReady,
@@ -279,13 +291,16 @@ function ModelGroupRows({
   group: ModelGroup;
   navigate: ReturnType<typeof useNavigate>;
   revenueByPageId: Map<number, number>;
+  revenueReady: boolean;
   followersByPageId: Map<number, number>;
   subsByPageId: Map<number, number>;
   growthReady: boolean;
   isOwner: boolean;
 }) {
   const modelName = group.modelName;
-  const groupRevenue = group.pages.reduce((sum, p) => sum + (revenueByPageId.get(p.id) ?? 0), 0);
+  const groupRevenue = revenueReady
+    ? group.pages.reduce((sum, p) => sum + (revenueByPageId.get(p.id) ?? 0), 0)
+    : null;
   const groupSubs = sumPageMetrics(group.pages.map((page) => page.subscriberCount));
   const groupNewSubs = growthReady
     ? group.pages.reduce((sum, p) => sum + (subsByPageId.get(p.id) ?? 0), 0)
@@ -304,7 +319,7 @@ function ModelGroupRows({
           </span>
         </td>
         <td className="px-4 pt-4 pb-2 text-right tabular-nums text-[15px] font-semibold text-accent">
-          {formatUsdFromMills(groupRevenue)}
+          {groupRevenue === null ? "—" : formatUsdFromMills(groupRevenue)}
         </td>
         <td className="px-4 pt-4 pb-2 text-right tabular-nums font-semibold">
           {formatMetricTotal(groupSubs)}
@@ -327,7 +342,7 @@ function ModelGroupRows({
       {group.pages.map((page) => {
         const platform = page.platform as keyof typeof PLATFORM_COLORS;
         const platformCfg = PLATFORM_COLORS[platform];
-        const pageRevenue = revenueByPageId.get(page.id) ?? 0;
+        const pageRevenue = revenueReady ? (revenueByPageId.get(page.id) ?? 0) : null;
         const isFansly = page.platform === "fansly";
         const pageFollowers = growthReady ? (followersByPageId.get(page.id) ?? 0) : null;
         const pageSubscribers = growthReady ? (subsByPageId.get(page.id) ?? 0) : null;
@@ -338,7 +353,7 @@ function ModelGroupRows({
         return (
           <tr
             key={page.id}
-            onClick={() => navigate(`/pages/${page.label}`)}
+            onClick={() => navigate(buildPageRoute(page.label))}
             className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
           >
             <td className="px-4 py-3">
@@ -372,7 +387,7 @@ function ModelGroupRows({
               )}
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
-              {formatUsdFromMills(pageRevenue)}
+              {pageRevenue === null ? "—" : formatUsdFromMills(pageRevenue)}
             </td>
             <td className="px-4 py-3 text-right tabular-nums text-[15px] font-medium text-text-secondary">
               {formatPageMetric(page.subscriberCount)}

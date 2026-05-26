@@ -16,6 +16,7 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { removeProxy, resolveStoredProxyConfig, saveProxy } from "./page-context.ts";
+import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSnapshot } from "./sync-status.ts";
 
@@ -169,9 +170,17 @@ export async function updatePageCredentials(
 
   const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
   const hasExplicitProxyInput = body.proxy !== undefined;
+  const explicitProxy = body.proxy ? normalizeProxyConfig(body.proxy) : null;
+  if (explicitProxy) {
+    await assertAllowedProxyTarget(explicitProxy);
+  }
   const proxy = body.proxy === undefined
     ? storedProxy
-    : (body.proxy ? normalizeProxyConfig(body.proxy) : null);
+    : explicitProxy && storedProxy && explicitProxy.url === storedProxy.url &&
+        explicitProxy.username === null && explicitProxy.password === null &&
+        (storedProxy.username !== null || storedProxy.password !== null)
+      ? storedProxy
+      : explicitProxy;
 
   if (stored.page.platform !== body.platform) {
     throw new BadRequestError(

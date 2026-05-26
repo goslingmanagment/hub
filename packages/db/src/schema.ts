@@ -677,7 +677,7 @@ export const pageSubscriptions = pgTable(
   "page_subscriptions",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
-    platformSubscriptionId: text("platform_subscription_id").notNull().unique(),
+    platformSubscriptionId: text("platform_subscription_id").notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "cascade" })
       .notNull(),
@@ -705,6 +705,10 @@ export const pageSubscriptions = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
+    uniq: unique("page_subscriptions_account_subscription_uniq").on(
+      table.platformAccountId,
+      table.platformSubscriptionId,
+    ),
     accountIdx: index("page_subscriptions_account_idx").on(table.platformAccountId, table.endsAt),
     generationIdx: index("page_subscriptions_generation_idx").on(
       table.platformAccountId,

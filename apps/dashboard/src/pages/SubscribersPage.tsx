@@ -28,7 +28,7 @@ export function SubscribersPage() {
 
   useEffect(() => {
     setOffset(0);
-  }, [filter, searchQuery]);
+  }, [pageLabel, filter, searchQuery]);
 
   const params = useMemo(() => ({
     limit: LIMIT,

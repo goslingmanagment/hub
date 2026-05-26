@@ -40,6 +40,7 @@ describe("config", () => {
     expect(config.fanslyDmConversationsDelayMs).toBe(5000);
     expect(config.fanslyDmMessagesDelayMs).toBe(5000);
     expect(config.onlyFansDefaultDelayMs).toBe(1000);
+    expect(config.syncSharedRateLimitEnabled).toBe(true);
     expect(config.syncPageExecutorConcurrency).toBe(4);
     expect(config.trustProxy).toBe(false);
   });

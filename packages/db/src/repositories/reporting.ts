@@ -18,6 +18,7 @@ import {
   fans,
   fanUsernameAliases,
   models,
+  pageDmConversations,
   pageFollows,
   pageSubscriptions,
   pages,
@@ -526,11 +527,14 @@ export async function listFollowersForPage(
     offset: number;
     query?: string;
     followedWithinHours?: number;
+    subscriber?: boolean;
+    dmStatus?: "none" | "has_dm";
+    activeWithinMinutes?: number;
   },
 ) {
   const clauses = [
-    eq(pageFollows.platformAccountId, input.pageId),
-    eq(pageFollows.isActive, true),
+    sql`${pageFollows.platformAccountId} = ${input.pageId}`,
+    sql`${pageFollows.isActive} = true`,
     sql`${fans.deletedDetectedAt} is null`,
   ];
 
@@ -563,31 +567,106 @@ export async function listFollowersForPage(
 
   if (input.followedWithinHours != null) {
     const cutoff = new Date(Date.now() - input.followedWithinHours * 60 * 60 * 1000);
-    clauses.push(gte(pageFollows.followedAt, cutoff));
+    clauses.push(sql`${pageFollows.followedAt} >= ${cutoff}`);
   }
 
-  const whereClause = and(...clauses);
-  const rows = await db.select({
-    total: sql<number>`count(*) over()::int`,
-    platformUserId: fans.platformUserId,
-    pageAlias: fanPages.pageAlias,
-    username: fans.username,
-    displayName: fans.displayName,
-    followedAt: pageFollows.followedAt,
-  }).from(pageFollows)
-    .innerJoin(fans, eq(fans.id, pageFollows.fanId))
-    .innerJoin(fanPages, and(
-      eq(fanPages.platformAccountId, pageFollows.platformAccountId),
-      eq(fanPages.fanId, pageFollows.fanId),
-    ))
-    .where(whereClause)
-    .orderBy(desc(pageFollows.followedAt), desc(pageFollows.id))
-    .limit(input.limit)
-    .offset(input.offset);
+  if (input.subscriber != null) {
+    clauses.push(sql`${fanPages.isSubscriber} = ${input.subscriber}`);
+  }
+
+  if (input.dmStatus === "none") {
+    clauses.push(sql`dm.platform_conversation_id is null`);
+  } else if (input.dmStatus === "has_dm") {
+    clauses.push(sql`dm.platform_conversation_id is not null`);
+  }
+
+  if (input.activeWithinMinutes != null) {
+    const cutoff = new Date(Date.now() - input.activeWithinMinutes * 60 * 1000);
+    clauses.push(sql`${fanPages.externalPresenceAt} >= ${cutoff}`);
+  }
+
+  const activeNowCutoff = new Date(Date.now() - 30 * 60 * 1000);
+  const recentlyActiveCutoff = new Date(Date.now() - 120 * 60 * 1000);
+  const whereClause = sql.join(clauses, sql` and `);
+  const rows = await db.execute<{
+    total: number;
+    platformUserId: string;
+    pageAlias: string | null;
+    username: string | null;
+    displayName: string | null;
+    followedAt: Date;
+    isSubscriber: boolean;
+    subscriberSince: Date | null;
+    subscriptionExpiresAt: Date | null;
+    autoRenew: boolean | null;
+    totalCreatorNetAmountMills: bigint;
+    lastTransactionAt: Date | null;
+    platformConversationId: string | null;
+    unreadCount: number | null;
+    lastMessageAt: Date | null;
+    lastFanMessageAt: Date | null;
+    lastModelMessageAt: Date | null;
+    lastMessagePreview: string | null;
+    presenceStatus: "active_now" | "recently_active" | "offline";
+    externalPresenceAt: Date | null;
+    externalPresenceObservedAt: Date | null;
+  }>(sql`
+    select count(*) over()::int as "total",
+           ${fans.platformUserId} as "platformUserId",
+           ${fanPages.pageAlias} as "pageAlias",
+           ${fans.username} as "username",
+           ${fans.displayName} as "displayName",
+           ${pageFollows.followedAt} as "followedAt",
+           ${fanPages.isSubscriber} as "isSubscriber",
+           ${fanPages.subscriberSince} as "subscriberSince",
+           ${fanPages.subscriptionExpiresAt} as "subscriptionExpiresAt",
+           ${fanPages.autoRenew} as "autoRenew",
+           coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint as "totalCreatorNetAmountMills",
+           ${spenderLifetimePage.lastTransactionAt} as "lastTransactionAt",
+           dm.platform_conversation_id as "platformConversationId",
+           dm.unread_count as "unreadCount",
+           dm.last_message_at as "lastMessageAt",
+           dm.last_fan_message_at as "lastFanMessageAt",
+           dm.last_model_message_at as "lastModelMessageAt",
+           dm.last_message_preview as "lastMessagePreview",
+           case
+             when ${fanPages.externalPresenceAt} >= ${activeNowCutoff} then 'active_now'
+             when ${fanPages.externalPresenceAt} >= ${recentlyActiveCutoff} then 'recently_active'
+             else 'offline'
+           end as "presenceStatus",
+           ${fanPages.externalPresenceAt} as "externalPresenceAt",
+           ${fanPages.externalPresenceObservedAt} as "externalPresenceObservedAt"
+    from ${pageFollows}
+    inner join ${fans} on ${fans.id} = ${pageFollows.fanId}
+    inner join ${fanPages}
+      on ${fanPages.platformAccountId} = ${pageFollows.platformAccountId}
+     and ${fanPages.fanId} = ${pageFollows.fanId}
+    left join ${spenderLifetimePage}
+      on ${spenderLifetimePage.platformAccountId} = ${pageFollows.platformAccountId}
+     and ${spenderLifetimePage.fanId} = ${pageFollows.fanId}
+    left join lateral (
+      select c.platform_conversation_id,
+             c.unread_count,
+             c.last_message_at,
+             c.last_fan_message_at,
+             c.last_model_message_at,
+             c.last_message_preview
+      from ${pageDmConversations} c
+      where c.platform_account_id = ${pageFollows.platformAccountId}
+        and c.fan_id = ${pageFollows.fanId}
+        and c.is_visible = true
+      order by c.last_message_at desc nulls last, c.id desc
+      limit 1
+    ) dm on true
+    where ${whereClause}
+    order by ${pageFollows.followedAt} desc, ${pageFollows.id} desc
+    limit ${input.limit}
+    offset ${input.offset}
+  `);
 
   return {
-    total: rows[0]?.total ?? 0,
-    items: rows.map(({ total: _total, ...item }) => item),
+    total: rows.rows[0]?.total ?? 0,
+    items: rows.rows.map(({ total: _total, ...item }) => item),
   };
 }
 

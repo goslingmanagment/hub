@@ -155,6 +155,17 @@ async function createTempJsonFile(name: string, contents: Record<string, unknown
   };
 }
 
+async function createTempTextFile(name: string, contents: string) {
+  const directory = await mkdtemp(path.join(tmpdir(), "cli-test-"));
+  const filePath = path.join(directory, name);
+  await writeFile(filePath, contents, "utf8");
+
+  return {
+    directory,
+    filePath,
+  };
+}
+
 describe("CLI parsing", () => {
   const cleanupDirectories = new Set<string>();
 
@@ -705,6 +716,33 @@ describe("CLI parsing", () => {
       url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
       username: null,
       password: null,
+    });
+    expect(logSpy).toHaveBeenCalledWith("Updated proxy for page lora-main");
+  });
+
+  it("reads proxy passwords from files to avoid putting secrets in argv", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const secret = await createTempTextFile("proxy-password.txt", "proxy-pass\n");
+    cleanupDirectories.add(secret.directory);
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "page",
+      "set-proxy",
+      "--page",
+      "lora-main",
+      "--proxy-url",
+      "socks5://proxy.example:1080",
+      "--proxy-username",
+      "proxy-user",
+      "--proxy-password-file",
+      secret.filePath,
+    ], { from: "user" });
+
+    expect(cliMocks.setPageProxy).toHaveBeenCalledWith(expect.anything(), "lora-main", {
+      url: "socks5://proxy.example:1080",
+      username: "proxy-user",
+      password: "proxy-pass",
     });
     expect(logSpy).toHaveBeenCalledWith("Updated proxy for page lora-main");
   });

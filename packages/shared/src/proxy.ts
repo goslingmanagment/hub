@@ -90,6 +90,75 @@ function parseNormalizedProxyConfig(proxy: ProxyConfig): NormalizedProxyConfig {
   };
 }
 
+function isPrivateIpv4(hostname: string) {
+  const octets = hostname.split(".").map((part) => Number.parseInt(part, 10));
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    return false;
+  }
+
+  const [a, b] = octets;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224
+  );
+}
+
+function isIpv4Literal(hostname: string) {
+  const octets = hostname.split(".");
+  return octets.length === 4 && octets.every((part) => {
+    if (!/^\d+$/.test(part)) {
+      return false;
+    }
+    const value = Number.parseInt(part, 10);
+    return value >= 0 && value <= 255;
+  });
+}
+
+function isIpv6Literal(hostname: string) {
+  return hostname.includes(":");
+}
+
+function isPrivateIpv6(hostname: string) {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "::" ||
+    normalized === "::1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80:") ||
+    normalized.startsWith("::ffff:127.") ||
+    normalized.startsWith("::ffff:10.") ||
+    normalized.startsWith("::ffff:192.168.") ||
+    /^::ffff:172\.(1[6-9]|2\d|3[01])\./.test(normalized)
+  );
+}
+
+export function isDisallowedProxyHostname(hostname: string) {
+  const normalizedHostname = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    normalizedHostname === "localhost" ||
+    normalizedHostname.endsWith(".localhost") ||
+    (isIpv4Literal(normalizedHostname) && isPrivateIpv4(normalizedHostname)) ||
+    (isIpv6Literal(normalizedHostname) && isPrivateIpv6(normalizedHostname))
+  );
+}
+
+export function assertProxyTargetAllowed(proxy: ProxyConfig) {
+  const normalized = parseNormalizedProxyConfig(proxy);
+  if (
+    isDisallowedProxyHostname(normalized.hostname)
+  ) {
+    throw new Error("Proxy host must not be loopback, private, link-local, multicast, or localhost");
+  }
+}
+
 export function normalizeProxyConfig(proxy: ProxyConfig): ProxyConfig {
   const normalized = parseNormalizedProxyConfig(proxy);
   return {

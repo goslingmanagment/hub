@@ -24,6 +24,7 @@ import { ConflictError, NotFoundError } from "./errors.ts";
 import { buildFanslyMetadata } from "./fansly.ts";
 import { buildOnlyFansMetadata, findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
+import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 
 type FanslyOnboardingContext = Pick<AppContext, "db" | "config"> & {
   adapter: Pick<AppContext["adapter"], "verifySession">;
@@ -85,6 +86,9 @@ export async function onboardFanslyPage(
   }
 
   const proxy = input.proxy ? normalizeProxyConfig(input.proxy) : null;
+  if (proxy) {
+    await assertAllowedProxyTarget(proxy);
+  }
   const verification = await app.adapter.verifySession({
     session: input.session,
     proxy,
@@ -147,6 +151,9 @@ export async function onboardOnlyFansPage(
   }
 
   const proxy = input.proxy ? normalizeProxyConfig(input.proxy) : null;
+  if (proxy) {
+    await assertAllowedProxyTarget(proxy);
+  }
   const lookupContext = {
     auth: input.auth,
     proxy,

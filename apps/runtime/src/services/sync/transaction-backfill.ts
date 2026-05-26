@@ -16,6 +16,7 @@ export type FanslyTransactionBackfillState = TransactionBackfillBase & {
   provider: "fansly";
   phase: "transactions";
   offset: number;
+  lastPageTransactionIds?: string[];
 };
 
 export type OnlyFansTransactionBackfillState = TransactionBackfillBase & {
@@ -76,6 +77,12 @@ function asNullableString(value: unknown) {
   return value === null || typeof value === "string" ? value : null;
 }
 
+function asStringArray(value: unknown) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : null;
+}
+
 export function parseTransactionBackfillState(value: unknown): TransactionBackfillState | null {
   const state = asRecord(value);
   if (!state || state.mode !== "backfill" || state.completed !== false) {
@@ -106,7 +113,13 @@ export function parseTransactionBackfillState(value: unknown): TransactionBackfi
 
   if (provider === "fansly") {
     const offset = asNonNegativeInt(state.offset);
+    const lastPageTransactionIds = state.lastPageTransactionIds === undefined
+      ? []
+      : asStringArray(state.lastPageTransactionIds);
     if (offset === null || state.phase !== "transactions") {
+      return null;
+    }
+    if (lastPageTransactionIds === null) {
       return null;
     }
 
@@ -124,6 +137,7 @@ export function parseTransactionBackfillState(value: unknown): TransactionBackfi
       transactionPages,
       chargebackPages,
       offset,
+      lastPageTransactionIds,
     };
   }
 

@@ -230,4 +230,40 @@ describe("page sync lease fencing", () => {
       await testDb.stop();
     }
   }, 30_000);
+
+  it("refreshes dependency blockers immediately after manual requests", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "dependency-model",
+        name: "Dependency Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "dependency-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+      });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["dm_messages"],
+        source: "manual",
+      });
+
+      const state = await getPageSyncState(testDb.db, page.id, "dm_messages");
+      expect(state).toMatchObject({
+        status: "blocked",
+        blockerKind: "dependency",
+        blockerCode: "unmet_dependency",
+      });
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
 });

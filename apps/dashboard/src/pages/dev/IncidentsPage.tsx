@@ -31,7 +31,7 @@ export function IncidentsPage() {
 
   const summary = data.summary ?? [];
   const items = data.items ?? [];
-  const displaySummary = summary.reduce<Array<{ code: string; severity: string; count: number }>>((acc, item) => {
+  const displaySummary = summary.reduce<Array<{ code: string | null; severity: string; count: number }>>((acc, item) => {
     const displaySeverity = getEventDisplaySeverity({
       eventCode: item.code,
       severity: item.severity ?? "info",
@@ -61,19 +61,20 @@ export function IncidentsPage() {
       {displaySummary.length > 0 && (
         <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-3 lg:grid-cols-4">
           {displaySummary.map((s) => {
-            const isActive = codeFilter === s.code;
+            const isActive = s.code !== null && codeFilter === s.code;
+            const displayCode = s.code ?? "Unclassified";
             return (
               <button
                 key={`${s.code}:${s.severity}`}
                 type="button"
-                onClick={() => setCodeFilter(isActive ? undefined : s.code)}
+                onClick={() => setCodeFilter(s.code === null || isActive ? undefined : s.code)}
                 className={`rounded-xl border p-4 text-left transition-colors ${
                   isActive
                     ? "border-accent bg-accent/5"
                     : "border-border bg-card hover:bg-hover"
                 }`}
               >
-                <p className="text-sm font-semibold text-text-primary">{s.code}</p>
+                <p className="text-sm font-semibold text-text-primary">{displayCode}</p>
                 <div className="flex items-center gap-2 mt-1">
                   <span className="text-lg font-extrabold text-text-primary tabular-nums">
                     {s.count}

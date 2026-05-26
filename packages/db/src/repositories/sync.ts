@@ -351,6 +351,16 @@ export async function closeOrphanedSyncRuns(
       from ${syncRuns} sr
       where sr.outcome = 'running'
         and sr.started_at < ${input.startedBefore}
+        and not exists (
+          select 1
+          from ${pageSyncStates} st
+          where st.page_id = sr.page_id
+            and st.stream = sr.stream
+            and st.status = 'running'
+            and st.leased_seq is not distinct from sr.leased_seq
+            and st.lease_token is not distinct from sr.lease_token
+            and st.lease_expires_at >= ${input.finishedAt}
+        )
     )
     update ${syncRuns} sr
     set outcome = orphaned_runs.next_outcome,

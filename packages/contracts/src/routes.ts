@@ -1,6 +1,7 @@
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
+  SPENDER_RETENTION_STATUSES,
   SPENDER_SERIES_GRANULARITIES,
   aiUsageFeatures,
   creatableUserRoles,
@@ -48,6 +49,7 @@ const spenderSortByEnum = z.enum([
   "username",
   "displayName",
 ]);
+const spenderRetentionStatusEnum = z.enum(SPENDER_RETENTION_STATUSES);
 const fanSearchMatchKindEnum = z.enum(["platformUserId", "username", "alias", "displayName"]);
 const pageSpenderAutoListBucketKeyEnum = z.enum([
   "0-25",
@@ -275,6 +277,9 @@ export const subscriberListQuerySchema = paginationQuerySchema.extend({
 export const followerListQuerySchema = paginationQuerySchema.extend({
   query: z.string().min(1).optional(),
   followedWithinHours: z.coerce.number().int().min(1).max(24 * 30).optional(),
+  subscriber: queryBooleanSchema.optional(),
+  dmStatus: z.enum(["none", "has_dm"]).optional(),
+  activeWithinMinutes: z.coerce.number().int().min(1).max(24 * 60).optional(),
 });
 
 const spenderScopeFieldsSchema = z.object({
@@ -392,6 +397,7 @@ export const spenderListQuerySchema = spenderScopeFieldsSchema
     query: z.string().min(1).optional(),
     sortBy: spenderSortByEnum.optional(),
     sortDir: sortDirEnum.optional(),
+    retentionStatus: spenderRetentionStatusEnum.optional(),
   });
 
 export const spenderDetailQuerySchema = spenderScopeFieldsSchema.merge(spenderPeriodFieldsSchema);
@@ -628,6 +634,26 @@ export const followerItemSchema = z.object({
   username: z.string().nullable(),
   displayName: z.string().nullable(),
   followedAt: isoTimestamp,
+  isSubscriber: z.boolean(),
+  subscriberSince: isoTimestamp.nullable(),
+  subscriptionExpiresAt: isoTimestamp.nullable(),
+  autoRenew: z.boolean().nullable(),
+  totalSpentCents: z.number().int(),
+  lastTransactionAt: isoTimestamp.nullable(),
+  dm: z.object({
+    hasConversation: z.boolean(),
+    platformConversationId: z.string().nullable(),
+    unreadCount: z.number().int(),
+    lastMessageAt: isoTimestamp.nullable(),
+    lastFanMessageAt: isoTimestamp.nullable(),
+    lastModelMessageAt: isoTimestamp.nullable(),
+    lastMessagePreview: z.string().nullable(),
+  }),
+  presence: z.object({
+    status: z.enum(["active_now", "recently_active", "offline"]),
+    lastSeenAt: isoTimestamp.nullable(),
+    observedAt: isoTimestamp.nullable(),
+  }),
 });
 
 export const followerDailyItemSchema = z.object({
@@ -828,6 +854,8 @@ const spenderDiagnosticsSchema = z.object({
 const spenderListItemSchema = z.object({
   fan: spenderFanSchema,
   metrics: spenderMetricsSchema,
+  lifetimeLastTransactionAt: isoTimestamp.nullable(),
+  retentionStatus: spenderRetentionStatusEnum.exclude(["all"]),
 });
 
 export const spenderListResponseSchema = z.object({
@@ -2975,6 +3003,7 @@ export const routeSchemas = {
     body: adminCreateUserBodySchema,
     response: {
       200: authUserSchema,
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
@@ -2987,6 +3016,7 @@ export const routeSchemas = {
     body: adminSetPasswordBodySchema,
     response: {
       200: z.object({ ok: z.literal(true) }),
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -3291,6 +3321,7 @@ export const routeSchemas = {
     params: pageParamsSchema,
     response: {
       200: verifyPageResponseSchema,
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,

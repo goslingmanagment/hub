@@ -264,6 +264,7 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
         from date_series ds
         left join page_subscriptions ps
           on ps.platform_account_id = ${platformAccountId}
+         and ps.is_current = true
          and coalesce((ps.source_created_at at time zone 'UTC')::date, ds.business_date) <= ds.business_date
          and coalesce((ps.ends_at at time zone 'UTC')::date, ds.business_date) >= ds.business_date
         group by ds.business_date

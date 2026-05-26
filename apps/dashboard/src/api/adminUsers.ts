@@ -9,6 +9,7 @@ import type {
   IssuedApiKeyResponse,
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
+import { pathSegment } from "@/lib/path";
 
 export function useAdminUsers() {
   return useQuery({
@@ -30,7 +31,7 @@ export function useAdminCreateUser() {
 export function useAdminUserApiKeys(username: string, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["admin", "users", username, "apiKeys"],
-    queryFn: () => api.get<ApiKeyItem[]>(`/api/v1/admin/users/${username}/api-keys`),
+    queryFn: () => api.get<ApiKeyItem[]>(`/api/v1/admin/users/${pathSegment(username)}/api-keys`),
     enabled: options.enabled ?? true,
   });
 }
@@ -40,7 +41,7 @@ export function useAdminIssueApiKey(username: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminIssueApiKeyBody) =>
-      api.post<IssuedApiKeyResponse>(`/api/v1/admin/users/${username}/api-keys`, body),
+      api.post<IssuedApiKeyResponse>(`/api/v1/admin/users/${pathSegment(username)}/api-keys`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
       qc.invalidateQueries({ queryKey: ["admin", "users", username, "apiKeys"] });
@@ -53,7 +54,7 @@ export function useAdminRevokeApiKeys(username: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: () =>
-      api.del<{ revokedCount: number }>(`/api/v1/admin/users/${username}/api-keys`),
+      api.del<{ revokedCount: number }>(`/api/v1/admin/users/${pathSegment(username)}/api-keys`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
       qc.invalidateQueries({ queryKey: ["admin", "users", username, "apiKeys"] });
@@ -66,7 +67,7 @@ export function useAdminAssignPage(username: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminAssignPageBody) =>
-      api.post<AuthUser>(`/api/v1/admin/users/${username}/pages`, body),
+      api.post<AuthUser>(`/api/v1/admin/users/${pathSegment(username)}/pages`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 }
@@ -76,8 +77,7 @@ export function useAdminUnassignPage(username: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (pageLabel: string) =>
-      api.del<{ ok: true }>(`/api/v1/admin/users/${username}/pages/${pageLabel}`),
+      api.del<{ ok: true }>(`/api/v1/admin/users/${pathSegment(username)}/pages/${pathSegment(pageLabel)}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 }
-

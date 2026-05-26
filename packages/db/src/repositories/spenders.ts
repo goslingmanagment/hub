@@ -1,10 +1,15 @@
 import { and, asc, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import type { SQL, SQLWrapper } from "drizzle-orm";
 
 import {
+  SPENDER_RETENTION_ACTIVE_DAYS,
+  SPENDER_RETENTION_INACTIVE_DAYS,
+  SPENDER_RETENTION_NEEDS_REACTIVATION_LIFETIME_NET_MILLS,
   businessDateToUtcStart,
   spenderAnalyticsTransactionTypes,
   toBusinessDate,
   type Platform,
+  type SpenderRetentionStatus,
   type TransactionType,
   UTC_TIME_ZONE,
 } from "@agency_hub_core/shared";
@@ -456,6 +461,32 @@ export interface RankedSpenderRow {
   lastTransactionAt: Date | null;
   lifetimeGrossAmountMills: bigint;
   lifetimeCreatorNetAmountMills: bigint;
+  lifetimeLastTransactionAt: Date | null;
+}
+
+function buildRetentionFilterSql(
+  retentionStatus: SpenderRetentionStatus | undefined,
+  lifetimeLastTransactionAt: SQLWrapper,
+  lifetimeCreatorNetAmountMills: SQLWrapper,
+  now: Date,
+): SQL | undefined {
+  if (!retentionStatus || retentionStatus === "all") return undefined;
+
+  const activeCutoff = new Date(now.getTime() - SPENDER_RETENTION_ACTIVE_DAYS * 86_400_000);
+  const inactiveCutoff = new Date(now.getTime() - SPENDER_RETENTION_INACTIVE_DAYS * 86_400_000);
+  const needsReactivationMills = SPENDER_RETENTION_NEEDS_REACTIVATION_LIFETIME_NET_MILLS;
+
+  if (retentionStatus === "active") {
+    return sql`${lifetimeLastTransactionAt} >= ${activeCutoff}`;
+  }
+  if (retentionStatus === "cooling") {
+    return sql`${lifetimeLastTransactionAt} >= ${inactiveCutoff} and ${lifetimeLastTransactionAt} < ${activeCutoff}`;
+  }
+  if (retentionStatus === "inactive") {
+    return sql`(${lifetimeLastTransactionAt} is null or ${lifetimeLastTransactionAt} < ${inactiveCutoff}) and coalesce(${lifetimeCreatorNetAmountMills}, 0::bigint) < ${needsReactivationMills}::bigint`;
+  }
+  // needs_reactivation
+  return sql`(${lifetimeLastTransactionAt} is null or ${lifetimeLastTransactionAt} < ${inactiveCutoff}) and coalesce(${lifetimeCreatorNetAmountMills}, 0::bigint) >= ${needsReactivationMills}::bigint`;
 }
 
 export interface SpenderAutoListBucketInput {
@@ -1004,6 +1035,8 @@ export async function listRankedSpenders(
     sortDir: "asc" | "desc";
     limit: number;
     offset: number;
+    retentionStatus?: SpenderRetentionStatus;
+    now?: Date;
   },
 ) {
   if (input.pageIds.length === 0) {
@@ -1012,6 +1045,8 @@ export async function listRankedSpenders(
       items: [] as RankedSpenderRow[],
     };
   }
+
+  const now = input.now ?? new Date();
 
   const lifetimeMetrics = db.select({
     fanId: spenderLifetimePage.fanId,
@@ -1024,7 +1059,14 @@ export async function listRankedSpenders(
     .as("lifetime_metrics");
 
   if (input.period === "lifetime") {
-    const whereClause = buildSpenderQueryClause(input.query, input);
+    const baseQueryClause = buildSpenderQueryClause(input.query, input);
+    const retentionClause = buildRetentionFilterSql(
+      input.retentionStatus,
+      qualifiedSubqueryColumn<Date | null>("lifetime_metrics", "lifetime_last_transaction_at"),
+      qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_creator_net_amount_mills"),
+      now,
+    );
+    const whereClause = retentionClause ? and(baseQueryClause, retentionClause)! : baseQueryClause;
     const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
 
     const sortFieldMap = {
@@ -1065,6 +1107,7 @@ export async function listRankedSpenders(
       lastTransactionAt: lifetimeMetrics.lastTransactionAt,
       lifetimeGrossAmountMills: lifetimeMetrics.grossAmountMills,
       lifetimeCreatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
+      lifetimeLastTransactionAt: lifetimeMetrics.lastTransactionAt,
     }).from(lifetimeMetrics)
       .innerJoin(fans, eq(fans.id, lifetimeMetrics.fanId))
       .leftJoin(fanPages, singlePageId === null
@@ -1119,7 +1162,7 @@ export async function listRankedSpenders(
     .groupBy(spenderDailyFacts.fanId)
     .as("current_metrics");
 
-  const whereClause = buildSpenderQueryClause(input.query, input);
+  const baseQueryClause = buildSpenderQueryClause(input.query, input);
   const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
   const currentMetricFields = {
     grossAmountMills: qualifiedSubqueryColumn<bigint>("current_metrics", "gross_amount_mills"),
@@ -1136,7 +1179,15 @@ export async function listRankedSpenders(
   const lifetimeMetricFields = {
     grossAmountMills: qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_gross_amount_mills"),
     creatorNetAmountMills: qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_creator_net_amount_mills"),
+    lastTransactionAt: qualifiedSubqueryColumn<Date | null>("lifetime_metrics", "lifetime_last_transaction_at"),
   };
+  const retentionClause = buildRetentionFilterSql(
+    input.retentionStatus,
+    lifetimeMetricFields.lastTransactionAt,
+    lifetimeMetricFields.creatorNetAmountMills,
+    now,
+  );
+  const whereClause = retentionClause ? and(baseQueryClause, retentionClause)! : baseQueryClause;
   const sortFieldMap = {
     grossAmountMills: currentMetricFields.grossAmountMills,
     creatorNetAmountMills: currentMetricFields.creatorNetAmountMills,
@@ -1175,6 +1226,7 @@ export async function listRankedSpenders(
     lastTransactionAt: currentMetricFields.lastTransactionAt,
     lifetimeGrossAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.grossAmountMills}, 0)::bigint`.as("lifetime_gross_amount_mills"),
     lifetimeCreatorNetAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.creatorNetAmountMills}, 0)::bigint`.as("lifetime_creator_net_amount_mills"),
+    lifetimeLastTransactionAt: lifetimeMetricFields.lastTransactionAt,
   }).from(currentMetrics)
     .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
     .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
@@ -1194,6 +1246,7 @@ export async function listRankedSpenders(
       total: sql<number>`count(*)::int`,
     }).from(currentMetrics)
       .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
+      .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
       .where(whereClause);
 
     return countRow?.total ?? 0;

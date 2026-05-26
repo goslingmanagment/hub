@@ -1,5 +1,5 @@
 import { useLocation, useNavigate, useParams } from "react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronDown, CalendarDays, RefreshCw, Clock } from "lucide-react";
 import {
   usePageFanDetail,
@@ -46,9 +46,18 @@ export function FanProfilePage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [intelligenceOpen, setIntelligenceOpen] = useState(false);
   const [selectedProfileVersion, setSelectedProfileVersion] = useState<number | null>(null);
+  const routeKey = `${pageLabel ?? ""}\0${platform ?? ""}\0${platformUserId ?? ""}`;
   const { period } = useSpenderPeriodStore();
   const selectedPeriod = period;
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
+
+  useEffect(() => {
+    setTxOffset(0);
+    setNoteBody("");
+    setHistoryOpen(false);
+    setIntelligenceOpen(false);
+    setSelectedProfileVersion(null);
+  }, [routeKey]);
 
   const { data, isLoading, isError } = usePageFanDetail(pageLabel!, platformUserId!);
   const { data: latestProfileData, isLoading: latestProfileLoading } = usePageFanProfile(pageLabel!, platformUserId!);

@@ -301,7 +301,9 @@ export function WorkboardPage() {
     activeSpenders: Math.max(0, (data?.activeSpenders.items.length ?? 0) - activeSpenderVms.length),
     inactiveSpenders: Math.max(0, (data?.inactiveSpenders.items.length ?? 0) - inactiveSpenderVms.length),
   };
-  const totalHidden = hiddenCounts.subscribers + hiddenCounts.inactiveSpenders;
+  const snoozedHiddenCount = Math.max(0, (data?.snoozed.items.length ?? 0) - snoozedVms.length);
+  const totalHidden = hiddenCounts.subscribers + hiddenCounts.activeSpenders +
+    hiddenCounts.inactiveSpenders + snoozedHiddenCount;
 
   // Build priority lanes for current tab
   const currentLanes: PriorityLane<WorkboardCardVm>[] = useMemo(() => {
@@ -420,8 +422,8 @@ export function WorkboardPage() {
               {totalHidden > 0 && (
                 <span> &middot; {totalHidden} скрыто</span>
               )}
-              {snoozedVms.length > 0 && (
-                <span> &middot; {snoozedVms.length} отложено</span>
+              {(data.snoozed.total > 0 || snoozedVms.length > 0) && (
+                <span> &middot; {data.snoozed.total} отложено</span>
               )}
             </div>
           )}

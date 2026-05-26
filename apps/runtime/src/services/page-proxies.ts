@@ -5,6 +5,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { NotFoundError } from "./errors.ts";
 import { getOnlyMonsterAccountId } from "./onlyfans.ts";
 import { removeProxy, resolvePageContext, saveProxy } from "./page-context.ts";
+import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 
 export async function setPageProxy(
   app: AppContext,
@@ -12,6 +13,7 @@ export async function setPageProxy(
   proxy: ProxyConfig,
 ) {
   const normalizedProxy = normalizeProxyConfig(proxy);
+  await assertAllowedProxyTarget(normalizedProxy);
   const pageContext = await resolvePageContext(app, pageLabel);
 
   if (pageContext.platform === "fansly") {

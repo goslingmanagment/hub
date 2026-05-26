@@ -15,6 +15,9 @@ import { resolveAccessibleFanslyPage } from "./fansly-page.ts";
 import { resolvePageContext } from "./page-context.ts";
 import { upsertHydratedFansForPage } from "./sync/fan-hydration.ts";
 
+const PRESENCE_REFRESH_TTL_MS = 60_000;
+const presenceRefreshByPageId = new Map<number, number>();
+
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
     return null;
@@ -65,11 +68,13 @@ export async function getWorkboardPresenceReport(
   const updatedAt = new Date();
   const lastSeenAfter = updatedAt.getTime() - FANSLY_RECENTLY_ACTIVE_WINDOW_MS;
   const platformAccountId = resolveFanslyPlatformAccountId(pageContext.page);
+  const lastRefreshAt = presenceRefreshByPageId.get(page.id) ?? 0;
+  const shouldRefresh = updatedAt.getTime() - lastRefreshAt >= PRESENCE_REFRESH_TTL_MS;
 
   let offset = 0;
   const limit = 100;
 
-  while (true) {
+  while (shouldRefresh) {
     const response = await app.adapter.getFollowersPage(
       {
         session: pageContext.session,
@@ -122,6 +127,10 @@ export async function getWorkboardPresenceReport(
     }
 
     offset += limit;
+  }
+
+  if (shouldRefresh) {
+    presenceRefreshByPageId.set(page.id, updatedAt.getTime());
   }
 
   const [activeNow, recentlyActive] = await Promise.all([

@@ -21,7 +21,7 @@ services:
       - .env.production
     command: ["node", "apps/runtime/dist/startup.js", "api"]
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,6 +43,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env.production
+    environment:
+      WORKER_HEALTH_FILE: /tmp/agency-hub-worker-health.json
     command: ["node", "apps/runtime/dist/startup.js", "worker"]
     depends_on:
       postgres:
@@ -55,7 +57,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "const { Client } = require('./apps/runtime/node_modules/pg'); const client = new Client({ connectionString: process.env.DATABASE_URL }); client.connect().then(() => client.query('select 1')).then(() => client.end()).catch((error) => { console.error(error); process.exit(1); });",
+          "const fs = require('node:fs'); const { Client } = require('./apps/runtime/node_modules/pg'); const file = process.env.WORKER_HEALTH_FILE || '/tmp/agency-hub-worker-health.json'; const stat = fs.statSync(file); if (Date.now() - stat.mtimeMs > 90000) throw new Error('stale worker health file'); const client = new Client({ connectionString: process.env.DATABASE_URL }); client.connect().then(() => client.query('select 1')).then(() => client.end()).catch((error) => { console.error(error); process.exit(1); });",
         ]
       interval: 30s
       timeout: 5s

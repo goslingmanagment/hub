@@ -41,7 +41,7 @@ export function SpenderAutoListPage() {
 
   useEffect(() => {
     setOffset(0);
-  }, [bucketKey, searchQuery, spenderPeriod, excludeNonFollowers]);
+  }, [pageLabel, bucketKey, searchQuery, spenderPeriod, excludeNonFollowers]);
 
   const params = useMemo(() => ({
     limit: LIMIT,

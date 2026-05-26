@@ -12,6 +12,7 @@ import type {
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
 import { qs } from "./utils.js";
+import { pathSegment } from "@/lib/path";
 
 export function useAdminConnections(options: { enabled?: boolean } = {}) {
   return useQuery({
@@ -144,8 +145,13 @@ export function useAdminUpdateCredentials(pageLabel: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: VerifyCredentialsBody) =>
-      api.patch(`/api/v1/admin/pages/${pageLabel}/credentials`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "connections"] }),
+      api.patch(`/api/v1/admin/pages/${pathSegment(pageLabel)}/credentials`, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
+      void qc.invalidateQueries({ queryKey: ["overview"] });
+      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+      void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
+      void qc.invalidateQueries({ queryKey: ["page", pageLabel] });
+    },
   });
 }
-

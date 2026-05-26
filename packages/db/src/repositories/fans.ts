@@ -650,7 +650,7 @@ export async function upsertPageSubscription(
       ...patch,
     })
     .onConflictDoUpdate({
-      target: pageSubscriptions.platformSubscriptionId,
+      target: [pageSubscriptions.platformAccountId, pageSubscriptions.platformSubscriptionId],
       set: patch,
     })
     .returning();
@@ -690,7 +690,7 @@ export async function upsertPageSubscriptions(
 
   const deduped = dedupeByKey(
     inputs,
-    (input) => input.platformSubscriptionId,
+    (input) => `${input.platformAccountId}:${input.platformSubscriptionId}`,
     (_current, next) => next,
   );
   const lastSeenAt = new Date();
@@ -722,7 +722,7 @@ export async function upsertPageSubscriptions(
       lastSeenAt,
     })))
     .onConflictDoUpdate({
-      target: pageSubscriptions.platformSubscriptionId,
+      target: [pageSubscriptions.platformAccountId, pageSubscriptions.platformSubscriptionId],
       set: {
         platformAccountId: sql`excluded.platform_account_id`,
         fanId: sql`excluded.fan_id`,

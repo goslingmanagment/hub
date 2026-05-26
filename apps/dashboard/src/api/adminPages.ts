@@ -17,6 +17,7 @@ import type {
   VerifyPageResponse,
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
+import { pathSegment } from "@/lib/path";
 
 function invalidateAdminCatalog(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: ["admin", "models"] });
@@ -48,7 +49,7 @@ export function useAdminUpdateModel(modelSlug: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: UpdateModelBody) =>
-      api.patch<CreateModelResponse>(`/api/v1/admin/models/${modelSlug}`, body),
+      api.patch<CreateModelResponse>(`/api/v1/admin/models/${pathSegment(modelSlug)}`, body),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -58,7 +59,7 @@ export function useAdminDeleteModel(modelSlug: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: () =>
-      api.del<DeletedResponse>(`/api/v1/admin/models/${modelSlug}`),
+      api.del<DeletedResponse>(`/api/v1/admin/models/${pathSegment(modelSlug)}`),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -85,7 +86,7 @@ export function useAdminUpdatePage(pageLabel: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: UpdatePageBody) =>
-      api.patch<AdminUpdatePageResponse>(`/api/v1/admin/pages/${pageLabel}`, body),
+      api.patch<AdminUpdatePageResponse>(`/api/v1/admin/pages/${pathSegment(pageLabel)}`, body),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -95,7 +96,7 @@ export function useAdminDeletePage(pageLabel: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: () =>
-      api.del<DeletedResponse>(`/api/v1/admin/pages/${pageLabel}`),
+      api.del<DeletedResponse>(`/api/v1/admin/pages/${pathSegment(pageLabel)}`),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -121,8 +122,7 @@ export function useAdminVerifyPage(pageLabel: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: () =>
-      api.post<VerifyPageResponse>(`/api/v1/admin/pages/${pageLabel}/verify`),
+      api.post<VerifyPageResponse>(`/api/v1/admin/pages/${pathSegment(pageLabel)}/verify`),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
-

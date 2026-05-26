@@ -38,6 +38,7 @@ import {
   type SpenderWindowMetricRow,
 } from "@agency_hub_core/db";
 import {
+  classifyRetention,
   millsToNumber,
   nextBusinessDate,
   parseBusinessDate,
@@ -49,6 +50,7 @@ import {
   toBusinessDate,
   type Platform,
   type SpenderPeriod,
+  type SpenderRetentionStatus,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -745,12 +747,14 @@ export async function getSpenderList(
     await resolveAsOf(app, scope),
   );
   const { sortBy, sortDir } = normalizeSortBy(period, query.sortBy, query.sortDir);
+  const now = new Date();
   const { fromBusinessDate, toBusinessDateInclusive } = resolveSpenderBusinessDateRangeForPlatform(
     scope.platform,
     period,
-    new Date(),
+    now,
     custom,
   );
+  const retentionStatus: SpenderRetentionStatus = query.retentionStatus ?? "all";
   const ranked = await listRankedSpenders(app.db, {
     platform: scope.platform,
     pageIds: scope.pageIds,
@@ -764,6 +768,8 @@ export async function getSpenderList(
     sortDir,
     limit: query.limit,
     offset: query.offset,
+    retentionStatus,
+    now,
   });
 
   const comparisonRange = period === "lifetime"
@@ -817,6 +823,12 @@ export async function getSpenderList(
           ? null
           : serializeComparison(item, comparisonByFanId.get(item.fanId)),
       },
+      lifetimeLastTransactionAt: serializeTimestamp(item.lifetimeLastTransactionAt),
+      retentionStatus: classifyRetention({
+        lifetimeLastTransactionAt: item.lifetimeLastTransactionAt,
+        lifetimeCreatorNetAmountMills: millsToNumber(item.lifetimeCreatorNetAmountMills),
+        now,
+      }),
     })),
     limit: query.limit,
     offset: query.offset,

@@ -42,4 +42,14 @@ describe("compose config", () => {
       expect(worker).toContain("condition: service_completed_successfully");
     });
   }
+
+  it("docker-compose.production.yml keeps the API behind loopback and uses worker readiness health", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    const api = getServiceBlock(text, "api");
+    const worker = getServiceBlock(text, "worker");
+
+    expect(api).toContain('"127.0.0.1:3000:3000"');
+    expect(worker).toContain("WORKER_HEALTH_FILE");
+    expect(worker).toContain("stale worker health file");
+  });
 });

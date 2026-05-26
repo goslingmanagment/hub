@@ -1,3 +1,5 @@
+import { pathSegment } from "./path.js";
+
 export interface FanProfileNavigationState {
   backTo: string;
   fanLabel?: string;
@@ -14,7 +16,7 @@ const SETTINGS_TABS = new Set<SettingsTab>([
 ]);
 
 export function buildPageRoute(pageLabel: string) {
-  return `/pages/${pageLabel}`;
+  return `/pages/${pathSegment(pageLabel)}`;
 }
 
 export function buildPageSectionRoute(pageLabel: string, section: string) {
@@ -22,7 +24,7 @@ export function buildPageSectionRoute(pageLabel: string, section: string) {
 }
 
 export function buildPageSpenderAutoListRoute(pageLabel: string, bucketKey: string) {
-  return `${buildPageSectionRoute(pageLabel, "spender-autolists")}/${bucketKey}`;
+  return `${buildPageSectionRoute(pageLabel, "spender-autolists")}/${pathSegment(bucketKey)}`;
 }
 
 export function buildWorkboardRoute(pageLabel: string) {
@@ -38,7 +40,7 @@ export function buildFanProfileRoute(
   platform: string,
   platformUserId: string,
 ) {
-  return `${buildPageRoute(pageLabel)}/fans/${platform}/${platformUserId}`;
+  return `${buildPageRoute(pageLabel)}/fans/${pathSegment(platform)}/${pathSegment(platformUserId)}`;
 }
 
 export function buildFanProfileNavigation(

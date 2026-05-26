@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+
 import {
   closeOrphanedSyncRuns,
   deleteExpiredRawPayloads,
@@ -22,6 +25,7 @@ import {
 } from "./services/sync-queue.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
+const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
 
 type WorkerBoss = Pick<
   PgBoss,
@@ -63,6 +67,15 @@ function listPendingTelegramReportDates(
   return dates;
 }
 
+async function writeWorkerHealthFile(path: string, status: "starting" | "ready" | "stopping") {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify({
+    status,
+    timestamp: new Date().toISOString(),
+    pid: process.pid,
+  })}\n`, "utf8");
+}
+
 export async function startWorkerServices(
   app: AppContext,
   boss: WorkerBoss,
@@ -74,6 +87,7 @@ export async function startWorkerServices(
   const abortController = new AbortController();
   const processStartedAt = input?.processStartedAt ?? new Date();
   const cleanupFinishedAt = new Date();
+  const healthFilePath = process.env.WORKER_HEALTH_FILE ?? null;
 
   const orphanedRuns = await closeOrphanedSyncRuns(app.db, {
     startedBefore: processStartedAt,
@@ -143,11 +157,29 @@ export async function startWorkerServices(
   const executorPromise = startSyncPageExecutor(app, boss, {
     signal: abortController.signal,
   });
+  if (healthFilePath) {
+    await writeWorkerHealthFile(healthFilePath, "ready");
+  }
+  const healthTimer = healthFilePath
+    ? setInterval(() => {
+      void writeWorkerHealthFile(healthFilePath, "ready").catch((error) => {
+        app.logger.warn({ err: error, healthFilePath }, "Failed to update worker health file");
+      });
+    }, WORKER_HEALTH_WRITE_INTERVAL_MS)
+    : null;
 
   app.logger.info("Worker started");
 
   return {
     async shutdown() {
+      if (healthTimer) {
+        clearInterval(healthTimer);
+      }
+      if (healthFilePath) {
+        await writeWorkerHealthFile(healthFilePath, "stopping").catch((error) => {
+          app.logger.warn({ err: error, healthFilePath }, "Failed to mark worker health file stopping");
+        });
+      }
       abortController.abort();
       await executorPromise.catch((error) => {
         app.logger.error({ err: error }, "Sync page executor failed during shutdown");

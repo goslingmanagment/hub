@@ -1,5 +1,6 @@
 import type { WorkboardPresenceResponse, WorkboardResponse } from "@agency_hub_core/contracts";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
+import { buildFanProfileRoute } from "@/lib/navigation";
 import { resolveFanslyExternalLink, type FanslyExternalLinkKind } from "@/lib/platformUrls";
 import { formatMills, formatRelativeTime, formatDate, daysRemaining } from "@/lib/format";
 import { resolveOverdueSeverity, type OverdueSeverity } from "./theme.js";
@@ -76,7 +77,7 @@ function buildBaseVm(pageLabel: string, item: SubscriberItem | SpenderItem): Wor
     fanLabel: fan.label,
     fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
     platformConversationId: item.conversation.platformConversationId,
-    profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
+    profileHref: buildFanProfileRoute(pageLabel, "fansly", item.fan.platformUserId),
     fanslyExternalUrl: fanslyExternalLink?.url ?? null,
     fanslyExternalKind: fanslyExternalLink?.kind ?? null,
     ltvMills: item.ltv.creatorNetAmountMills,
@@ -194,7 +195,7 @@ export function mapPresenceVm(pageLabel: string, item: PresenceItem): WorkboardP
     fanId: item.fanId,
     fanLabel: fan.label,
     fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
-    profileHref: `/pages/${pageLabel}/fans/fansly/${item.fan.platformUserId}`,
+    profileHref: buildFanProfileRoute(pageLabel, "fansly", item.fan.platformUserId),
     fanslyExternalUrl: fanslyExternalLink?.url ?? null,
     fanslyExternalKind: fanslyExternalLink?.kind ?? null,
     ltvMills: item.ltv.creatorNetAmountMills,

@@ -2,6 +2,7 @@ type SubscribersCursorState = {
   revision: number;
   generation: number;
   offset: number;
+  observedCount: number;
   pageCount: number;
   providerReportedTotal: number | null;
 };
@@ -19,6 +20,7 @@ type FollowersReconcileCursorState = {
   revision: number;
   generation: number;
   offset: number;
+  observedCount: number;
   pageCount: number;
   sourceFollowerCount: number;
 };
@@ -99,11 +101,13 @@ export function parseSubscribersCursorState(
 
   const generation = asNumber(state.generation);
   const offset = asNumber(state.offset);
+  const observedCount = asNumber(state.observedCount) ?? offset;
   const pageCount = asNumber(state.pageCount);
   const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
   if (
     generation === null ||
     offset === null ||
+    observedCount === null ||
     pageCount === null ||
     providerReportedTotal === undefined
   ) {
@@ -114,6 +118,7 @@ export function parseSubscribersCursorState(
     revision: expectedRevision,
     generation,
     offset,
+    observedCount,
     pageCount,
     providerReportedTotal,
   };
@@ -174,11 +179,13 @@ export function parseFollowersReconcileCursorState(
 
   const generation = asNumber(state.generation);
   const offset = asNumber(state.offset);
+  const observedCount = asNumber(state.observedCount) ?? offset;
   const pageCount = asNumber(state.pageCount);
   const sourceFollowerCount = asNumber(state.sourceFollowerCount);
   if (
     generation === null ||
     offset === null ||
+    observedCount === null ||
     pageCount === null ||
     sourceFollowerCount === null
   ) {
@@ -189,6 +196,7 @@ export function parseFollowersReconcileCursorState(
     revision: expectedRevision,
     generation,
     offset,
+    observedCount,
     pageCount,
     sourceFollowerCount,
   };

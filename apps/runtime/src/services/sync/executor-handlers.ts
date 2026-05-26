@@ -1170,6 +1170,7 @@ export async function executeSubscribersChunk(
     revision: input.streamState.requestSeq,
     generation: previousGeneration + 1,
     offset: 0,
+    observedCount: 0,
     pageCount: 0,
     providerReportedTotal: null,
   } satisfies SubscribersCursorState;
@@ -1234,7 +1235,23 @@ export async function executeSubscribersChunk(
       : {
         ...state,
         offset: state.offset + 100,
+        observedCount: state.observedCount + page.items.length,
       };
+    const finalObservedCount = state.observedCount + page.items.length;
+    if (page.done && state.providerReportedTotal !== null && finalObservedCount !== state.providerReportedTotal) {
+      await input.telemetry.addAnomaly({
+        code: "subscribers_partial_page_guard",
+        severity: "warn",
+        message: "Subscriber sync returned fewer rows than the provider-reported total; refusing destructive finalization",
+        details: {
+          providerReportedTotal: state.providerReportedTotal,
+          observedCount: finalObservedCount,
+          pageCount: state.pageCount,
+        },
+      });
+      throw new Error("Subscriber sync returned a partial result; refusing destructive finalization");
+    }
+
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
@@ -1300,7 +1317,10 @@ export async function executeSubscribersChunk(
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "subscribers",
-            state,
+            state: {
+              ...state,
+              observedCount: finalObservedCount,
+            },
             lastSuccessfulRunId: input.syncRunId,
           }),
           processedThisPage: subscriptionInputs.length,
@@ -1662,11 +1682,12 @@ export async function executeFollowersReconcileChunk(
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
     state = {
       revision: input.streamState.requestSeq,
-      generation: previousGeneration + 1,
-      offset: 0,
-      pageCount: 0,
-      sourceFollowerCount: accountMe.parsed.account.followCount,
-    };
+    generation: previousGeneration + 1,
+    offset: 0,
+    observedCount: 0,
+    pageCount: 0,
+    sourceFollowerCount: accountMe.parsed.account.followCount,
+  };
     await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "followers_reconcile",
@@ -1728,7 +1749,23 @@ export async function executeFollowersReconcileChunk(
       : {
         ...state,
         offset: state.offset + 100,
+        observedCount: state.observedCount + page.items.length,
       };
+    const finalObservedCount = state.observedCount + page.items.length;
+    if (page.done && finalObservedCount !== state.sourceFollowerCount) {
+      await input.telemetry.addAnomaly({
+        code: "followers_reconcile_partial_page_guard",
+        severity: "warn",
+        message: "Follower reconcile returned fewer rows than the source follower count; refusing destructive finalization",
+        details: {
+          sourceFollowerCount: state.sourceFollowerCount,
+          observedCount: finalObservedCount,
+          pageCount: state.pageCount,
+        },
+      });
+      throw new Error("Follower reconcile returned a partial result; refusing destructive finalization");
+    }
+
     const hydratedFollowers = await hydrateFanslyFollowerRows(app, {
       requestContext,
       followers: page.items,
@@ -1818,7 +1855,10 @@ export async function executeFollowersReconcileChunk(
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "followers_reconcile",
-            state,
+            state: {
+              ...state,
+              observedCount: finalObservedCount,
+            },
             lastSuccessfulRunId: input.syncRunId,
           }),
           processedThisPage: followInputs.length,
@@ -2175,10 +2215,14 @@ export async function executeDmConversationsChunk(
         unresolvedIdentity: !partnerPlatformUserId,
         messageSyncExcludedReason,
       });
+      const incomingLastMessageId = conversation.lastMessageId ?? null;
+      const preserveHeadForRetry = incomingLastMessageId !== null &&
+        (!lastMessageAt || !lastMessageSenderId) &&
+        (!existing || existing.lastMessageId !== incomingLastMessageId);
 
       if (
         !existing ||
-        existing.lastMessageId !== (conversation.lastMessageId ?? null) ||
+        existing.lastMessageId !== incomingLastMessageId ||
         existing.unreadCount !== conversation.unreadCount ||
         !existing.isVisible ||
         hasUnresolvedIdentityMetadata(existing?.metadata) !== hasUnresolvedIdentityMetadata(metadata) ||
@@ -2199,7 +2243,7 @@ export async function executeDmConversationsChunk(
         conversationFlags: conversation.flags,
         unreadCount: conversation.unreadCount,
         subscriptionTierId: conversation.subscriptionTierId ?? null,
-        lastMessageId: conversation.lastMessageId ?? null,
+        lastMessageId: preserveHeadForRetry ? existing?.lastMessageId ?? null : incomingLastMessageId,
         lastUnreadMessageId: conversation.lastUnreadMessageId ?? null,
         lastMessageAt: lastMessageAt ?? existing?.lastMessageAt ?? null,
         lastMessageSenderId: lastMessageSenderId ?? existing?.lastMessageSenderId ?? null,

@@ -487,6 +487,8 @@ describe("dashboard sync product surfaces", () => {
             },
             comparison: null,
           },
+          lifetimeLastTransactionAt: null,
+          retentionStatus: "inactive",
         }],
         limit: 50,
         offset: 0,

@@ -95,13 +95,24 @@ export function buildCredentialsBody({
   platform,
   values,
   hadStoredProxy = false,
+  initialStoredProxy = null,
 }: {
   platform: Platform;
   values: PlatformCredentialsValues;
   hadStoredProxy?: boolean;
+  initialStoredProxy?: { url: string; hasAuth: boolean } | null;
 }): VerifyCredentialsBody {
   const proxyConfig = buildProxyConfig(values.proxyRaw);
-  const proxy = proxyConfig !== undefined
+  const preserveStoredProxyAuth = Boolean(
+    initialStoredProxy?.hasAuth &&
+      proxyConfig &&
+      proxyConfig.url === initialStoredProxy.url &&
+      proxyConfig.username == null &&
+      proxyConfig.password == null,
+  );
+  const proxy = preserveStoredProxyAuth
+    ? undefined
+    : proxyConfig !== undefined
     ? proxyConfig
     : hadStoredProxy
       ? null
@@ -129,4 +140,3 @@ export function buildCredentialsBody({
     proxy,
   };
 }
-

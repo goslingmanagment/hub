@@ -23,6 +23,7 @@ import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/share
 import {
   buildFanProfileNavigation,
   buildPageRoute,
+  buildPageSectionRoute,
   buildPageSpenderAutoListRoute,
   buildSettingsRoute,
 } from "@/lib/navigation";
@@ -92,18 +93,34 @@ export function PageDetailPage() {
   const page = findPageByLabel(pageLabel);
   const canLoadPageData = resolvedPageLabel.length > 0 && pageCatalogState === "ready" && !!page;
 
-  const { data: selectedRevenue } = usePageRevenue(resolvedPageLabel, selectedPeriod, {
+  const {
+    data: selectedRevenue,
+    isLoading: selectedRevenueLoading,
+    isError: selectedRevenueError,
+  } = usePageRevenue(resolvedPageLabel, selectedPeriod, {
     enabled: canLoadPageData,
   });
 
   const isFansly = page?.platform === "fansly";
-  const { data: dailyData } = usePageFollowersDaily(resolvedPageLabel, audienceChartPeriod, {
+  const {
+    data: dailyData,
+    isLoading: dailyDataLoading,
+    isError: dailyDataError,
+  } = usePageFollowersDaily(resolvedPageLabel, audienceChartPeriod, {
     enabled: canLoadPageData && isFansly,
   });
-  const { data: subsDailyData } = usePageSubscribersDaily(resolvedPageLabel, audienceChartPeriod, {
+  const {
+    data: subsDailyData,
+    isLoading: subsDailyDataLoading,
+    isError: subsDailyDataError,
+  } = usePageSubscribersDaily(resolvedPageLabel, audienceChartPeriod, {
     enabled: canLoadPageData,
   });
-  const { data: revenueDailyData } = usePageRevenueDaily(resolvedPageLabel, selectedPeriod, {
+  const {
+    data: revenueDailyData,
+    isLoading: revenueDailyLoading,
+    isError: revenueDailyError,
+  } = usePageRevenueDaily(resolvedPageLabel, selectedPeriod, {
     enabled: canLoadPageData,
   });
 
@@ -196,6 +213,11 @@ export function PageDetailPage() {
     businessDate: item.businessDate,
     value: item.netAmountMills,
   }));
+  const revenueReady = Boolean(selectedRevenue) && !selectedRevenueLoading && !selectedRevenueError;
+  const audienceChartReady = isFansly
+    ? Boolean(dailyData) && !dailyDataLoading && !dailyDataError
+    : Boolean(subsDailyData) && !subsDailyDataLoading && !subsDailyDataError;
+  const revenueChartReady = Boolean(revenueDailyData) && !revenueDailyLoading && !revenueDailyError;
   const selectedPeriodLabel = PERIOD_LABELS[selectedPeriod];
   const audienceChartPeriodLabel = PERIOD_LABELS[audienceChartPeriod];
   const syncMode = getSyncUxDisplayMode(page.syncUx, "page_detail");
@@ -267,7 +289,7 @@ export function PageDetailPage() {
             Revenue
           </div>
           <div className="text-2xl font-extrabold tabular-nums text-accent mt-1">
-            {formatUsdFromMills(selectedRevenue?.netEarningsMills ?? 0)}
+            {revenueReady ? formatUsdFromMills(selectedRevenue?.netEarningsMills ?? 0) : "—"}
           </div>
           {selectedPeriod !== "all" && (
             <div className="flex items-center gap-1.5 mt-1.5">
@@ -286,7 +308,7 @@ export function PageDetailPage() {
               {label}
             </div>
             <div className="text-2xl font-extrabold tabular-nums text-text-primary mt-1">
-              {formatUsdFromMills(breakdownAmount(type))}
+              {revenueReady ? formatUsdFromMills(breakdownAmount(type)) : "—"}
             </div>
           </div>
         ))}
@@ -301,21 +323,25 @@ export function PageDetailPage() {
           </div>
         )}
       >
-        <PageActivityChart
-          title={chartTitle}
-          selectedPeriod={audienceChartPeriod}
-          selectedPeriodLabel={audienceChartPeriodLabel}
-          points={activityPoints}
-          color="#5b8def"
-        />
-        <PageActivityChart
-          title="REVENUE"
-          selectedPeriod={selectedPeriod}
-          selectedPeriodLabel={selectedPeriodLabel}
-          points={revenuePoints}
-          valueFormatter={(v) => formatUsdFromMills(v)}
-          yAxisWidth={72}
-        />
+        {audienceChartReady && (
+          <PageActivityChart
+            title={chartTitle}
+            selectedPeriod={audienceChartPeriod}
+            selectedPeriodLabel={audienceChartPeriodLabel}
+            points={activityPoints}
+            color="#5b8def"
+          />
+        )}
+        {revenueChartReady && (
+          <PageActivityChart
+            title="REVENUE"
+            selectedPeriod={selectedPeriod}
+            selectedPeriodLabel={selectedPeriodLabel}
+            points={revenuePoints}
+            valueFormatter={(v) => formatUsdFromMills(v)}
+            yAxisWidth={72}
+          />
+        )}
       </Suspense>
 
       <PageSubscribersSection
@@ -384,7 +410,7 @@ function PageSubscribersSection({
     <div className="bg-card border border-border rounded-xl overflow-hidden mb-6">
       <div className="flex items-center justify-between p-4 px-[22px] border-b border-border bg-hover-alt">
         <Link
-          to={`/pages/${pageLabel}/subscribers`}
+          to={buildPageSectionRoute(pageLabel, "subscribers")}
           className="font-bold text-[15px] text-text-primary hover:text-accent transition-colors"
         >
           Subscribers
@@ -394,7 +420,7 @@ function PageSubscribersSection({
             {subscribers?.total ?? 0} total
           </span>
           <Link
-            to={`/pages/${pageLabel}/subscribers`}
+            to={buildPageSectionRoute(pageLabel, "subscribers")}
             className="text-accent text-[12px] font-medium hover:underline"
           >
             View all &rarr;
@@ -738,7 +764,7 @@ function PageFollowersSection({ pageLabel }: { pageLabel: string }) {
   return (
     <div className="bg-card border border-border rounded-xl p-8">
       <Link
-        to={`/pages/${pageLabel}/followers`}
+        to={buildPageSectionRoute(pageLabel, "followers")}
         className="text-accent text-sm font-medium hover:underline"
       >
         View all followers &rarr;

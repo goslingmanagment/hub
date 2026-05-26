@@ -294,21 +294,26 @@ describe("workboard repository integration", () => {
     expect(subscribers.map((row) => row.fanId)).toEqual([seeded.visibleSubscriber.id]);
     expect(subscribers[0]?.subscriberSince?.toISOString()).toBe("2026-03-01T12:00:00.000Z");
     expect(subscribers[0]?.pageAlias).toBe("Subscriber Visible Alias");
-    expect(activeSpenders.map((row) => row.fanId)).toEqual([seeded.activeSpender.id]);
-    expect(activeSpenders[0]?.pageAlias).toBe("Active Spender Alias");
+    expect(activeSpenders.map((row) => row.fanId)).toEqual([
+      seeded.deletedActiveSpender.id,
+      seeded.activeSpender.id,
+    ]);
+    expect(activeSpenders[1]?.pageAlias).toBe("Active Spender Alias");
     expect(allSpenders.map((row) => row.fanId)).toEqual([
+      seeded.deletedInactiveSpender.id,
       seeded.inactiveSpender.id,
+      seeded.deletedActiveSpender.id,
       seeded.activeSpender.id,
       seeded.microSpender.id,
     ]);
-    expect(allSpenders[0]?.pageAlias).toBe("Inactive Spender Alias");
-    expect(allSpenders[1]?.pageAlias).toBe("Active Spender Alias");
-    expect(allSpenders[2]?.pageAlias).toBe("Micro Spender Alias");
-    expect(snoozed.map((row) => row.fanId)).toEqual([seeded.snoozedSubscriber.id]);
+    expect(allSpenders[1]?.pageAlias).toBe("Inactive Spender Alias");
+    expect(allSpenders[3]?.pageAlias).toBe("Active Spender Alias");
+    expect(allSpenders[4]?.pageAlias).toBe("Micro Spender Alias");
+    expect(snoozed.map((row) => row.fanId)).toEqual([
+      seeded.snoozedSubscriber.id,
+      seeded.deletedSubscriber.id,
+    ]);
     expect(snoozed[0]?.pageAlias).toBe("Subscriber Snoozed Alias");
-    expect(activeSpenders.map((row) => row.fanId)).not.toContain(seeded.deletedActiveSpender.id);
-    expect(allSpenders.map((row) => row.fanId)).not.toContain(seeded.deletedInactiveSpender.id);
-    expect(snoozed.map((row) => row.fanId)).not.toContain(seeded.deletedSubscriber.id);
   });
 
   it("restores the queue after unsnoozing a fan", async (context) => {
@@ -339,8 +344,8 @@ describe("workboard repository integration", () => {
     expect(subscribers.map((row) => row.fanId).sort((left, right) => left - right)).toEqual([
       seeded.visibleSubscriber.id,
       seeded.snoozedSubscriber.id,
+      seeded.deletedSubscriber.id,
     ].sort((left, right) => left - right));
-    expect(subscribers.map((row) => row.fanId)).not.toContain(seeded.deletedSubscriber.id);
     expect(snoozed).toHaveLength(0);
   });
 

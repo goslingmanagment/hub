@@ -90,12 +90,18 @@ export async function getPublicSyncHealth(
   app: AppContext,
   input?: {
     now?: Date;
+    pageIds?: number[];
   },
 ) {
   const now = input?.now ?? new Date();
   const [connections, snapshot] = await Promise.all([
-    listConnectionStatuses(app),
-    getSyncStatusSnapshot(app, { now }),
+    listConnectionStatuses(app, {
+      pageIds: input?.pageIds,
+    }),
+    getSyncStatusSnapshot(app, {
+      now,
+      pageIds: input?.pageIds,
+    }),
   ]);
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));

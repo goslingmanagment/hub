@@ -1468,6 +1468,9 @@ export interface paths {
                     offset?: number;
                     query?: string;
                     followedWithinHours?: number;
+                    subscriber?: boolean;
+                    dmStatus?: "none" | "has_dm";
+                    activeWithinMinutes?: number;
                 };
                 header?: never;
                 path: {
@@ -1510,6 +1513,27 @@ export interface paths {
                                 username: string | null;
                                 displayName: string | null;
                                 followedAt: string;
+                                isSubscriber: boolean;
+                                subscriberSince: string | null;
+                                subscriptionExpiresAt: string | null;
+                                autoRenew: boolean | null;
+                                totalSpentCents: number;
+                                lastTransactionAt: string | null;
+                                dm: {
+                                    hasConversation: boolean;
+                                    platformConversationId: string | null;
+                                    unreadCount: number;
+                                    lastMessageAt: string | null;
+                                    lastFanMessageAt: string | null;
+                                    lastModelMessageAt: string | null;
+                                    lastMessagePreview: string | null;
+                                };
+                                presence: {
+                                    /** @enum {string} */
+                                    status: "active_now" | "recently_active" | "offline";
+                                    lastSeenAt: string | null;
+                                    observedAt: string | null;
+                                };
                             }[];
                             limit: number;
                             offset: number;
@@ -1742,6 +1766,381 @@ export interface paths {
                             limit: number;
                             offset: number;
                             total: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/deleted-fans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List deleted fans for one page */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            page: {
+                                id: number;
+                                label: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                                username: string | null;
+                                displayName: string | null;
+                                followerCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                subscriberCount: {
+                                    value: number | null;
+                                    available: boolean;
+                                };
+                                lastLightSyncAt: string | null;
+                                lastFollowerSyncAt: string | null;
+                            };
+                            items: {
+                                platformUserId: string;
+                                latestKnownLabel: string | null;
+                                pageAlias: string | null;
+                                username: string | null;
+                                displayName: string | null;
+                                latestHistoricalPageAlias: string | null;
+                                latestHistoricalUsername: string | null;
+                                deletedDetectedAt: string;
+                                deletedLastDetectedAt: string | null;
+                                lastSeenAt: string;
+                            }[];
+                            limit: number;
+                            offset: number;
+                            total: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/spender-autolists": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List spender auto-list buckets for one page */
+        get: {
+            parameters: {
+                query?: {
+                    period?: "today" | "7d" | "30d" | "90d" | "180d" | "mtd" | "custom" | "lifetime";
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            page: {
+                                id: number;
+                                label: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                            };
+                            /** @enum {string} */
+                            currency: "USD";
+                            /** @enum {string} */
+                            metric: "grossAmountMills" | "lifetimeGrossAmountMills";
+                            period: {
+                                timeZone: string;
+                                fromBusinessDate: string | null;
+                                toBusinessDateInclusive: string | null;
+                                asOf: string | null;
+                            };
+                            asOf: string | null;
+                            totalEntries: number;
+                            lists: {
+                                key: string;
+                                label: string;
+                                minAmountMills: number;
+                                maxAmountMillsExclusive: number | null;
+                                entryCount: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/spender-autolists/{bucketKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List fans inside one spender auto-list bucket */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    offset?: number;
+                    query?: string;
+                    period?: "today" | "7d" | "30d" | "90d" | "180d" | "mtd" | "custom" | "lifetime";
+                    from?: string;
+                    to?: string;
+                    excludeNonFollowers?: boolean;
+                };
+                header?: never;
+                path: {
+                    pageLabel: string;
+                    bucketKey: "0-25" | "25-50" | "50-150" | "150-350" | "350-600" | "600-plus";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            page: {
+                                id: number;
+                                label: string;
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                modelSlug: string;
+                                modelName: string;
+                            };
+                            /** @enum {string} */
+                            currency: "USD";
+                            /** @enum {string} */
+                            metric: "grossAmountMills" | "lifetimeGrossAmountMills";
+                            period: {
+                                timeZone: string;
+                                fromBusinessDate: string | null;
+                                toBusinessDateInclusive: string | null;
+                                asOf: string | null;
+                            };
+                            bucket: {
+                                key: string;
+                                label: string;
+                                minAmountMills: number;
+                                maxAmountMillsExclusive: number | null;
+                                entryCount: number;
+                            };
+                            items: {
+                                fan: {
+                                    /** @enum {string} */
+                                    platform: "fansly" | "onlyfans";
+                                    platformUserId: string;
+                                    username: string | null;
+                                    displayName: string | null;
+                                    createdAtExternal: string | null;
+                                    pageAlias: string | null;
+                                };
+                                isFollower: boolean;
+                                isSubscriber: boolean;
+                                /** @enum {string} */
+                                subscriptionStatus: "active" | "expired" | "never";
+                                subscriptionExpiresAt: string | null;
+                                lastSubscriptionEndedAt: string | null;
+                                grossAmountMills: number;
+                                creatorNetAmountMills: number;
+                                lifetimeGrossAmountMills: number;
+                                lifetimeCreatorNetAmountMills: number;
+                                lastTransactionAt: string | null;
+                            }[];
+                            limit: number;
+                            offset: number;
+                            total: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
                         };
                     };
                 };
@@ -3342,7 +3741,7 @@ export interface paths {
                     pageLabel?: string;
                     modelSlug?: string;
                     platform?: "fansly" | "onlyfans";
-                    period: "today" | "7d" | "30d" | "90d" | "mtd" | "custom" | "lifetime";
+                    period: "today" | "7d" | "30d" | "90d" | "180d" | "mtd" | "custom" | "lifetime";
                     from?: string;
                     to?: string;
                     limit?: number;
@@ -3350,6 +3749,7 @@ export interface paths {
                     query?: string;
                     sortBy?: "grossAmountMills" | "creatorNetAmountMills" | "postedGrossAmountMills" | "pendingGrossAmountMills" | "postedCreatorNetAmountMills" | "pendingCreatorNetAmountMills" | "lifetimeGrossAmountMills" | "lifetimeCreatorNetAmountMills" | "lastTransactionAt" | "platformUserId" | "username" | "displayName";
                     sortDir?: "asc" | "desc";
+                    retentionStatus?: "all" | "active" | "cooling" | "inactive" | "needs_reactivation";
                 };
                 header?: never;
                 path?: never;
@@ -3434,6 +3834,9 @@ export interface paths {
                                         deltaPct: number | null;
                                     } | null;
                                 };
+                                lifetimeLastTransactionAt: string | null;
+                                /** @enum {string} */
+                                retentionStatus: "active" | "cooling" | "inactive" | "needs_reactivation";
                             }[];
                             limit: number;
                             offset: number;
@@ -3518,7 +3921,7 @@ export interface paths {
                     pageLabel?: string;
                     modelSlug?: string;
                     platform?: "fansly" | "onlyfans";
-                    period: "today" | "7d" | "30d" | "90d" | "mtd" | "custom" | "lifetime";
+                    period: "today" | "7d" | "30d" | "90d" | "180d" | "mtd" | "custom" | "lifetime";
                     from?: string;
                     to?: string;
                 };
@@ -3702,7 +4105,7 @@ export interface paths {
                     pageLabel?: string;
                     modelSlug?: string;
                     platform?: "fansly" | "onlyfans";
-                    period: "today" | "7d" | "30d" | "90d" | "mtd" | "custom" | "lifetime";
+                    period: "today" | "7d" | "30d" | "90d" | "180d" | "mtd" | "custom" | "lifetime";
                     from?: string;
                     to?: string;
                     granularity?: "day" | "week" | "month" | "auto";
@@ -3869,7 +4272,7 @@ export interface paths {
                         /** @enum {string} */
                         platform?: "fansly" | "onlyfans";
                         /** @enum {string} */
-                        period?: "today" | "7d" | "30d" | "90d" | "mtd" | "custom" | "lifetime";
+                        period?: "today" | "7d" | "30d" | "90d" | "180d" | "mtd" | "custom" | "lifetime";
                         from?: string;
                         to?: string;
                         fans: {
@@ -6650,6 +7053,19 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 401: {
                     headers: {
                         [name: string]: unknown;
@@ -6841,6 +7257,19 @@ export interface paths {
                         "application/json": {
                             /** @enum {boolean} */
                             ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
                         };
                     };
                 };
@@ -9163,6 +9592,19 @@ export interface paths {
                             username: string | null;
                             /** @enum {string} */
                             platform: "fansly" | "onlyfans";
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
                         };
                     };
                 };

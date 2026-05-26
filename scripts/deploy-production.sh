@@ -9,8 +9,8 @@ Usage:
 Options:
   --app-dir <path>       Remote release directory. Default: /opt/agency-hub
   --image <tag>          Docker image tag. Default: agency_hub_core/runtime:production
-  --port <port>          Public HTTP port used for verification. Default: 3000
-  --verify-url <url>     Base URL to verify after deploy. Default: http://<host>:<port>
+  --port <port>          Remote loopback HTTP port used for verification. Default: 3000
+  --verify-url <url>     Public HTTPS base URL to verify after deploy. Default: remote http://127.0.0.1:<port>
   --identity <path>      SSH identity file
   --ssh-port <port>      SSH port
   -h, --help             Show this help text
@@ -32,6 +32,7 @@ log() {
 
 fail() {
   if [[ "${STACK_RECREATED:-0}" == "1" ]]; then
+    rollback_remote_stack
     dump_remote_diagnostics
   fi
   printf '[deploy] error: %s\n' "$*" >&2
@@ -114,9 +115,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_PLATFORM="linux/amd64"
 
+VERIFY_VIA_SSH=0
 if [[ -z "$VERIFY_URL" ]]; then
-  REMOTE_HOST="${REMOTE##*@}"
-  VERIFY_URL="http://${REMOTE_HOST}:${HTTP_PORT}"
+  VERIFY_URL="http://127.0.0.1:${HTTP_PORT}"
+  VERIFY_VIA_SSH=1
 fi
 
 SSH_ARGS=()
@@ -128,6 +130,8 @@ if [[ -n "$IDENTITY_FILE" ]]; then
 fi
 
 STACK_RECREATED=0
+ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback"
+ROLLBACK_IMAGE_AVAILABLE=0
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
 REMOTE_RELEASE_FILES=()
@@ -155,12 +159,83 @@ dump_remote_diagnostics() {
     || log "Unable to collect remote diagnostics"
 }
 
+capture_remote_rollback_image() {
+  local result
+  result="$(run_remote "set -euo pipefail; if docker image inspect $(printf '%q' "$IMAGE_TAG") >/dev/null 2>&1; then docker tag $(printf '%q' "$IMAGE_TAG") $(printf '%q' "$ROLLBACK_IMAGE_TAG"); printf available; else printf missing; fi" || true)"
+  if [[ "$result" == "available" ]]; then
+    ROLLBACK_IMAGE_AVAILABLE=1
+    log "Captured rollback image as ${ROLLBACK_IMAGE_TAG}"
+  else
+    ROLLBACK_IMAGE_AVAILABLE=0
+    log "No previous remote image found for rollback"
+  fi
+}
+
+rollback_remote_stack() {
+  if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
+    log "Rollback skipped; no previous image was captured"
+    return 0
+  fi
+
+  log "Rolling back remote stack to ${ROLLBACK_IMAGE_TAG}"
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; docker tag $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$IMAGE_TAG"); docker compose -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build" \
+    || {
+      log "Rollback command failed"
+      return 0
+    }
+
+  if wait_for_api_health "$HEALTH_FILE"; then
+    log "Rollback health check passed"
+  else
+    log "Rollback health check did not reach 200"
+  fi
+}
+
+remote_curl_status() {
+  local output_file="$1"
+  local url="$2"
+  local header="${3:-}"
+  local remote_output="${TEMP_DIR}/remote-curl.out"
+  local command="curl --silent --show-error --connect-timeout 5 --max-time 10"
+  if [[ -n "$header" ]]; then
+    command+=" --header $(printf '%q' "$header")"
+  fi
+  command+=" --write-out '\n%{http_code}' $(printf '%q' "$url")"
+
+  run_remote "$command" >"$remote_output" || return 1
+  tail -n 1 "$remote_output"
+  sed '$d' "$remote_output" >"$output_file"
+}
+
 curl_status() {
   local output_file="$1"
   local url="$2"
+  if [[ "$VERIFY_VIA_SSH" == "1" ]]; then
+    remote_curl_status "$output_file" "$url"
+    return
+  fi
+
   curl --silent --show-error \
     --connect-timeout 5 \
     --max-time 10 \
+    --output "$output_file" \
+    --write-out '%{http_code}' \
+    "$url"
+}
+
+curl_status_with_monitoring_token() {
+  local output_file="$1"
+  local url="$2"
+  local token="$3"
+  if [[ "$VERIFY_VIA_SSH" == "1" ]]; then
+    remote_curl_status "$output_file" "$url" "x-monitoring-token: ${token}"
+    return
+  fi
+
+  curl --silent --show-error \
+    --connect-timeout 5 \
+    --max-time 10 \
+    --header "x-monitoring-token: ${token}" \
     --output "$output_file" \
     --write-out '%{http_code}' \
     "$url"
@@ -197,6 +272,10 @@ HEALTH_FILE="${TEMP_DIR}/health.json"
 SYNC_FILE="${TEMP_DIR}/sync.json"
 DASHBOARD_FILE="${TEMP_DIR}/dashboard.html"
 
+log "Validating remote Docker access"
+run_remote "set -euo pipefail; docker version >/dev/null"
+capture_remote_rollback_image
+
 log "Building ${IMAGE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
 docker build --platform="${BUILD_PLATFORM}" -t "$IMAGE_TAG" "$ROOT_DIR"
 
@@ -209,6 +288,7 @@ tar -C "$ROOT_DIR" -cf - "${REMOTE_RELEASE_FILES[@]}" | ssh "${SSH_ARGS[@]}" "$R
 
 log "Validating remote prerequisites"
 run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.production && docker compose version >/dev/null"
+SYNC_MONITORING_TOKEN="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; set -a; source .env.production; printf '%s' \"\${HEALTH_SYNC_MONITORING_TOKEN:-}\"")"
 
 log "Recreating the remote production stack"
 run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && docker compose -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build"
@@ -217,16 +297,21 @@ STACK_RECREATED=1
 log "Waiting for ${VERIFY_URL%/}/api/v1/health"
 wait_for_api_health "$HEALTH_FILE" || fail "API health never reached 200 at ${VERIFY_URL%/}/api/v1/health"
 
-log "Verifying sync health endpoint"
-SYNC_STATUS_CODE="$(curl_status "$SYNC_FILE" "${VERIFY_URL%/}/api/v1/health/sync" || true)"
-case "$SYNC_STATUS_CODE" in
-  200|503)
-    ;;
-  *)
-    fail "Unexpected /api/v1/health/sync status: ${SYNC_STATUS_CODE}"
-    ;;
-esac
-grep -q '"pages"' "$SYNC_FILE" || fail "Sync health response is missing pages[]"
+if [[ -n "$SYNC_MONITORING_TOKEN" ]]; then
+  log "Verifying sync health endpoint"
+  SYNC_STATUS_CODE="$(curl_status_with_monitoring_token "$SYNC_FILE" "${VERIFY_URL%/}/api/v1/health/sync" "$SYNC_MONITORING_TOKEN" || true)"
+  case "$SYNC_STATUS_CODE" in
+    200|503)
+      ;;
+    *)
+      fail "Unexpected /api/v1/health/sync status: ${SYNC_STATUS_CODE}"
+      ;;
+  esac
+  grep -q '"pages"' "$SYNC_FILE" || fail "Sync health response is missing pages[]"
+else
+  SYNC_STATUS_CODE="skipped"
+  log "Skipping protected sync health verification because HEALTH_SYNC_MONITORING_TOKEN is not set"
+fi
 
 log "Verifying same-origin dashboard delivery"
 DASHBOARD_STATUS_CODE="$(curl_status "$DASHBOARD_FILE" "${VERIFY_URL%/}/login" || true)"

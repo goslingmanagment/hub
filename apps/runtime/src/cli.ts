@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import { Command } from "commander";
@@ -135,18 +136,71 @@ function printRows(headers: string[], rows: Array<unknown[]>) {
   }
 }
 
-function buildProxyInput(options: {
+async function readSecretOption(input: {
+  value?: string;
+  file?: string;
+  env?: string;
+  label: string;
+}) {
+  const provided = [
+    input.value !== undefined,
+    input.file !== undefined,
+    input.env !== undefined,
+  ].filter(Boolean).length;
+  if (provided > 1) {
+    throw new Error(`Use only one of --${input.label}, --${input.label}-file, or --${input.label}-env`);
+  }
+
+  if (input.value !== undefined) {
+    return input.value;
+  }
+  if (input.file !== undefined) {
+    return (await readFile(input.file, "utf8")).replace(/\r?\n$/, "");
+  }
+  if (input.env !== undefined) {
+    const value = process.env[input.env];
+    if (value === undefined) {
+      throw new Error(`Environment variable ${input.env} is not set`);
+    }
+    return value;
+  }
+
+  return undefined;
+}
+
+async function buildProxyInput(options: {
   proxyUrl?: string;
   proxyUsername?: string;
   proxyPassword?: string;
+  proxyPasswordFile?: string;
+  proxyPasswordEnv?: string;
 }) {
+  const proxyPassword = await readSecretOption({
+    value: options.proxyPassword,
+    file: options.proxyPasswordFile,
+    env: options.proxyPasswordEnv,
+    label: "proxy-password",
+  });
   return options.proxyUrl
     ? {
       url: options.proxyUrl,
       username: options.proxyUsername ?? null,
-      password: options.proxyPassword ?? null,
+      password: proxyPassword ?? null,
     }
     : null;
+}
+
+async function readPasswordOption(options: {
+  password?: string;
+  passwordFile?: string;
+  passwordEnv?: string;
+}) {
+  return readSecretOption({
+    value: options.password,
+    file: options.passwordFile,
+    env: options.passwordEnv,
+    label: "password",
+  });
 }
 
 function collectStringOption(value: string, previous: string[] = []) {
@@ -523,11 +577,13 @@ export function buildProgram() {
     .option("--proxy-url <url>")
     .option("--proxy-username <username>")
     .option("--proxy-password <password>")
+    .option("--proxy-password-file <file>")
+    .option("--proxy-password-env <name>")
     .action(async (options) => {
       const app = await createAppContext();
       try {
         const session = await loadFanslySessionBundleFromFile(options.sessionFile);
-        const proxy = buildProxyInput(options);
+        const proxy = await buildProxyInput(options);
         const { page: created } = await onboardFanslyPage(app, {
           modelSlug: options.model,
           label: options.label,
@@ -552,11 +608,13 @@ export function buildProgram() {
     .option("--proxy-url <url>")
     .option("--proxy-username <username>")
     .option("--proxy-password <password>")
+    .option("--proxy-password-file <file>")
+    .option("--proxy-password-env <name>")
     .action(async (options) => {
       const app = await createAppContext();
       try {
         const auth = await loadOnlyMonsterTokenBundleFromFile(options.tokenFile);
-        const proxy = buildProxyInput(options);
+        const proxy = await buildProxyInput(options);
 
         const { page: created } = await onboardOnlyFansPage(app, {
           modelSlug: options.model,
@@ -620,10 +678,12 @@ export function buildProgram() {
     .requiredOption("--proxy-url <url>")
     .option("--proxy-username <username>")
     .option("--proxy-password <password>")
+    .option("--proxy-password-file <file>")
+    .option("--proxy-password-env <name>")
     .action(async (options) => {
       const app = await createAppContext();
       try {
-        await setPageProxy(app, options.page, buildProxyInput(options)!);
+        await setPageProxy(app, options.page, (await buildProxyInput(options))!);
         console.log(`Updated proxy for page ${options.page}`);
       } finally {
         await app.close();
@@ -1093,6 +1153,8 @@ export function buildProgram() {
     .requiredOption("--username <username>")
     .requiredOption("--role <role>")
     .option("--password <password>")
+    .option("--password-file <file>")
+    .option("--password-env <name>")
     .action(async (options) => {
       const app = await createAppContext();
       try {
@@ -1104,7 +1166,7 @@ export function buildProgram() {
         const user = await createUserAccount(app, {
           username: options.username,
           role,
-          password: options.password,
+          password: await readPasswordOption(options),
         }, auditContext());
 
         console.log(
@@ -1137,13 +1199,19 @@ export function buildProgram() {
   user
     .command("set-password")
     .requiredOption("--username <username>")
-    .requiredOption("--password <password>")
+    .option("--password <password>")
+    .option("--password-file <file>")
+    .option("--password-env <name>")
     .action(async (options) => {
       const app = await createAppContext();
       try {
+        const password = await readPasswordOption(options);
+        if (password === undefined) {
+          throw new Error("set-password requires --password, --password-file, or --password-env");
+        }
         await setUserPassword(app, {
           username: options.username,
-          password: options.password,
+          password,
         }, auditContext());
         console.log(`Updated password for ${options.username}`);
       } finally {

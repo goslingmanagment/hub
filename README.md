@@ -3,7 +3,7 @@
 Agency Hub is a single-origin dashboard + API for syncing Fansly and OnlyFans page data into PostgreSQL, running background sync workers, and operating the system from one Docker Compose stack.
 
 For v1.0 production:
-- the dashboard and API are served from the same plain-HTTP origin
+- the dashboard and API are served from the same origin; production internet exposure should be behind TLS
 - the production container runs compiled Node.js output, not `tsx`
 - migrations run automatically on API and worker startup under a Postgres advisory lock
 - crashed services restart automatically through Docker restart policies
@@ -18,6 +18,7 @@ Backups are intentionally deferred in this release hardening pass. Do not assume
 - Linux server with Docker Engine and Docker Compose plugin
 - Git
 - A reachable public IP or hostname
+- TLS termination through a reverse proxy or load balancer for public dashboard access
 - One 32-byte base64 encryption key for stored credentials
 - Valid Fansly sessions and/or OnlyMonster tokens for the pages you will onboard
 
@@ -55,7 +56,7 @@ openssl rand -base64 32
 - `APP_ENCRYPTION_KEY`
 - any optional Telegram values you want enabled
 
-The default production compose file expects the bundled Postgres container and the app to use port `3000`.
+The default production compose file expects the bundled Postgres container and binds the app to `127.0.0.1:3000`. Put a TLS reverse proxy on the same host in front of that loopback port.
 
 5. Build and start the stack:
 
@@ -71,20 +72,21 @@ curl http://127.0.0.1:3000/api/v1/health
 
 `/api/v1/health` should return HTTP `200`. If external monitoring needs detailed per-page sync state, set `HEALTH_SYNC_MONITORING_TOKEN` in the runtime environment and call `/api/v1/health/sync` with that value in the `x-monitoring-token` header. That endpoint may return HTTP `200` or `503`, because it reports real per-page sync state rather than simple process liveness.
 
-7. Create the first owner account:
+7. Create the first owner account. Pass the password through an environment variable or a file so it does not appear in shell history:
 
 ```bash
+export INITIAL_OWNER_PASSWORD='change-me-now'
 docker compose -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js user add \
   --username owner \
   --role owner \
-  --password 'change-me-now'
+  --password-env INITIAL_OWNER_PASSWORD
 ```
 
 8. Open the dashboard from the same origin as the API:
 
 ```text
-http://YOUR_SERVER_IP:3000/login
+https://YOUR_DOMAIN/login
 ```
 
 Sign in with the owner account you just created. The dashboard onboarding flow can add models and pages from the browser.
@@ -165,7 +167,7 @@ This is the intended update path. It rebuilds the production image, recreates th
 If you want to build locally and push the image to a remote host over SSH:
 
 ```bash
-scripts/deploy-production.sh user@server --verify-url http://SERVER_IP:3000
+scripts/deploy-production.sh user@server --verify-url https://YOUR_DOMAIN
 ```
 
 On Apple Silicon workstations, this deploy path still targets `linux/amd64` for amd64 servers. The Docker build compiles the JS/TS artifacts in a native build stage while installing runtime dependencies for the target platform, which avoids running `esbuild` under amd64 emulation during the production build.
@@ -177,7 +179,7 @@ What the script does:
 - syncs release files into `/opt/agency-hub` by default
 - runs `docker compose -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build`
 - verifies `/api/v1/health`, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
-- if verification fails after the stack is recreated, prints `docker compose ps` plus recent `postgres`, `api`, and `worker` logs automatically
+- if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured, then prints `docker compose ps` plus recent `postgres`, `api`, and `worker` logs automatically
 
 The script assumes the remote server already has `/opt/agency-hub/.env.production` populated.
 
@@ -195,7 +197,8 @@ Examples:
 
 ```bash
 curl http://127.0.0.1:3000/api/v1/health
-curl -i http://127.0.0.1:3000/api/v1/health/sync
+curl -i -H "x-monitoring-token: $HEALTH_SYNC_MONITORING_TOKEN" \
+  http://127.0.0.1:3000/api/v1/health/sync
 ```
 
 `/api/v1/health/sync` includes per-page state, failed/stalled stream counts, sync freshness ages, and issue codes that are suitable for external uptime or alerting systems.
@@ -230,7 +233,8 @@ docker compose -f docker-compose.production.yml ps
 That means the app is running but one or more pages are stale or have failed/stalled streams. Inspect:
 
 ```bash
-curl -s http://127.0.0.1:3000/api/v1/health/sync
+curl -s -H "x-monitoring-token: $HEALTH_SYNC_MONITORING_TOKEN" \
+  http://127.0.0.1:3000/api/v1/health/sync
 docker compose -f docker-compose.production.yml exec api node apps/runtime/dist/cli.js sync status
 ```
 

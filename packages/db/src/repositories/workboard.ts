@@ -112,20 +112,6 @@ function getMessageSyncEligibility(input: {
   return unresolvedIdentity ? "unresolved_identity" : "eligible";
 }
 
-function hasVisibleFanIdentitySql(input: {
-  pageAlias: ReturnType<typeof sql.raw>;
-  username: ReturnType<typeof sql.raw>;
-  displayName: ReturnType<typeof sql.raw>;
-}) {
-  return sql`
-    coalesce(
-      nullif(btrim(${input.pageAlias}), ''),
-      nullif(btrim(${input.username}), ''),
-      nullif(btrim(${input.displayName}), '')
-    ) is not null
-  `;
-}
-
 function workboardSnoozeExclusionSql(platformAccountId: number, fanIdSql: ReturnType<typeof sql.raw>) {
   return sql`
     and not exists (
@@ -362,11 +348,6 @@ function spenderBaseQuery(
       where slp.platform_account_id = ${input.platformAccountId}
         and f.deleted_detected_at is null
         and slp.creator_net_amount_mills >= ${minimumSpendMills}
-        and ${hasVisibleFanIdentitySql({
-          pageAlias: sql.raw("fp.page_alias"),
-          username: sql.raw("f.username"),
-          displayName: sql.raw("f.display_name"),
-        })}
         ${subscriberExclusion}
         ${spendWindow}
         ${workboardSnoozeExclusionSql(input.platformAccountId, sql.raw("slp.fan_id"))}
@@ -457,11 +438,6 @@ export async function listWorkboardSubscribers(
              )::int as overdue_days
       from filtered
       where is_handled = false
-        and ${hasVisibleFanIdentitySql({
-          pageAlias: sql.raw("filtered.page_alias"),
-          username: sql.raw("filtered.username"),
-          displayName: sql.raw("filtered.display_name"),
-        })}
         ${workboardSnoozeExclusionSql(input.platformAccountId, sql.raw("filtered.fan_id"))}
     )
     select fan_id as "fanId",
@@ -855,11 +831,6 @@ export async function listWorkboardSnoozed(
     where ws.platform_account_id = ${input.platformAccountId}
       and ws.snoozed_until > now()
       and f.deleted_detected_at is null
-      and ${hasVisibleFanIdentitySql({
-        pageAlias: sql.raw("fp.page_alias"),
-        username: sql.raw("f.username"),
-        displayName: sql.raw("f.display_name"),
-      })}
     order by ws.snoozed_until asc
   `);
 
@@ -970,11 +941,6 @@ export async function listWorkboardPresence(
     where fp.platform_account_id = ${input.platformAccountId}
       and ${presenceFilter}
       and f.deleted_detected_at is null
-      and ${hasVisibleFanIdentitySql({
-        pageAlias: sql.raw("fp.page_alias"),
-        username: sql.raw("f.username"),
-        displayName: sql.raw("f.display_name"),
-      })}
     order by fp.external_presence_at desc,
              coalesce(slp.creator_net_amount_mills, 0) desc,
              fp.fan_id asc

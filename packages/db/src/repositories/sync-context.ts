@@ -33,7 +33,12 @@ export function getPageSyncExecutionContext() {
   return pageSyncExecutionContextStorage.getStore() ?? null;
 }
 
-export async function assertOwnedPageSyncLease(db: Database) {
+export async function assertOwnedPageSyncLease(
+  db: Database,
+  input?: {
+    lock?: boolean;
+  },
+) {
   const executionContext = getPageSyncExecutionContext();
   if (!executionContext) {
     return;
@@ -48,6 +53,7 @@ export async function assertOwnedPageSyncLease(db: Database) {
       and leased_seq = ${executionContext.requestSeq}
       and status = 'running'
     limit 1
+    ${input?.lock ? sql`for update` : sql``}
   `);
 
   if ((result.rowCount ?? 0) === 0) {
@@ -85,7 +91,7 @@ export async function withOwnedPageSyncTransaction<T>(
     const database = tx as unknown as Database;
     await assertOwnedPageSyncLease(database);
     const result = await run(database);
-    await assertOwnedPageSyncLease(database);
+    await assertOwnedPageSyncLease(database, { lock: true });
     return result;
   });
 }

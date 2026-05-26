@@ -161,12 +161,14 @@ export async function waitForRequestedSyncRequests(
   const timeoutMs = input.timeoutMs ?? 10 * 60 * 1000;
   const pollMs = input.pollMs ?? 2000;
   const deadline = Date.now() + timeoutMs;
+  let lastRows = [] as Awaited<ReturnType<typeof listPageSyncStates>>;
 
   while (Date.now() < deadline) {
     const rows = await listPageSyncStates(app.db, {
       pageId: input.pageId,
       streams: input.requests.map((request) => request.stream),
     });
+    lastRows = rows;
     const byStream = new Map(rows.map((row) => [row.stream, row] as const));
     const unsatisfied = input.requests.filter((request) => {
       const row = byStream.get(request.stream);
@@ -178,7 +180,11 @@ export async function waitForRequestedSyncRequests(
         throw new Error(`Sync for stream "${request.stream}" is blocked by auth`);
       }
 
-      if (row.status === "blocked" && row.appliedSeq < request.requestedSeq) {
+      if (
+        row.status === "blocked" &&
+        row.blockerKind !== "dependency" &&
+        row.appliedSeq < request.requestedSeq
+      ) {
         throw new Error(`Sync for stream "${request.stream}" is blocked`);
       }
 
@@ -196,5 +202,10 @@ export async function waitForRequestedSyncRequests(
     await delay(pollMs);
   }
 
-  throw new Error("Timed out waiting for requested sync requests to converge");
+  const stateSummary = lastRows
+    .map((row) =>
+      `${row.stream}:${row.status}:${row.appliedSeq}/${row.requestSeq}` +
+      (row.blockerKind ? `:${row.blockerKind}:${row.blockerCode ?? "unknown"}` : ""))
+    .join(", ");
+  throw new Error(`Timed out waiting for requested sync requests to converge${stateSummary ? ` (${stateSummary})` : ""}`);
 }

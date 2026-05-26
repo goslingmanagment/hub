@@ -257,7 +257,8 @@ describe("WorkboardPage", () => {
     const html = renderPage();
 
     expect(html).toContain("Ожидают внимания: 1");
-    expect(html).toContain("1 скрыто");
+    expect(html).toContain("2 скрыто");
+    expect(html).toContain("1 отложено");
     expect(html).toContain("Нет видимых фанов");
     expect(html).not.toContain("Deleted user");
   });

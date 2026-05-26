@@ -242,7 +242,7 @@ export class FanslyAdapter {
 
     const limit = params.limit ?? 100;
     return {
-      total: response.parsed.stats.total,
+      total: response.parsed.stats.totalActive,
       items: response.parsed.subscriptions,
       offset: params.offset ?? 0,
       done: response.parsed.subscriptions.length < limit,

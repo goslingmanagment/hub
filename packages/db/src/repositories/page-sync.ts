@@ -1281,7 +1281,15 @@ export async function completePageSync(
       and leased_seq = ${input.requestSeq}
   `);
 
-  return (result.rowCount ?? 0) > 0;
+  const applied = (result.rowCount ?? 0) > 0;
+  if (applied) {
+    await refreshPageSyncDependencies(db, {
+      pageId: input.pageId,
+      now,
+    });
+  }
+
+  return applied;
 }
 
 export async function yieldPageSync(
@@ -1644,6 +1652,11 @@ export async function requestPageSync(
         requestedSeq: nextRequestSeq,
       });
     }
+  });
+
+  await refreshPageSyncDependencies(db, {
+    pageId: input.pageId,
+    now,
   });
 
   return results;

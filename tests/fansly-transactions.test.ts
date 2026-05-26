@@ -779,6 +779,116 @@ describe("syncTransactions", () => {
     ]);
   });
 
+  it("refuses to finalize a Fansly backfill when the provider total changes mid-scan", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    const telemetry = createTelemetry();
+    const getTransactionsPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+        total: 2,
+        done: false,
+        raw: { page: 1 },
+      })
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-2", "2026-03-09T00:00:00.000Z")],
+        total: 3,
+        done: false,
+        raw: { page: 2 },
+      });
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    })).rejects.toThrow("Fansly transaction backfill total changed during an offset scan");
+
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "backfill_total_changed",
+      severity: "error",
+    }));
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual(["tx-1"]);
+  });
+
+  it("refuses to finalize a Fansly backfill when adjacent offset pages overlap", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    const telemetry = createTelemetry();
+    const getTransactionsPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+        total: 2,
+        done: false,
+        raw: { page: 1 },
+      })
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+        total: 2,
+        done: false,
+        raw: { page: 2 },
+      });
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    })).rejects.toThrow("Fansly transaction backfill saw overlapping rows between offset pages");
+
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "backfill_offset_overlap",
+      severity: "error",
+    }));
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual(["tx-1"]);
+  });
+
   it("looks up backfill Fansly fan hydration before opening each DB transaction", async () => {
     dbMocks.getCheckpoint.mockResolvedValue(null);
 

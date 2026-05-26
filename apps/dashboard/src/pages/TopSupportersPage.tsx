@@ -5,19 +5,53 @@ import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { buildFanProfileNavigation, buildPageSectionRoute } from "@/lib/navigation";
 import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
-import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
-import { formatRelativeTime } from "@/lib/format";
+import {
+  SPENDER_RETENTION_ACTIVE_DAYS,
+  SPENDER_RETENTION_INACTIVE_DAYS,
+  formatUsdFromMills,
+  resolveFanLabelForScope,
+  type SpenderRetentionStatus,
+} from "@agency_hub_core/shared";
+import { formatDelta, formatRelativeTime } from "@/lib/format";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import type { SpenderBatchBody } from "@agency_hub_core/contracts";
 
 const LIMIT = 50;
-const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
 
 type TypeBreakdownItem = {
   canonicalType: string;
   grossAmountMills: number;
   creatorNetAmountMills: number;
   transactionCount: number;
+};
+
+type RetentionFilter = SpenderRetentionStatus;
+
+const RETENTION_FILTERS: { key: RetentionFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "active", label: "Active" },
+  { key: "cooling", label: "Cooling" },
+  { key: "inactive", label: "Inactive" },
+  { key: "needs_reactivation", label: "Needs reactivation" },
+];
+
+const ROW_STATUS_BADGES: Record<Exclude<RetentionFilter, "all">, { label: string; className: string }> = {
+  active: {
+    label: "ACTIVE",
+    className: "bg-green/15 text-green",
+  },
+  cooling: {
+    label: "COOLING",
+    className: "bg-warning/15 text-warning-dark",
+  },
+  inactive: {
+    label: "INACTIVE",
+    className: "bg-text-muted/15 text-text-muted",
+  },
+  needs_reactivation: {
+    label: "REACTIVATE",
+    className: "bg-danger/15 text-danger",
+  },
 };
 
 function sumBreakdownTypes(
@@ -43,15 +77,16 @@ function whaleBadge(lifetimeScopeCreatorNetMills: number) {
 export function TopSupportersPage() {
   const { pageLabel } = useParams();
   const navigate = useNavigate();
-  const selectedPeriod = useSpenderPeriodStore((s) => s.period);
+  const selectedPeriod = useSpenderPeriodStore((s) => s.topSupportersPeriod);
   const [searchQuery, setSearchQuery] = useState("");
   const [offset, setOffset] = useState(0);
+  const [retentionFilter, setRetentionFilter] = useState<RetentionFilter>("all");
 
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
 
   useEffect(() => {
     setOffset(0);
-  }, [searchQuery, spenderPeriod]);
+  }, [pageLabel, searchQuery, spenderPeriod, retentionFilter]);
 
   const spenderParams = useMemo(() => ({
     scope: "page" as const,
@@ -62,7 +97,8 @@ export function TopSupportersPage() {
     sortBy: "creatorNetAmountMills" as const,
     sortDir: "desc" as const,
     query: searchQuery || undefined,
-  }), [pageLabel, spenderPeriod, offset, searchQuery]);
+    retentionStatus: retentionFilter,
+  }), [pageLabel, spenderPeriod, offset, searchQuery, retentionFilter]);
 
   const { data: spenders, isLoading } = useSpenders(spenderParams);
 
@@ -87,14 +123,12 @@ export function TopSupportersPage() {
   const batchByPlatformUserId = useMemo(() => {
     const map = new Map<string, {
       typeBreakdown: TypeBreakdownItem[] | null;
-      lifetimeLastTransactionAt: string | null;
     }>();
     if (!batchData) return map;
     for (const item of batchData.items) {
       if (item.found) {
         map.set(item.requestedFan.platformUserId, {
           typeBreakdown: item.typeBreakdown,
-          lifetimeLastTransactionAt: item.lifetimeLastTransactionAt,
         });
       }
     }
@@ -102,10 +136,12 @@ export function TopSupportersPage() {
   }, [batchData]);
 
   if (isLoading || !spenders) {
-    return <TableSkeleton rows={6} columns={7} />;
+    return <TableSkeleton rows={6} columns={8} />;
   }
 
   const total = spenders.total;
+  const isLifetime = spenderPeriod === "lifetime";
+  const subtitle = describeRetentionSubtitle(retentionFilter);
 
   return (
     <div>
@@ -113,10 +149,34 @@ export function TopSupportersPage() {
         <h1 className="text-xl font-extrabold text-text-primary">
           Top Supporters &mdash; {pageLabel}
         </h1>
-        <p className="text-sm text-text-muted mt-1">{total} total</p>
+        <p className="text-sm text-text-muted mt-1">
+          {total} {retentionFilter === "all" ? "total" : "match"}
+          {subtitle ? ` · ${subtitle}` : ""}
+        </p>
       </div>
 
-      <div className="flex items-center justify-end mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div role="tablist" aria-label="Retention filter" className="flex flex-wrap items-center gap-1">
+          {RETENTION_FILTERS.map((filter) => {
+            const isActive = retentionFilter === filter.key;
+            return (
+              <button
+                key={filter.key}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setRetentionFilter(filter.key)}
+                className={`rounded-button px-3 py-1.5 text-[13px] font-medium transition-colors ${
+                  isActive
+                    ? "bg-accent text-white"
+                    : "border border-border bg-card text-text-secondary hover:bg-hover"
+                }`}
+              >
+                {filter.label}
+              </button>
+            );
+          })}
+        </div>
         <SearchInput
           value={searchQuery}
           onChange={setSearchQuery}
@@ -124,7 +184,7 @@ export function TopSupportersPage() {
         />
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
+      <section className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-hover-alt">
@@ -135,7 +195,8 @@ export function TopSupportersPage() {
                 { label: "Tips", align: "text-right" },
                 { label: "Subs", align: "text-right" },
                 { label: "Purchases", align: "text-right" },
-                { label: "Last Active", align: "text-left" },
+                { label: isLifetime ? "Last Activity" : "Trend", align: "text-left" },
+                { label: "Status", align: "text-left" },
               ].map((col) => (
                 <th
                   key={col.label}
@@ -149,8 +210,8 @@ export function TopSupportersPage() {
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-sm text-text-muted">
-                  No supporters found for this period.
+                <td colSpan={8} className="px-4 py-8 text-center text-sm text-text-muted">
+                  {emptyStateMessage(retentionFilter)}
                 </td>
               </tr>
             )}
@@ -158,7 +219,8 @@ export function TopSupportersPage() {
               const fanLabel = resolveFanLabelForScope(item.fan, "page");
               const lifetimeNet = item.metrics.lifetime.scopeCreatorNetAmountMills;
               const windowMetrics = item.metrics.window;
-              const spent = spenderPeriod === "lifetime"
+              const comparison = item.metrics.comparison;
+              const spent = isLifetime
                 ? lifetimeNet
                 : (windowMetrics?.creatorNetAmountMills ?? 0);
 
@@ -168,10 +230,10 @@ export function TopSupportersPage() {
               const subs = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["subscription"]);
               const purchases = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["message_purchase", "post_purchase"]);
 
-              const lastActive = batch?.lifetimeLastTransactionAt;
-              const isInactive = lastActive
-                ? Date.now() - new Date(lastActive).getTime() > FOURTEEN_DAYS_MS
-                : false;
+              const lastActive = item.lifetimeLastTransactionAt;
+              const rowStatus = item.retentionStatus;
+              const statusBadge = ROW_STATUS_BADGES[rowStatus];
+
               const fanNavigation = buildFanProfileNavigation(
                 pageLabel!,
                 platform!,
@@ -199,6 +261,11 @@ export function TopSupportersPage() {
                     {fanLabel.secondaryPlatformHandle && (
                       <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
                     )}
+                    {lastActive && (
+                      <div className="text-[11px] text-text-muted mt-0.5">
+                        Last activity {formatRelativeTime(lastActive)}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
                     {formatUsdFromMills(spent)}
@@ -213,20 +280,17 @@ export function TopSupportersPage() {
                     {hasBatch ? formatUsdFromMills(purchases) : "—"}
                   </td>
                   <td className="px-4 py-3 text-sm text-text-secondary">
-                    {!hasBatch ? (
-                      "—"
-                    ) : lastActive ? (
-                      <span className="flex items-center gap-1.5">
-                        {formatRelativeTime(lastActive)}
-                        {isInactive && (
-                          <span className="inline-flex items-center rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold text-danger">
-                            INACTIVE
-                          </span>
-                        )}
-                      </span>
-                    ) : (
-                      "—"
-                    )}
+                    {isLifetime
+                      ? (lastActive ? formatRelativeTime(lastActive) : "—")
+                      : <TrendCell deltaPct={comparison?.deltaPct ?? null} />
+                    }
+                  </td>
+                  <td className="px-4 py-3 text-sm text-text-secondary">
+                    <span
+                      className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold ${statusBadge.className}`}
+                    >
+                      {statusBadge.label}
+                    </span>
                   </td>
                 </tr>
               );
@@ -243,4 +307,38 @@ export function TopSupportersPage() {
       </section>
     </div>
   );
+}
+
+function describeRetentionSubtitle(filter: RetentionFilter): string {
+  switch (filter) {
+    case "active":
+      return `bought within ${SPENDER_RETENTION_ACTIVE_DAYS} days`;
+    case "cooling":
+      return `quiet ${SPENDER_RETENTION_ACTIVE_DAYS}–${SPENDER_RETENTION_INACTIVE_DAYS} days`;
+    case "inactive":
+      return `quiet > ${SPENDER_RETENTION_INACTIVE_DAYS} days`;
+    case "needs_reactivation":
+      return `high-value, quiet > ${SPENDER_RETENTION_INACTIVE_DAYS} days`;
+    default:
+      return "";
+  }
+}
+
+function emptyStateMessage(filter: RetentionFilter): string {
+  if (filter === "all") return "No supporters found for this period.";
+  if (filter === "needs_reactivation") return "No high-value supporters have gone quiet — nothing to reactivate.";
+  return `No supporters in the "${RETENTION_FILTERS.find((f) => f.key === filter)?.label ?? filter}" segment.`;
+}
+
+function TrendCell({ deltaPct }: { deltaPct: number | null }) {
+  if (deltaPct === null) {
+    return <span className="text-text-muted">—</span>;
+  }
+  const { text, direction } = formatDelta(deltaPct);
+  const className = direction === "up"
+    ? "text-green"
+    : direction === "down"
+      ? "text-danger"
+      : "text-text-muted";
+  return <span className={`tabular-nums text-sm ${className}`}>{text}</span>;
 }

@@ -42,6 +42,7 @@ export function CredentialsModal({
         platform: connection.platform,
         values,
         hadStoredProxy,
+        initialStoredProxy: hadStoredProxy ? { url: connection.proxyUrl!, hasAuth: connection.proxyHasAuth } : null,
       }));
       toast.success("Credentials updated");
       onClose();

@@ -5,6 +5,7 @@ import net, { type Server as NetServer, type Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  assertProxyTargetAllowed,
   buildProxyDispatcherCacheKey,
   buildProxyEgressKey,
   buildSyncPageExecuteGroupId,
@@ -334,6 +335,13 @@ describe("shared http client helpers", () => {
     expect(key).toContain("socks5://127.0.0.1:1080#");
     expect(key).not.toContain("proxy-user");
     expect(key).not.toContain("proxy-pass");
+  });
+
+  it("rejects proxy targets that point at local or private networks", () => {
+    expect(() => assertProxyTargetAllowed({ url: "http://127.0.0.1:8080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://localhost:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "http://192.168.1.10:8080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "http://proxy.example:8080" })).not.toThrow();
   });
 
   it("builds canonical egress keys and queue group ids", () => {

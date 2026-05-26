@@ -807,6 +807,78 @@ describe("sync executor handlers", () => {
     expect(dbMocks.deactivatePageSubscriptionsByGeneration).not.toHaveBeenCalled();
   });
 
+  it("guards against destructive subscriber finalization on a partial non-empty first page", async () => {
+    const telemetry = createTelemetry();
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback({})),
+    };
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getSubscribersPage: vi.fn(async () => ({
+          total: 2,
+          items: [{
+            id: "sub-1",
+            subscriberId: "fan-1",
+            historyId: null,
+            subscriptionTierId: null,
+            subscriptionTierName: null,
+            subscriptionTierColor: null,
+            planId: null,
+            status: 3,
+            price: 5000,
+            renewPrice: 5000,
+            autoRenew: 1,
+            billingCycle: 30,
+            duration: 30,
+            renewDate: null,
+            createdAt: new Date("2026-03-10T00:00:00.000Z").toISOString(),
+            updatedAt: null,
+            endsAt: new Date("2026-04-09T00:00:00.000Z").toISOString(),
+          }],
+          done: true,
+          raw: {},
+        })),
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
+
+    await expect(executeSubscribersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 10,
+          label: "fansly-page",
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 5,
+      },
+      syncRunId: 100,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never)).rejects.toThrow("refusing destructive finalization");
+
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "subscribers_partial_page_guard",
+      details: {
+        providerReportedTotal: 2,
+        observedCount: 1,
+        pageCount: 1,
+      },
+    }));
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(dbMocks.deactivatePageSubscriptionsByGeneration).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+  });
+
   it("promotes followers_reconcile when follower drift is detected", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-10T01:00:00.000Z"));
@@ -966,6 +1038,81 @@ it("guards against empty first-page follower reconcile wipes when active followe
       existingActiveFollowers: 3,
     },
   }));
+  expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
+  expect(dbMocks.refreshFanPageFollowerState).not.toHaveBeenCalled();
+  expect(dbMocks.rebuildFollowerRollups).not.toHaveBeenCalled();
+  expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+});
+
+it("guards against non-empty partial follower reconcile wipes", async () => {
+  const telemetry = createTelemetry();
+  const db = {
+    transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback({})),
+  };
+  const app = {
+    db,
+    config: {
+      followerPageDelayMs: 0,
+      syncSharedRateLimitEnabled: false,
+    },
+    adapter: {
+      getFollowersPage: vi.fn(async () => ({
+        items: [{
+          id: "1000",
+          followerId: "fan-1",
+          lastSeenAt: 1_775_782_500_000,
+        }],
+        accounts: [{
+          id: "fan-1",
+          username: "fan_1",
+          displayName: "Fan 1",
+          createdAt: 1_770_000_000_000,
+          lastSeenAt: 1_775_782_500_000,
+        }],
+        done: true,
+        raw: {},
+      })),
+    },
+  } as never;
+
+  dbMocks.getCheckpoint.mockResolvedValue(null);
+  sharedMocks.refreshPageMetadata.mockResolvedValue({
+    parsed: {
+      account: {
+        followCount: 2,
+      },
+    },
+  });
+
+  await expect(executeFollowersReconcileChunk(app, {
+    pageContext: {
+      platform: "fansly",
+      page: {
+        id: 13,
+        label: "fansly-page",
+        platformAccountId: "acct-13",
+        metadata: {},
+      },
+      session: { authorization: "token" },
+      proxy: null,
+    },
+    streamState: {
+      requestSeq: 4,
+    },
+    syncRunId: 102,
+    telemetry: telemetry as never,
+    budget: new SyncChunkBudget(),
+  } as never)).rejects.toThrow("refusing destructive finalization");
+
+  expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+    code: "followers_reconcile_partial_page_guard",
+    details: {
+      sourceFollowerCount: 2,
+      observedCount: 1,
+      pageCount: 1,
+    },
+  }));
+  expect(db.transaction).not.toHaveBeenCalled();
   expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
   expect(dbMocks.refreshFanPageFollowerState).not.toHaveBeenCalled();
   expect(dbMocks.rebuildFollowerRollups).not.toHaveBeenCalled();

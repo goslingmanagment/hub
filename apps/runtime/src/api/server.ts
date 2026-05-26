@@ -145,6 +145,7 @@ import {
   unsnoozeWorkboardFanReport,
 } from "../services/workboard.ts";
 import { getWorkboardPresenceReport } from "../services/workboard-presence.ts";
+import { assertAllowedProxyTarget } from "../services/proxy-validation.ts";
 import {
   getPageConversationProfile,
   getPageFanProfile,
@@ -394,11 +395,14 @@ export async function buildApiServer(appContext: AppContext) {
     cookies: Record<string, string | undefined>;
   }) {
     if (hasValidSyncHealthMonitoringToken(request)) {
-      return;
+      return {};
     }
 
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
+    return {
+      pageIds: pageScopeFor(principal),
+    };
   }
 
   async function requireOpenApiDocsOwner(request: {
@@ -496,8 +500,10 @@ export async function buildApiServer(appContext: AppContext) {
   server.get("/api/v1/health/sync", {
     schema: routeSchemas.healthSync,
   }, async (request, reply) => {
-    await requireSyncHealthAccess(request);
-    const health = await getPublicSyncHealth(appContext);
+    const access = await requireSyncHealthAccess(request);
+    const health = await getPublicSyncHealth(appContext, {
+      pageIds: access.pageIds,
+    });
     reply.code(health.statusCode as 200 | 503);
     return health.body;
   });
@@ -1999,6 +2005,7 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
     const { request: undiciRequest } = await import("undici");
     const proxy = normalizeProxyConfig(request.body.proxy);
+    await assertAllowedProxyTarget(proxy);
     const dispatcher = createProxyRequestDispatcher(proxy);
     try {
       const { statusCode, body: responseBody } = await undiciRequest(

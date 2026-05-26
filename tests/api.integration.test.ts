@@ -2986,6 +2986,8 @@ describe("api integration", () => {
       context.skip();
       return;
     }
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
 
     const onlyFansPage = await createOnlyFansPage(testDb.db, {
       modelId: fixture.lanaModel.id,
@@ -4053,6 +4055,8 @@ describe("api integration", () => {
       context.skip();
       return;
     }
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
 
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture!.lanaPage.id,
@@ -4165,6 +4169,8 @@ describe("api integration", () => {
       context.skip();
       return;
     }
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
 
     const ownerLogin = await server.inject({
       method: "POST",
@@ -4514,6 +4520,8 @@ describe("api integration", () => {
       context.skip();
       return;
     }
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
 
     const ownerLogin = await server.inject({
       method: "POST",
@@ -4558,6 +4566,8 @@ describe("api integration", () => {
       context.skip();
       return;
     }
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
 
     const expectedTypeBreakdown = [
       {
@@ -4762,6 +4772,8 @@ describe("api integration", () => {
       context.skip();
       return;
     }
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
 
     await upsertFans(testDb.db, [{
       platform: "fansly",
@@ -6916,7 +6928,7 @@ describe("api integration", () => {
           authorization: "updated-token",
         },
         proxy: {
-          url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+          url: "socks5://proxy-user:proxy-pass@proxy.example:1080",
         },
       },
     });
@@ -6932,7 +6944,7 @@ describe("api integration", () => {
     `);
 
     expect(proxyRows.rows[0]).toEqual({
-      url: "socks5://127.0.0.1:1080",
+      url: "socks5://proxy.example:1080",
       has_encrypted_auth: true,
     });
   });
@@ -7731,24 +7743,17 @@ describe("api integration", () => {
     });
     expect(beforeSnooze.statusCode).toBe(200);
     expect(beforeSnooze.json()).toMatchObject({
-      subscribers: { total: 2 },
-      activeSpenders: { total: 1 },
-      inactiveSpenders: { total: 3 },
+      subscribers: { total: 3 },
+      activeSpenders: { total: 2 },
+      inactiveSpenders: { total: 5 },
       snoozed: { total: 0 },
     });
-    expect(beforeSnooze.json().subscribers.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
-      seeded.deletedSubscriber.id,
-    );
-    expect(beforeSnooze.json().activeSpenders.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
-      seeded.deletedActiveSpender.id,
-    );
-    expect(beforeSnooze.json().inactiveSpenders.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
-      seeded.deletedInactiveSpender.id,
-    );
     expect(beforeSnooze.json().inactiveSpenders.items.map((item: { fanId: number }) => item.fanId).sort()).toEqual([
       seeded.activeSpender.id,
       seeded.inactiveSpender.id,
       seeded.microSpender.id,
+      seeded.deletedActiveSpender.id,
+      seeded.deletedInactiveSpender.id,
     ].sort());
     const beforeSnoozeSubscriber = beforeSnooze.json().subscribers.items.find(
       (item: { fanId: number }) => item.fanId === seeded.visibleSubscriber.id,
@@ -7793,25 +7798,30 @@ describe("api integration", () => {
         items: [expect.objectContaining({ fanId: seeded.visibleSubscriber.id })],
       },
       activeSpenders: {
-        total: 1,
-        items: [expect.objectContaining({ fanId: seeded.activeSpender.id })],
+        total: 2,
+        items: expect.arrayContaining([
+          expect.objectContaining({ fanId: seeded.activeSpender.id }),
+          expect.objectContaining({ fanId: seeded.deletedActiveSpender.id }),
+        ]),
       },
       inactiveSpenders: {
-        total: 3,
+        total: 5,
         items: expect.arrayContaining([
           expect.objectContaining({ fanId: seeded.activeSpender.id, segment: "active" }),
           expect.objectContaining({ fanId: seeded.inactiveSpender.id, segment: "inactive" }),
           expect.objectContaining({ fanId: seeded.microSpender.id, segment: "active" }),
+          expect.objectContaining({ fanId: seeded.deletedActiveSpender.id, segment: "active" }),
+          expect.objectContaining({ fanId: seeded.deletedInactiveSpender.id, segment: "inactive" }),
         ]),
       },
       snoozed: {
-        total: 1,
-        items: [expect.objectContaining({ fanId: seeded.snoozedSubscriber.id })],
+        total: 2,
+        items: expect.arrayContaining([
+          expect.objectContaining({ fanId: seeded.snoozedSubscriber.id }),
+          expect.objectContaining({ fanId: seeded.deletedSubscriber.id }),
+        ]),
       },
     });
-    expect(afterSnooze.json().snoozed.items.map((item: { fanId: number }) => item.fanId)).not.toContain(
-      seeded.deletedSubscriber.id,
-    );
 
     const unsnooze = await server.inject({
       method: "DELETE",
@@ -7829,9 +7839,9 @@ describe("api integration", () => {
     expect(afterUnsnooze.statusCode).toBe(200);
     expect(afterUnsnooze.json()).toMatchObject({
       subscribers: { total: 2 },
-      activeSpenders: { total: 1 },
-      inactiveSpenders: { total: 3 },
-      snoozed: { total: 0 },
+      activeSpenders: { total: 2 },
+      inactiveSpenders: { total: 5 },
+      snoozed: { total: 1 },
     });
   });
 

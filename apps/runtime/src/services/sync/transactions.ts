@@ -226,6 +226,24 @@ function maxDate(a: Date | null, b: Date | null) {
   return a >= b ? a : b;
 }
 
+function transactionIdsForPage(items: FanslyTransactionItem[]) {
+  return items.map((item) => item.transactionId);
+}
+
+function findPageOverlap(
+  previousTransactionIds: string[] | undefined,
+  items: FanslyTransactionItem[],
+) {
+  if (!previousTransactionIds || previousTransactionIds.length === 0) {
+    return [];
+  }
+
+  const previous = new Set(previousTransactionIds);
+  return items
+    .map((item) => item.transactionId)
+    .filter((transactionId) => previous.has(transactionId));
+}
+
 async function flushFanslyDirtyRange(
   app: AppContext,
   platformAccountId: number,
@@ -935,6 +953,39 @@ async function syncTransactionsBackfill(
       providerReportedTotal ??= page.total ?? null;
 
       if (
+        providerReportedTotal !== null &&
+        page.total !== null &&
+        page.total !== providerReportedTotal
+      ) {
+        await input.telemetry.addAnomaly({
+          code: "backfill_total_changed",
+          severity: "error",
+          message: "Fansly transaction backfill total changed during an offset scan",
+          details: {
+            initialTotal: providerReportedTotal,
+            currentTotal: page.total,
+            offset: state.offset,
+            snapshotEnd: state.snapshotEnd,
+          },
+        });
+        throw new Error("Fansly transaction backfill total changed during an offset scan");
+      }
+
+      if (page.items.length === 0 && !page.done) {
+        await input.telemetry.addAnomaly({
+          code: "backfill_empty_page_before_done",
+          severity: "error",
+          message: "Fansly transaction backfill returned an empty page before completion",
+          details: {
+            total: page.total,
+            offset: state.offset,
+            snapshotEnd: state.snapshotEnd,
+          },
+        });
+        throw new Error("Fansly transaction backfill returned an empty page before completion");
+      }
+
+      if (
         state.transactionPages === 0 &&
         state.offset === 0 &&
         page.items.length === 0 &&
@@ -950,6 +1001,22 @@ async function syncTransactionsBackfill(
           },
         });
         throw new Error("Fansly transaction backfill returned an empty first page despite a non-zero total");
+      }
+
+      const overlappingIds = findPageOverlap(state.lastPageTransactionIds, page.items);
+      if (overlappingIds.length > 0) {
+        await input.telemetry.addAnomaly({
+          code: "backfill_offset_overlap",
+          severity: "error",
+          message: "Fansly transaction backfill saw overlapping rows between offset pages",
+          details: {
+            offset: state.offset,
+            overlappingTransactionIds: overlappingIds.slice(0, 10),
+            overlapCount: overlappingIds.length,
+            snapshotEnd: state.snapshotEnd,
+          },
+        });
+        throw new Error("Fansly transaction backfill saw overlapping rows between offset pages");
       }
 
       await persistRawPayload(app.db, {
@@ -987,6 +1054,7 @@ async function syncTransactionsBackfill(
         transactionPages: state.transactionPages + 1,
         processedTransactions: state.processedTransactions + page.items.length,
         newestSeenAt: isoDateOrNull(newestSeenAt),
+        lastPageTransactionIds: transactionIdsForPage(page.items),
         dirtyFrom: isoDateOrNull(minDate(
           state.dirtyFrom ? new Date(state.dirtyFrom) : null,
           pageOldestSeenAt,

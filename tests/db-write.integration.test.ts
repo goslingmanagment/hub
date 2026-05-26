@@ -11,6 +11,7 @@ import {
   deleteProxyConfig,
   deleteTransactionsMissingFromWindow,
   getFollowersForPage,
+  listFollowersForPage,
   recalculateFanPageSpend,
   refreshFanPageFollowerState,
   rebuildRevenueRollups,
@@ -20,7 +21,9 @@ import {
   updatePageMetadata,
   upsertCheckpoint,
   upsertFanPage,
+  upsertFanPageExternalPresences,
   upsertFans,
+  upsertPageDmConversation,
   upsertPageTopSpenders,
   upsertPageFollow,
   upsertPageSubscription,
@@ -572,7 +575,7 @@ describe("db write safety", () => {
     });
 
     await setPageProxy(app, page.label, {
-      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+      url: "socks5://proxy-user:proxy-pass@proxy.example:1080",
     });
 
     const proxyRows = await testDb.pool.query(`
@@ -583,12 +586,12 @@ describe("db write safety", () => {
 
     expect(verifyCallCount).toBe(1);
     expect(verifiedProxy).toEqual({
-      url: "socks5://127.0.0.1:1080",
+      url: "socks5://proxy.example:1080",
       username: "proxy-user",
       password: "proxy-pass",
     });
     expect(proxyRows.rows[0]).toEqual({
-      url: "socks5://127.0.0.1:1080",
+      url: "socks5://proxy.example:1080",
       has_encrypted_auth: true,
     });
   });
@@ -1220,6 +1223,118 @@ describe("db write safety", () => {
       "2026-03-05T00:00:00.000Z",
       "2026-03-03T00:00:00.000Z",
     ]);
+  });
+
+  it("enriches active followers with subscriber, spend, DM, and presence state", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "mira",
+      name: "Mira",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "mira-main",
+    });
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-rich",
+      username: "richfan",
+      displayName: "Rich Fan",
+    }]);
+    const now = new Date();
+    const presenceAt = new Date(now.getTime() - 12 * 60 * 1000);
+    const followedAt = new Date(now.getTime() - 60 * 60 * 1000);
+    const expiresAt = new Date(now.getTime() + 3 * 86_400_000);
+    const messageAt = new Date(now.getTime() - 20 * 60 * 1000);
+
+    await upsertFanPage(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+      isFollower: true,
+      followerSince: followedAt,
+      isSubscriber: true,
+      subscriberSince: new Date(now.getTime() - 2 * 86_400_000),
+      subscriptionExpiresAt: expiresAt,
+      autoRenew: false,
+    });
+    await upsertFanPageExternalPresences(testDb.db, [{
+      fanId: fan.id,
+      platformAccountId: page.id,
+      externalPresenceAt: presenceAt,
+      externalPresenceObservedAt: now,
+    }]);
+    await upsertPageFollow(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformFollowId: "follow-rich",
+      followedAt,
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      transactionId: "tx-rich-tip",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 12_340n,
+      sourceDestinationAmountMills: 12_340n,
+      creatorNetAmountMills: 12_340n,
+      occurredAt: new Date(now.getTime() - 30 * 60 * 1000),
+    });
+    await recalculateFanPageSpend(testDb.db, page.id);
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformConversationId: "conv-rich",
+      partnerPlatformUserId: "fan-rich",
+      partnerUsername: "richfan",
+      partnerDisplayName: "Rich Fan",
+      conversationFlags: 0,
+      unreadCount: 2,
+      subscriptionTierId: null,
+      lastMessageId: "msg-rich",
+      lastUnreadMessageId: "msg-rich",
+      lastMessageAt: messageAt,
+      lastMessageSenderId: "fan-rich",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "hey are you online?",
+      lastFanMessageAt: messageAt,
+      lastModelMessageAt: null,
+      storedMessageCount: 1,
+      messageCoverageStatus: "partial_window",
+      messageBackfillComplete: false,
+      lastMessageSyncAt: messageAt,
+      isVisible: true,
+      lastSeenGeneration: 1,
+    });
+
+    const result = await listFollowersForPage(testDb.db, {
+      pageId: page.id,
+      limit: 10,
+      offset: 0,
+      activeWithinMinutes: 120,
+      dmStatus: "has_dm",
+      subscriber: true,
+    });
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]).toMatchObject({
+      platformUserId: "fan-rich",
+      isSubscriber: true,
+      autoRenew: false,
+      totalCreatorNetAmountMills: 12_340n,
+      platformConversationId: "conv-rich",
+      unreadCount: 2,
+      lastMessagePreview: "hey are you online?",
+      presenceStatus: "active_now",
+    });
+    expect(new Date(result.items[0]!.subscriptionExpiresAt!).toISOString()).toBe(expiresAt.toISOString());
+    expect(new Date(result.items[0]!.externalPresenceAt!).toISOString()).toBe(presenceAt.toISOString());
   });
 
   it("refreshes follower projection state safely when called directly", async (context) => {
