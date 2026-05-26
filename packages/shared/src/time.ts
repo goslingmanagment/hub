@@ -406,6 +406,21 @@ export function resolveBusinessDateRangeForPlatform(
   );
 }
 
+export function resolveRevenueBusinessDateRangeForPlatform(
+  platform: Platform,
+  period: Period,
+  now = new Date(),
+  custom?: { from: string; to: string },
+): BusinessDateRange {
+  const timeZone = resolveBusinessTimeZone(platform);
+  const bounds = resolveRevenuePeriodBoundsForPlatform(platform, period, now, custom);
+
+  return {
+    from: bounds.from ? toBusinessDate(bounds.from, timeZone) : null,
+    toExclusive: bounds.to ? toBusinessDate(bounds.to, timeZone) : null,
+  };
+}
+
 function resolveSpenderPeriodBounds(
   period: SpenderPeriod,
   now: Date,

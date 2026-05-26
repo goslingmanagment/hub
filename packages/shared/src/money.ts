@@ -25,14 +25,14 @@ export function millsToDecimalString(value: MoneyLike): string {
 
 export function formatUsdFromMills(value: MoneyLike): string {
   const mills = toMills(value);
-  const centsRounded = Number((mills + (mills >= 0n ? 5n : -5n)) / 10n) / 100;
+  const cents = Number(mills / 10n) / 100;
 
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(centsRounded);
+  }).format(cents);
 }
 
 export function millsToNumber(value: MoneyLike): number {

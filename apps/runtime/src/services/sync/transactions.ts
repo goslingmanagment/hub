@@ -526,7 +526,7 @@ async function syncTransactionsIncremental(
       const requestOffset = state.offset;
       const page = await app.adapter.getTransactionsPage(
         input.requestContext,
-        { after, before: snapshotEnd, limit: 100, offset: requestOffset },
+        { after, limit: 100, offset: requestOffset },
       );
 
       await persistRawPayload(app.db, {
@@ -535,7 +535,6 @@ async function syncTransactionsIncremental(
         endpoint: "earnings_transactions",
         requestParams: {
           after: after?.toISOString() ?? null,
-          before: snapshotEnd.toISOString(),
           offset: requestOffset,
           limit: 100,
         },
@@ -929,7 +928,6 @@ async function syncTransactionsBackfill(
       const page = await app.adapter.getTransactionsPage(
         input.requestContext,
         {
-          before: snapshotEnd,
           limit: 100,
           offset: state.offset,
         },
@@ -960,7 +958,6 @@ async function syncTransactionsBackfill(
         endpoint: "earnings_transactions",
         requestParams: {
           after: null,
-          before: snapshotEnd.toISOString(),
           offset: state.offset,
           limit: 100,
         },

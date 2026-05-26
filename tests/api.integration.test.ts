@@ -3144,7 +3144,7 @@ describe("api integration", () => {
   });
 
   it("uses UTC day boundaries for OnlyFans 30d revenue and rollups", async (context) => {
-    if (!testDb) {
+    if (!testDb || !server) {
       context.skip();
       return;
     }
@@ -3273,6 +3273,34 @@ describe("api integration", () => {
       {
         business_date: "2026-03-10",
         net_amount_mills: 4000n,
+      },
+    ]);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const dailyResponse = await server.inject({
+      method: "GET",
+      url: `/api/v1/pages/${onlyFansPage.label}/revenue/daily?period=30d`,
+      headers: { cookie },
+    });
+
+    expect(dailyResponse.statusCode).toBe(200);
+    expect(dailyResponse.json().series).toEqual([
+      {
+        businessDate: "2026-02-07",
+        netAmountMills: 6000,
+        transactionCount: 3,
       },
     ]);
   });

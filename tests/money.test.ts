@@ -9,6 +9,7 @@ import {
   parsePeriod,
   resolveBusinessDateRangeForPlatform,
   resolveComparisonPeriodBounds,
+  resolveRevenueBusinessDateRangeForPlatform,
   resolveSpenderBusinessDateRangeForPlatform,
   resolvePeriodBounds,
   resolveRevenueComparisonPeriodBoundsForPlatform,
@@ -19,7 +20,9 @@ describe("money helpers", () => {
   it("formats mills without floating point drift", () => {
     expect(millsToDecimalString(1234500n)).toBe("1234.500");
     expect(formatUsdFromMills(1234500n)).toBe("$1,234.50");
+    expect(formatUsdFromMills(481496n)).toBe("$481.49");
     expect(formatUsdFromMills(-5600n)).toBe("-$5.60");
+    expect(formatUsdFromMills(-5609n)).toBe("-$5.60");
   });
 
   it("converts OnlyMonster dollar amounts into mills", () => {
@@ -60,10 +63,15 @@ describe("money helpers", () => {
   it("builds OnlyFans revenue windows on UTC calendar days", () => {
     const now = new Date("2026-03-09T12:00:00.000Z");
     const thirtyDay = resolveRevenuePeriodBoundsForPlatform("onlyfans", "30d", now);
+    const thirtyDayRange = resolveRevenueBusinessDateRangeForPlatform("onlyfans", "30d", now);
     const comparison = resolveRevenueComparisonPeriodBoundsForPlatform("onlyfans", "30d", now);
 
     expect(thirtyDay.from?.toISOString()).toBe("2026-02-07T00:00:00.000Z");
     expect(thirtyDay.to?.toISOString()).toBe("2026-03-10T00:00:00.000Z");
+    expect(thirtyDayRange).toEqual({
+      from: "2026-02-07",
+      toExclusive: "2026-03-10",
+    });
     expect(comparison?.from?.toISOString()).toBe("2026-01-07T00:00:00.000Z");
     expect(comparison?.to?.toISOString()).toBe("2026-02-07T00:00:00.000Z");
   });

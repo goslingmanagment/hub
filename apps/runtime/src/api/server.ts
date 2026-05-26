@@ -48,6 +48,7 @@ import {
   normalizeProxyConfig,
   redactSensitiveText,
   resolveBusinessDateRangeForPlatform,
+  resolveRevenueBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
   toMills,
@@ -1260,7 +1261,7 @@ export async function buildApiServer(appContext: AppContext) {
     }>();
 
     for (const [platform, ids] of groupedPageIds) {
-      const range = resolveBusinessDateRangeForPlatform(
+      const range = resolveRevenueBusinessDateRangeForPlatform(
         platform,
         query.period as Period,
         new Date(),

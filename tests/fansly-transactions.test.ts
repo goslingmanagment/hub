@@ -513,17 +513,14 @@ describe("syncTransactions", () => {
       expect.anything(),
       expect.objectContaining({
         after: new Date("2026-03-07T00:00:00.000Z"),
-        before: new Date("2026-03-15T00:00:00.000Z"),
         offset: 0,
       }),
     );
-    expect(sharedMocks.persistRawPayload.mock.calls[0]?.[1]).toMatchObject({
-      requestParams: {
-        after: "2026-03-07T00:00:00.000Z",
-        before: "2026-03-15T00:00:00.000Z",
-        offset: 0,
-        limit: 100,
-      },
+    expect(getTransactionsPage.mock.calls[0]?.[1]).not.toHaveProperty("before");
+    expect(sharedMocks.persistRawPayload.mock.calls[0]?.[1].requestParams).toEqual({
+      after: "2026-03-07T00:00:00.000Z",
+      offset: 0,
+      limit: 100,
     });
 
     const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1].state;
@@ -565,10 +562,10 @@ describe("syncTransactions", () => {
       2,
       expect.anything(),
       expect.objectContaining({
-        before: new Date("2026-03-15T00:00:00.000Z"),
         offset: 1,
       }),
     );
+    expect(getTransactionsPage.mock.calls[1]?.[1]).not.toHaveProperty("before");
     expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -662,34 +659,25 @@ describe("syncTransactions", () => {
     );
   });
 
-  it("uses the same snapshot boundary when yielding and resuming Fansly backfills", async () => {
+  it("yields and resumes Fansly backfills without sending the unsupported before filter", async () => {
     dbMocks.getCheckpoint.mockResolvedValue(null);
 
     const liveRows = [
-      buildTransaction("tx-future-head", "2026-03-16T00:00:00.000Z"),
       buildTransaction("tx-1", "2026-03-10T00:00:00.000Z"),
       buildTransaction("tx-2", "2026-03-09T00:00:00.000Z"),
     ];
     const getTransactionsPage = vi.fn(async (
       _requestContext: unknown,
-      params: { before?: Date | null; offset?: number; limit?: number },
+      params: { offset?: number; limit?: number },
     ) => {
-      if (getTransactionsPage.mock.calls.length === 2) {
-        liveRows.shift();
-        liveRows.unshift(buildTransaction("tx-new-future-head", "2026-03-16T01:00:00.000Z"));
-      }
-
       const offset = params.offset ?? 0;
-      const visibleRows = params.before
-        ? liveRows.filter((row) => row.createdAt < params.before!.getTime())
-        : liveRows;
+      const visibleRows = liveRows;
       const items = visibleRows[offset] ? [visibleRows[offset]] : [];
       return {
         items,
         total: visibleRows.length,
         done: offset + items.length >= visibleRows.length,
         raw: {
-          before: params.before?.toISOString() ?? null,
           offset,
         },
       };
@@ -734,17 +722,14 @@ describe("syncTransactions", () => {
       1,
       expect.anything(),
       expect.objectContaining({
-        before: new Date("2026-03-15T00:00:00.000Z"),
         offset: 0,
       }),
     );
-    expect(sharedMocks.persistRawPayload.mock.calls[0]?.[1]).toMatchObject({
-      requestParams: {
-        after: null,
-        before: "2026-03-15T00:00:00.000Z",
-        offset: 0,
-        limit: 100,
-      },
+    expect(getTransactionsPage.mock.calls[0]?.[1]).not.toHaveProperty("before");
+    expect(sharedMocks.persistRawPayload.mock.calls[0]?.[1].requestParams).toEqual({
+      after: null,
+      offset: 0,
+      limit: 100,
     });
 
     const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1].state;
@@ -784,10 +769,10 @@ describe("syncTransactions", () => {
       2,
       expect.anything(),
       expect.objectContaining({
-        before: new Date("2026-03-15T00:00:00.000Z"),
         offset: 1,
       }),
     );
+    expect(getTransactionsPage.mock.calls[1]?.[1]).not.toHaveProperty("before");
     expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual([
       "tx-1",
       "tx-2",
