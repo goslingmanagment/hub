@@ -925,7 +925,6 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.spenders,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     return getSpenderList(appContext, principal, request.query);
   });
 
