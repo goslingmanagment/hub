@@ -14730,6 +14730,63 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "subscription": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "active",
+                                      "expired",
+                                      "never"
+                                    ]
+                                  },
+                                  "expiresAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "autoRenew": {
+                                    "anyOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "autoRenewOffDetectedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "status",
+                                  "expiresAt",
+                                  "autoRenew",
+                                  "autoRenewOffDetectedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -14738,7 +14795,8 @@
                           "fan",
                           "metrics",
                           "typeBreakdown",
-                          "lifetimeLastTransactionAt"
+                          "lifetimeLastTransactionAt",
+                          "subscription"
                         ],
                         "additionalProperties": false
                       }

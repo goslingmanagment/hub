@@ -987,6 +987,13 @@ export const spenderSeriesResponseSchema = z.object({
   items: z.array(spenderSeriesBucketSchema),
 });
 
+const spenderSubscriptionSchema = z.object({
+  status: z.enum(["active", "expired", "never"]),
+  expiresAt: isoTimestamp.nullable(),
+  autoRenew: z.boolean().nullable(),
+  autoRenewOffDetectedAt: isoTimestamp.nullable(),
+});
+
 export const spenderBatchItemSchema = z.object({
   requestedFan: fanLookupParamsSchema,
   found: z.boolean(),
@@ -994,6 +1001,7 @@ export const spenderBatchItemSchema = z.object({
   metrics: spenderMetricsSchema.nullable(),
   typeBreakdown: z.array(spenderTypeBreakdownItemSchema).nullable(),
   lifetimeLastTransactionAt: isoTimestamp.nullable(),
+  subscription: spenderSubscriptionSchema.nullable(),
 });
 
 export const spenderBatchResponseSchema = z.object({

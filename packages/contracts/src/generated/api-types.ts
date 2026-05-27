@@ -4396,6 +4396,13 @@ export interface paths {
                                     transactionCount: number;
                                 }[] | null;
                                 lifetimeLastTransactionAt: string | null;
+                                subscription: {
+                                    /** @enum {string} */
+                                    status: "active" | "expired" | "never";
+                                    expiresAt: string | null;
+                                    autoRenew: boolean | null;
+                                    autoRenewOffDetectedAt: string | null;
+                                } | null;
                             }[];
                         };
                     };

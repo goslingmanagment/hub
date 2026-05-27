@@ -5110,6 +5110,7 @@ describe("api integration", () => {
         metrics: null,
         typeBreakdown: null,
         lifetimeLastTransactionAt: null,
+        subscription: null,
       },
     ]);
 

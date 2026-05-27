@@ -1535,6 +1535,16 @@ export async function getVisibleFanPageMemberships(
     subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
     autoRenew: fanPages.autoRenew,
     autoRenewOffDetectedAt: fanPages.autoRenewOffDetectedAt,
+    subscriptionStatus: sql<"active" | "expired" | "never">`case
+      when ${fanPages.isSubscriber} then 'active'
+      when exists (
+        select 1
+        from ${pageSubscriptions}
+        where ${pageSubscriptions.platformAccountId} = ${fanPages.platformAccountId}
+          and ${pageSubscriptions.fanId} = ${fanPages.fanId}
+      ) then 'expired'
+      else 'never'
+    end`,
     grossAmountMills: sql<bigint>`coalesce(${spenderLifetimePage.grossAmountMills}, 0)::bigint`,
     creatorNetAmountMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,

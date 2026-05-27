@@ -1163,6 +1163,27 @@ export async function getSpenderBatch(
     }
   }
 
+  const subscriptionByFanId = new Map<number, {
+    status: "active" | "expired" | "never";
+    expiresAt: string | null;
+    autoRenew: boolean | null;
+    autoRenewOffDetectedAt: string | null;
+  }>();
+  if (fanIds.length > 0 && scope.pageIds.length === 1) {
+    const memberships = await getVisibleFanPageMemberships(app.db, {
+      fanIds,
+      pageIds: scope.pageIds,
+    });
+    for (const m of memberships) {
+      subscriptionByFanId.set(m.fanId, {
+        status: m.subscriptionStatus,
+        expiresAt: serializeTimestamp(m.subscriptionExpiresAt),
+        autoRenew: m.autoRenew,
+        autoRenewOffDetectedAt: serializeTimestamp(m.autoRenewOffDetectedAt),
+      });
+    }
+  }
+
   return {
     scope: scope.responseScope,
     period: toPeriodMetadata(
@@ -1181,6 +1202,7 @@ export async function getSpenderBatch(
           metrics: null,
           typeBreakdown: null,
           lifetimeLastTransactionAt: null,
+          subscription: null,
         };
       }
 
@@ -1202,6 +1224,7 @@ export async function getSpenderBatch(
         },
         typeBreakdown: typeBreakdownByFanId.get(fan.fanId) ?? [],
         lifetimeLastTransactionAt: serializeTimestamp(scopeLifetime?.lastTransactionAt),
+        subscription: subscriptionByFanId.get(fan.fanId) ?? null,
       };
     }),
   };
