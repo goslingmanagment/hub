@@ -3878,6 +3878,16 @@
                               }
                             ]
                           },
+                          "autoRenewOffDetectedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "subscriptionTierName": {
                             "anyOf": [
                               {
@@ -3922,6 +3932,7 @@
                           "displayName",
                           "endsAt",
                           "autoRenew",
+                          "autoRenewOffDetectedAt",
                           "subscriptionTierName",
                           "startedAt",
                           "totalSpentCents",
@@ -4676,6 +4687,16 @@
                               }
                             ]
                           },
+                          "autoRenewOffDetectedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "totalSpentCents": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -4814,6 +4835,7 @@
                           "subscriberSince",
                           "subscriptionExpiresAt",
                           "autoRenew",
+                          "autoRenewOffDetectedAt",
                           "totalSpentCents",
                           "lastTransactionAt",
                           "dm",
@@ -5556,6 +5578,16 @@
                               }
                             ]
                           },
+                          "autoRenewOffDetectedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "lastTransactionAt": {
                             "anyOf": [
                               {
@@ -5580,6 +5612,7 @@
                           "subscriberSince",
                           "subscriptionExpiresAt",
                           "autoRenew",
+                          "autoRenewOffDetectedAt",
                           "lastTransactionAt"
                         ],
                         "additionalProperties": false
@@ -7178,6 +7211,16 @@
                             }
                           ]
                         },
+                        "autoRenewOffDetectedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "lastTransactionAt": {
                           "anyOf": [
                             {
@@ -7278,6 +7321,7 @@
                         "subscriberSince",
                         "subscriptionExpiresAt",
                         "autoRenew",
+                        "autoRenewOffDetectedAt",
                         "lastTransactionAt",
                         "notes",
                         "summaries"
@@ -9721,6 +9765,16 @@
                                       }
                                     ]
                                   },
+                                  "autoRenewOffDetectedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "tierName": {
                                     "anyOf": [
                                       {
@@ -9745,6 +9799,7 @@
                                 "required": [
                                   "expiresAt",
                                   "autoRenew",
+                                  "autoRenewOffDetectedAt",
                                   "tierName",
                                   "subscriberSince"
                                 ],
@@ -11493,6 +11548,16 @@
                               }
                             ]
                           },
+                          "autoRenewOffDetectedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "lastTransactionAt": {
                             "anyOf": [
                               {
@@ -11593,6 +11658,7 @@
                           "subscriberSince",
                           "subscriptionExpiresAt",
                           "autoRenew",
+                          "autoRenewOffDetectedAt",
                           "lastTransactionAt",
                           "notes",
                           "summaries"
@@ -13319,6 +13385,16 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "autoRenewOffDetectedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -13335,7 +13411,8 @@
                           "isSubscriber",
                           "subscriberSince",
                           "subscriptionExpiresAt",
-                          "autoRenew"
+                          "autoRenew",
+                          "autoRenewOffDetectedAt"
                         ],
                         "additionalProperties": false
                       }
@@ -15152,6 +15229,16 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "autoRenewOffDetectedAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -15164,7 +15251,8 @@
                                 "isSubscriber",
                                 "subscriberSince",
                                 "subscriptionExpiresAt",
-                                "autoRenew"
+                                "autoRenew",
+                                "autoRenewOffDetectedAt"
                               ],
                               "additionalProperties": false
                             }

@@ -603,6 +603,7 @@ export const subscriberItemSchema = z.object({
   displayName: z.string().nullable(),
   endsAt: isoTimestamp.nullable(),
   autoRenew: z.boolean().nullable(),
+  autoRenewOffDetectedAt: isoTimestamp.nullable(),
   subscriptionTierName: z.string().nullable(),
   startedAt: isoTimestamp.nullable(),
   totalSpentCents: z.number().int(),
@@ -638,6 +639,7 @@ export const followerItemSchema = z.object({
   subscriberSince: isoTimestamp.nullable(),
   subscriptionExpiresAt: isoTimestamp.nullable(),
   autoRenew: z.boolean().nullable(),
+  autoRenewOffDetectedAt: isoTimestamp.nullable(),
   totalSpentCents: z.number().int(),
   lastTransactionAt: isoTimestamp.nullable(),
   dm: z.object({
@@ -688,6 +690,7 @@ export const fanListItemSchema = z.object({
   subscriberSince: isoTimestamp.nullable(),
   subscriptionExpiresAt: isoTimestamp.nullable(),
   autoRenew: z.boolean().nullable(),
+  autoRenewOffDetectedAt: isoTimestamp.nullable(),
   lastTransactionAt: isoTimestamp.nullable(),
 });
 
@@ -765,6 +768,7 @@ const fanPageContextSchema = z.object({
   subscriberSince: isoTimestamp.nullable(),
   subscriptionExpiresAt: isoTimestamp.nullable(),
   autoRenew: z.boolean().nullable(),
+  autoRenewOffDetectedAt: isoTimestamp.nullable(),
   lastTransactionAt: isoTimestamp.nullable(),
   notes: z.array(fanNoteSchema),
   summaries: z.array(fanSummarySchema),
@@ -950,6 +954,7 @@ const spenderPageBreakdownSchema = z.object({
   subscriberSince: isoTimestamp.nullable(),
   subscriptionExpiresAt: isoTimestamp.nullable(),
   autoRenew: z.boolean().nullable(),
+  autoRenewOffDetectedAt: isoTimestamp.nullable(),
 });
 
 const spenderTypeBreakdownItemSchema = z.object({
@@ -1008,6 +1013,7 @@ const fanSearchPageMembershipSchema = z.object({
   subscriberSince: isoTimestamp.nullable(),
   subscriptionExpiresAt: isoTimestamp.nullable(),
   autoRenew: z.boolean().nullable(),
+  autoRenewOffDetectedAt: isoTimestamp.nullable(),
 });
 
 export const fansSearchItemSchema = z.object({
@@ -1120,6 +1126,7 @@ const workboardSubscriberItemSchema = z.object({
   subscription: z.object({
     expiresAt: isoTimestamp,
     autoRenew: z.boolean().nullable(),
+    autoRenewOffDetectedAt: isoTimestamp.nullable(),
     tierName: z.string().nullable(),
     subscriberSince: isoTimestamp.nullable(),
   }),

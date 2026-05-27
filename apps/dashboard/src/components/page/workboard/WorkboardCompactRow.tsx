@@ -93,7 +93,7 @@ export function WorkboardCompactRow({
         {vm.kind === "subscriber" ? (
           vm.autoRenew !== null && (
             <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold ${vm.autoRenew ? "bg-green/10 text-green" : "bg-warning/10 text-warning"}`}>
-              {vm.autoRenew ? "Да" : "Нет"}
+              {vm.autoRenew ? "Да" : "Откл."}
             </span>
           )
         ) : (

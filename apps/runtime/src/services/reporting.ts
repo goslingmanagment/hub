@@ -638,6 +638,7 @@ export async function getPageSubscribersReport(
       displayName: row.displayName,
       endsAt: serializeTimestamp(row.endsAt),
       autoRenew: row.autoRenew,
+      autoRenewOffDetectedAt: serializeTimestamp(row.autoRenewOffDetectedAt),
       subscriptionTierName: row.subscriptionTierName,
       startedAt: serializeTimestamp(row.sourceCreatedAt),
       totalSpentCents: millsToRoundedCents(row.totalCreatorNetAmountMills),
@@ -702,6 +703,7 @@ export async function getPageFollowersReport(
       subscriberSince: serializeTimestamp(row.subscriberSince),
       subscriptionExpiresAt: serializeTimestamp(row.subscriptionExpiresAt),
       autoRenew: row.autoRenew,
+      autoRenewOffDetectedAt: serializeTimestamp(row.autoRenewOffDetectedAt),
       totalSpentCents: millsToRoundedCents(row.totalCreatorNetAmountMills),
       lastTransactionAt: serializeTimestamp(row.lastTransactionAt),
       dm: {
@@ -777,6 +779,7 @@ export async function getPageFansReport(
       subscriberSince: serializeTimestamp(row.subscriberSince),
       subscriptionExpiresAt: serializeTimestamp(row.subscriptionExpiresAt),
       autoRenew: row.autoRenew,
+      autoRenewOffDetectedAt: serializeTimestamp(row.autoRenewOffDetectedAt),
       lastTransactionAt: serializeTimestamp(row.lastTransactionAt),
     })),
     limit: input.limit,
@@ -877,6 +880,7 @@ export async function getPageFanDetailReport(
       subscriberSince: serializeTimestamp(fan.subscriberSince),
       subscriptionExpiresAt: serializeTimestamp(fan.subscriptionExpiresAt),
       autoRenew: fan.autoRenew,
+      autoRenewOffDetectedAt: serializeTimestamp(fan.autoRenewOffDetectedAt),
       lastTransactionAt: serializeTimestamp(fan.lastTransactionAt),
       notes: notes.map((row) => ({
         id: row.id,
@@ -954,6 +958,7 @@ export async function getCrossPageFanDetailReport(
       subscriberSince: serializeTimestamp(page.subscriberSince),
       subscriptionExpiresAt: serializeTimestamp(page.subscriptionExpiresAt),
       autoRenew: page.autoRenew,
+      autoRenewOffDetectedAt: serializeTimestamp(page.autoRenewOffDetectedAt),
       lastTransactionAt: serializeTimestamp(page.lastTransactionAt),
       notes: (notesByPage.get(page.pageId) ?? []).map((row) => ({
         id: row.id,

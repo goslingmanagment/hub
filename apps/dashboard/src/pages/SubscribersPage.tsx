@@ -168,7 +168,14 @@ export function SubscribersPage() {
                       <span className="text-green font-medium">On</span>
                     )}
                     {sub.autoRenew === false && (
-                      <span className="text-danger font-medium">Off</span>
+                      <span className="inline-flex flex-col">
+                        <span className="font-medium text-danger">Off</span>
+                        {sub.autoRenewOffDetectedAt && (
+                          <span className="text-[11px] text-warning-dark">
+                            detected {formatDate(sub.autoRenewOffDetectedAt, { includeYear: true })}
+                          </span>
+                        )}
+                      </span>
                     )}
                     {sub.autoRenew == null && (
                       <span className="text-text-muted">&mdash;</span>

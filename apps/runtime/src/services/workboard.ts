@@ -136,6 +136,7 @@ export async function getWorkboardReport(
         subscription: {
           expiresAt: new Date(row.subscriptionExpiresAt).toISOString(),
           autoRenew: row.autoRenew,
+          autoRenewOffDetectedAt: serializeTimestamp(row.autoRenewOffDetectedAt),
           tierName: row.subscriptionTierName,
           subscriberSince: serializeTimestamp(row.subscriberSince),
         },

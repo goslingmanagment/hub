@@ -220,6 +220,7 @@ describe("WorkboardPage", () => {
             subscription: {
               expiresAt: "2026-04-05T12:00:00.000Z",
               autoRenew: false,
+              autoRenewOffDetectedAt: "2026-03-20T12:00:00.000Z",
               tierName: "VIP",
               subscriberSince: "2026-03-01T12:00:00.000Z",
             },
@@ -343,6 +344,7 @@ describe("WorkboardPage", () => {
             subscription: {
               expiresAt: "2026-04-05T12:00:00.000Z",
               autoRenew: false,
+              autoRenewOffDetectedAt: "2026-03-20T12:00:00.000Z",
               tierName: "VIP",
               subscriberSince: "2026-03-01T12:00:00.000Z",
             },

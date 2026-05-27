@@ -1534,6 +1534,7 @@ export async function getVisibleFanPageMemberships(
     subscriberSince: fanPages.subscriberSince,
     subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
     autoRenew: fanPages.autoRenew,
+    autoRenewOffDetectedAt: fanPages.autoRenewOffDetectedAt,
     grossAmountMills: sql<bigint>`coalesce(${spenderLifetimePage.grossAmountMills}, 0)::bigint`,
     creatorNetAmountMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,

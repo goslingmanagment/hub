@@ -6578,6 +6578,7 @@ describe("api integration", () => {
     expect(subscriberNoRenew.json().items).toEqual([
       expect.objectContaining({
         platformUserId: "fan-202",
+        autoRenewOffDetectedAt: expect.any(String),
       }),
     ]);
 

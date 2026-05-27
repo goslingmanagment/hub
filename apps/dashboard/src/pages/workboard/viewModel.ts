@@ -49,6 +49,7 @@ export interface WorkboardSubscriberVm extends WorkboardBaseVm {
   expiryLabel: string;
   expiryRelativeLabel: string;
   autoRenew: boolean | null;
+  autoRenewOffDetectedLabel: string | null;
   tierName: string | null;
   tierShortName: string | null;
 }
@@ -114,6 +115,9 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
     expiryLabel: formatDate(item.subscription.expiresAt),
     expiryRelativeLabel: `через ${daysRemaining(item.subscription.expiresAt)}д`,
     autoRenew: item.subscription.autoRenew,
+    autoRenewOffDetectedLabel: item.subscription.autoRenewOffDetectedAt
+      ? formatDate(item.subscription.autoRenewOffDetectedAt, { includeYear: true })
+      : null,
     tierName: item.subscription.tierName,
     tierShortName: item.subscription.tierName
       ? item.subscription.tierName.replace(/\s*\([^)]*\)\s*/g, " ").trim()

@@ -417,6 +417,7 @@ export async function listSubscribersForPage(
     platformSubscriptionId: pageSubscriptions.platformSubscriptionId,
     endsAt: pageSubscriptions.endsAt,
     autoRenew: pageSubscriptions.autoRenew,
+    autoRenewOffDetectedAt: pageSubscriptions.autoRenewOffDetectedAt,
     subscriptionTierName: pageSubscriptions.subscriptionTierName,
     sourceCreatedAt: pageSubscriptions.sourceCreatedAt,
     platformUserId: fans.platformUserId,
@@ -599,6 +600,7 @@ export async function listFollowersForPage(
     subscriberSince: Date | null;
     subscriptionExpiresAt: Date | null;
     autoRenew: boolean | null;
+    autoRenewOffDetectedAt: Date | null;
     totalCreatorNetAmountMills: bigint;
     lastTransactionAt: Date | null;
     platformConversationId: string | null;
@@ -621,6 +623,7 @@ export async function listFollowersForPage(
            ${fanPages.subscriberSince} as "subscriberSince",
            ${fanPages.subscriptionExpiresAt} as "subscriptionExpiresAt",
            ${fanPages.autoRenew} as "autoRenew",
+           ${fanPages.autoRenewOffDetectedAt} as "autoRenewOffDetectedAt",
            coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint as "totalCreatorNetAmountMills",
            ${spenderLifetimePage.lastTransactionAt} as "lastTransactionAt",
            dm.platform_conversation_id as "platformConversationId",
@@ -748,6 +751,7 @@ export async function listFansForPage(
     subscriberSince: fanPages.subscriberSince,
     subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
     autoRenew: fanPages.autoRenew,
+    autoRenewOffDetectedAt: fanPages.autoRenewOffDetectedAt,
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
@@ -852,6 +856,7 @@ export async function findFanOnPage(db: Database, pageId: number, platformUserId
     subscriberSince: fanPages.subscriberSince,
     subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
     autoRenew: fanPages.autoRenew,
+    autoRenewOffDetectedAt: fanPages.autoRenewOffDetectedAt,
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
@@ -906,6 +911,7 @@ export async function listFanPageContexts(
     subscriberSince: fanPages.subscriberSince,
     subscriptionExpiresAt: fanPages.subscriptionExpiresAt,
     autoRenew: fanPages.autoRenew,
+    autoRenewOffDetectedAt: fanPages.autoRenewOffDetectedAt,
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))

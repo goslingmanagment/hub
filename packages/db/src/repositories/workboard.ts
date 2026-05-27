@@ -173,6 +173,7 @@ function subscribersBaseQuery(platformAccountId: number, now: Date) {
              f.display_name as display_name,
              fp.subscription_expires_at as subscription_expires_at,
              fp.auto_renew as auto_renew,
+             fp.auto_renew_off_detected_at as auto_renew_off_detected_at,
              fp.subscriber_since as subscriber_since,
              cs.subscription_tier_name as subscription_tier_name,
              coalesce(slp.creator_net_amount_mills, 0)::bigint as creator_net_amount_mills,
@@ -392,6 +393,7 @@ export interface WorkboardSubscriberRow {
   messageSyncEligibility: MessageSyncEligibility;
   subscriptionExpiresAt: Date;
   autoRenew: boolean | null;
+  autoRenewOffDetectedAt: Date | null;
   subscriberSince: Date | null;
   subscriptionTierName: string | null;
   lastTransactionAt: Date | null;
@@ -426,6 +428,7 @@ export async function listWorkboardSubscribers(
     conversationMetadata: unknown;
     subscriptionExpiresAt: TimestampValue;
     autoRenew: boolean | null;
+    autoRenewOffDetectedAt: TimestampValue;
     subscriberSince: TimestampValue;
     subscriptionTierName: string | null;
     lastTransactionAt: TimestampValue;
@@ -460,6 +463,7 @@ export async function listWorkboardSubscribers(
            conversation_metadata as "conversationMetadata",
            subscription_expires_at as "subscriptionExpiresAt",
            auto_renew as "autoRenew",
+           auto_renew_off_detected_at as "autoRenewOffDetectedAt",
            subscriber_since as "subscriberSince",
            subscription_tier_name as "subscriptionTierName",
            last_transaction_at as "lastTransactionAt"
@@ -501,6 +505,7 @@ export async function listWorkboardSubscribers(
     }),
     subscriptionExpiresAt: requireTimestamp(row.subscriptionExpiresAt, "subscriptionExpiresAt"),
     autoRenew: row.autoRenew,
+    autoRenewOffDetectedAt: parseTimestamp(row.autoRenewOffDetectedAt),
     subscriberSince: parseTimestamp(row.subscriberSince),
     subscriptionTierName: row.subscriptionTierName,
     lastTransactionAt: parseTimestamp(row.lastTransactionAt),

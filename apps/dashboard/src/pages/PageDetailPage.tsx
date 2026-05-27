@@ -490,7 +490,14 @@ function PageSubscribersSection({
                     <span className="text-green font-medium">On</span>
                   )}
                   {item.autoRenew === false && (
-                    <span className="text-danger font-medium">Off</span>
+                    <span className="inline-flex flex-col">
+                      <span className="font-medium text-danger">Off</span>
+                      {item.autoRenewOffDetectedAt && (
+                        <span className="text-[11px] text-warning-dark">
+                          detected {formatDate(item.autoRenewOffDetectedAt, { includeYear: true })}
+                        </span>
+                      )}
+                    </span>
                   )}
                   {item.autoRenew == null && (
                     <span className="text-text-muted">&mdash;</span>

@@ -285,6 +285,11 @@ export function FanProfilePage() {
                 }`}>
                   {page.autoRenew === true ? "On" : page.autoRenew === false ? "Off" : "Unknown"}
                 </div>
+                {page.autoRenew === false && page.autoRenewOffDetectedAt && (
+                  <div className="text-xs text-warning-dark">
+                    Detected {formatDate(page.autoRenewOffDetectedAt, { includeYear: true })}
+                  </div>
+                )}
               </div>
             </div>
             {page.subscriberSince && (

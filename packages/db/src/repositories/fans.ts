@@ -192,6 +192,7 @@ export interface UpsertFanPageInput {
   subscriberSince?: Date | null;
   subscriptionExpiresAt?: Date | null;
   autoRenew?: boolean | null;
+  autoRenewOffDetectedAt?: Date | null;
   pageAlias?: string | null;
   pageAliasSource?: string | null;
   pageAliasSourceNoteId?: string | null;
@@ -221,6 +222,9 @@ function mergeUpsertFanPageInput(
       ? next.subscriptionExpiresAt
       : current.subscriptionExpiresAt,
     autoRenew: next.autoRenew !== undefined ? next.autoRenew : current.autoRenew,
+    autoRenewOffDetectedAt: next.autoRenewOffDetectedAt !== undefined
+      ? next.autoRenewOffDetectedAt
+      : current.autoRenewOffDetectedAt,
     pageAlias: next.pageAlias !== undefined ? next.pageAlias : current.pageAlias,
     pageAliasSource: next.pageAliasSource !== undefined
       ? next.pageAliasSource
@@ -242,6 +246,7 @@ function fanPagePresenceKey(input: UpsertFanPageInput) {
     input.subscriberSince !== undefined ? "subscriberSince" : "",
     input.subscriptionExpiresAt !== undefined ? "subscriptionExpiresAt" : "",
     input.autoRenew !== undefined ? "autoRenew" : "",
+    input.autoRenewOffDetectedAt !== undefined ? "autoRenewOffDetectedAt" : "",
     input.pageAlias !== undefined ? "pageAlias" : "",
     input.pageAliasSource !== undefined ? "pageAliasSource" : "",
     input.pageAliasSourceNoteId !== undefined ? "pageAliasSourceNoteId" : "",
@@ -286,6 +291,20 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
     if (template.autoRenew !== undefined) {
       updateSet.autoRenew = sql`excluded.auto_renew`;
     }
+    if (template.autoRenew !== undefined || template.autoRenewOffDetectedAt !== undefined) {
+      updateSet.autoRenewOffDetectedAt = sql`
+        case
+          when excluded.auto_renew is false then
+            case
+              when ${fanPages.autoRenew} is distinct from false then excluded.auto_renew_off_detected_at
+              else coalesce(${fanPages.autoRenewOffDetectedAt}, excluded.auto_renew_off_detected_at)
+            end
+          when excluded.auto_renew is true then null
+          when excluded.auto_renew_off_detected_at is not null then excluded.auto_renew_off_detected_at
+          else ${fanPages.autoRenewOffDetectedAt}
+        end
+      `;
+    }
     if (template.pageAlias !== undefined) {
       updateSet.pageAlias = sql`excluded.page_alias`;
     }
@@ -310,6 +329,9 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
         subscriberSince: input.subscriberSince ?? null,
         subscriptionExpiresAt: input.subscriptionExpiresAt ?? null,
         autoRenew: input.autoRenew ?? null,
+        autoRenewOffDetectedAt: input.autoRenewOffDetectedAt ?? (
+          input.autoRenew === false ? lastSeenAt : null
+        ),
         pageAlias: input.pageAlias ?? null,
         pageAliasSource: input.pageAliasSource ?? null,
         pageAliasSourceNoteId: input.pageAliasSourceNoteId ?? null,
@@ -327,6 +349,7 @@ export async function upsertFanPage(
   db: Database,
   input: UpsertFanPageInput,
 ) {
+  const lastSeenAt = new Date();
   const patch = {
     isFollower: input.isFollower ?? false,
     followerSince: input.followerSince ?? null,
@@ -334,11 +357,14 @@ export async function upsertFanPage(
     subscriberSince: input.subscriberSince ?? null,
     subscriptionExpiresAt: input.subscriptionExpiresAt ?? null,
     autoRenew: input.autoRenew ?? null,
+    autoRenewOffDetectedAt: input.autoRenewOffDetectedAt ?? (
+      input.autoRenew === false ? lastSeenAt : null
+    ),
     pageAlias: input.pageAlias ?? null,
     pageAliasSource: input.pageAliasSource ?? null,
     pageAliasSourceNoteId: input.pageAliasSourceNoteId ?? null,
     pageAliasSyncedAt: input.pageAliasSyncedAt ?? null,
-    lastSeenAt: new Date(),
+    lastSeenAt,
   };
 
   const updateSet: Record<string, unknown> = {
@@ -362,6 +388,19 @@ export async function upsertFanPage(
   }
   if (input.autoRenew !== undefined) {
     updateSet.autoRenew = input.autoRenew;
+    updateSet.autoRenewOffDetectedAt = sql`
+      case
+        when excluded.auto_renew is false then
+          case
+            when ${fanPages.autoRenew} is distinct from false then excluded.auto_renew_off_detected_at
+            else coalesce(${fanPages.autoRenewOffDetectedAt}, excluded.auto_renew_off_detected_at)
+          end
+        when excluded.auto_renew is true then null
+        else ${fanPages.autoRenewOffDetectedAt}
+      end
+    `;
+  } else if (input.autoRenewOffDetectedAt !== undefined) {
+    updateSet.autoRenewOffDetectedAt = input.autoRenewOffDetectedAt;
   }
   if (input.pageAlias !== undefined) {
     updateSet.pageAlias = input.pageAlias;
@@ -632,6 +671,9 @@ export async function upsertPageSubscription(
     priceMills: input.priceMills,
     renewPriceMills: input.renewPriceMills,
     autoRenew: input.autoRenew ?? null,
+    autoRenewOffDetectedAt: input.autoRenewOffDetectedAt ?? (
+      input.autoRenew === false ? lastSeenAt : null
+    ),
     billingCycleDays: input.billingCycleDays ?? null,
     durationDays: input.durationDays ?? null,
     renewDate: input.renewDate ?? null,
@@ -651,7 +693,20 @@ export async function upsertPageSubscription(
     })
     .onConflictDoUpdate({
       target: [pageSubscriptions.platformAccountId, pageSubscriptions.platformSubscriptionId],
-      set: patch,
+      set: {
+        ...patch,
+        autoRenewOffDetectedAt: sql`
+          case
+            when excluded.auto_renew is false then
+              case
+                when ${pageSubscriptions.autoRenew} is distinct from false then excluded.auto_renew_off_detected_at
+                else coalesce(${pageSubscriptions.autoRenewOffDetectedAt}, excluded.auto_renew_off_detected_at)
+              end
+            when excluded.auto_renew is true then null
+            else ${pageSubscriptions.autoRenewOffDetectedAt}
+          end
+        `,
+      },
     })
     .returning();
   return subscription;
@@ -671,6 +726,7 @@ export interface UpsertPageSubscriptionInput {
   priceMills: bigint;
   renewPriceMills: bigint;
   autoRenew?: boolean | null;
+  autoRenewOffDetectedAt?: Date | null;
   billingCycleDays?: number | null;
   durationDays?: number | null;
   renewDate?: Date | null;
@@ -711,6 +767,9 @@ export async function upsertPageSubscriptions(
       priceMills: input.priceMills,
       renewPriceMills: input.renewPriceMills,
       autoRenew: input.autoRenew ?? null,
+      autoRenewOffDetectedAt: input.autoRenewOffDetectedAt ?? (
+        input.autoRenew === false ? lastSeenAt : null
+      ),
       billingCycleDays: input.billingCycleDays ?? null,
       durationDays: input.durationDays ?? null,
       renewDate: input.renewDate ?? null,
@@ -736,6 +795,17 @@ export async function upsertPageSubscriptions(
         priceMills: sql`excluded.price_mills`,
         renewPriceMills: sql`excluded.renew_price_mills`,
         autoRenew: sql`excluded.auto_renew`,
+        autoRenewOffDetectedAt: sql`
+          case
+            when excluded.auto_renew is false then
+              case
+                when ${pageSubscriptions.autoRenew} is distinct from false then excluded.auto_renew_off_detected_at
+                else coalesce(${pageSubscriptions.autoRenewOffDetectedAt}, excluded.auto_renew_off_detected_at)
+              end
+            when excluded.auto_renew is true then null
+            else ${pageSubscriptions.autoRenewOffDetectedAt}
+          end
+        `,
         billingCycleDays: sql`excluded.billing_cycle_days`,
         durationDays: sql`excluded.duration_days`,
         renewDate: sql`excluded.renew_date`,
@@ -790,12 +860,21 @@ export async function refreshFanPageSubscriberState(db: Database, platformAccoun
         subscriber_since = active.active_subscriber_since,
         subscription_expires_at = active.active_subscription_expires_at,
         auto_renew = active.active_auto_renew,
+        auto_renew_off_detected_at = active.active_auto_renew_off_detected_at,
         last_seen_at = now()
     from (
       select fan_id,
              min(source_created_at) as active_subscriber_since,
              max(ends_at) as active_subscription_expires_at,
-             bool_or(coalesce(auto_renew, false)) as active_auto_renew
+             case
+               when bool_or(auto_renew = true) then true
+               when bool_or(auto_renew = false) then false
+               else null
+             end as active_auto_renew,
+             case
+               when bool_or(auto_renew = true) then null
+               else min(auto_renew_off_detected_at) filter (where auto_renew = false)
+             end as active_auto_renew_off_detected_at
       from page_subscriptions
       where platform_account_id = ${platformAccountId}
         and is_current = true
@@ -810,6 +889,7 @@ export async function refreshFanPageSubscriberState(db: Database, platformAccoun
         subscriber_since = null,
         subscription_expires_at = null,
         auto_renew = null,
+        auto_renew_off_detected_at = null,
         last_seen_at = now()
     where platform_account_id = ${platformAccountId}
       and fan_id not in (

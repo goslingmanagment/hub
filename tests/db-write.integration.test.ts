@@ -1637,7 +1637,8 @@ describe("db write safety", () => {
       select count(*)::int as count,
              max(raw_status)::int as raw_status,
              max(canonical_status) as canonical_status,
-             max(price_mills)::bigint as price_mills
+             max(price_mills)::bigint as price_mills,
+             max(auto_renew_off_detected_at) as auto_renew_off_detected_at
       from page_subscriptions
       where platform_subscription_id = 'sub-1'
     `);
@@ -1645,6 +1646,7 @@ describe("db write safety", () => {
     expect(subscriptionRows.rows[0]?.raw_status).toBe(3);
     expect(subscriptionRows.rows[0]?.canonical_status).toBe("active");
     expect(BigInt(subscriptionRows.rows[0]?.price_mills ?? 0)).toBe(7000n);
+    expect(subscriptionRows.rows[0]?.auto_renew_off_detected_at).toBeTruthy();
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,

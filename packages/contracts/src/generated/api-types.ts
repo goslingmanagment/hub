@@ -1286,6 +1286,7 @@ export interface paths {
                                 displayName: string | null;
                                 endsAt: string | null;
                                 autoRenew: boolean | null;
+                                autoRenewOffDetectedAt: string | null;
                                 subscriptionTierName: string | null;
                                 startedAt: string | null;
                                 totalSpentCents: number;
@@ -1517,6 +1518,7 @@ export interface paths {
                                 subscriberSince: string | null;
                                 subscriptionExpiresAt: string | null;
                                 autoRenew: boolean | null;
+                                autoRenewOffDetectedAt: string | null;
                                 totalSpentCents: number;
                                 lastTransactionAt: string | null;
                                 dm: {
@@ -1761,6 +1763,7 @@ export interface paths {
                                 subscriberSince: string | null;
                                 subscriptionExpiresAt: string | null;
                                 autoRenew: boolean | null;
+                                autoRenewOffDetectedAt: string | null;
                                 lastTransactionAt: string | null;
                             }[];
                             limit: number;
@@ -2244,6 +2247,7 @@ export interface paths {
                                 subscriberSince: string | null;
                                 subscriptionExpiresAt: string | null;
                                 autoRenew: boolean | null;
+                                autoRenewOffDetectedAt: string | null;
                                 lastTransactionAt: string | null;
                                 notes: {
                                     id: number;
@@ -3107,6 +3111,7 @@ export interface paths {
                                     subscription: {
                                         expiresAt: string;
                                         autoRenew: boolean | null;
+                                        autoRenewOffDetectedAt: string | null;
                                         tierName: string | null;
                                         subscriberSince: string | null;
                                     };
@@ -3654,6 +3659,7 @@ export interface paths {
                                 subscriberSince: string | null;
                                 subscriptionExpiresAt: string | null;
                                 autoRenew: boolean | null;
+                                autoRenewOffDetectedAt: string | null;
                                 lastTransactionAt: string | null;
                                 notes: {
                                     id: number;
@@ -4046,6 +4052,7 @@ export interface paths {
                                 subscriberSince: string | null;
                                 subscriptionExpiresAt: string | null;
                                 autoRenew: boolean | null;
+                                autoRenewOffDetectedAt: string | null;
                             }[];
                         };
                     };
@@ -4529,6 +4536,7 @@ export interface paths {
                                     subscriberSince: string | null;
                                     subscriptionExpiresAt: string | null;
                                     autoRenew: boolean | null;
+                                    autoRenewOffDetectedAt: string | null;
                                 }[];
                             }[];
                             limit: number;

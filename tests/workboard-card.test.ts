@@ -47,6 +47,7 @@ function buildSubscriberVm(overrides: Partial<SubscriberCardVm> = {}): Subscribe
     expiryLabel: "Mar 31",
     expiryRelativeLabel: "через 1д",
     autoRenew: false,
+    autoRenewOffDetectedLabel: "Mar 20, 2026",
     tierName: "Master",
     tierShortName: "Master",
     canPreview: false,

@@ -197,7 +197,12 @@ export function FollowersPage() {
                         <div className="flex items-center gap-2">
                           <Badge variant="subscriber">Subscriber</Badge>
                           {follower.autoRenew === false && (
-                            <span className="text-xs font-medium text-warning-dark">No renew</span>
+                            <span className="text-xs font-medium text-warning-dark">
+                              No renew
+                              {follower.autoRenewOffDetectedAt
+                                ? ` · ${formatDate(follower.autoRenewOffDetectedAt, { includeYear: true })}`
+                                : ""}
+                            </span>
                           )}
                         </div>
                         <div className="text-xs text-text-muted">

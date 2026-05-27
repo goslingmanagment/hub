@@ -989,6 +989,7 @@ export async function getSpenderDetail(
       subscriberSince: serializeTimestamp(row.subscriberSince),
       subscriptionExpiresAt: serializeTimestamp(row.subscriptionExpiresAt),
       autoRenew: row.autoRenew,
+      autoRenewOffDetectedAt: serializeTimestamp(row.autoRenewOffDetectedAt),
     })),
   };
 }
@@ -1252,6 +1253,7 @@ export async function searchVisibleFans(
         subscriberSince: serializeTimestamp(membership.subscriberSince),
         subscriptionExpiresAt: serializeTimestamp(membership.subscriptionExpiresAt),
         autoRenew: membership.autoRenew,
+        autoRenewOffDetectedAt: serializeTimestamp(membership.autoRenewOffDetectedAt),
       })),
     })),
     limit: query.limit,

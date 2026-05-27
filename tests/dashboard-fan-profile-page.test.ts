@@ -70,6 +70,7 @@ describe("FanProfilePage", () => {
           subscriptionExpiresAt: "2026-04-10T00:00:00.000Z",
           subscriberSince: "2026-03-01T00:00:00.000Z",
           autoRenew: false,
+          autoRenewOffDetectedAt: "2026-03-20T00:00:00.000Z",
           notes: [],
         },
       },
