@@ -13,10 +13,12 @@ dist
 .vscode
 .testcontainers.properties
 tmp
+.playwright-mcp/
 .sessions/
 .lilly2-session.json
 drafts/
 .om-token
+*-openclaw-backup.tar.gz
 
 # Documentation (local/generated, not tracked)
 docs/
