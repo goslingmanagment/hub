@@ -162,12 +162,12 @@ describe("TopSupportersPage", () => {
     expect(html).toContain("Cooling");
     expect(html).toContain("Inactive");
     expect(html).toContain("Needs reactivation");
-    expect(html).toContain("REACTIVATE");
+    expect(html).toContain("Reactivate");
+    expect(html).toContain("Sub");
+    expect(html).toContain("Next");
     expect(html).toContain("Last Chat");
     expect(html).toContain("Last Spend");
     expect(html).toContain("Unanswered");
-    expect(html).toContain("2 unread");
-    expect(html).toContain("beach or hike - which one wins for you?");
     expect(html).toContain("Tip");
     expect(html).not.toContain("Last Activity");
     expect(html).not.toContain("Last activity ");

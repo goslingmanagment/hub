@@ -19,6 +19,7 @@ import type {
   SpenderBatchResponse,
   SpenderDetailResponse,
   SpenderListResponse,
+  SpenderSeriesResponse,
   SubscriberDailyResponse,
   SubscriberListResponse,
   TransactionListResponse,
@@ -302,6 +303,22 @@ export function useSpenderDetail(
     queryFn: () =>
       api.get<SpenderDetailResponse>(`/api/v2/spenders/${pathSegment(platform)}/${pathSegment(platformUserId)}${qs(params)}`),
     enabled: !!platformUserId,
+  });
+}
+
+export function useSpenderSeries(
+  platform: string,
+  platformUserId: string,
+  params: { scope: string; pageLabel?: string; period: string; granularity?: string },
+  options: QueryOptions = {},
+) {
+  return useQuery({
+    queryKey: ["spenderSeries", platform, platformUserId, params],
+    queryFn: () =>
+      api.get<SpenderSeriesResponse>(
+        `/api/v2/spenders/${pathSegment(platform)}/${pathSegment(platformUserId)}/series${qs(params)}`,
+      ),
+    enabled: (options.enabled ?? true) && !!platformUserId,
   });
 }
 

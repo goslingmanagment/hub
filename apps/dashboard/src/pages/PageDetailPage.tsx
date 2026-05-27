@@ -587,6 +587,8 @@ function PageTransactionsSection({
   onTxPageChange: (offset: number) => void;
   stateColorClass: (state: string) => string;
 }) {
+  const pagePlatform = transactions?.page.platform;
+
   return (
     <div>
       <div className="mb-3">
@@ -624,7 +626,9 @@ function PageTransactionsSection({
           </thead>
           <tbody>
             {(transactions?.items ?? []).map((item, idx) => {
-              const fanLabel = item.fan ? resolveFanLabelForScope(item.fan, "page") : null;
+              const fanLabel = item.fan
+                ? resolveFanLabelForScope({ ...item.fan, platform: pagePlatform }, "page")
+                : null;
               const fanDisplay = fanLabel?.label ?? null;
               const fanIsMuted = fanLabel?.isDeletedFallback ?? false;
 
