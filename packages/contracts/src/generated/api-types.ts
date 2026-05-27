@@ -3835,6 +3835,28 @@ export interface paths {
                                     } | null;
                                 };
                                 lifetimeLastTransactionAt: string | null;
+                                lastFanMessageAt: string | null;
+                                conversation: {
+                                    platformConversationId: string | null;
+                                    unreadCount: number;
+                                    lastMessageAt: string | null;
+                                    lastFanMessageAt: string | null;
+                                    lastModelMessageAt: string | null;
+                                    lastMessagePreview: string | null;
+                                    storedMessageCount: number;
+                                    /** @enum {string} */
+                                    messageCoverageStatus: "pending_backfill" | "partial_window" | "complete";
+                                    messageBackfillComplete: boolean;
+                                };
+                                lastTransaction: {
+                                    /** @enum {string} */
+                                    canonicalType: "subscription" | "tip" | "message_purchase" | "post_purchase" | "stream_tip" | "chargeback" | "refund" | "payout_reversal" | "other";
+                                    /** @enum {string} */
+                                    transactionState: "pending" | "posted" | "unknown";
+                                    grossAmountMills: number;
+                                    creatorNetAmountMills: number;
+                                    occurredAt: string;
+                                } | null;
                                 /** @enum {string} */
                                 retentionStatus: "active" | "cooling" | "inactive" | "needs_reactivation";
                             }[];

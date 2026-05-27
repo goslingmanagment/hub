@@ -12,9 +12,9 @@ import {
   resolveFanLabelForScope,
   type SpenderRetentionStatus,
 } from "@agency_hub_core/shared";
-import { formatDelta, formatRelativeTime } from "@/lib/format";
+import { formatDelta, formatRelativeTime, transactionTypeLabel } from "@/lib/format";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import type { SpenderBatchBody } from "@agency_hub_core/contracts";
+import type { SpenderBatchBody, SpenderListResponse } from "@agency_hub_core/contracts";
 
 const LIMIT = 50;
 
@@ -26,6 +26,9 @@ type TypeBreakdownItem = {
 };
 
 type RetentionFilter = SpenderRetentionStatus;
+type SpenderListItem = SpenderListResponse["items"][number];
+type SpenderConversation = SpenderListItem["conversation"];
+type SpenderLastTransaction = SpenderListItem["lastTransaction"];
 
 const RETENTION_FILTERS: { key: RetentionFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -72,6 +75,86 @@ function whaleBadge(lifetimeScopeCreatorNetMills: number) {
   if (lifetimeScopeCreatorNetMills >= 50_000)
     return <span className="ml-1.5 inline-flex items-center rounded-md bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-bold text-yellow-400">⭐ Regular</span>;
   return null;
+}
+
+function timestampMs(value: string | null) {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function isUnansweredConversation(conversation: SpenderConversation) {
+  const fanAt = timestampMs(conversation.lastFanMessageAt);
+  if (fanAt === null) return false;
+  const modelAt = timestampMs(conversation.lastModelMessageAt);
+  return modelAt === null || fanAt > modelAt;
+}
+
+function ChatCell({ conversation }: { conversation: SpenderConversation }) {
+  const hasConversation = conversation.platformConversationId !== null;
+  const hasAnyMessage = conversation.lastMessageAt !== null ||
+    conversation.lastFanMessageAt !== null ||
+    conversation.lastModelMessageAt !== null;
+
+  if (!hasConversation && !hasAnyMessage) {
+    return <span className="text-text-muted">No DM</span>;
+  }
+
+  const unanswered = isUnansweredConversation(conversation);
+
+  return (
+    <div className="max-w-[280px] space-y-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-medium text-text-primary">
+          {conversation.lastMessageAt ? formatRelativeTime(conversation.lastMessageAt) : "DM synced"}
+        </span>
+        {unanswered && (
+          <span className="inline-flex rounded-md bg-warning/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-warning-dark">
+            Unanswered
+          </span>
+        )}
+        {conversation.unreadCount > 0 && (
+          <span className="inline-flex rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-accent">
+            {conversation.unreadCount} unread
+          </span>
+        )}
+      </div>
+      <div className="text-xs text-text-muted">
+        Fan {conversation.lastFanMessageAt ? formatRelativeTime(conversation.lastFanMessageAt) : "never"}
+        <span className="mx-1 text-border">·</span>
+        Model {conversation.lastModelMessageAt ? formatRelativeTime(conversation.lastModelMessageAt) : "never"}
+      </div>
+      {conversation.lastMessagePreview && (
+        <div className="truncate text-xs text-text-muted">
+          {conversation.lastMessagePreview}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LastTransactionCell({ transaction }: { transaction: SpenderLastTransaction }) {
+  if (!transaction) {
+    return <span className="text-text-muted">—</span>;
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="font-medium text-text-primary">
+        {formatRelativeTime(transaction.occurredAt)}
+      </div>
+      <div className="flex flex-wrap items-center justify-start gap-1.5 text-xs text-text-muted">
+        <span>{transactionTypeLabel(transaction.canonicalType)}</span>
+        <span className="text-border">·</span>
+        <span className="tabular-nums">{formatUsdFromMills(transaction.creatorNetAmountMills)}</span>
+        {transaction.transactionState !== "posted" && (
+          <span className="inline-flex rounded-md bg-hover-alt px-1.5 py-0.5 text-[10px] font-bold uppercase text-text-muted">
+            {transaction.transactionState}
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function TopSupportersPage() {
@@ -136,11 +219,12 @@ export function TopSupportersPage() {
   }, [batchData]);
 
   if (isLoading || !spenders) {
-    return <TableSkeleton rows={6} columns={8} />;
+    return <TableSkeleton rows={6} columns={spenderPeriod === "lifetime" ? 9 : 10} />;
   }
 
   const total = spenders.total;
   const isLifetime = spenderPeriod === "lifetime";
+  const columnCount = isLifetime ? 9 : 10;
   const subtitle = describeRetentionSubtitle(retentionFilter);
 
   return (
@@ -195,7 +279,9 @@ export function TopSupportersPage() {
                 { label: "Tips", align: "text-right" },
                 { label: "Subs", align: "text-right" },
                 { label: "Purchases", align: "text-right" },
-                { label: isLifetime ? "Last Activity" : "Trend", align: "text-left" },
+                { label: "Last Chat", align: "text-left" },
+                { label: "Last Spend", align: "text-left" },
+                ...(!isLifetime ? [{ label: "Trend", align: "text-left" }] : []),
                 { label: "Status", align: "text-left" },
               ].map((col) => (
                 <th
@@ -210,7 +296,7 @@ export function TopSupportersPage() {
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-text-muted">
+                <td colSpan={columnCount} className="px-4 py-8 text-center text-sm text-text-muted">
                   {emptyStateMessage(retentionFilter)}
                 </td>
               </tr>
@@ -230,7 +316,6 @@ export function TopSupportersPage() {
               const subs = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["subscription"]);
               const purchases = sumBreakdownTypes(batch?.typeBreakdown ?? null, ["message_purchase", "post_purchase"]);
 
-              const lastActive = item.lifetimeLastTransactionAt;
               const rowStatus = item.retentionStatus;
               const statusBadge = ROW_STATUS_BADGES[rowStatus];
 
@@ -275,11 +360,16 @@ export function TopSupportersPage() {
                     {hasBatch ? formatUsdFromMills(purchases) : "—"}
                   </td>
                   <td className="px-4 py-3 text-sm text-text-secondary">
-                    {isLifetime
-                      ? (lastActive ? formatRelativeTime(lastActive) : "—")
-                      : <TrendCell deltaPct={comparison?.deltaPct ?? null} />
-                    }
+                    <ChatCell conversation={item.conversation} />
                   </td>
+                  <td className="px-4 py-3 text-sm text-text-secondary">
+                    <LastTransactionCell transaction={item.lastTransaction} />
+                  </td>
+                  {!isLifetime && (
+                    <td className="px-4 py-3 text-sm text-text-secondary">
+                      <TrendCell deltaPct={comparison?.deltaPct ?? null} />
+                    </td>
+                  )}
                   <td className="px-4 py-3 text-sm text-text-secondary">
                     <span
                       className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold ${statusBadge.className}`}

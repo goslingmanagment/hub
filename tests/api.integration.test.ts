@@ -4561,7 +4561,7 @@ describe("api integration", () => {
     });
   });
 
-  it("filters v2 spenders by retention status and exposes lifetimeLastTransactionAt", async (context) => {
+  it("filters v2 spenders by retention status and exposes activity timestamps", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -4682,6 +4682,26 @@ describe("api integration", () => {
       creatorNetAmountMills: 900_000n,
       occurredAt: new Date("2026-05-25T12:00:00.000Z"),
     });
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: reactivationFan.id,
+      platformConversationId: "conversation-retention-reactivate",
+      partnerPlatformUserId: "fan-retention-reactivate",
+      partnerUsername: "reactivate_buyer",
+      partnerDisplayName: "Reactivate Buyer",
+      conversationFlags: 0,
+      unreadCount: 0,
+      subscriptionTierId: null,
+      lastMessageId: "msg-retention-reactivate",
+      lastUnreadMessageId: null,
+      lastMessageAt: new Date("2026-05-26T18:54:00.000Z"),
+      lastMessageSenderId: "fan-retention-reactivate",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "beach or hike - which one wins for you?",
+      lastFanMessageAt: new Date("2026-05-26T18:54:00.000Z"),
+      lastModelMessageAt: null,
+      lastSeenGeneration: 1,
+    });
 
     await recalculateFanPageSpend(testDb.db, fixture.lanaPage.id);
 
@@ -4707,6 +4727,21 @@ describe("api integration", () => {
       const reactivateRow = allBody.items.find((item: { fan: { platformUserId: string } }) => item.fan.platformUserId === "fan-retention-reactivate");
       expect(reactivateRow.retentionStatus).toBe("needs_reactivation");
       expect(reactivateRow.lifetimeLastTransactionAt).toBe("2026-02-15T12:00:00.000Z");
+      expect(reactivateRow.lastFanMessageAt).toBe("2026-05-26T18:54:00.000Z");
+      expect(reactivateRow.conversation).toMatchObject({
+        platformConversationId: "conversation-retention-reactivate",
+        unreadCount: 0,
+        lastMessageAt: "2026-05-26T18:54:00.000Z",
+        lastFanMessageAt: "2026-05-26T18:54:00.000Z",
+        lastModelMessageAt: null,
+        lastMessagePreview: "beach or hike - which one wins for you?",
+      });
+      expect(reactivateRow.lastTransaction).toMatchObject({
+        canonicalType: "tip",
+        transactionState: "posted",
+        creatorNetAmountMills: 150_000,
+        occurredAt: "2026-02-15T12:00:00.000Z",
+      });
 
       const activeResponse = await server.inject({
         method: "GET",

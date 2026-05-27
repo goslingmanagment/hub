@@ -10,6 +10,7 @@ import {
   toBusinessDate,
   type Platform,
   type SpenderRetentionStatus,
+  type TransactionState,
   type TransactionType,
   UTC_TIME_ZONE,
 } from "@agency_hub_core/shared";
@@ -20,6 +21,7 @@ import {
   fanUsernameAliases,
   fans,
   models,
+  pageDmConversations,
   pageSubscriptions,
   pages,
   spenderDailyFacts,
@@ -459,6 +461,21 @@ export interface RankedSpenderRow {
   unknownCreatorNetAmountMills: bigint;
   transactionCount: number;
   lastTransactionAt: Date | null;
+  lastFanMessageAt: Date | null;
+  conversationPlatformConversationId: string | null;
+  conversationUnreadCount: number;
+  conversationLastMessageAt: Date | null;
+  conversationLastFanMessageAt: Date | null;
+  conversationLastModelMessageAt: Date | null;
+  conversationLastMessagePreview: string | null;
+  conversationStoredMessageCount: number;
+  conversationMessageCoverageStatus: "pending_backfill" | "partial_window" | "complete";
+  conversationMessageBackfillComplete: boolean;
+  lastTransactionCanonicalType: TransactionType | null;
+  lastTransactionState: TransactionState | null;
+  lastTransactionGrossAmountMills: bigint | null;
+  lastTransactionCreatorNetAmountMills: bigint | null;
+  lastTransactionOccurredAt: Date | null;
   lifetimeGrossAmountMills: bigint;
   lifetimeCreatorNetAmountMills: bigint;
   lifetimeLastTransactionAt: Date | null;
@@ -1060,6 +1077,52 @@ export async function listRankedSpenders(
     .where(inArray(spenderLifetimePage.platformAccountId, input.pageIds))
     .groupBy(spenderLifetimePage.fanId)
     .as("lifetime_metrics");
+  const primaryConversations = db.select({
+    fanId: pageDmConversations.fanId,
+    platformConversationId: pageDmConversations.platformConversationId,
+    unreadCount: pageDmConversations.unreadCount,
+    lastMessageAt: pageDmConversations.lastMessageAt,
+    lastFanMessageAt: pageDmConversations.lastFanMessageAt,
+    lastModelMessageAt: pageDmConversations.lastModelMessageAt,
+    lastMessagePreview: pageDmConversations.lastMessagePreview,
+    storedMessageCount: pageDmConversations.storedMessageCount,
+    messageCoverageStatus: pageDmConversations.messageCoverageStatus,
+    messageBackfillComplete: pageDmConversations.messageBackfillComplete,
+    rn: sql<number>`row_number() over (
+      partition by ${pageDmConversations.platformAccountId}, ${pageDmConversations.fanId}
+      order by ${pageDmConversations.lastMessageAt} desc nulls last,
+               ${pageDmConversations.platformConversationId} desc
+    )`.as("rn"),
+  }).from(pageDmConversations)
+    .where(and(
+      inArray(pageDmConversations.platformAccountId, input.pageIds),
+      eq(pageDmConversations.isVisible, true),
+      sql`${pageDmConversations.fanId} is not null`,
+    ))
+    .as("primary_conversations");
+  const latestTransactions = db.select({
+    fanId: transactions.fanId,
+    canonicalType: transactions.canonicalType,
+    transactionState: transactions.transactionState,
+    grossAmountMills: transactions.grossAmountMills,
+    creatorNetAmountMills: transactions.creatorNetAmountMills,
+    occurredAt: transactions.occurredAt,
+    rn: sql<number>`row_number() over (
+      partition by ${transactions.fanId}
+      order by ${transactions.occurredAt} desc,
+               ${transactions.id} desc
+    )`.as("rn"),
+  }).from(transactions)
+    .where(and(
+      inArray(transactions.platformAccountId, input.pageIds),
+      eq(transactions.isActive, true),
+      sql`${transactions.fanId} is not null`,
+      inArray(
+        transactions.canonicalType,
+        spenderAnalyticsTransactionTypes as Array<typeof transactions.$inferSelect.canonicalType>,
+      ),
+    ))
+    .as("latest_transactions");
 
   if (input.period === "lifetime") {
     const baseQueryClause = buildSpenderQueryClause(input.query, input);
@@ -1108,11 +1171,34 @@ export async function listRankedSpenders(
       unknownCreatorNetAmountMills: sql<bigint>`0::bigint`,
       transactionCount: sql<number>`0::int`,
       lastTransactionAt: lifetimeMetrics.lastTransactionAt,
+      lastFanMessageAt: primaryConversations.lastFanMessageAt,
+      conversationPlatformConversationId: primaryConversations.platformConversationId,
+      conversationUnreadCount: sql<number>`coalesce(${primaryConversations.unreadCount}, 0)::int`,
+      conversationLastMessageAt: primaryConversations.lastMessageAt,
+      conversationLastFanMessageAt: primaryConversations.lastFanMessageAt,
+      conversationLastModelMessageAt: primaryConversations.lastModelMessageAt,
+      conversationLastMessagePreview: primaryConversations.lastMessagePreview,
+      conversationStoredMessageCount: sql<number>`coalesce(${primaryConversations.storedMessageCount}, 0)::int`,
+      conversationMessageCoverageStatus: sql<"pending_backfill" | "partial_window" | "complete">`coalesce(${primaryConversations.messageCoverageStatus}, 'pending_backfill'::dm_message_coverage_status)`,
+      conversationMessageBackfillComplete: sql<boolean>`coalesce(${primaryConversations.messageBackfillComplete}, false)`,
+      lastTransactionCanonicalType: latestTransactions.canonicalType,
+      lastTransactionState: latestTransactions.transactionState,
+      lastTransactionGrossAmountMills: latestTransactions.grossAmountMills,
+      lastTransactionCreatorNetAmountMills: latestTransactions.creatorNetAmountMills,
+      lastTransactionOccurredAt: latestTransactions.occurredAt,
       lifetimeGrossAmountMills: lifetimeMetrics.grossAmountMills,
       lifetimeCreatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
       lifetimeLastTransactionAt: lifetimeMetrics.lastTransactionAt,
     }).from(lifetimeMetrics)
       .innerJoin(fans, eq(fans.id, lifetimeMetrics.fanId))
+      .leftJoin(primaryConversations, and(
+        eq(primaryConversations.fanId, lifetimeMetrics.fanId),
+        eq(qualifiedSubqueryColumn<number>("primary_conversations", "rn"), 1),
+      ))
+      .leftJoin(latestTransactions, and(
+        eq(latestTransactions.fanId, lifetimeMetrics.fanId),
+        eq(qualifiedSubqueryColumn<number>("latest_transactions", "rn"), 1),
+      ))
       .leftJoin(fanPages, singlePageId === null
         ? sql`false`
         : and(
@@ -1227,12 +1313,35 @@ export async function listRankedSpenders(
     unknownCreatorNetAmountMills: currentMetricFields.unknownCreatorNetAmountMills,
     transactionCount: currentMetricFields.transactionCount,
     lastTransactionAt: currentMetricFields.lastTransactionAt,
+    lastFanMessageAt: primaryConversations.lastFanMessageAt,
+    conversationPlatformConversationId: primaryConversations.platformConversationId,
+    conversationUnreadCount: sql<number>`coalesce(${primaryConversations.unreadCount}, 0)::int`,
+    conversationLastMessageAt: primaryConversations.lastMessageAt,
+    conversationLastFanMessageAt: primaryConversations.lastFanMessageAt,
+    conversationLastModelMessageAt: primaryConversations.lastModelMessageAt,
+    conversationLastMessagePreview: primaryConversations.lastMessagePreview,
+    conversationStoredMessageCount: sql<number>`coalesce(${primaryConversations.storedMessageCount}, 0)::int`,
+    conversationMessageCoverageStatus: sql<"pending_backfill" | "partial_window" | "complete">`coalesce(${primaryConversations.messageCoverageStatus}, 'pending_backfill'::dm_message_coverage_status)`,
+    conversationMessageBackfillComplete: sql<boolean>`coalesce(${primaryConversations.messageBackfillComplete}, false)`,
+    lastTransactionCanonicalType: latestTransactions.canonicalType,
+    lastTransactionState: latestTransactions.transactionState,
+    lastTransactionGrossAmountMills: latestTransactions.grossAmountMills,
+    lastTransactionCreatorNetAmountMills: latestTransactions.creatorNetAmountMills,
+    lastTransactionOccurredAt: latestTransactions.occurredAt,
     lifetimeGrossAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.grossAmountMills}, 0)::bigint`.as("lifetime_gross_amount_mills"),
     lifetimeCreatorNetAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.creatorNetAmountMills}, 0)::bigint`.as("lifetime_creator_net_amount_mills"),
     lifetimeLastTransactionAt: lifetimeMetricFields.lastTransactionAt,
   }).from(currentMetrics)
     .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
     .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
+    .leftJoin(primaryConversations, and(
+      eq(primaryConversations.fanId, currentMetrics.fanId),
+      eq(qualifiedSubqueryColumn<number>("primary_conversations", "rn"), 1),
+    ))
+    .leftJoin(latestTransactions, and(
+      eq(latestTransactions.fanId, currentMetrics.fanId),
+      eq(qualifiedSubqueryColumn<number>("latest_transactions", "rn"), 1),
+    ))
     .leftJoin(fanPages, singlePageId === null
       ? sql`false`
       : and(

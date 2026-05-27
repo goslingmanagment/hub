@@ -12359,6 +12359,159 @@
                               }
                             ]
                           },
+                          "lastFanMessageAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "conversation": {
+                            "type": "object",
+                            "properties": {
+                              "platformConversationId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "unreadCount": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "lastMessageAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastFanMessageAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastModelMessageAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastMessagePreview": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "storedMessageCount": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "messageCoverageStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "pending_backfill",
+                                  "partial_window",
+                                  "complete"
+                                ]
+                              },
+                              "messageBackfillComplete": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "platformConversationId",
+                              "unreadCount",
+                              "lastMessageAt",
+                              "lastFanMessageAt",
+                              "lastModelMessageAt",
+                              "lastMessagePreview",
+                              "storedMessageCount",
+                              "messageCoverageStatus",
+                              "messageBackfillComplete"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "lastTransaction": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "canonicalType": {
+                                    "type": "string",
+                                    "enum": [
+                                      "subscription",
+                                      "tip",
+                                      "message_purchase",
+                                      "post_purchase",
+                                      "stream_tip",
+                                      "chargeback",
+                                      "refund",
+                                      "payout_reversal",
+                                      "other"
+                                    ]
+                                  },
+                                  "transactionState": {
+                                    "type": "string",
+                                    "enum": [
+                                      "pending",
+                                      "posted",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "grossAmountMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "creatorNetAmountMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "occurredAt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "canonicalType",
+                                  "transactionState",
+                                  "grossAmountMills",
+                                  "creatorNetAmountMills",
+                                  "occurredAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "retentionStatus": {
                             "type": "string",
                             "enum": [
@@ -12373,6 +12526,9 @@
                           "fan",
                           "metrics",
                           "lifetimeLastTransactionAt",
+                          "lastFanMessageAt",
+                          "conversation",
+                          "lastTransaction",
                           "retentionStatus"
                         ],
                         "additionalProperties": false

@@ -851,10 +851,33 @@ const spenderDiagnosticsSchema = z.object({
   unattributedCreatorNetAmountMills: mills,
 });
 
+const spenderConversationSchema = z.object({
+  platformConversationId: z.string().nullable(),
+  unreadCount: z.number().int(),
+  lastMessageAt: isoTimestamp.nullable(),
+  lastFanMessageAt: isoTimestamp.nullable(),
+  lastModelMessageAt: isoTimestamp.nullable(),
+  lastMessagePreview: z.string().nullable(),
+  storedMessageCount: z.number().int(),
+  messageCoverageStatus: messageCoverageStatusSchema,
+  messageBackfillComplete: z.boolean(),
+});
+
+const spenderLastTransactionSchema = z.object({
+  canonicalType: transactionTypeEnum,
+  transactionState: transactionStateEnum,
+  grossAmountMills: mills,
+  creatorNetAmountMills: mills,
+  occurredAt: isoTimestamp,
+}).nullable();
+
 const spenderListItemSchema = z.object({
   fan: spenderFanSchema,
   metrics: spenderMetricsSchema,
   lifetimeLastTransactionAt: isoTimestamp.nullable(),
+  lastFanMessageAt: isoTimestamp.nullable(),
+  conversation: spenderConversationSchema,
+  lastTransaction: spenderLastTransactionSchema,
   retentionStatus: spenderRetentionStatusEnum.exclude(["all"]),
 });
 

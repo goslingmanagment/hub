@@ -135,6 +135,8 @@ type LifetimeMetricLike = {
 };
 
 type SerializedWindowMetrics = NonNullable<SpenderListResponse["items"][number]["metrics"]["window"]>;
+type SerializedSpenderConversation = SpenderListResponse["items"][number]["conversation"];
+type SerializedSpenderLastTransaction = SpenderListResponse["items"][number]["lastTransaction"];
 type SerializedSpenderTypeBreakdown =
   SpenderDetailResponse["typeBreakdown"][number];
 
@@ -167,6 +169,34 @@ function serializeFan(input: FanLike) {
     username: input.username,
     displayName: input.displayName,
     createdAtExternal: serializeTimestamp(input.createdAtExternal),
+  };
+}
+
+function serializeSpenderConversation(row: RankedSpenderRow): SerializedSpenderConversation {
+  return {
+    platformConversationId: row.conversationPlatformConversationId,
+    unreadCount: row.conversationUnreadCount,
+    lastMessageAt: serializeTimestamp(row.conversationLastMessageAt),
+    lastFanMessageAt: serializeTimestamp(row.conversationLastFanMessageAt),
+    lastModelMessageAt: serializeTimestamp(row.conversationLastModelMessageAt),
+    lastMessagePreview: row.conversationLastMessagePreview,
+    storedMessageCount: row.conversationStoredMessageCount,
+    messageCoverageStatus: row.conversationMessageCoverageStatus,
+    messageBackfillComplete: row.conversationMessageBackfillComplete,
+  };
+}
+
+function serializeSpenderLastTransaction(row: RankedSpenderRow): SerializedSpenderLastTransaction {
+  if (!row.lastTransactionOccurredAt || !row.lastTransactionCanonicalType || !row.lastTransactionState) {
+    return null;
+  }
+
+  return {
+    canonicalType: row.lastTransactionCanonicalType,
+    transactionState: row.lastTransactionState,
+    grossAmountMills: millsToNumber(row.lastTransactionGrossAmountMills ?? 0n),
+    creatorNetAmountMills: millsToNumber(row.lastTransactionCreatorNetAmountMills ?? 0n),
+    occurredAt: row.lastTransactionOccurredAt.toISOString(),
   };
 }
 
@@ -824,6 +854,9 @@ export async function getSpenderList(
           : serializeComparison(item, comparisonByFanId.get(item.fanId)),
       },
       lifetimeLastTransactionAt: serializeTimestamp(item.lifetimeLastTransactionAt),
+      lastFanMessageAt: serializeTimestamp(item.conversationLastFanMessageAt),
+      conversation: serializeSpenderConversation(item),
+      lastTransaction: serializeSpenderLastTransaction(item),
       retentionStatus: classifyRetention({
         lifetimeLastTransactionAt: item.lifetimeLastTransactionAt,
         lifetimeCreatorNetAmountMills: millsToNumber(item.lifetimeCreatorNetAmountMills),

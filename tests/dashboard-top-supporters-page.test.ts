@@ -49,6 +49,25 @@ function makeItem(overrides: Partial<SpenderListResponse["items"][number]> = {})
       comparison: null,
     },
     lifetimeLastTransactionAt: "2026-02-10T12:00:00.000Z",
+    lastFanMessageAt: "2026-05-26T18:54:00.000Z",
+    conversation: {
+      platformConversationId: "conversation-001",
+      unreadCount: 2,
+      lastMessageAt: "2026-05-26T18:54:00.000Z",
+      lastFanMessageAt: "2026-05-26T18:54:00.000Z",
+      lastModelMessageAt: null,
+      lastMessagePreview: "beach or hike - which one wins for you?",
+      storedMessageCount: 1,
+      messageCoverageStatus: "complete",
+      messageBackfillComplete: true,
+    },
+    lastTransaction: {
+      canonicalType: "tip",
+      transactionState: "posted",
+      grossAmountMills: 250_000,
+      creatorNetAmountMills: 250_000,
+      occurredAt: "2026-02-10T12:00:00.000Z",
+    },
     retentionStatus: "needs_reactivation",
     ...overrides,
   };
@@ -144,7 +163,13 @@ describe("TopSupportersPage", () => {
     expect(html).toContain("Inactive");
     expect(html).toContain("Needs reactivation");
     expect(html).toContain("REACTIVATE");
-    expect(html).toContain("Last Activity");
+    expect(html).toContain("Last Chat");
+    expect(html).toContain("Last Spend");
+    expect(html).toContain("Unanswered");
+    expect(html).toContain("2 unread");
+    expect(html).toContain("beach or hike - which one wins for you?");
+    expect(html).toContain("Tip");
+    expect(html).not.toContain("Last Activity");
     expect(html).not.toContain("Last activity ");
   });
 
