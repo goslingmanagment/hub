@@ -1033,7 +1033,7 @@ export const fansSearchResponseSchema = z.object({
 
 const pageConversationFanSchema = z.object({
   fanId: intId,
-  platform: z.literal("fansly"),
+  platform: platformEnum,
   platformUserId: z.string(),
   pageAlias: z.string().nullable(),
   username: z.string().nullable(),

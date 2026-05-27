@@ -56,6 +56,7 @@ import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
   getFanslyDmMessageSyncExcludedReason,
   isFanslyDmMessageSyncExcluded,
+  normalizeDmMessageText,
   toMills,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
@@ -431,7 +432,7 @@ function assertDmSharedRateLimitEnabled(app: AppContext) {
 }
 
 function truncateDmPreview(content: string | null | undefined, maxLength = 280) {
-  const normalized = (content ?? "").trim();
+  const normalized = normalizeDmMessageText(content);
   if (!normalized) {
     return null;
   }
@@ -3049,7 +3050,7 @@ async function executeOnlyFansDmMessagesChunk(
             senderPlatformUserId: onlyMonsterSenderPlatformUserId(message),
             senderRole: resolveOnlyMonsterSenderRole(message),
             createdAt,
-            content: message.text ?? "",
+            content: normalizeDmMessageText(message.text),
             totalTipAmountCents: 0,
             inReplyToMessageId: null,
             inReplyToRootMessageId: null,

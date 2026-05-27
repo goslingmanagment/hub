@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import type { PageConversationPreviewResponse } from "@agency_hub_core/contracts";
+import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import { usePageConversationPreview } from "@/api/queries";
 import { formatRelativeTime, formatUsdFromCents } from "@/lib/format";
 
@@ -183,7 +184,7 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
                     : "bg-hover text-text-primary"
                 }`}
               >
-                <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                <p className="whitespace-pre-wrap break-words">{normalizeDmMessageText(msg.content)}</p>
                 <div className="mt-1 flex items-center gap-2">
                   <span className="text-[11px] text-text-muted">
                     {formatRelativeTime(msg.createdAt)}

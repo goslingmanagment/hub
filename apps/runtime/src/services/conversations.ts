@@ -8,15 +8,16 @@ import type {
 } from "@agency_hub_core/contracts";
 import {
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
+  findPageSummaryByLabel,
   getPageConversationMessages,
   getPageConversationPreview,
   getPageDmSyncCoverage,
 } from "@agency_hub_core/db";
+import { normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
-import { NotFoundError } from "./errors.ts";
-import { resolveAccessibleFanslyPage } from "./fansly-page.ts";
+import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
+import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { buildConversationHistorySyncUx } from "./sync-ux.ts";
 import { getSyncStatusSnapshot, mapDomainBlockToSyncUx } from "./sync-status.ts";
 
@@ -100,6 +101,22 @@ async function resolveConversationHistorySyncUx(
   });
 }
 
+async function resolveAccessiblePage(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+) {
+  const page = await findPageSummaryByLabel(app.db, pageLabel);
+  if (!page) {
+    throw new NotFoundError(`Page "${pageLabel}" was not found`);
+  }
+  if (!canAccessPage(principal, page.id)) {
+    throw new ForbiddenError();
+  }
+
+  return page;
+}
+
 export async function getPageConversationPreviewReport(
   app: AppContext,
   principal: AuthPrincipal,
@@ -107,7 +124,7 @@ export async function getPageConversationPreviewReport(
   query: PageConversationPreviewQuery,
 ): Promise<PageConversationPreviewResponse> {
   requireDashboardUser(principal);
-  const page = await resolveAccessibleFanslyPage(app, principal, params.pageLabel, "Conversation history");
+  const page = await resolveAccessiblePage(app, principal, params.pageLabel);
   const [preview, freshness] = await Promise.all([
     getPageConversationPreview(app.db, {
       platformAccountId: page.id,
@@ -128,7 +145,7 @@ export async function getPageConversationPreviewReport(
     fan: preview.fan
       ? {
         fanId: preview.fan.id,
-        platform: "fansly",
+        platform: page.platform,
         platformUserId: preview.fan.platformUserId,
         pageAlias: preview.fan.pageAlias,
         username: preview.fan.username,
@@ -152,7 +169,7 @@ export async function getPageConversationPreviewReport(
       senderPlatformUserId: message.senderPlatformUserId,
       senderRole: message.senderRole,
       createdAt: message.createdAt.toISOString(),
-      content: message.content,
+      content: normalizeDmMessageText(message.content),
       totalTipAmountCents: message.totalTipAmountCents,
     })),
   };
@@ -165,7 +182,7 @@ export async function getPageConversationMessagesReport(
   query: PageConversationMessagesQuery,
 ): Promise<PageConversationMessagesResponse> {
   requireDashboardUser(principal);
-  const page = await resolveAccessibleFanslyPage(app, principal, params.pageLabel, "Conversation history");
+  const page = await resolveAccessiblePage(app, principal, params.pageLabel);
   const conversation = await getPageConversationMessages(app.db, {
     platformAccountId: page.id,
     platformConversationId: params.conversationId,
@@ -193,7 +210,7 @@ export async function getPageConversationMessagesReport(
     messages: conversation.messages.map((message) => ({
       messageId: message.messageId,
       senderRole: message.senderRole,
-      content: message.content,
+      content: normalizeDmMessageText(message.content),
       createdAt: message.createdAt.toISOString(),
       tipAmountCents: message.tipAmountCents,
     })),

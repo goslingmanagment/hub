@@ -8419,7 +8419,7 @@ describe("api integration", () => {
     expect(workboard.statusCode).toBe(200);
   });
 
-  it("enforces conversation and workboard page access and rejects non-Fansly pages", async (context) => {
+  it("enforces conversation and workboard page access", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -8500,9 +8500,9 @@ describe("api integration", () => {
       url: "/api/v1/pages/lana-of-workboard/conversations/any/messages",
       headers: { cookie: ownerCookie },
     });
-    expect(nonFanslyMessages.statusCode).toBe(400);
+    expect(nonFanslyMessages.statusCode).toBe(404);
     expect(nonFanslyMessages.json()).toMatchObject({
-      message: "Conversation history is only supported for Fansly pages",
+      message: "Conversation messages were not found",
     });
 
     const appContext = createTestAppContext(testDb);

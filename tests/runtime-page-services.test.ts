@@ -142,6 +142,88 @@ describe("runtime page services", () => {
     expect(result.conversation.messageCoverageStatus).toBe("complete");
   });
 
+  it("allows OnlyFans conversation previews", async () => {
+    authMocks.canAccessPage.mockReturnValue(true);
+    repoMocks.findPageSummaryByLabel.mockResolvedValue({
+      id: 9,
+      label: "lora-vip",
+      platform: "onlyfans",
+      username: "loravievip",
+      displayName: "Lora VIP",
+      followerCount: null,
+      subscriberCount: null,
+      lastLightSyncAt: new Date("2026-03-24T11:00:00.000Z"),
+      lastFollowerSyncAt: null,
+      modelSlug: "lora",
+      modelName: "Lora",
+    });
+    repoMocks.getPageDmSyncCoverage.mockResolvedValue({
+      lastConversationChunkSucceededAt: new Date("2026-03-24T11:50:00.000Z"),
+      lastConversationFullSweepAt: null,
+      lastMessageChunkSucceededAt: new Date("2026-03-24T11:55:00.000Z"),
+      pendingMessageBackfillCount: 0,
+      partialWindowConversationCount: 0,
+      excludedConversationCount: 0,
+      unresolvedConversationCount: 0,
+      previewReadyConversationCount: 1,
+    });
+    repoMocks.getPageConversationPreview.mockResolvedValue({
+      fan: {
+        id: 42,
+        platformUserId: "87790113",
+        pageAlias: null,
+        username: null,
+        displayName: null,
+      },
+      conversation: {
+        platformConversationId: "87790113",
+        storedMessageCount: 1,
+        messageCoverageStatus: "complete",
+        messageBackfillComplete: true,
+        messageSyncEligibility: "eligible",
+        messageSyncExcludedReason: null,
+        lastMessageSyncAt: new Date("2026-03-24T11:55:00.000Z"),
+        unreadCount: 0,
+        lastMessageAt: new Date("2026-03-24T11:55:00.000Z"),
+      },
+      messages: [{
+        platformMessageId: "of-message-1",
+        senderPlatformUserId: "87790113",
+        senderRole: "fan",
+        createdAt: new Date("2026-03-24T11:55:00.000Z"),
+        content: "<p>hey &amp; hi</p>",
+        totalTipAmountCents: 0,
+      }],
+    });
+    syncStatusMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-24T12:00:00.000Z",
+      pages: [{
+        pageId: 9,
+        blocks: {
+          messages_live: { state: "up_to_date", error: null },
+          messages_history: { state: "up_to_date", error: null },
+        },
+      }],
+    });
+
+    const result = await getPageConversationPreviewReport(
+      { db: {} } as never,
+      {} as never,
+      { pageLabel: "lora-vip", platformConversationId: "87790113" },
+      { limit: 10 },
+    );
+
+    expect(result.page.platform).toBe("onlyfans");
+    expect(result.fan).toMatchObject({
+      platform: "onlyfans",
+      platformUserId: "87790113",
+    });
+    expect(result.messages[0]).toMatchObject({
+      platformMessageId: "of-message-1",
+      content: "hey & hi",
+    });
+  });
+
   it("uses workboard-specific unsupported-page errors", async () => {
     authMocks.canAccessPage.mockReturnValue(true);
     repoMocks.findPageSummaryByLabel.mockResolvedValue({

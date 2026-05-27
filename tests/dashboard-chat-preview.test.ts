@@ -135,6 +135,31 @@ describe("ChatPreviewPanel", () => {
     expect(html).toContain("Tip $20.00");
   });
 
+  it("renders stored HTML message bodies as plain text", () => {
+    queryMocks.usePageConversationPreview.mockReturnValue({
+      data: {
+        messageSyncUx: buildSyncUx(),
+        conversation: {
+          messageBackfillComplete: true,
+        },
+        messages: [{
+          platformMessageId: "msg-html",
+          senderRole: "model",
+          createdAt: "2026-03-24T11:55:00.000Z",
+          content: "<p>Privet Sladkiy, how its going?</p>",
+          totalTipAmountCents: 0,
+        }],
+      },
+      isError: false,
+      isLoading: false,
+    });
+
+    const html = renderPanel();
+
+    expect(html).toContain("Privet Sladkiy, how its going?");
+    expect(html).not.toContain("&lt;p&gt;");
+  });
+
   it("uses data-loading language for transient empty previews", () => {
     queryMocks.usePageConversationPreview.mockReturnValue({
       data: {
