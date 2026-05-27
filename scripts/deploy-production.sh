@@ -132,8 +132,10 @@ fi
 STACK_RECREATED=0
 ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback"
 ROLLBACK_IMAGE_AVAILABLE=0
+SCHEMA_BASELINE_CAPTURED=0
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
+REMOTE_COMPOSE="docker compose --env-file .env.production -f docker-compose.production.yml"
 REMOTE_RELEASE_FILES=()
 for file in \
   Dockerfile \
@@ -155,7 +157,7 @@ run_remote() {
 
 dump_remote_diagnostics() {
   log "Remote verification failed; collecting docker compose status and recent logs"
-  run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; docker compose -f docker-compose.production.yml ps; printf '\\n'; docker compose -f docker-compose.production.yml logs --tail=200 postgres api worker; exit 0" \
+  run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; ${REMOTE_COMPOSE} ps; printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 postgres api worker; exit 0" \
     || log "Unable to collect remote diagnostics"
 }
 
@@ -177,8 +179,14 @@ rollback_remote_stack() {
     return 0
   fi
 
+  if schema_migrations_changed_since_baseline; then
+    log "Rollback skipped; schema_migrations changed during this deploy"
+    log "The previous image may not be compatible with the migrated database; inspect diagnostics before choosing a manual rollback"
+    return 0
+  fi
+
   log "Rolling back remote stack to ${ROLLBACK_IMAGE_TAG}"
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; docker tag $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$IMAGE_TAG"); docker compose -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build" \
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; docker tag $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$IMAGE_TAG"); ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build" \
     || {
       log "Rollback command failed"
       return 0
@@ -189,6 +197,21 @@ rollback_remote_stack() {
   else
     log "Rollback health check did not reach 200"
   fi
+}
+
+capture_remote_schema_migrations() {
+  local output_file="$1"
+
+  run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; ${REMOTE_COMPOSE} exec -T postgres sh -c 'PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select id from schema_migrations order by id\" 2>/dev/null' 2>/dev/null || true" >"$output_file"
+}
+
+schema_migrations_changed_since_baseline() {
+  if [[ "${SCHEMA_BASELINE_CAPTURED:-0}" != "1" ]]; then
+    return 1
+  fi
+
+  capture_remote_schema_migrations "$SCHEMA_AFTER_FILE" || return 1
+  ! cmp -s "$SCHEMA_BEFORE_FILE" "$SCHEMA_AFTER_FILE"
 }
 
 remote_curl_status() {
@@ -271,6 +294,8 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 HEALTH_FILE="${TEMP_DIR}/health.json"
 SYNC_FILE="${TEMP_DIR}/sync.json"
 DASHBOARD_FILE="${TEMP_DIR}/dashboard.html"
+SCHEMA_BEFORE_FILE="${TEMP_DIR}/schema-before.txt"
+SCHEMA_AFTER_FILE="${TEMP_DIR}/schema-after.txt"
 
 log "Validating remote Docker access"
 run_remote "set -euo pipefail; docker version >/dev/null"
@@ -287,11 +312,18 @@ tar -C "$ROOT_DIR" -cf - "${REMOTE_RELEASE_FILES[@]}" | ssh "${SSH_ARGS[@]}" "$R
   "mkdir -p ${REMOTE_APP_DIR_ESCAPED} && tar -xf - -C ${REMOTE_APP_DIR_ESCAPED}"
 
 log "Validating remote prerequisites"
-run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.production && docker compose version >/dev/null"
+run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.production && docker compose version >/dev/null && ${REMOTE_COMPOSE} config >/dev/null"
 SYNC_MONITORING_TOKEN="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; set -a; source .env.production; printf '%s' \"\${HEALTH_SYNC_MONITORING_TOKEN:-}\"")"
 
+if capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"; then
+  SCHEMA_BASELINE_CAPTURED=1
+  log "Captured remote schema migration state for rollback safety"
+else
+  log "Unable to capture remote schema migration state; rollback will only restore the image"
+fi
+
 log "Recreating the remote production stack"
-run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && docker compose -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build"
+run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build"
 STACK_RECREATED=1
 
 log "Waiting for ${VERIFY_URL%/}/api/v1/health"

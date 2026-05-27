@@ -45,10 +45,14 @@ describe("compose config", () => {
 
   it("docker-compose.production.yml keeps the API behind loopback and uses worker readiness health", async () => {
     const text = await readComposeFile("docker-compose.production.yml");
+    const postgres = getServiceBlock(text, "postgres");
     const api = getServiceBlock(text, "api");
     const worker = getServiceBlock(text, "worker");
 
+    expect(postgres).not.toContain("env_file:");
+    expect(postgres).toContain("POSTGRES_PASSWORD");
     expect(api).toContain('"127.0.0.1:3000:3000"');
+    expect(api).toContain(".env.production");
     expect(worker).toContain("WORKER_HEALTH_FILE");
     expect(worker).toContain("stale worker health file");
   });

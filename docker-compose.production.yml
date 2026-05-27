@@ -2,8 +2,10 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
-    env_file:
-      - .env.production
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agency_hub_core}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

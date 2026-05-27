@@ -54,14 +54,15 @@ openssl rand -base64 32
 - `POSTGRES_PASSWORD`
 - `DATABASE_URL`
 - `APP_ENCRYPTION_KEY`
+- `TRUST_PROXY=true` when the app is behind the production TLS reverse proxy
 - any optional Telegram values you want enabled
 
-The default production compose file expects the bundled Postgres container and binds the app to `127.0.0.1:3000`. Put a TLS reverse proxy on the same host in front of that loopback port.
+The default production compose file expects the bundled Postgres container and binds the app to `127.0.0.1:3000`. Put a TLS reverse proxy on the same host in front of that loopback port. Compose reads interpolation values from `.env.production`, while only the API and worker receive the full app environment; Postgres receives only `POSTGRES_*`.
 
 5. Build and start the stack:
 
 ```bash
-docker compose -f docker-compose.production.yml up -d --build
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
 ```
 
 6. Wait for the API to come up and confirm health:
@@ -76,7 +77,7 @@ curl http://127.0.0.1:3000/api/v1/health
 
 ```bash
 export INITIAL_OWNER_PASSWORD='change-me-now'
-docker compose -f docker-compose.production.yml exec api \
+docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js user add \
   --username owner \
   --role owner \
@@ -102,7 +103,7 @@ Sign in with the owner account you just created. The dashboard onboarding flow c
 ### Add the first model from the CLI
 
 ```bash
-docker compose -f docker-compose.production.yml exec api \
+docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js model add \
   --slug lora \
   --name "Lora"
@@ -113,7 +114,7 @@ docker compose -f docker-compose.production.yml exec api \
 Fansly:
 
 ```bash
-docker compose -f docker-compose.production.yml exec api \
+docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js page add fansly \
   --model lora \
   --label lora-main \
@@ -125,7 +126,7 @@ The session file must already exist inside the container if you use the CLI this
 OnlyFans via OnlyMonster:
 
 ```bash
-docker compose -f docker-compose.production.yml exec api \
+docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js page add onlyfans \
   --model lora \
   --label lora-of \
@@ -138,7 +139,7 @@ The token file must already exist inside the container if you use the CLI this w
 ### Trigger a manual sync
 
 ```bash
-docker compose -f docker-compose.production.yml exec api \
+docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js sync \
   --page lora-main \
   --scope all
@@ -147,7 +148,7 @@ docker compose -f docker-compose.production.yml exec api \
 ### Inspect sync state from the CLI
 
 ```bash
-docker compose -f docker-compose.production.yml exec api \
+docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js sync status
 ```
 
@@ -157,7 +158,7 @@ When the server already has the repo checked out:
 
 ```bash
 git pull
-docker compose -f docker-compose.production.yml up -d --build
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
 ```
 
 This is the intended update path. It rebuilds the production image, recreates the containers, and lets startup handle migrations automatically. No separate migration command is required.
@@ -177,9 +178,9 @@ What the script does:
 - builds `agency_hub_core/runtime:production` locally
 - streams that image to the remote host with `docker load`
 - syncs release files into `/opt/agency-hub` by default
-- runs `docker compose -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build`
+- runs `docker compose --env-file .env.production -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build`
 - verifies `/api/v1/health`, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
-- if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured, then prints `docker compose ps` plus recent `postgres`, `api`, and `worker` logs automatically
+- if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured and `schema_migrations` did not change during the failed deploy, then prints `docker compose ps` plus recent `postgres`, `api`, and `worker` logs automatically
 
 The script assumes the remote server already has `/opt/agency-hub/.env.production` populated.
 
@@ -210,8 +211,8 @@ curl -i -H "x-monitoring-token: $HEALTH_SYNC_MONITORING_TOKEN" \
 Check container logs:
 
 ```bash
-docker compose -f docker-compose.production.yml logs --tail=200 api
-docker compose -f docker-compose.production.yml logs --tail=200 worker
+docker compose --env-file .env.production -f docker-compose.production.yml logs --tail=200 api
+docker compose --env-file .env.production -f docker-compose.production.yml logs --tail=200 worker
 ```
 
 Common causes are an invalid `DATABASE_URL`, a bad `APP_ENCRYPTION_KEY`, or missing page credentials.
@@ -221,7 +222,7 @@ Common causes are an invalid `DATABASE_URL`, a bad `APP_ENCRYPTION_KEY`, or miss
 - Confirm Postgres is up:
 
 ```bash
-docker compose -f docker-compose.production.yml ps
+docker compose --env-file .env.production -f docker-compose.production.yml ps
 ```
 
 - Confirm the app can connect to the DSN in `.env.production`.
@@ -235,7 +236,7 @@ That means the app is running but one or more pages are stale or have failed/sta
 ```bash
 curl -s -H "x-monitoring-token: $HEALTH_SYNC_MONITORING_TOKEN" \
   http://127.0.0.1:3000/api/v1/health/sync
-docker compose -f docker-compose.production.yml exec api node apps/runtime/dist/cli.js sync status
+docker compose --env-file .env.production -f docker-compose.production.yml exec api node apps/runtime/dist/cli.js sync status
 ```
 
 ### Dashboard route shows a 404 or blank page
