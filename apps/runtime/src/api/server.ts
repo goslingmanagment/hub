@@ -1,4 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
@@ -219,6 +222,44 @@ function serializeTimestamp(value: Date | string) {
 
 function serializeNullableTimestamp(value: Date | string | null | undefined) {
   return value == null ? null : serializeTimestamp(value);
+}
+
+type DashboardDistResolverOptions = {
+  cwd?: string;
+  moduleUrl?: string;
+  pathExists?: (path: string) => boolean;
+};
+
+function ancestorDirs(start: string) {
+  const dirs: string[] = [];
+  let current = resolve(start);
+
+  while (true) {
+    dirs.push(current);
+    const parent = dirname(current);
+    if (parent === current) {
+      return dirs;
+    }
+    current = parent;
+  }
+}
+
+export function resolveDashboardDistPath(options: DashboardDistResolverOptions = {}) {
+  const pathExists = options.pathExists ?? existsSync;
+  const moduleDir = dirname(fileURLToPath(options.moduleUrl ?? import.meta.url));
+  const roots = new Set([
+    ...ancestorDirs(options.cwd ?? process.cwd()),
+    ...ancestorDirs(moduleDir),
+  ]);
+
+  for (const root of roots) {
+    const candidate = resolve(root, "apps/dashboard/dist");
+    if (pathExists(resolve(candidate, "index.html"))) {
+      return candidate;
+    }
+  }
+
+  return null;
 }
 
 function serializeEpochMillisecondsTimestamp(value: Date | string | number | bigint) {
@@ -2485,10 +2526,8 @@ export async function buildApiServer(appContext: AppContext) {
   });
 
   // SPA static file serving (production only)
-  const { existsSync } = await import("node:fs");
-  const { resolve } = await import("node:path");
-  const dashboardDist = resolve(process.cwd(), "apps/dashboard/dist");
-  if (existsSync(dashboardDist)) {
+  const dashboardDist = resolveDashboardDistPath();
+  if (dashboardDist) {
     const fastifyStatic = (await import("@fastify/static")).default;
     await server.register(fastifyStatic, { root: dashboardDist, prefix: "/", wildcard: false });
     server.setNotFoundHandler((req, reply) => {

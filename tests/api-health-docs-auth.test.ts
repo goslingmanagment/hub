@@ -1,3 +1,8 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createLogger } from "@agency_hub_core/shared";
@@ -25,7 +30,7 @@ vi.mock("../apps/runtime/src/services/health.ts", () => ({
   getSystemHealth: routeMocks.getSystemHealth,
 }));
 
-const { buildApiServer } = await import("../apps/runtime/src/api/server.ts");
+const { buildApiServer, resolveDashboardDistPath } = await import("../apps/runtime/src/api/server.ts");
 const { SESSION_COOKIE_NAME } = await import("../apps/runtime/src/services/auth.ts");
 
 function createRouteTestContext(input?: {
@@ -95,6 +100,28 @@ const leadPrincipal = {
   },
   assignedPageIds: [],
 };
+
+describe("dashboard static route resolution", () => {
+  it("finds dashboard dist from the API module path when cwd is elsewhere", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-static-"));
+    const repoDir = path.join(tempDir, "repo");
+    const dashboardDist = path.join(repoDir, "apps/dashboard/dist");
+    const runtimeDist = path.join(repoDir, "apps/runtime/dist");
+
+    try {
+      await mkdir(dashboardDist, { recursive: true });
+      await mkdir(runtimeDist, { recursive: true });
+      await writeFile(path.join(dashboardDist, "index.html"), "<!doctype html><div id=\"root\"></div>");
+
+      expect(resolveDashboardDistPath({
+        cwd: path.join(tempDir, "outside"),
+        moduleUrl: pathToFileURL(path.join(runtimeDist, "api.js")).href,
+      })).toBe(dashboardDist);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("health and docs route auth", () => {
   afterEach(() => {
