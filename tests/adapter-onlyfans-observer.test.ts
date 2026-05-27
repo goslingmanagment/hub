@@ -86,5 +86,7 @@ describe("adapter hardening", () => {
     expect(serialized).not.toContain("cursor-secret-123");
     expect(serialized).not.toContain("next-secret-cursor");
     expect(serialized).not.toContain("om-super-secret-token");
+    await adapter.close();
   });
+
 });

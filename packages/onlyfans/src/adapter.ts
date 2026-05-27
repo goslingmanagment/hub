@@ -194,6 +194,7 @@ export class OnlyFansAdapter {
       },
     );
   }
+
   async getTrackingLinkUsersPage(
     context: OnlyFansRequestContext,
     platformAccountId: string,
@@ -231,55 +232,6 @@ export class OnlyFansAdapter {
       platformAccountId,
       "trial",
       params,
-    );
-  }
-
-  private async getLinkUsersPage(
-    context: OnlyFansRequestContext,
-    platformAccountId: string,
-    linkKind: "tracking" | "trial",
-    params?: {
-      collectedFrom?: Date | null;
-      collectedTo?: Date | null;
-      cursor?: string | null;
-      limit?: number;
-      linkId?: string | null;
-      pageIndex?: number;
-    },
-  ) {
-    const endpointSuffix = linkKind === "tracking"
-      ? "tracking-link-users"
-      : "trial-link-users";
-    return this.request<OnlyMonsterCursorResponse<OnlyMonsterLinkUser>>(
-      context,
-      `/api/v0/platforms/onlyfans/accounts/${platformAccountId}/${endpointSuffix}`,
-      {
-        operation: `onlymonster_${linkKind}_link_users`,
-        endpointTemplate: `/api/v0/platforms/onlyfans/accounts/:platformAccountId/${endpointSuffix}`,
-        category: "statistics",
-        query: {
-          collected_from: params?.collectedFrom?.toISOString(),
-          collected_to: params?.collectedTo?.toISOString(),
-          cursor: params?.cursor ?? undefined,
-          limit: params?.limit ? String(params.limit) : undefined,
-          link_id: params?.linkId ?? undefined,
-        },
-        requestShape: {
-          collectedFromPresent: Boolean(params?.collectedFrom),
-          collectedToPresent: Boolean(params?.collectedTo),
-          cursorPresent: Boolean(params?.cursor),
-          limit: params?.limit ?? 100,
-          linkIdPresent: Boolean(params?.linkId),
-        },
-        pagination: {
-          pageIndex: params?.pageIndex ?? 0,
-          cursorPresent: Boolean(params?.cursor),
-        },
-        summarizeResponse: (parsed) => ({
-          returnedItems: parsed.items.length,
-          cursorPresent: Boolean(parsed.cursor),
-        }),
-      },
     );
   }
 
@@ -350,6 +302,54 @@ export class OnlyFansAdapter {
     );
   }
 
+  private async getLinkUsersPage(
+    context: OnlyFansRequestContext,
+    platformAccountId: string,
+    linkKind: "tracking" | "trial",
+    params?: {
+      collectedFrom?: Date | null;
+      collectedTo?: Date | null;
+      cursor?: string | null;
+      limit?: number;
+      linkId?: string | null;
+      pageIndex?: number;
+    },
+  ) {
+    const endpointSuffix = linkKind === "tracking"
+      ? "tracking-link-users"
+      : "trial-link-users";
+    return this.request<OnlyMonsterCursorResponse<OnlyMonsterLinkUser>>(
+      context,
+      `/api/v0/platforms/onlyfans/accounts/${platformAccountId}/${endpointSuffix}`,
+      {
+        operation: `onlymonster_${linkKind}_link_users`,
+        endpointTemplate: `/api/v0/platforms/onlyfans/accounts/:platformAccountId/${endpointSuffix}`,
+        category: "statistics",
+        query: {
+          collected_from: params?.collectedFrom?.toISOString(),
+          collected_to: params?.collectedTo?.toISOString(),
+          cursor: params?.cursor ?? undefined,
+          limit: params?.limit ? String(params.limit) : undefined,
+          link_id: params?.linkId ?? undefined,
+        },
+        requestShape: {
+          collectedFromPresent: Boolean(params?.collectedFrom),
+          collectedToPresent: Boolean(params?.collectedTo),
+          cursorPresent: Boolean(params?.cursor),
+          limit: params?.limit ?? 100,
+          linkIdPresent: Boolean(params?.linkId),
+        },
+        pagination: {
+          pageIndex: params?.pageIndex ?? 0,
+          cursorPresent: Boolean(params?.cursor),
+        },
+        summarizeResponse: (parsed) => ({
+          returnedItems: parsed.items.length,
+          cursorPresent: Boolean(parsed.cursor),
+        }),
+      },
+    );
+  }
 
   private async request<TParsed>(
     context: OnlyFansRequestContext,
