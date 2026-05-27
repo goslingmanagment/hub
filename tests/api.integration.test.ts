@@ -4561,6 +4561,197 @@ describe("api integration", () => {
     });
   });
 
+  it("filters v2 spenders by retention status and exposes lifetimeLastTransactionAt", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const [activeFan, coolingFan, inactiveFan, reactivationFan, deletedFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-retention-active",
+        username: "active_buyer",
+        displayName: "Active Buyer",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-retention-cooling",
+        username: "cooling_buyer",
+        displayName: "Cooling Buyer",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-retention-inactive",
+        username: "inactive_buyer",
+        displayName: "Inactive Buyer",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-retention-reactivate",
+        username: "reactivate_buyer",
+        displayName: "Reactivate Buyer",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-retention-deleted",
+        metadata: {},
+        deletedDetectedAt: new Date("2026-05-20T12:00:00.000Z"),
+      },
+    ]);
+
+    for (const fan of [activeFan, coolingFan, inactiveFan, reactivationFan, deletedFan]) {
+      await upsertFanPage(testDb.db, {
+        fanId: fan.id,
+        platformAccountId: fixture.lanaPage.id,
+        isFollower: true,
+        isSubscriber: false,
+      });
+    }
+
+    // Active: bought 2 days ago, low value
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: activeFan.id,
+      transactionId: "tx-retention-active",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 2_000n,
+      sourceDestinationAmountMills: 2_000n,
+      creatorNetAmountMills: 2_000n,
+      occurredAt: new Date("2026-05-25T12:00:00.000Z"),
+    });
+
+    // Cooling: bought 30 days ago
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: coolingFan.id,
+      transactionId: "tx-retention-cooling",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 3_000n,
+      sourceDestinationAmountMills: 3_000n,
+      creatorNetAmountMills: 3_000n,
+      occurredAt: new Date("2026-04-27T12:00:00.000Z"),
+    });
+
+    // Inactive low-value: bought 90 days ago, < $100 lifetime
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: inactiveFan.id,
+      transactionId: "tx-retention-inactive",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 4_000n,
+      sourceDestinationAmountMills: 4_000n,
+      creatorNetAmountMills: 4_000n,
+      occurredAt: new Date("2026-02-15T12:00:00.000Z"),
+    });
+
+    // Needs reactivation: bought 90 days ago, > $100 lifetime
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: reactivationFan.id,
+      transactionId: "tx-retention-reactivate",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 150_000n,
+      sourceDestinationAmountMills: 150_000n,
+      creatorNetAmountMills: 150_000n,
+      occurredAt: new Date("2026-02-15T12:00:00.000Z"),
+    });
+
+    await upsertTransaction(testDb.db, {
+      platformAccountId: fixture.lanaPage.id,
+      fanId: deletedFan.id,
+      transactionId: "tx-retention-deleted",
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 900_000n,
+      sourceDestinationAmountMills: 900_000n,
+      creatorNetAmountMills: 900_000n,
+      occurredAt: new Date("2026-05-25T12:00:00.000Z"),
+    });
+
+    await recalculateFanPageSpend(testDb.db, fixture.lanaPage.id);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-27T12:00:00.000Z"));
+
+    try {
+      const ownerCookie = await loginOwnerCookie(server);
+
+      const allResponse = await server.inject({
+        method: "GET",
+        url: "/api/v2/spenders?scope=page&pageLabel=lana&period=lifetime&limit=50&offset=0",
+        headers: { cookie: ownerCookie },
+      });
+      expect(allResponse.statusCode).toBe(200);
+      const allBody = allResponse.json();
+      const allIds = allBody.items.map((item: { fan: { platformUserId: string } }) => item.fan.platformUserId).sort();
+      expect(allIds).toContain("fan-retention-active");
+      expect(allIds).toContain("fan-retention-cooling");
+      expect(allIds).toContain("fan-retention-inactive");
+      expect(allIds).toContain("fan-retention-reactivate");
+      expect(allIds).not.toContain("fan-retention-deleted");
+      const reactivateRow = allBody.items.find((item: { fan: { platformUserId: string } }) => item.fan.platformUserId === "fan-retention-reactivate");
+      expect(reactivateRow.retentionStatus).toBe("needs_reactivation");
+      expect(reactivateRow.lifetimeLastTransactionAt).toBe("2026-02-15T12:00:00.000Z");
+
+      const activeResponse = await server.inject({
+        method: "GET",
+        url: "/api/v2/spenders?scope=page&pageLabel=lana&period=lifetime&limit=50&offset=0&retentionStatus=active",
+        headers: { cookie: ownerCookie },
+      });
+      expect(activeResponse.statusCode).toBe(200);
+      const activeIds = activeResponse.json().items.map((item: { fan: { platformUserId: string } }) => item.fan.platformUserId);
+      expect(activeIds).toEqual(["fan-retention-active"]);
+      expect(activeResponse.json().total).toBe(1);
+
+      const coolingResponse = await server.inject({
+        method: "GET",
+        url: "/api/v2/spenders?scope=page&pageLabel=lana&period=lifetime&limit=50&offset=0&retentionStatus=cooling",
+        headers: { cookie: ownerCookie },
+      });
+      expect(coolingResponse.statusCode).toBe(200);
+      const coolingIds = coolingResponse.json().items.map((item: { fan: { platformUserId: string } }) => item.fan.platformUserId).sort();
+      // fan-001 from the shared fixture last bought 2026-03-07 (~80 days ago) — not cooling.
+      expect(coolingIds).toEqual(["fan-retention-cooling"]);
+
+      const inactiveResponse = await server.inject({
+        method: "GET",
+        url: "/api/v2/spenders?scope=page&pageLabel=lana&period=lifetime&limit=50&offset=0&retentionStatus=inactive",
+        headers: { cookie: ownerCookie },
+      });
+      expect(inactiveResponse.statusCode).toBe(200);
+      const inactiveIds = inactiveResponse.json().items.map((item: { fan: { platformUserId: string } }) => item.fan.platformUserId).sort();
+      // fan-001 lifetime is $7 net (< $100), so it lands in inactive too.
+      expect(inactiveIds).toEqual(["fan-001", "fan-retention-inactive"]);
+
+      const reactivationResponse = await server.inject({
+        method: "GET",
+        url: "/api/v2/spenders?scope=page&pageLabel=lana&period=lifetime&limit=50&offset=0&retentionStatus=needs_reactivation",
+        headers: { cookie: ownerCookie },
+      });
+      expect(reactivationResponse.statusCode).toBe(200);
+      const reactivationIds = reactivationResponse.json().items.map((item: { fan: { platformUserId: string } }) => item.fan.platformUserId);
+      expect(reactivationIds).toEqual(["fan-retention-reactivate"]);
+      expect(reactivationResponse.json().total).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("serves v2 spender detail with visible-platform totals and scoped page breakdowns", async (context) => {
     if (!testDb || !server) {
       context.skip();

@@ -777,7 +777,10 @@ function buildSpenderQueryClause(
 ) {
   const pattern = buildContainsSearchPattern(query);
   if (!pattern) {
-    return eq(fans.platform, input.platform);
+    return and(
+      eq(fans.platform, input.platform),
+      sql`${fans.deletedDetectedAt} is null`,
+    )!;
   }
 
   const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;

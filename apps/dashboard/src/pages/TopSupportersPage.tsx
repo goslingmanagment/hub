@@ -261,11 +261,6 @@ export function TopSupportersPage() {
                     {fanLabel.secondaryPlatformHandle && (
                       <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
                     )}
-                    {lastActive && (
-                      <div className="text-[11px] text-text-muted mt-0.5">
-                        Last activity {formatRelativeTime(lastActive)}
-                      </div>
-                    )}
                   </td>
                   <td className="px-4 py-3 text-right text-sm font-medium tabular-nums text-text-primary">
                     {formatUsdFromMills(spent)}
