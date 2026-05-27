@@ -45,9 +45,6 @@ export function resolveStreamsForScope(
   }
 
   if (scope === "messages") {
-    if (platform !== "fansly") {
-      throw new Error("Message sync is not supported for OnlyFans pages");
-    }
     return ["dm_conversations", "dm_messages"];
   }
 
@@ -62,7 +59,7 @@ export function resolveStreamsForScope(
       "dm_conversations",
       "dm_messages",
     ]
-    : ["light", "transactions"];
+    : ["light", "transactions", "dm_conversations", "dm_messages"];
 }
 
 export async function requestPageSync(

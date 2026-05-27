@@ -35,6 +35,7 @@ type DmConversationCursorState = {
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
   lastFullSweepCompletedAt: string | null;
+  snapshotConversationIds?: string[];
 };
 
 type DmMessagesCursorState = {
@@ -79,6 +80,18 @@ function asNullableNumber(value: unknown) {
 
 function asNullableString(value: unknown) {
   return value === null || typeof value === "string" ? value : null;
+}
+
+function asOptionalStringArray(value: unknown) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const items = value.filter((item): item is string => typeof item === "string");
+  return items.length === value.length ? items : null;
 }
 
 function parseRevision(revision: number | null | undefined) {
@@ -215,13 +228,15 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
   const unchangedPageStreak = asNumber(state.unchangedPageStreak);
   const fullSweepStartedAt = asNullableString(state.fullSweepStartedAt);
   const lastFullSweepCompletedAt = asNullableString(state.lastFullSweepCompletedAt);
+  const snapshotConversationIds = asOptionalStringArray(state.snapshotConversationIds);
   if (
     generation === null ||
     offset === null ||
     pageCount === null ||
     providerReportedTotal === undefined ||
     unchangedPageStreak === null ||
-    !fullSweepStartedAt
+    !fullSweepStartedAt ||
+    snapshotConversationIds === null
   ) {
     return null;
   }
@@ -236,6 +251,7 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     unchangedPageStreak,
     fullSweepStartedAt,
     lastFullSweepCompletedAt,
+    ...(snapshotConversationIds ? { snapshotConversationIds } : {}),
   };
 }
 

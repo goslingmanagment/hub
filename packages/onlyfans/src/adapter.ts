@@ -22,6 +22,8 @@ import type {
   OnlyMonsterAccountResponse,
   OnlyMonsterAccountsResponse,
   OnlyMonsterChargeback,
+  OnlyMonsterChatFansResponse,
+  OnlyMonsterChatMessagesResponse,
   OnlyMonsterCursorResponse,
   OnlyMonsterTransaction,
 } from "./types.ts";
@@ -191,6 +193,74 @@ export class OnlyFansAdapter {
       },
     );
   }
+
+  async getRecentChatFanIds(
+    context: OnlyFansRequestContext,
+    accountId: number,
+    params?: {
+      limit?: number;
+    },
+  ) {
+    return this.request<OnlyMonsterChatFansResponse>(
+      context,
+      `/api/v0/accounts/${accountId}/fans`,
+      {
+        operation: "onlymonster_chat_fans",
+        endpointTemplate: "/api/v0/accounts/:accountId/fans",
+        category: "messages",
+        query: {
+          limit: params?.limit ? String(params.limit) : undefined,
+        },
+        requestShape: {
+          limit: params?.limit ?? 10000,
+        },
+        summarizeResponse: (parsed) => ({
+          returnedItems: parsed.fan_ids.length,
+        }),
+      },
+    );
+  }
+
+  async getChatMessagesPage(
+    context: OnlyFansRequestContext,
+    accountId: number,
+    chatId: string,
+    params?: {
+      limit?: number;
+      messageId?: number | string | null;
+      order?: "asc" | "desc";
+      pageIndex?: number;
+    },
+  ) {
+    return this.request<OnlyMonsterChatMessagesResponse>(
+      context,
+      `/api/v0/accounts/${accountId}/chats/${encodeURIComponent(chatId)}/messages`,
+      {
+        operation: "messages",
+        endpointTemplate: "/api/v0/accounts/:accountId/chats/:chatId/messages",
+        category: "messages",
+        query: {
+          limit: params?.limit ? String(params.limit) : undefined,
+          message_id: params?.messageId != null ? String(params.messageId) : undefined,
+          order: params?.order,
+        },
+        requestShape: {
+          limit: params?.limit ?? 100,
+          hasMessageId: params?.messageId != null,
+          order: params?.order ?? null,
+        },
+        pagination: {
+          pageIndex: params?.pageIndex ?? 0,
+          cursorPresent: params?.messageId != null,
+        },
+        summarizeResponse: (parsed) => ({
+          returnedItems: parsed.items.length,
+          hasMore: parsed.has_more ?? null,
+        }),
+      },
+    );
+  }
+
 
   private async request<TParsed>(
     context: OnlyFansRequestContext,

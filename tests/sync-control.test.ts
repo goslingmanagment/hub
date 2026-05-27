@@ -14,7 +14,7 @@ describe("resolveStreamsForScope", () => {
     ]);
   });
 
-  it("keeps message sync scoped to Fansly DM streams", () => {
+  it("supports message sync for both Fansly and OnlyFans DM streams", () => {
     expect(resolveStreamsForScope("fansly", "messages")).toEqual([
       "dm_conversations",
       "dm_messages",
@@ -23,8 +23,9 @@ describe("resolveStreamsForScope", () => {
       "light",
       "transactions",
     ]);
-    expect(() => resolveStreamsForScope("onlyfans", "messages")).toThrow(
-      "Message sync is not supported for OnlyFans pages",
-    );
+    expect(resolveStreamsForScope("onlyfans", "messages")).toEqual([
+      "dm_conversations",
+      "dm_messages",
+    ]);
   });
 });

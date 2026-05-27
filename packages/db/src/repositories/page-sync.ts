@@ -499,7 +499,7 @@ function normalizePageSyncLease(row: Record<string, unknown>): PageSyncLease {
 export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): SyncStream[] {
   return platform === "fansly"
     ? [...SYNC_STREAMS]
-    : ["light", "transactions"];
+    : ["light", "transactions", "dm_conversations", "dm_messages"];
 }
 
 export function resolvePageSyncPriority(stream: SyncStream, source: SyncRequestSource) {
@@ -809,7 +809,8 @@ export async function refreshPageSyncDependencies(
     for (const [pageId, pageRows] of rowsByPage) {
       const streamByName = new Map(pageRows.map((row) => [row.stream, row] as const));
       for (const row of pageRows) {
-        const dependencies = SYNC_STREAM_DEPENDENCIES[row.stream] ?? [];
+        const dependencies = (SYNC_STREAM_DEPENDENCIES[row.stream] ?? [])
+          .filter((dependency) => streamByName.has(dependency));
         if (dependencies.length === 0) {
           continue;
         }

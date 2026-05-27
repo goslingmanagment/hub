@@ -46,6 +46,43 @@ export interface OnlyMonsterChargeback {
   transaction_timestamp: string;
 }
 
+export interface OnlyMonsterChatFansResponse {
+  fan_ids: string[];
+}
+
+export interface OnlyMonsterChatMessageMedia {
+  id: number;
+  type: string;
+  can_view: boolean;
+  is_ready: boolean;
+  has_error: boolean | null;
+  converted_to_video: boolean;
+  created_at: string | null;
+  thumbnail_url: string;
+}
+
+export interface OnlyMonsterChatMessage {
+  id: number;
+  text: string;
+  from_user: number;
+  is_sent_by_me: boolean;
+  created_at: string;
+  media: OnlyMonsterChatMessageMedia[];
+  media_count: number;
+  is_opened: boolean;
+  is_new: boolean;
+  price: number;
+  is_free: boolean;
+  can_purchase: boolean;
+  can_purchase_reason: string;
+}
+
+export interface OnlyMonsterChatMessagesResponse {
+  items: OnlyMonsterChatMessage[];
+  has_more?: boolean;
+}
+
+
 export interface OnlyMonsterAccountsResponse {
   accounts: OnlyMonsterAccount[];
   nextCursor?: string;
