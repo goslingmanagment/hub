@@ -8839,7 +8839,7 @@ describe("api integration", () => {
     expect(filtered.json().pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
   }, 15_000);
 
-  it("returns sync block overview rows and marks unsupported OnlyFans blocks as not_available", async (context) => {
+  it("returns sync block overview rows and exposes supported OnlyFans message blocks", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -8894,8 +8894,14 @@ describe("api integration", () => {
     expect(fanslyPage.blocks.connection.connectionStatus).toBeDefined();
     expect(onlyFansOverview.blocks.connection.connectionStatus).toBeDefined();
     expect(onlyFansOverview.blocks.audience.state).toBe("not_available");
-    expect(onlyFansOverview.blocks.messages_live.state).toBe("not_available");
-    expect(onlyFansOverview.blocks.messages_history.state).toBe("not_available");
+    expect(onlyFansOverview.blocks.messages_live.state).not.toBe("not_available");
+    expect(onlyFansOverview.blocks.messages_live.intervals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+    ]));
+    expect(onlyFansOverview.blocks.messages_history.state).not.toBe("not_available");
+    expect(onlyFansOverview.blocks.messages_history.intervals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stream: "dm_messages", cadenceSeconds: 86400 }),
+    ]));
   }, 15_000);
 
   it("returns page block detail and the combined Messages block response", async (context) => {

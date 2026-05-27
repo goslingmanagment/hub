@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router";
 import {
   useAuthMe,
@@ -20,6 +20,7 @@ import { RemainingBar } from "@/components/shared/RemainingBar";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
+import { PageActivityChart } from "@/components/page/PageActivityChart";
 import {
   buildFanProfileNavigation,
   buildPageRoute,
@@ -53,10 +54,6 @@ const PERIOD_LABELS = {
   "30d": "30 Days",
   all: "All Time",
 } satisfies Record<PeriodOption, string>;
-const PageActivityChart = lazy(() =>
-  import("@/components/page/PageActivityChart").then((m) => ({ default: m.PageActivityChart })),
-);
-
 function isRecent(iso: string | null) {
   return iso ? Date.now() - new Date(iso).getTime() < 86_400_000 : false;
 }
@@ -314,35 +311,25 @@ export function PageDetailPage() {
         ))}
       </div>
 
-      <Suspense
-        fallback={(
-          <div className="bg-card border border-border rounded-xl p-5 mb-6">
-            <div className="h-[300px] flex items-center justify-center text-sm text-text-muted">
-              Loading chart...
-            </div>
-          </div>
-        )}
-      >
-        {audienceChartReady && (
-          <PageActivityChart
-            title={chartTitle}
-            selectedPeriod={audienceChartPeriod}
-            selectedPeriodLabel={audienceChartPeriodLabel}
-            points={activityPoints}
-            color="#5b8def"
-          />
-        )}
-        {revenueChartReady && (
-          <PageActivityChart
-            title="REVENUE"
-            selectedPeriod={selectedPeriod}
-            selectedPeriodLabel={selectedPeriodLabel}
-            points={revenuePoints}
-            valueFormatter={(v) => formatUsdFromMills(v)}
-            yAxisWidth={72}
-          />
-        )}
-      </Suspense>
+      {audienceChartReady && (
+        <PageActivityChart
+          title={chartTitle}
+          selectedPeriod={audienceChartPeriod}
+          selectedPeriodLabel={audienceChartPeriodLabel}
+          points={activityPoints}
+          color="#5b8def"
+        />
+      )}
+      {revenueChartReady && (
+        <PageActivityChart
+          title="REVENUE"
+          selectedPeriod={selectedPeriod}
+          selectedPeriodLabel={selectedPeriodLabel}
+          points={revenuePoints}
+          valueFormatter={(v) => formatUsdFromMills(v)}
+          yAxisWidth={72}
+        />
+      )}
 
       <PageSubscribersSection
         pageLabel={pageLabel!}
@@ -587,7 +574,7 @@ function PageTransactionsSection({
   onTxPageChange: (offset: number) => void;
   stateColorClass: (state: string) => string;
 }) {
-  const pagePlatform = transactions?.page.platform;
+  const pagePlatform = transactions?.page?.platform;
 
   return (
     <div>
