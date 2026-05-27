@@ -44,7 +44,11 @@ import {
   type FanslyAccount,
   type FanslyFollower,
 } from "@agency_hub_core/fansly";
-import type { OnlyMonsterChatMessage } from "@agency_hub_core/onlyfans";
+import {
+  OnlyMonsterApiError,
+  type OnlyMonsterChatMessage,
+} from "@agency_hub_core/onlyfans";
+import { sql } from "drizzle-orm";
 import {
   buildFanslyDmConversationMetadata,
   buildProxyEgressKey,
@@ -115,6 +119,7 @@ type ExecutorRequestContext = {
 };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
+const ONLYMONSTER_DM_MESSAGE_SYNC_EXCLUDED_REASON_CHAT_NOT_FOUND = "onlymonster_chat_not_found";
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_WEEK_MS = 7 * TOP_SPENDERS_WINDOW_DAY_MS;
@@ -265,6 +270,10 @@ function isTerminalFanslyServerError(error: unknown): error is FanslyApiError & 
     typeof error.status === "number" &&
     error.status >= 500 &&
     error.status < 600;
+}
+
+function isOnlyMonsterNotFoundError(error: unknown): error is OnlyMonsterApiError & { status: 404 } {
+  return error instanceof OnlyMonsterApiError && error.status === 404;
 }
 
 async function probeFanslyAccountResolution(
@@ -516,7 +525,6 @@ async function normalizeOnlyMonsterDmTimestampWithAnomaly(
   return normalized;
 }
 
-
 function resolveDmSenderRole(
   senderId: string | null | undefined,
   pageAccountId: string,
@@ -561,6 +569,36 @@ function onlyMonsterMessagesHistoryExhausted(input: {
   return input.itemCount < input.limit;
 }
 
+async function listOnlyFansKnownDmConversationCandidateIds(
+  db: AppContext["db"],
+  platformAccountId: number,
+  limit = 1000,
+) {
+  const result = await db.execute<{ platformUserId: string }>(sql`
+    select f.platform_user_id as "platformUserId"
+    from page_fans fp
+    join fans f on f.id = fp.fan_id
+    left join fan_spend_lifetime slp
+      on slp.platform_account_id = fp.platform_account_id
+     and slp.fan_id = fp.fan_id
+    where fp.platform_account_id = ${platformAccountId}
+      and f.platform_user_id is not null
+      and f.platform_user_id <> ''
+      and greatest(
+            coalesce(fp.total_creator_net_mills, 0),
+            coalesce(slp.creator_net_amount_mills, 0)
+          ) > 0
+    order by greatest(
+               coalesce(fp.total_creator_net_mills, 0),
+               coalesce(slp.creator_net_amount_mills, 0)
+             ) desc,
+             slp.last_transaction_at desc nulls last,
+             f.id asc
+    limit ${limit}
+  `);
+
+  return result.rows.map((row) => row.platformUserId);
+}
 
 function buildUtcMonthKey(date: Date) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -2079,13 +2117,19 @@ async function executeOnlyFansDmConversationsChunk(
   const onlyMonsterAccountId = getOnlyMonsterAccountId(input.pageContext.page.metadata);
   let fanIds = state.snapshotConversationIds ?? null;
   if (!fanIds) {
-    const fanIdsResponse = await app.onlyFansAdapter.getRecentChatFanIds(requestContext, onlyMonsterAccountId, {
-      limit: 10000,
-    });
+    const [knownFanIds, fanIdsResponse] = await Promise.all([
+      listOnlyFansKnownDmConversationCandidateIds(app.db, input.pageContext.page.id),
+      app.onlyFansAdapter.getRecentChatFanIds(requestContext, onlyMonsterAccountId, {
+        limit: 10000,
+      }),
+    ]);
     fanIds = Array.from(new Set(
-      fanIdsResponse.parsed.fan_ids
-        .map((fanId) => fanId.trim())
-        .filter((fanId) => fanId.length > 0),
+      [
+        ...knownFanIds,
+        ...fanIdsResponse.parsed.fan_ids,
+      ]
+      .map((fanId) => fanId.trim())
+      .filter((fanId) => fanId.length > 0),
     ));
     state = {
       ...state,
@@ -2120,16 +2164,34 @@ async function executeOnlyFansDmConversationsChunk(
     const fanPlatformUserId = fanIds[offset]!;
     offset += 1;
 
-    const page = await app.onlyFansAdapter.getChatMessagesPage(
-      requestContext,
-      onlyMonsterAccountId,
-      fanPlatformUserId,
-      {
-        limit: 1,
-        order: "desc",
-        pageIndex: 0,
-      },
-    );
+    let page;
+    try {
+      page = await app.onlyFansAdapter.getChatMessagesPage(
+        requestContext,
+        onlyMonsterAccountId,
+        fanPlatformUserId,
+        {
+          limit: 1,
+          order: "desc",
+          pageIndex: 0,
+        },
+      );
+    } catch (error) {
+      if (!isOnlyMonsterNotFoundError(error)) {
+        throw error;
+      }
+
+      await input.telemetry.addAnomaly({
+        code: "onlymonster_chat_not_found",
+        severity: "warn",
+        message: "Skipped OnlyMonster chat because messages endpoint returned 404",
+        details: {
+          context: "onlyfans_dm_conversations",
+          offset: offset - 1,
+        },
+      });
+      continue;
+    }
     const head = page.parsed.items[0] ?? null;
     if (!head) {
       continue;
@@ -2306,7 +2368,6 @@ async function executeOnlyFansDmConversationsChunk(
     },
   } satisfies StreamChunkResult;
 }
-
 
 export async function executeDmConversationsChunk(
   app: AppContext,
@@ -2893,16 +2954,77 @@ async function executeOnlyFansDmMessagesChunk(
         dmMessagesRequestObserver.recordConversationTouched(currentConversation.id);
 
         const limit = 25;
-        const page = await app.onlyFansAdapter.getChatMessagesPage(
-          requestContext,
-          onlyMonsterAccountId,
-          currentConversation.platformConversationId,
-          {
-            limit,
-            messageId: state.currentBeforeMessageId,
-            order: "desc",
-          },
-        );
+        let page;
+        try {
+          page = await app.onlyFansAdapter.getChatMessagesPage(
+            requestContext,
+            onlyMonsterAccountId,
+            currentConversation.platformConversationId,
+            {
+              limit,
+              messageId: state.currentBeforeMessageId,
+              order: "desc",
+            },
+          );
+        } catch (error) {
+          if (!isOnlyMonsterNotFoundError(error)) {
+            throw error;
+          }
+
+          const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+            await upsertPageDmConversation(dbTx, {
+              platformAccountId: currentConversation.platformAccountId,
+              fanId: currentConversation.fanId,
+              platformConversationId: currentConversation.platformConversationId,
+              partnerPlatformUserId: currentConversation.partnerPlatformUserId,
+              partnerUsername: currentConversation.partnerUsername,
+              partnerDisplayName: currentConversation.partnerDisplayName,
+              conversationFlags: currentConversation.conversationFlags,
+              unreadCount: currentConversation.unreadCount,
+              subscriptionTierId: currentConversation.subscriptionTierId,
+              lastMessageId: currentConversation.lastMessageId,
+              lastUnreadMessageId: currentConversation.lastUnreadMessageId,
+              lastMessageAt: currentConversation.lastMessageAt,
+              lastMessageSenderId: currentConversation.lastMessageSenderId,
+              lastMessageSenderRole: currentConversation.lastMessageSenderRole,
+              lastMessagePreview: currentConversation.lastMessagePreview,
+              lastFanMessageAt: currentConversation.lastFanMessageAt,
+              lastModelMessageAt: currentConversation.lastModelMessageAt,
+              storedMessageCount: currentConversation.storedMessageCount,
+              newestStoredMessageId: currentConversation.newestStoredMessageId,
+              oldestStoredMessageId: currentConversation.oldestStoredMessageId,
+              messageCoverageStatus: currentConversation.messageCoverageStatus,
+              messageBackfillComplete: currentConversation.messageBackfillComplete,
+              lastMessageSyncAt: currentConversation.lastMessageSyncAt,
+              isVisible: currentConversation.isVisible,
+              lastSeenGeneration: currentConversation.lastSeenGeneration,
+              metadata: {
+                ...currentConversation.metadata,
+                [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+                  ONLYMONSTER_DM_MESSAGE_SYNC_EXCLUDED_REASON_CHAT_NOT_FOUND,
+              },
+            });
+            return upsertCheckpointProgress(dbTx, {
+              platformAccountId: input.pageContext.page.id,
+              stream: "dm_messages",
+              state: emptyDmMessagesCursorState(),
+            });
+          });
+
+          await input.telemetry.addNote(
+            "Excluded OnlyMonster DM conversation after messages endpoint returned 404",
+            {
+              exclusionReason: ONLYMONSTER_DM_MESSAGE_SYNC_EXCLUDED_REASON_CHAT_NOT_FOUND,
+            },
+          );
+
+          state = emptyDmMessagesCursorState();
+          await input.telemetry.recordCheckpointAdvanced(
+            "dm_messages",
+            summarizeCheckpoint(progressCheckpoint),
+          );
+          continue conversationLoop;
+        }
         const platformMessageIds = page.parsed.items.map((message) => onlyMonsterMessageId(message));
         const existingIds = await getExistingPageDmMessageIds(app.db, {
           conversationId: currentConversation.id,
@@ -3060,7 +3182,6 @@ async function executeOnlyFansDmMessagesChunk(
     throw error;
   }
 }
-
 
 export async function executeDmMessagesChunk(
   app: AppContext,
