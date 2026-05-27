@@ -59,6 +59,7 @@ const envSchema = z.object({
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
   ONLYMONSTER_BASE_URL: z.string().url().default("https://omapi.onlymonster.ai"),
   ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: booleanSchema.default(false),
+  ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT: booleanSchema.default(false),
   ONLYFANS_PUBLIC_PROFILE_PROXY_URL: optionalTrimmedStringSchema,
   ONLYFANS_PUBLIC_PROFILE_MAX_PER_RUN: z.coerce.number().int().positive().default(5),
   ONLYFANS_PUBLIC_PROFILE_DELAY_MS: z.coerce.number().int().positive().default(30_000),
@@ -96,6 +97,7 @@ export interface AppConfig {
   fanslyBaseUrl: string;
   onlyMonsterBaseUrl: string;
   onlyFansPublicProfileResolutionEnabled?: boolean;
+  onlyFansPublicProfileAllowDirect?: boolean;
   onlyFansPublicProfileProxy?: ProxyConfig | null;
   onlyFansPublicProfileMaxPerRun?: number;
   onlyFansPublicProfileDelayMs?: number;
@@ -161,9 +163,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const onlyFansPublicProfileProxy = parseOnlyFansPublicProfileProxy(
     parsed.ONLYFANS_PUBLIC_PROFILE_PROXY_URL,
   );
-  if (parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED && !onlyFansPublicProfileProxy) {
+  if (
+    parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED &&
+    !parsed.ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT &&
+    !onlyFansPublicProfileProxy
+  ) {
     throw new Error(
-      "ONLYFANS_PUBLIC_PROFILE_PROXY_URL is required when ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED=true",
+      "ONLYFANS_PUBLIC_PROFILE_PROXY_URL or ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT=true is required when ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED=true",
     );
   }
   const telegramBotToken = parsed.TELEGRAM_BOT_TOKEN ?? null;
@@ -183,6 +189,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     fanslyBaseUrl: parsed.FANSLY_BASE_URL,
     onlyMonsterBaseUrl: parsed.ONLYMONSTER_BASE_URL,
     onlyFansPublicProfileResolutionEnabled: parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED,
+    onlyFansPublicProfileAllowDirect: parsed.ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT,
     onlyFansPublicProfileProxy,
     onlyFansPublicProfileMaxPerRun: parsed.ONLYFANS_PUBLIC_PROFILE_MAX_PER_RUN,
     onlyFansPublicProfileDelayMs: parsed.ONLYFANS_PUBLIC_PROFILE_DELAY_MS,

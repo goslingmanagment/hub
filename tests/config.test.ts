@@ -41,6 +41,7 @@ describe("config", () => {
     expect(config.fanslyDmMessagesDelayMs).toBe(5000);
     expect(config.onlyFansDefaultDelayMs).toBe(1000);
     expect(config.onlyFansPublicProfileResolutionEnabled).toBe(false);
+    expect(config.onlyFansPublicProfileAllowDirect).toBe(false);
     expect(config.onlyFansPublicProfileProxy).toBeNull();
     expect(config.onlyFansPublicProfileMaxPerRun).toBe(5);
     expect(config.onlyFansPublicProfileDelayMs).toBe(30_000);
@@ -78,11 +79,23 @@ describe("config", () => {
     expect(config.fanslyDefaultDelayMs).toBe(3000);
   });
 
-  it("requires a dedicated public OnlyFans profile proxy when that fallback is enabled", () => {
+  it("requires a dedicated public OnlyFans profile proxy or explicit direct egress when that fallback is enabled", () => {
     expect(() => loadConfig({
       ...baseEnv,
       ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: "true",
-    })).toThrow("ONLYFANS_PUBLIC_PROFILE_PROXY_URL is required");
+    })).toThrow("ONLYFANS_PUBLIC_PROFILE_PROXY_URL or ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT=true is required");
+  });
+
+  it("allows direct public OnlyFans profile egress only when explicitly requested", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: "true",
+      ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT: "true",
+    });
+
+    expect(config.onlyFansPublicProfileResolutionEnabled).toBe(true);
+    expect(config.onlyFansPublicProfileAllowDirect).toBe(true);
+    expect(config.onlyFansPublicProfileProxy).toBeNull();
   });
 
   it("parses the dedicated public OnlyFans profile proxy separately from account proxies", () => {
@@ -95,6 +108,7 @@ describe("config", () => {
     });
 
     expect(config.onlyFansPublicProfileResolutionEnabled).toBe(true);
+    expect(config.onlyFansPublicProfileAllowDirect).toBe(false);
     expect(config.onlyFansPublicProfileProxy).toEqual({
       url: "socks5://203.0.113.10:1080",
       username: "user",

@@ -366,10 +366,11 @@ async function syncOnlyFansPublicProfileFallback(
   }
 
   const proxy = app.config.onlyFansPublicProfileProxy ?? null;
-  if (!proxy) {
+  const allowDirect = app.config.onlyFansPublicProfileAllowDirect ?? false;
+  if (!proxy && !allowDirect) {
     await input.telemetry.addNote(
-      "OnlyFans public profile fallback skipped because no dedicated proxy is configured",
-      { publicProfileFallback: "missing_proxy" },
+      "OnlyFans public profile fallback skipped because neither a dedicated proxy nor direct egress is enabled",
+      { publicProfileFallback: "missing_proxy_or_direct_disabled" },
     );
     return emptyStats;
   }
@@ -405,6 +406,7 @@ async function syncOnlyFansPublicProfileFallback(
     candidateCount: candidates.length,
     maxPerRun: limit,
     egressKey: getOnlyFansPublicProfileEgressKey(proxy),
+    directEgress: !proxy,
   });
 
   try {

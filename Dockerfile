@@ -43,6 +43,7 @@ RUN pnpm build:production
 FROM node:22-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
@@ -60,6 +61,7 @@ COPY --from=prod-deps /app/packages/db/node_modules ./packages/db/node_modules
 COPY --from=prod-deps /app/packages/fansly/node_modules ./packages/fansly/node_modules
 COPY --from=prod-deps /app/packages/onlyfans/node_modules ./packages/onlyfans/node_modules
 COPY --from=prod-deps /app/packages/shared/node_modules ./packages/shared/node_modules
+RUN node apps/runtime/node_modules/playwright/cli.js install --with-deps chromium
 COPY --from=build /app/apps/dashboard/dist ./apps/dashboard/dist
 COPY --from=build /app/apps/runtime/dist ./apps/runtime/dist
 COPY --from=build /app/packages/db/dist ./packages/db/dist

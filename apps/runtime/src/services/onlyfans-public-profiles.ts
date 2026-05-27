@@ -129,7 +129,7 @@ export class PlaywrightOnlyFansPublicProfileResolver implements OnlyFansPublicPr
 
   constructor(
     private readonly input: {
-      proxy: ProxyConfig;
+      proxy?: ProxyConfig | null;
       delayMs: number;
     },
   ) {}
@@ -254,7 +254,7 @@ export class PlaywrightOnlyFansPublicProfileResolver implements OnlyFansPublicPr
     const chromium = await loadPlaywrightChromium();
     return chromium.launch({
       headless: true,
-      proxy: buildPlaywrightProxy(this.input.proxy),
+      ...(this.input.proxy ? { proxy: buildPlaywrightProxy(this.input.proxy) } : {}),
       args: [
         "--disable-quic",
         "--disable-background-networking",
@@ -267,12 +267,12 @@ export class PlaywrightOnlyFansPublicProfileResolver implements OnlyFansPublicPr
 }
 
 export function createOnlyFansPublicProfileResolver(input: {
-  proxy: ProxyConfig;
+  proxy?: ProxyConfig | null;
   delayMs: number;
 }) {
   return new PlaywrightOnlyFansPublicProfileResolver(input);
 }
 
-export function getOnlyFansPublicProfileEgressKey(proxy: ProxyConfig) {
-  return buildProxyEgressKey(proxy);
+export function getOnlyFansPublicProfileEgressKey(proxy: ProxyConfig | null) {
+  return proxy ? buildProxyEgressKey(proxy) : "direct";
 }

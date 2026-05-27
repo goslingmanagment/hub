@@ -86,11 +86,13 @@ function createAdapter(input: {
 function createApp(adapter: ReturnType<typeof createAdapter>) {
   const config: {
     onlyFansPublicProfileResolutionEnabled: boolean;
+    onlyFansPublicProfileAllowDirect: boolean;
     onlyFansPublicProfileProxy: { url: string; username?: string | null; password?: string | null } | null;
     onlyFansPublicProfileMaxPerRun: number;
     onlyFansPublicProfileDelayMs: number;
   } = {
     onlyFansPublicProfileResolutionEnabled: false,
+    onlyFansPublicProfileAllowDirect: false,
     onlyFansPublicProfileProxy: null,
     onlyFansPublicProfileMaxPerRun: 5,
     onlyFansPublicProfileDelayMs: 30_000,
@@ -118,6 +120,7 @@ async function runIdentitySync(input: {
   };
   publicProfileConfig?: {
     enabled?: boolean;
+    allowDirect?: boolean;
     proxy?: { url: string; username?: string | null; password?: string | null } | null;
     maxPerRun?: number;
     delayMs?: number;
@@ -127,6 +130,7 @@ async function runIdentitySync(input: {
   dbMocks.getCheckpoint.mockResolvedValueOnce(input.checkpoint ?? null);
   const app = createApp(input.adapter);
   app.config.onlyFansPublicProfileResolutionEnabled = input.publicProfileConfig?.enabled ?? false;
+  app.config.onlyFansPublicProfileAllowDirect = input.publicProfileConfig?.allowDirect ?? false;
   app.config.onlyFansPublicProfileProxy = input.publicProfileConfig?.proxy ?? null;
   app.config.onlyFansPublicProfileMaxPerRun = input.publicProfileConfig?.maxPerRun ?? 5;
   app.config.onlyFansPublicProfileDelayMs = input.publicProfileConfig?.delayMs ?? 30_000;
@@ -283,7 +287,7 @@ describe("syncOnlyFansIdentities", () => {
     }));
   });
 
-  it("skips the public profile fallback when the dedicated proxy is not configured", async () => {
+  it("skips the public profile fallback when neither a dedicated proxy nor direct egress is configured", async () => {
     const adapter = createAdapter({
       trackingPages: [makeCursorPage([])],
       trialPages: [makeCursorPage([])],
@@ -306,6 +310,41 @@ describe("syncOnlyFansIdentities", () => {
     expect(dbMocks.listOnlyFansPublicProfileResolutionCandidates).not.toHaveBeenCalled();
     expect(result.publicProfilesAttempted).toBe(0);
     expect(result.publicProfilesResolved).toBe(0);
+  });
+
+  it("allows the public profile fallback to use direct egress when explicitly configured", async () => {
+    const adapter = createAdapter({
+      trackingPages: [makeCursorPage([])],
+      trialPages: [makeCursorPage([])],
+    });
+    const publicProfileResolver = {
+      resolve: vi.fn(async () => ({
+        status: "resolved" as const,
+        platformUserId: "87790113",
+        username: "jamesjamesjamesjames",
+        displayName: "James",
+      })),
+      close: vi.fn(),
+    };
+    dbMocks.listOnlyFansPublicProfileResolutionCandidates.mockResolvedValueOnce([{
+      fanId: 44,
+      platformUserId: "87790113",
+      previousAttemptCount: 0,
+    }]);
+
+    const result = await runIdentitySync({
+      adapter,
+      publicProfileConfig: {
+        enabled: true,
+        allowDirect: true,
+        proxy: null,
+      },
+      publicProfileResolver,
+    });
+
+    expect(publicProfileResolver.resolve).toHaveBeenCalledWith("87790113");
+    expect(result.publicProfilesAttempted).toBe(1);
+    expect(result.publicProfilesResolved).toBe(1);
   });
 
   it("hydrates unresolved top OnlyFans fans through the public profile fallback", async () => {
