@@ -7,6 +7,7 @@ import {
   requestPageSync as requestPageSyncRows,
   resetPageDmSyncState,
   resetPageSync,
+  getSyncStreamsForPlatform,
   resolvePageSyncPriority,
   resumePageSync,
   type SyncStream,
@@ -140,7 +141,7 @@ type SyncMessagesBlockResponse = {
 
 const BLOCK_TASKS: Record<SyncBlockKey, readonly SyncStream[]> = {
   connection: ["light"],
-  financials: ["transactions", "top_spenders"],
+  financials: ["transactions", "fan_identities", "top_spenders"],
   audience: ["subscribers", "followers", "followers_reconcile"],
   messages_live: ["dm_conversations"],
   messages_history: ["dm_messages"],
@@ -157,7 +158,8 @@ function blockTasksForPlatform(platform: Platform, block: SyncBlockKey) {
     return [] as SyncStream[];
   }
 
-  return [...BLOCK_TASKS[block]];
+  const supportedStreams = new Set(getSyncStreamsForPlatform(platform));
+  return BLOCK_TASKS[block].filter((stream) => supportedStreams.has(stream));
 }
 
 function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {

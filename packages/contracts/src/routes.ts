@@ -1848,6 +1848,7 @@ const syncBlockStateEnum = z.enum([
 
 const extendedSyncStreamEnum = z.enum([
   "light",
+  "fan_identities",
   "followers",
   "transactions",
   "top_spenders",

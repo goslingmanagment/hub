@@ -31,6 +31,7 @@ const STALLED_THRESHOLD_MS = 45_000;
 const RATE_LIMITED_LOOKBACK_MS = 15 * 60 * 1000;
 const MONITORED_SYNC_STREAMS = [
   "light",
+  "fan_identities",
   "followers",
   "transactions",
   "subscribers",

@@ -91,6 +91,7 @@ const BLOCK_LABELS: Record<SyncBlockKey, string> = {
 
 const STREAM_LABELS: Record<string, string> = {
   light: "connection",
+  fan_identities: "fan identities",
   transactions: "transactions",
   top_spenders: "top spenders",
   subscribers: "subscribers",
@@ -101,6 +102,7 @@ const STREAM_LABELS: Record<string, string> = {
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {
+  fan_identities: "fan identity enrichment",
   top_spenders: "top spenders enrichment",
   followers_reconcile: "follower reconcile",
   dm_conversations: "conversation sync",

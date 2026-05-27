@@ -255,6 +255,7 @@ function streamOrderSql(columnName: string) {
     case ${columnName}
       when 'light' then ${SYNC_STREAM_POLICY.light.streamIndex}
       when 'transactions' then ${SYNC_STREAM_POLICY.transactions.streamIndex}
+      when 'fan_identities' then ${SYNC_STREAM_POLICY.fan_identities.streamIndex}
       when 'top_spenders' then ${SYNC_STREAM_POLICY.top_spenders.streamIndex}
       when 'subscribers' then ${SYNC_STREAM_POLICY.subscribers.streamIndex}
       when 'followers' then ${SYNC_STREAM_POLICY.followers.streamIndex}

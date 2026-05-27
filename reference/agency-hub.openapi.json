@@ -17959,6 +17959,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -18012,6 +18013,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -18511,6 +18513,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -18564,6 +18567,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -19063,6 +19067,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -19116,6 +19121,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -19615,6 +19621,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -19668,6 +19675,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -20167,6 +20175,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -20220,6 +20229,7 @@
                                           "type": "string",
                                           "enum": [
                                             "light",
+                                            "fan_identities",
                                             "followers",
                                             "transactions",
                                             "top_spenders",
@@ -20955,6 +20965,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -21008,6 +21019,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -21507,6 +21519,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -21560,6 +21573,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -22059,6 +22073,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -22112,6 +22127,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -22611,6 +22627,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -22664,6 +22681,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -23163,6 +23181,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -23216,6 +23235,7 @@
                                         "type": "string",
                                         "enum": [
                                           "light",
+                                          "fan_identities",
                                           "followers",
                                           "transactions",
                                           "top_spenders",
@@ -23988,6 +24008,7 @@
                                 "type": "string",
                                 "enum": [
                                   "light",
+                                  "fan_identities",
                                   "followers",
                                   "transactions",
                                   "top_spenders",
@@ -24041,6 +24062,7 @@
                                 "type": "string",
                                 "enum": [
                                   "light",
+                                  "fan_identities",
                                   "followers",
                                   "transactions",
                                   "top_spenders",
@@ -29093,6 +29115,7 @@
                             "type": "string",
                             "enum": [
                               "light",
+                              "fan_identities",
                               "followers",
                               "transactions",
                               "top_spenders",
@@ -29361,6 +29384,7 @@
                             "type": "string",
                             "enum": [
                               "light",
+                              "fan_identities",
                               "followers",
                               "transactions",
                               "top_spenders",
@@ -29600,6 +29624,7 @@
                             "type": "string",
                             "enum": [
                               "light",
+                              "fan_identities",
                               "followers",
                               "transactions",
                               "top_spenders",
@@ -29839,6 +29864,7 @@
                             "type": "string",
                             "enum": [
                               "light",
+                              "fan_identities",
                               "followers",
                               "transactions",
                               "top_spenders",

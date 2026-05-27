@@ -14,6 +14,7 @@ type NumericValue = number | bigint | null | undefined;
 
 export const SYNC_STREAMS = [
   "light",
+  "fan_identities",
   "transactions",
   "top_spenders",
   "subscribers",
@@ -86,12 +87,23 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 5 * 60_000,
     freshnessSlaSeconds: 3 * 3600,
   },
+  fan_identities: {
+    stream: "fan_identities",
+    domain: "financials",
+    cadenceSeconds: 6 * 3600,
+    basePriority: 49,
+    streamIndex: 3,
+    defaultWorkClass: "maintenance",
+    queueDelayThresholdMs: 30 * 60_000,
+    progressStallThresholdMs: 10 * 60_000,
+    freshnessSlaSeconds: null,
+  },
   top_spenders: {
     stream: "top_spenders",
     domain: "financials",
     cadenceSeconds: 3600,
     basePriority: 45,
-    streamIndex: 3,
+    streamIndex: 4,
     defaultWorkClass: "maintenance",
     queueDelayThresholdMs: 30 * 60_000,
     progressStallThresholdMs: 10 * 60_000,
@@ -102,7 +114,7 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     domain: "audience",
     cadenceSeconds: 3600,
     basePriority: 40,
-    streamIndex: 4,
+    streamIndex: 5,
     defaultWorkClass: "live",
     queueDelayThresholdMs: 15 * 60_000,
     progressStallThresholdMs: 5 * 60_000,
@@ -113,7 +125,7 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     domain: "audience",
     cadenceSeconds: 3600,
     basePriority: 35,
-    streamIndex: 5,
+    streamIndex: 6,
     defaultWorkClass: "live",
     queueDelayThresholdMs: 15 * 60_000,
     progressStallThresholdMs: 5 * 60_000,
@@ -124,7 +136,7 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     domain: "audience",
     cadenceSeconds: 172800,
     basePriority: 34,
-    streamIndex: 6,
+    streamIndex: 7,
     defaultWorkClass: "maintenance",
     queueDelayThresholdMs: 90 * 60_000,
     progressStallThresholdMs: 15 * 60_000,
@@ -135,7 +147,7 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     domain: "messages_live",
     cadenceSeconds: 1800,
     basePriority: 30,
-    streamIndex: 7,
+    streamIndex: 8,
     defaultWorkClass: "live",
     queueDelayThresholdMs: 15 * 60_000,
     progressStallThresholdMs: 5 * 60_000,
@@ -146,7 +158,7 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     domain: "messages_history",
     cadenceSeconds: 86400,
     basePriority: 25,
-    streamIndex: 8,
+    streamIndex: 9,
     defaultWorkClass: "history",
     queueDelayThresholdMs: 45 * 60_000,
     progressStallThresholdMs: 15 * 60_000,
@@ -164,7 +176,7 @@ export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
   financials: {
     domain: "financials",
     primaryStreams: ["transactions"],
-    supportingStreams: ["top_spenders"],
+    supportingStreams: ["fan_identities", "top_spenders"],
     freshnessSlaSeconds: 3 * 3600,
   },
   audience: {
@@ -205,6 +217,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
   scheduled: {
     light: 60,
     transactions: 50,
+    fan_identities: 49,
     top_spenders: 45,
     subscribers: 40,
     followers: 35,
@@ -215,6 +228,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
   recovery: {
     light: 70,
     transactions: 60,
+    fan_identities: 59,
     top_spenders: 55,
     subscribers: 50,
     followers: 45,
@@ -225,6 +239,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
   anomaly: {
     light: 70,
     transactions: 60,
+    fan_identities: 59,
     top_spenders: 55,
     subscribers: 50,
     followers: 45,
@@ -235,6 +250,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
   manual: {
     light: 100,
     transactions: 90,
+    fan_identities: 89,
     top_spenders: 85,
     subscribers: 80,
     followers: 75,
@@ -245,6 +261,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
   onboarding: {
     light: 100,
     transactions: 90,
+    fan_identities: 89,
     top_spenders: 85,
     subscribers: 80,
     followers: 75,
@@ -255,6 +272,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
   reset: {
     light: 100,
     transactions: 90,
+    fan_identities: 89,
     top_spenders: 85,
     subscribers: 80,
     followers: 75,
@@ -394,6 +412,7 @@ function streamOrderSql(columnName: string) {
     case ${columnName}
       when 'light' then ${SYNC_STREAM_POLICY.light.streamIndex}
       when 'transactions' then ${SYNC_STREAM_POLICY.transactions.streamIndex}
+      when 'fan_identities' then ${SYNC_STREAM_POLICY.fan_identities.streamIndex}
       when 'top_spenders' then ${SYNC_STREAM_POLICY.top_spenders.streamIndex}
       when 'subscribers' then ${SYNC_STREAM_POLICY.subscribers.streamIndex}
       when 'followers' then ${SYNC_STREAM_POLICY.followers.streamIndex}
@@ -410,6 +429,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
     case ${streamColumnName}
       when 'light' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].light}
       when 'transactions' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].transactions}
+      when 'fan_identities' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].fan_identities}
       when 'top_spenders' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].top_spenders}
       when 'subscribers' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].subscribers}
       when 'followers' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].followers}
@@ -498,8 +518,8 @@ function normalizePageSyncLease(row: Record<string, unknown>): PageSyncLease {
 
 export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): SyncStream[] {
   return platform === "fansly"
-    ? [...SYNC_STREAMS]
-    : ["light", "transactions", "dm_conversations", "dm_messages"];
+    ? SYNC_STREAMS.filter((stream) => stream !== "fan_identities")
+    : ["light", "transactions", "fan_identities", "dm_conversations", "dm_messages"];
 }
 
 export function resolvePageSyncPriority(stream: SyncStream, source: SyncRequestSource) {

@@ -28,6 +28,7 @@ export const syncRunOutcomeEnum = pgEnum("sync_run_outcome", [
 ]);
 export const syncStreamEnum = pgEnum("sync_stream", [
   "light",
+  "fan_identities",
   "followers",
   "transactions",
   "top_spenders",
@@ -521,6 +522,39 @@ export const fanUsernameAliases = pgTable(
       columns: [table.fanId, table.username],
     }),
     usernameIdx: index("fan_username_aliases_username_idx").on(table.username),
+  }),
+);
+
+export const onlyFansPublicProfileResolutions = pgTable(
+  "onlyfans_public_profile_resolutions",
+  {
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .primaryKey()
+      .notNull(),
+    platformUserId: text("platform_user_id").notNull(),
+    status: text("status").notNull(),
+    username: text("username"),
+    displayName: text("display_name"),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true }),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    nextAttemptAfter: timestamp("next_attempt_after", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    platformUserIdx: unique("onlyfans_public_profile_resolutions_platform_user_uniq").on(
+      table.platformUserId,
+    ),
+    nextAttemptIdx: index("onlyfans_public_profile_resolutions_next_attempt_idx").on(
+      table.nextAttemptAfter,
+    ),
+    statusCheck: check(
+      "onlyfans_public_profile_resolutions_status_check",
+      sql`${table.status} in ('resolved', 'not_found', 'unavailable', 'failed', 'rate_limited')`,
+    ),
   }),
 );
 

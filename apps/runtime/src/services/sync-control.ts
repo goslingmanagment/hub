@@ -28,7 +28,7 @@ export function resolveStreamsForScope(
   if (scope === "light") {
     return platform === "fansly"
       ? ["light"]
-      : ["light", "transactions"];
+      : ["light", "transactions", "fan_identities"];
   }
 
   if (scope === "followers") {
@@ -41,7 +41,7 @@ export function resolveStreamsForScope(
   if (scope === "data") {
     return platform === "fansly"
       ? ["light", "transactions", "top_spenders", "subscribers", "followers", "followers_reconcile"]
-      : ["light", "transactions"];
+      : ["light", "transactions", "fan_identities"];
   }
 
   if (scope === "messages") {
@@ -59,7 +59,7 @@ export function resolveStreamsForScope(
       "dm_conversations",
       "dm_messages",
     ]
-    : ["light", "transactions", "dm_conversations", "dm_messages"];
+    : ["light", "transactions", "fan_identities", "dm_conversations", "dm_messages"];
 }
 
 export async function requestPageSync(

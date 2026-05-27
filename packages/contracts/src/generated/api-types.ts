@@ -5193,7 +5193,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5202,7 +5202,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -5263,7 +5263,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5272,7 +5272,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -5333,7 +5333,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5342,7 +5342,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -5403,7 +5403,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5412,7 +5412,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -5473,7 +5473,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5482,7 +5482,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -5630,7 +5630,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5639,7 +5639,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -5700,7 +5700,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5709,7 +5709,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -5770,7 +5770,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5779,7 +5779,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -5840,7 +5840,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5849,7 +5849,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -5910,7 +5910,7 @@ export interface paths {
                                         nextRetryAt: string | null;
                                         intervals: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             cadenceSeconds: number;
                                         }[];
                                         metrics: {
@@ -5919,7 +5919,7 @@ export interface paths {
                                         connectionStatus: ("connected" | "not_connected" | "error") | null;
                                         substreams: {
                                             /** @enum {string} */
-                                            stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                             /** @enum {string} */
                                             role: "primary" | "supporting";
                                             /** @enum {string} */
@@ -6080,7 +6080,7 @@ export interface paths {
                                 nextRetryAt: string | null;
                                 intervals: {
                                     /** @enum {string} */
-                                    stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                    stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                     cadenceSeconds: number;
                                 }[];
                                 metrics: {
@@ -6089,7 +6089,7 @@ export interface paths {
                                 connectionStatus: ("connected" | "not_connected" | "error") | null;
                                 substreams: {
                                     /** @enum {string} */
-                                    stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                    stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                     /** @enum {string} */
                                     role: "primary" | "supporting";
                                     /** @enum {string} */
@@ -8144,7 +8144,7 @@ export interface paths {
                             block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                             requests?: {
                                 /** @enum {string} */
-                                stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                 requestedSeq: number;
                             }[];
                         };
@@ -8266,7 +8266,7 @@ export interface paths {
                             block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                             requests?: {
                                 /** @enum {string} */
-                                stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                 requestedSeq: number;
                             }[];
                         };
@@ -8375,7 +8375,7 @@ export interface paths {
                             block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                             requests?: {
                                 /** @enum {string} */
-                                stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                 requestedSeq: number;
                             }[];
                         };
@@ -8484,7 +8484,7 @@ export interface paths {
                             block: "connection" | "financials" | "audience" | "messages_live" | "messages_history";
                             requests?: {
                                 /** @enum {string} */
-                                stream: "light" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                 requestedSeq: number;
                             }[];
                         };

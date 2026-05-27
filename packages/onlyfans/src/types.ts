@@ -46,6 +46,17 @@ export interface OnlyMonsterChargeback {
   transaction_timestamp: string;
 }
 
+export interface OnlyMonsterLinkUser {
+  link_id: string;
+  fan: {
+    id: string;
+    name: string;
+    username: string;
+  };
+  subscribed_at: string;
+  collected_at: string;
+}
+
 export interface OnlyMonsterChatFansResponse {
   fan_ids: string[];
 }
@@ -81,7 +92,6 @@ export interface OnlyMonsterChatMessagesResponse {
   items: OnlyMonsterChatMessage[];
   has_more?: boolean;
 }
-
 
 export interface OnlyMonsterAccountsResponse {
   accounts: OnlyMonsterAccount[];

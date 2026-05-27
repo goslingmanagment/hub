@@ -22,6 +22,7 @@ describe("resolveStreamsForScope", () => {
     expect(resolveStreamsForScope("onlyfans", "data")).toEqual([
       "light",
       "transactions",
+      "fan_identities",
     ]);
     expect(resolveStreamsForScope("onlyfans", "messages")).toEqual([
       "dm_conversations",

@@ -58,6 +58,23 @@ describe("resolveFanLabel", () => {
     });
   });
 
+  it("renders unnamed OnlyFans users as platform ids instead of deleted users", () => {
+    expect(resolveFanLabel({
+      platform: "onlyfans",
+      platformUserId: "9876543212345678",
+      username: null,
+      displayName: "",
+    })).toMatchObject({
+      label: "@u9876543212345678",
+      pageAlias: null,
+      username: null,
+      displayName: null,
+      primarySource: "platformUserId",
+      secondaryPlatformHandle: null,
+      isDeletedFallback: false,
+    });
+  });
+
   it("treats whitespace-only name values as missing", () => {
     expect(resolveFanLabel({
       platformUserId: "1234",

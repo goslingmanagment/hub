@@ -283,7 +283,9 @@ function resolveCurrentWorkClass(taskLease: PageSyncLease, stats: Record<string,
   }
   return taskLease.workClass ?? (taskLease.stream === "dm_messages"
     ? "history"
-    : taskLease.stream === "top_spenders" || taskLease.stream === "followers_reconcile"
+    : taskLease.stream === "top_spenders" ||
+        taskLease.stream === "fan_identities" ||
+        taskLease.stream === "followers_reconcile"
       ? "maintenance"
       : "live");
 }

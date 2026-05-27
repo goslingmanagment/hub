@@ -71,6 +71,7 @@ import {
 } from "../fansly.ts";
 import { getOnlyMonsterAccountId } from "../onlyfans.ts";
 import { buildFanslyFollowerPresenceSignals } from "../fansly-presence.ts";
+import { syncOnlyFansIdentities } from "./onlyfans-identities.ts";
 import { syncOnlyFansTransactions } from "./onlyfans-transactions.ts";
 import {
   summarizeCheckpoint,
@@ -1141,6 +1142,39 @@ export async function executeTopSpendersChunk(
       windowsSplit,
       upsertedRankings,
     },
+  } satisfies StreamChunkResult;
+}
+
+export async function executeFanIdentitiesChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    syncRunId: number;
+  },
+) {
+  if (input.pageContext.platform !== "onlyfans") {
+    throw new Error("Fan identity sync is only supported for OnlyFans pages");
+  }
+
+  await input.telemetry.recordPhaseStarted("fan_identities");
+  const platformAccountIdValue = input.pageContext.page.platformAccountId;
+  if (!platformAccountIdValue) {
+    throw new Error("OnlyFans page is missing platform account id");
+  }
+
+  const result = await syncOnlyFansIdentities(app, {
+    pageLabel: input.pageContext.page.label,
+    platformAccountId: input.pageContext.page.id,
+    platformAccountIdValue,
+    requestContext: buildOnlyFansRequestContext(app, input),
+    syncRunId: input.syncRunId,
+    telemetry: input.telemetry,
+    budget: input.budget,
+  });
+
+  return {
+    satisfied: result.satisfied,
+    yieldReason: result.yieldReason,
+    stats: result as Record<string, unknown>,
   } satisfies StreamChunkResult;
 }
 
@@ -3444,6 +3478,8 @@ export async function executeStreamChunk(
   switch (input.streamState.stream) {
     case "light":
       return executeLightChunk(app, input);
+    case "fan_identities":
+      return executeFanIdentitiesChunk(app, input);
     case "top_spenders":
       return executeTopSpendersChunk(app, input);
     case "transactions":

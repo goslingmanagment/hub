@@ -1,4 +1,7 @@
+import type { Platform } from "./types.ts";
+
 export interface FanLabelInput {
+  platform?: Platform;
   platformUserId: string;
   pageAlias?: string | null;
   username?: string | null;
@@ -10,7 +13,7 @@ export interface ResolvedFanLabel {
   pageAlias: string | null;
   username: string | null;
   displayName: string | null;
-  primarySource: "pageAlias" | "displayName" | "username" | "deleted";
+  primarySource: "pageAlias" | "displayName" | "username" | "platformUserId" | "deleted";
   secondaryPlatformHandle: string | null;
   isDeletedFallback: boolean;
 }
@@ -44,6 +47,10 @@ function deletedUserLabel(platformUserId: string) {
     ? platformUserId.slice(-8)
     : platformUserId;
   return `Deleted user · ${shortId}`;
+}
+
+function onlyFansUserLabel(platformUserId: string) {
+  return `@u${platformUserId}`;
 }
 
 export function resolveFanLabel(input: FanLabelInput): ResolvedFanLabel {
@@ -91,6 +98,18 @@ export function resolveFanLabelForScope(
       username,
       displayName,
       primarySource: "username",
+      secondaryPlatformHandle: null,
+      isDeletedFallback: false,
+    };
+  }
+
+  if (input.platform === "onlyfans") {
+    return {
+      label: onlyFansUserLabel(input.platformUserId),
+      pageAlias,
+      username,
+      displayName,
+      primarySource: "platformUserId",
       secondaryPlatformHandle: null,
       isDeletedFallback: false,
     };

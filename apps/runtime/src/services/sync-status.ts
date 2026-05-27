@@ -783,6 +783,27 @@ function buildProgressFromPayload(
     };
   }
 
+  if (task.stream === "fan_identities") {
+    const tracking = typeof payload.processedTrackingUsers === "number"
+      ? payload.processedTrackingUsers
+      : 0;
+    const trial = typeof payload.processedTrialUsers === "number"
+      ? payload.processedTrialUsers
+      : 0;
+    const current = Math.max(0, tracking + trial);
+    if (current > 0) {
+      return {
+        label: `${current.toLocaleString()} identities hydrated`,
+        current,
+        total: null,
+        unit: "identities",
+        percent: null,
+        percentValid: false,
+        details: payload,
+      };
+    }
+  }
+
   if (task.stream === "dm_messages" && monitorRow) {
     const total = monitorRow.dmEligibleConversationCount;
     const current = monitorRow.dmBackfillCompleteConversationCount;

@@ -1,6 +1,10 @@
 import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
 
+import { assertProxyTargetAllowed, normalizeProxyConfig } from "./proxy.ts";
+import { parseProxyString } from "./proxy-string.ts";
+import type { ProxyConfig } from "./types.ts";
+
 const optionalTrimmedStringSchema = z.preprocess((value) => {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -54,6 +58,10 @@ const envSchema = z.object({
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
   ONLYMONSTER_BASE_URL: z.string().url().default("https://omapi.onlymonster.ai"),
+  ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: booleanSchema.default(false),
+  ONLYFANS_PUBLIC_PROFILE_PROXY_URL: optionalTrimmedStringSchema,
+  ONLYFANS_PUBLIC_PROFILE_MAX_PER_RUN: z.coerce.number().int().positive().default(5),
+  ONLYFANS_PUBLIC_PROFILE_DELAY_MS: z.coerce.number().int().positive().default(30_000),
   SYNC_HTTP_TRACE_FILE: optionalTrimmedStringSchema,
   FANSLY_DEFAULT_DELAY_MS: optionalPositiveIntSchema,
   FANSLY_GLOBAL_DELAY_MS: optionalPositiveIntSchema,
@@ -87,6 +95,10 @@ export interface AppConfig {
   sessionTtlDays: number;
   fanslyBaseUrl: string;
   onlyMonsterBaseUrl: string;
+  onlyFansPublicProfileResolutionEnabled?: boolean;
+  onlyFansPublicProfileProxy?: ProxyConfig | null;
+  onlyFansPublicProfileMaxPerRun?: number;
+  onlyFansPublicProfileDelayMs?: number;
   syncHttpTraceFile: string | null;
   fanslyDefaultDelayMs: number;
   followerPageDelayMs: number;
@@ -146,6 +158,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     parsed.FANSLY_GLOBAL_DELAY_MS ??
     parsed.FANSLY_ACCOUNT_LOOKUP_DELAY_MS ??
     2500;
+  const onlyFansPublicProfileProxy = parseOnlyFansPublicProfileProxy(
+    parsed.ONLYFANS_PUBLIC_PROFILE_PROXY_URL,
+  );
+  if (parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED && !onlyFansPublicProfileProxy) {
+    throw new Error(
+      "ONLYFANS_PUBLIC_PROFILE_PROXY_URL is required when ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED=true",
+    );
+  }
   const telegramBotToken = parsed.TELEGRAM_BOT_TOKEN ?? null;
   const telegramChatId = parsed.TELEGRAM_CHAT_ID ?? null;
   const telegramEnabled = telegramBotToken !== null && telegramChatId !== null;
@@ -162,6 +182,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionTtlDays: parsed.SESSION_TTL_DAYS,
     fanslyBaseUrl: parsed.FANSLY_BASE_URL,
     onlyMonsterBaseUrl: parsed.ONLYMONSTER_BASE_URL,
+    onlyFansPublicProfileResolutionEnabled: parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED,
+    onlyFansPublicProfileProxy,
+    onlyFansPublicProfileMaxPerRun: parsed.ONLYFANS_PUBLIC_PROFILE_MAX_PER_RUN,
+    onlyFansPublicProfileDelayMs: parsed.ONLYFANS_PUBLIC_PROFILE_DELAY_MS,
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
     fanslyDefaultDelayMs,
     followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,
@@ -181,6 +205,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
   };
+}
+
+function parseOnlyFansPublicProfileProxy(rawValue: string | undefined) {
+  if (!rawValue) {
+    return null;
+  }
+
+  const parsed = parseProxyString(rawValue);
+  if (!parsed) {
+    return null;
+  }
+
+  const normalized = normalizeProxyConfig(parsed);
+  assertProxyTargetAllowed(normalized);
+  return normalized;
 }
 
 function parseEncryptionKey(value: string, envVar: string): Buffer {
