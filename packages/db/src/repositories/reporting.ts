@@ -1106,10 +1106,15 @@ export async function listFanTransactionsCrossPage(
     offset: number;
   },
 ) {
-  const clauses = [eq(transactions.isActive, true), eq(transactions.fanId, input.fanId)];
-  if (input.pageIds.length > 0) {
-    clauses.push(inArray(transactions.platformAccountId, input.pageIds));
+  if (input.pageIds.length === 0) {
+    return {
+      total: 0,
+      items: [],
+    };
   }
+
+  const clauses = [eq(transactions.isActive, true), eq(transactions.fanId, input.fanId)];
+  clauses.push(inArray(transactions.platformAccountId, input.pageIds));
 
   const [countRow] = await db.select({
     total: sql<number>`count(*)::int`,
