@@ -65,6 +65,11 @@ export interface SyncDomainPolicy {
   freshnessSlaSeconds: number | null;
 }
 
+export interface PageSyncBlockResult {
+  updated: boolean;
+  blocked: boolean;
+}
+
 export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
   light: {
     stream: "light",
@@ -1539,11 +1544,11 @@ export async function blockPageSync(
     progress?: Record<string, unknown>;
     now?: Date;
   },
-) {
+): Promise<PageSyncBlockResult> {
   const now = input.now ?? new Date();
   const row = await getPageSyncState(db, input.pageId, input.stream);
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
-  const result = await db.execute(sql`
+  const result = await db.execute(sql<{ status: PageSyncStatus; blockerKind: string | null }>`
     update ${pageSyncStates}
     set status = case
                    when request_seq > ${input.requestSeq} then 'pending'::page_sync_status
@@ -1574,9 +1579,15 @@ export async function blockPageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+    returning status,
+              blocker_kind as "blockerKind"
   `);
 
-  return (result.rowCount ?? 0) > 0;
+  const updated = result.rows[0] ?? null;
+  return {
+    updated: updated !== null,
+    blocked: updated?.status === "blocked" && updated.blockerKind === input.blockerKind,
+  };
 }
 
 export async function markPageSyncAuthBlocked(

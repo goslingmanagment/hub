@@ -142,7 +142,7 @@ describe("sync executor", () => {
     });
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.acquirePageSyncLease.mockResolvedValue(null);
-    dbMocks.blockPageSync.mockResolvedValue(true);
+    dbMocks.blockPageSync.mockResolvedValue({ updated: true, blocked: true });
     dbMocks.completePageSync.mockResolvedValue(true);
     dbMocks.retryPageSync.mockResolvedValue(true);
     dbMocks.findPageById.mockResolvedValue({
@@ -464,7 +464,7 @@ describe("sync executor", () => {
     } as never;
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    dbMocks.blockPageSync.mockResolvedValueOnce(false);
+    dbMocks.blockPageSync.mockResolvedValueOnce({ updated: false, blocked: false });
     handlerMocks.executeStreamChunk.mockRejectedValue(
       new FanslyApiError("expired session", 401),
     );
@@ -488,6 +488,102 @@ describe("sync executor", () => {
       stream: null,
       runId: 777,
       needsContinuation: false,
+    });
+  });
+
+  it("continues newer pending work when stale auth blocking does not apply", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.blockPageSync.mockResolvedValueOnce({ updated: true, blocked: false });
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 42,
+      requestedAt: new Date("2026-03-14T12:00:01.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new FanslyApiError("expired session", 401),
+    );
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      requestSeq: 3,
+      leaseToken: "lease-1",
+      blockerKind: "auth",
+    }));
+    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
+      "failed",
+      expect.objectContaining({
+        summary: "expired session",
+      }),
+      {
+        chunkStatus: "stale_block",
+      },
+    );
+    expect(result).toMatchObject({
+      kind: "failed",
+      platformAccountId: 55,
+      stream: "followers",
+      runId: 777,
+      needsContinuation: true,
+      continuationPriority: 42,
+    });
+  });
+
+  it("continues newer pending work when stale manual blocking does not apply", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.blockPageSync.mockResolvedValueOnce({ updated: true, blocked: false });
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 41,
+      requestedAt: new Date("2026-03-14T12:00:01.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockRejectedValue(new Error("manual action required upstream"));
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      requestSeq: 3,
+      leaseToken: "lease-1",
+      blockerKind: "manual_action_required",
+    }));
+    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
+      "failed",
+      expect.objectContaining({
+        summary: "manual action required upstream",
+      }),
+      {
+        chunkStatus: "stale_block",
+      },
+    );
+    expect(result).toMatchObject({
+      kind: "failed",
+      platformAccountId: 55,
+      stream: "followers",
+      runId: 777,
+      needsContinuation: true,
+      continuationPriority: 41,
     });
   });
 

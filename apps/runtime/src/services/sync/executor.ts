@@ -471,7 +471,7 @@ export async function executeNextSyncPageChunk(
     const hasProxy = storedPage.proxy !== null;
 
     if (isAuthError(error)) {
-      const blocked = await blockPageSync(app.db, {
+      const blockResult = await blockPageSync(app.db, {
         pageId: platformAccountId,
         stream: taskLease.stream,
         requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
@@ -485,8 +485,15 @@ export async function executeNextSyncPageChunk(
         workClass: taskLease.workClass ?? "live",
         progress: taskLease.progress,
       });
-      if (!blocked) {
+      if (!blockResult.updated) {
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
+      }
+      if (!blockResult.blocked) {
+        await telemetry.finish("failed", failure, {
+          chunkStatus: "stale_block",
+        });
+        const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
+        return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "failed", continuationPriority);
       }
 
       await persistFailedSyncPayload(app, {
@@ -518,7 +525,7 @@ export async function executeNextSyncPageChunk(
 
     const classified = classifyTaskFailure(error, failure);
     if (classified.mode === "blocked") {
-      const blocked = await blockPageSync(app.db, {
+      const blockResult = await blockPageSync(app.db, {
         pageId: platformAccountId,
         stream: taskLease.stream,
         requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
@@ -532,8 +539,15 @@ export async function executeNextSyncPageChunk(
         workClass: taskLease.workClass ?? "live",
         progress: taskLease.progress,
       });
-      if (!blocked) {
+      if (!blockResult.updated) {
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
+      }
+      if (!blockResult.blocked) {
+        await telemetry.finish("failed", failure, {
+          chunkStatus: "stale_block",
+        });
+        const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
+        return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "failed", continuationPriority);
       }
     } else {
       const retried = await retryPageSync(app.db, {

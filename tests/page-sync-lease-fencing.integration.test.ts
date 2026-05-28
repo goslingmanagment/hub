@@ -566,7 +566,7 @@ describe("page sync lease fencing", () => {
         now: new Date(now.getTime() + 1_000),
       });
 
-      await blockPageSync(testDb.db, {
+      const blockResult = await blockPageSync(testDb.db, {
         pageId: page.id,
         stream: "followers",
         requestSeq: leasedSeq,
@@ -577,6 +577,10 @@ describe("page sync lease fencing", () => {
         errorCode: "http_403",
         errorSummary: "Upstream blocked",
         now: new Date(now.getTime() + 2_000),
+      });
+      expect(blockResult).toEqual({
+        updated: true,
+        blocked: false,
       });
 
       expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({
