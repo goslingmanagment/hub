@@ -336,3 +336,30 @@ describe("admin credential verification", () => {
     }
   });
 });
+
+describe("auth route parsing", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("accepts lowercase bearer authorization schemes", async () => {
+    routeMocks.authenticateApiKeyToken.mockResolvedValue(leadPrincipal);
+    const server = await buildApiServer(createRouteTestContext());
+
+    try {
+      const response = await server.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: {
+          authorization: "bearer chatter-key",
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().user.username).toBe("lead");
+      expect(routeMocks.authenticateApiKeyToken).toHaveBeenCalledWith(expect.anything(), "chatter-key");
+    } finally {
+      await server.close();
+    }
+  });
+});

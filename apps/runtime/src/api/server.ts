@@ -387,8 +387,11 @@ export async function buildApiServer(appContext: AppContext) {
     }
 
     const authorization = request.headers.authorization;
-    if (typeof authorization === "string" && authorization.startsWith("Bearer ")) {
-      const token = authorization.slice("Bearer ".length).trim();
+    const bearerMatch = typeof authorization === "string"
+      ? /^bearer\s+(.+)$/i.exec(authorization)
+      : null;
+    if (bearerMatch) {
+      const token = bearerMatch[1]?.trim() ?? "";
       request.auth = token ? await authenticateApiKeyToken(appContext, token) : null;
       return request.auth;
     }
