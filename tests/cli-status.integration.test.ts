@@ -311,7 +311,7 @@ async function seedSyncMonitorRows(
   await testDb.db.insert(syncRateLimits).values({
     provider: "fansly",
     scope: "global",
-    egressKey: "shared",
+    egressKey: "direct",
     minSpacingMs: 1_000,
     nextAvailableAt: new Date("2026-03-20T12:04:00.000Z"),
   });
