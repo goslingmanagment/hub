@@ -134,6 +134,10 @@ ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback"
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
 SCHEMA_BASELINE_CAPTURED=0
+ROLLBACK_COMPATIBLE_MIGRATIONS=(
+  "0013_backfill_egress_rate_limit_scope_key.sql"
+  "0014_repair_light_trusted_sync_states.sql"
+)
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
 REMOTE_COMPOSE="docker compose --env-file .env.production -f docker-compose.production.yml"
@@ -207,6 +211,40 @@ restore_remote_release_files() {
     <"$ROLLBACK_RELEASE_ARCHIVE"
 }
 
+is_rollback_compatible_migration() {
+  local migration="$1"
+  local compatible
+  for compatible in "${ROLLBACK_COMPATIBLE_MIGRATIONS[@]}"; do
+    if [[ "$migration" == "$compatible" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+schema_migration_delta_allows_rollback() {
+  local migration
+  while IFS= read -r migration; do
+    [[ -n "$migration" ]] || continue
+    if ! grep -Fxq "$migration" "$SCHEMA_AFTER_FILE"; then
+      return 1
+    fi
+  done <"$SCHEMA_BEFORE_FILE"
+
+  while IFS= read -r migration; do
+    [[ -n "$migration" ]] || continue
+    if grep -Fxq "$migration" "$SCHEMA_BEFORE_FILE"; then
+      continue
+    fi
+    if ! is_rollback_compatible_migration "$migration"; then
+      return 1
+    fi
+  done <"$SCHEMA_AFTER_FILE"
+
+  return 0
+}
+
 read_remote_env_value() {
   local key="$1"
   local escaped_key
@@ -234,9 +272,13 @@ rollback_remote_stack() {
   fi
 
   if ! cmp -s "$SCHEMA_BEFORE_FILE" "$SCHEMA_AFTER_FILE"; then
-    log "Rollback skipped; schema_migrations changed during this deploy"
-    log "The previous image may not be compatible with the migrated database; inspect diagnostics before choosing a manual rollback"
-    return 0
+    if schema_migration_delta_allows_rollback; then
+      log "Schema migrations changed only by rollback-compatible data migrations; continuing automatic rollback"
+    else
+      log "Rollback skipped; schema_migrations changed during this deploy"
+      log "The previous image may not be compatible with the migrated database; inspect diagnostics before choosing a manual rollback"
+      return 0
+    fi
   fi
 
   log "Rolling back remote stack to ${ROLLBACK_IMAGE_TAG}"
