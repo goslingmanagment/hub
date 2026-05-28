@@ -173,6 +173,14 @@ capture_remote_rollback_image() {
   fi
 }
 
+read_remote_env_value() {
+  local key="$1"
+  local escaped_key
+  escaped_key="$(printf '%q' "$key")"
+
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; awk -v key=${escaped_key} 'function trim(value) { sub(/^[[:space:]]+/, \"\", value); sub(/[[:space:]]+$/, \"\", value); return value } /^[[:space:]]*(#|$)/ { next } { line = \$0; eq = index(line, \"=\"); if (eq == 0) next; name = trim(substr(line, 1, eq - 1)); if (name == key) { value = trim(substr(line, eq + 1)); quote = substr(value, 1, 1); if ((quote == \"\\\"\" || quote == sprintf(\"%c\", 39)) && substr(value, length(value), 1) == quote) value = substr(value, 2, length(value) - 2); print value; exit } }' .env.production"
+}
+
 rollback_remote_stack() {
   if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
     log "Rollback skipped; no previous image was captured"
@@ -313,7 +321,7 @@ tar -C "$ROOT_DIR" -cf - "${REMOTE_RELEASE_FILES[@]}" | ssh "${SSH_ARGS[@]}" "$R
 
 log "Validating remote prerequisites"
 run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.production && docker compose version >/dev/null && ${REMOTE_COMPOSE} config >/dev/null"
-SYNC_MONITORING_TOKEN="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; set -a; source .env.production; printf '%s' \"\${HEALTH_SYNC_MONITORING_TOKEN:-}\"")"
+SYNC_MONITORING_TOKEN="$(read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN")"
 
 if capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"; then
   SCHEMA_BASELINE_CAPTURED=1

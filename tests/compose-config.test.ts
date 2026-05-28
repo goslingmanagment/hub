@@ -17,6 +17,17 @@ function getServiceBlock(text: string, serviceName: string) {
   return match?.[0] ?? null;
 }
 
+function getShellFunction(text: string, functionName: string) {
+  const match = text.match(
+    new RegExp(
+      `^${functionName}\\(\\) \\{\\n([\\s\\S]*?)(?=^}\\n)`,
+      "m",
+    ),
+  );
+
+  return match ? `${match[0]}}\n` : null;
+}
+
 async function readComposeFile(relativePath: string) {
   return readFile(path.join(repoRoot, relativePath), "utf8");
 }
@@ -55,5 +66,14 @@ describe("compose config", () => {
     expect(api).toContain(".env.production");
     expect(worker).toContain("WORKER_HEALTH_FILE");
     expect(worker).toContain("stale worker health file");
+  });
+
+  it("deploy-production.sh reads monitoring token without executing env files", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const envReader = getShellFunction(text, "read_remote_env_value");
+
+    expect(text).not.toContain("source .env.production");
+    expect(envReader).toContain("awk -v key=");
+    expect(text).toContain('read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN"');
   });
 });
