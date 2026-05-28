@@ -69,4 +69,22 @@ describe("findOnlyFansAccountByUsername", () => {
 
     expect(account.id).toBe(42);
   });
+
+  it("normalizes pasted OnlyFans profile URLs before matching accounts", async () => {
+    const listAccountsPage = vi.fn(async () => ({
+      parsed: {
+        accounts: [makeAccount({ username: "lora_of" })],
+        nextCursor: null,
+      },
+      raw: {},
+    }));
+
+    const account = await findOnlyFansAccountByUsername(
+      { listAccountsPage } as never,
+      { auth: { token: "om-token" } } as never,
+      "https://onlyfans.com/@LORA_OF/posts?tab=media",
+    );
+
+    expect(account.id).toBe(42);
+  });
 });

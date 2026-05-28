@@ -114,5 +114,27 @@ export async function findOnlyFansAccountByUsername(
 }
 
 function normalizeOnlyFansUsername(username: string) {
-  return username.trim().replace(/^@+/, "").toLowerCase();
+  const trimmed = username.trim();
+  const urlCandidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : /^(?:www\.)?onlyfans\.com\//i.test(trimmed)
+      ? `https://${trimmed}`
+      : null;
+
+  if (urlCandidate) {
+    try {
+      const parsed = new URL(urlCandidate);
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+      if (host === "onlyfans.com") {
+        const pathUsername = parsed.pathname.split("/").filter(Boolean)[0];
+        if (pathUsername) {
+          return decodeURIComponent(pathUsername).replace(/^@+/, "").toLowerCase();
+        }
+      }
+    } catch {
+      // Fall back to handle normalization below.
+    }
+  }
+
+  return trimmed.replace(/^@+/, "").toLowerCase();
 }
