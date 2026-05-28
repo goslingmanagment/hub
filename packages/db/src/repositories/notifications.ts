@@ -11,6 +11,8 @@ const MAX_OPEN_INCIDENT_ATTEMPTS = 3;
 
 type LockedNotificationIncidentRow = NotificationIncidentRow & {
   status: NotificationIncidentStatus;
+  resolvedAt: Date | string | null;
+  lastSeenAt: Date | string | null;
 };
 
 function normalizeDate(value: Date | string | null | undefined) {
@@ -210,7 +212,7 @@ export async function openNotificationIncident(
           where ${notificationIncidents.incidentKey} = ${input.incidentKey}
           for update
         `);
-        const locked = lockedResult.rows[0] ?? null;
+        const locked = (lockedResult.rows[0] as LockedNotificationIncidentRow | undefined) ?? null;
 
         if (!locked) {
           const [inserted] = await tx.insert(notificationIncidents)

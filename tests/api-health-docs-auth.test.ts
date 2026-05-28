@@ -389,7 +389,7 @@ describe("admin credential verification", () => {
       expect(verificationContext).toMatchObject({
         egressKey: "socks5://proxy.example:1080",
       });
-      expect(typeof verificationContext?.rateLimitWaiter).toBe("function");
+      expect(typeof (verificationContext as Record<string, unknown> | null)?.rateLimitWaiter).toBe("function");
     } finally {
       await server.close();
     }
@@ -454,7 +454,7 @@ describe("admin credential verification", () => {
       expect(requestContext).toMatchObject({
         egressKey: "https://proxy.example:443",
       });
-      expect(typeof requestContext?.rateLimitWaiter).toBe("function");
+      expect(typeof (requestContext as Record<string, unknown> | null)?.rateLimitWaiter).toBe("function");
     } finally {
       await server.close();
     }
