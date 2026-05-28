@@ -13,4 +13,8 @@ describe("route schema security", () => {
     expect(routeSchemas.workboardSnooze.security).toEqual(cookieOnlySecurity);
     expect(routeSchemas.workboardUnsnooze.security).toEqual(cookieOnlySecurity);
   });
+
+  it("documents logout as an idempotent cookie-clearing route", () => {
+    expect(routeSchemas.logout.security).toBeUndefined();
+  });
 });

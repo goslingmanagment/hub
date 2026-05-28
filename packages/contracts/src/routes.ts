@@ -2378,8 +2378,7 @@ export const routeSchemas = {
   },
   logout: {
     tags: ["auth"],
-    summary: "Log out the current session",
-    security: cookieOnlySecurity,
+    summary: "Clear the current session cookie if one is present",
     response: {
       200: z.object({ ok: z.literal(true) }),
     },
