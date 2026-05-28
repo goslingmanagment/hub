@@ -421,6 +421,70 @@ describe("sync executor", () => {
     });
   });
 
+  it("treats lost leases during retry persistence as skipped", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.retryPageSync.mockResolvedValueOnce(false);
+    handlerMocks.executeStreamChunk.mockRejectedValue(new Error("temporary upstream failure"));
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      requestSeq: 3,
+      leaseToken: "lease-1",
+    }));
+    expect(telemetryMocks.instances[0]?.recordSkipped).toHaveBeenCalledWith("Page sync lease lost");
+    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances[0]?.finish).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "idle",
+      platformAccountId: 55,
+      stream: null,
+      runId: 777,
+      needsContinuation: false,
+    });
+  });
+
+  it("treats lost leases during auth blocking as skipped", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.blockPageSync.mockResolvedValueOnce(false);
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new FanslyApiError("expired session", 401),
+    );
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      requestSeq: 3,
+      leaseToken: "lease-1",
+      blockerKind: "auth",
+      blockerCode: "credentials_invalid",
+    }));
+    expect(telemetryMocks.instances[0]?.recordSkipped).toHaveBeenCalledWith("Page sync lease lost");
+    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances[0]?.finish).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "idle",
+      platformAccountId: 55,
+      stream: null,
+      runId: 777,
+      needsContinuation: false,
+    });
+  });
+
   it("records a failed run when page-context decryption fails before chunk execution", async () => {
     const app = {
       db: {},
