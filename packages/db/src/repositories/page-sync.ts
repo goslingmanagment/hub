@@ -1638,18 +1638,24 @@ export async function pausePageSync(
   }
 
   const now = input.now ?? new Date();
-  await db.execute(sql`
-    update ${pageSyncStates}
-    set status = 'paused',
-        leased_seq = null,
-        lease_owner = null,
-        lease_token = null,
-        lease_heartbeat_at = null,
-        lease_expires_at = null,
-        updated_at = ${now}
-    where page_id = ${input.pageId}
-      and stream = any(${streamArraySql(input.streams)})
-  `);
+  const streams = normalizePageSyncRequestStreams(input.streams);
+  await db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    for (const stream of streams) {
+      await database.execute(sql`
+        update ${pageSyncStates}
+        set status = 'paused',
+            leased_seq = null,
+            lease_owner = null,
+            lease_token = null,
+            lease_heartbeat_at = null,
+            lease_expires_at = null,
+            updated_at = ${now}
+        where page_id = ${input.pageId}
+          and stream = ${stream}
+      `);
+    }
+  });
 }
 
 export async function resumePageSync(
@@ -1665,18 +1671,24 @@ export async function resumePageSync(
   }
 
   const now = input.now ?? new Date();
-  await db.execute(sql`
-    update ${pageSyncStates}
-    set status = case
-                   when blocker_kind is not null then 'blocked'::page_sync_status
-                   when request_seq > applied_seq then 'pending'::page_sync_status
-                   else 'idle'::page_sync_status
-                 end,
-        updated_at = ${now}
-    where page_id = ${input.pageId}
-      and stream = any(${streamArraySql(input.streams)})
-      and status = 'paused'
-  `);
+  const streams = normalizePageSyncRequestStreams(input.streams);
+  await db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    for (const stream of streams) {
+      await database.execute(sql`
+        update ${pageSyncStates}
+        set status = case
+                       when blocker_kind is not null then 'blocked'::page_sync_status
+                       when request_seq > applied_seq then 'pending'::page_sync_status
+                       else 'idle'::page_sync_status
+                     end,
+            updated_at = ${now}
+        where page_id = ${input.pageId}
+          and stream = ${stream}
+          and status = 'paused'
+      `);
+    }
+  });
 }
 
 export async function resetPageSync(
@@ -1692,33 +1704,39 @@ export async function resetPageSync(
   }
 
   const now = input.now ?? new Date();
-  await db.execute(sql`
-    update ${pageSyncStates}
-    set leased_seq = null,
-        retry_kind = null,
-        retry_at = null,
-        blocker_kind = case when blocker_kind = 'auth' then blocker_kind else null end,
-        blocker_code = case when blocker_kind = 'auth' then blocker_code else null end,
-        blocker_message = case when blocker_kind = 'auth' then blocker_message else null end,
-        blocked_at = case when blocker_kind = 'auth' then blocked_at else null end,
-        phase = null,
-        progress = '{}'::jsonb,
-        lease_owner = null,
-        lease_token = null,
-        lease_heartbeat_at = null,
-        lease_expires_at = null,
-        consecutive_failures = 0,
-        last_error_code = null,
-        last_error_summary = null,
-        status = case
-                   when status = 'paused' then 'paused'::page_sync_status
-                   when blocker_kind = 'auth' then 'blocked'::page_sync_status
-                   else 'idle'::page_sync_status
-                 end,
-        updated_at = ${now}
-    where page_id = ${input.pageId}
-      and stream = any(${streamArraySql(input.streams)})
-  `);
+  const streams = normalizePageSyncRequestStreams(input.streams);
+  await db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    for (const stream of streams) {
+      await database.execute(sql`
+        update ${pageSyncStates}
+        set leased_seq = null,
+            retry_kind = null,
+            retry_at = null,
+            blocker_kind = case when blocker_kind = 'auth' then blocker_kind else null end,
+            blocker_code = case when blocker_kind = 'auth' then blocker_code else null end,
+            blocker_message = case when blocker_kind = 'auth' then blocker_message else null end,
+            blocked_at = case when blocker_kind = 'auth' then blocked_at else null end,
+            phase = null,
+            progress = '{}'::jsonb,
+            lease_owner = null,
+            lease_token = null,
+            lease_heartbeat_at = null,
+            lease_expires_at = null,
+            consecutive_failures = 0,
+            last_error_code = null,
+            last_error_summary = null,
+            status = case
+                       when status = 'paused' then 'paused'::page_sync_status
+                       when blocker_kind = 'auth' then 'blocked'::page_sync_status
+                       else 'idle'::page_sync_status
+                     end,
+            updated_at = ${now}
+        where page_id = ${input.pageId}
+          and stream = ${stream}
+      `);
+    }
+  });
 }
 
 export async function requestPageSync(

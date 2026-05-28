@@ -7,8 +7,12 @@ import {
   listPageSyncStates,
   listRunnablePageSync,
   normalizePageSyncRequestStreams,
+  pausePageSync,
   requestPageSync,
+  resetPageSync,
+  resumePageSync,
   SYNC_STREAM_POLICY,
+  SYNC_STREAMS,
   type SyncStream,
 } from "../packages/db/src/repositories/page-sync.ts";
 import { sql, type SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
@@ -16,9 +20,14 @@ import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index
 import { pageSyncStates } from "../packages/db/src/schema.ts";
 
 const DIALECT = new PgDialect();
+const SYNC_STREAM_SET = new Set<string>(SYNC_STREAMS);
 
 function renderSql(query: SQL) {
   return DIALECT.sqlToQuery(query).sql;
+}
+
+function findStreamParam(params: unknown[]) {
+  return params.find((param) => typeof param === "string" && SYNC_STREAM_SET.has(param));
 }
 
 function buildPageSyncStateRow(pageId: number, stream: SyncStream, now: Date) {
@@ -189,6 +198,68 @@ describe("page-sync repository schema alignment", () => {
       "dm_messages",
     ]);
     expect(lockedStreams).toEqual([
+      "light",
+      "transactions",
+      "dm_conversations",
+      "dm_messages",
+    ]);
+  });
+
+  it("manual multi-stream controls update rows in normalized stream order", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    const pageId = 55;
+    const requestedStreams: SyncStream[] = ["dm_messages", "transactions", "light", "transactions", "dm_conversations"];
+
+    async function captureUpdatedStreams(
+      run: (db: never) => Promise<void>,
+    ) {
+      const updatedStreams: unknown[] = [];
+      const execute = vi.fn(async (query: SQL) => {
+        const rendered = DIALECT.sqlToQuery(query).sql;
+        const params = DIALECT.sqlToQuery(query).params;
+
+        if (rendered.includes('update "page_sync_states"') && rendered.includes("stream = $")) {
+          updatedStreams.push(findStreamParam(params));
+        }
+
+        return { rows: [] };
+      });
+      const db = {
+        execute: vi.fn(),
+        transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({ execute })),
+      } as never;
+
+      await run(db);
+
+      expect((db as { transaction: ReturnType<typeof vi.fn> }).transaction).toHaveBeenCalledTimes(1);
+      return updatedStreams;
+    }
+
+    await expect(captureUpdatedStreams((db) => pausePageSync(db, {
+      pageId,
+      streams: requestedStreams,
+      now,
+    }))).resolves.toEqual([
+      "light",
+      "transactions",
+      "dm_conversations",
+      "dm_messages",
+    ]);
+    await expect(captureUpdatedStreams((db) => resumePageSync(db, {
+      pageId,
+      streams: requestedStreams,
+      now,
+    }))).resolves.toEqual([
+      "light",
+      "transactions",
+      "dm_conversations",
+      "dm_messages",
+    ]);
+    await expect(captureUpdatedStreams((db) => resetPageSync(db, {
+      pageId,
+      streams: requestedStreams,
+      now,
+    }))).resolves.toEqual([
       "light",
       "transactions",
       "dm_conversations",
