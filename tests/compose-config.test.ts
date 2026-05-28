@@ -76,4 +76,14 @@ describe("compose config", () => {
     expect(envReader).toContain("awk -v key=");
     expect(text).toContain('read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN"');
   });
+
+  it("deploy-production.sh fails loudly when schema baseline capture breaks", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const schemaCapture = getShellFunction(text, "capture_remote_schema_migrations");
+
+    expect(schemaCapture).toContain("set -euo pipefail");
+    expect(schemaCapture).toContain("information_schema.tables");
+    expect(schemaCapture).not.toContain("|| true");
+    expect(schemaCapture).not.toContain("2>/dev/null");
+  });
 });

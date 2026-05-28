@@ -210,7 +210,7 @@ rollback_remote_stack() {
 capture_remote_schema_migrations() {
   local output_file="$1"
 
-  run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; ${REMOTE_COMPOSE} exec -T postgres sh -c 'PGPASSWORD=\"\$POSTGRES_PASSWORD\" psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select id from schema_migrations order by id\" 2>/dev/null' 2>/dev/null || true" >"$output_file"
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu; export PGPASSWORD=\"\$POSTGRES_PASSWORD\"; if [ \"\$(psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select count(*) from information_schema.tables where table_schema = \$\$public\$\$ and table_name = \$\$schema_migrations\$\$\")\" = \"1\" ]; then psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select id from schema_migrations order by id\"; fi'" >"$output_file"
 }
 
 schema_migrations_changed_since_baseline() {
