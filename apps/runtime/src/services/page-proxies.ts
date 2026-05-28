@@ -10,6 +10,7 @@ import { NotFoundError } from "./errors.ts";
 import { getOnlyMonsterAccountId } from "./onlyfans.ts";
 import { removeProxy, resolvePageContext, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
+import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 
 export async function setPageProxy(
   app: AppContext,
@@ -27,12 +28,16 @@ export async function setPageProxy(
   const proxyEgressKey = preservesStoredProxyRoute
     ? pageContext.egressKey
     : proxyRouteKey;
+  const rateLimitWaiter = createSyncRateLimitWaiter(app, {
+    egressKey: proxyEgressKey,
+  });
 
   if (pageContext.platform === "fansly") {
     await app.adapter.verifySession({
       session: pageContext.session,
       proxy: normalizedProxy,
       egressKey: proxyEgressKey,
+      rateLimitWaiter,
     });
   } else {
     await app.onlyFansAdapter.getAccount(
@@ -41,6 +46,7 @@ export async function setPageProxy(
         proxy: normalizedProxy,
         egressKey: proxyEgressKey,
         requestObserver: null,
+        rateLimitWaiter,
       },
       getOnlyMonsterAccountId(pageContext.page.metadata),
     );

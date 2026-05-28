@@ -27,6 +27,7 @@ import { buildFanslyMetadata } from "./fansly.ts";
 import { buildOnlyFansMetadata, findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
+import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 
 type FanslyOnboardingContext = Pick<AppContext, "db" | "config"> & {
   adapter: Pick<AppContext["adapter"], "verifySession">;
@@ -101,10 +102,13 @@ export async function onboardFanslyPage(
   if (proxy) {
     await assertAllowedProxyTarget(proxy);
   }
+  const egressKey = buildProxyEgressKey(proxy);
+  const rateLimitWaiter = createSyncRateLimitWaiter(app, { egressKey });
   const verification = await app.adapter.verifySession({
     session: input.session,
     proxy,
-    egressKey: buildProxyEgressKey(proxy),
+    egressKey,
+    rateLimitWaiter,
   });
   const verified = verification.parsed;
 
@@ -167,10 +171,13 @@ export async function onboardOnlyFansPage(
   if (proxy) {
     await assertAllowedProxyTarget(proxy);
   }
+  const egressKey = buildProxyEgressKey(proxy);
+  const rateLimitWaiter = createSyncRateLimitWaiter(app, { egressKey });
   const lookupContext = {
     auth: input.auth,
     proxy,
-    egressKey: buildProxyEgressKey(proxy),
+    egressKey,
+    rateLimitWaiter,
   };
   const account = await findOnlyFansAccountByUsername(
     app.onlyFansAdapter,

@@ -21,6 +21,7 @@ import { handleSuccessfulPageVerificationRecovery } from "./notification-inciden
 import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { removeProxy, resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
+import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSnapshot } from "./sync-status.ts";
 
@@ -230,6 +231,9 @@ export async function updatePageCredentials(
   const proxyEgressKey = preservesStoredProxyRoute
     ? storedEgressKey
     : buildProxyEgressKey(proxy);
+  const rateLimitWaiter = createSyncRateLimitWaiter(app, {
+    egressKey: proxyEgressKey,
+  });
 
   if (stored.page.platform !== body.platform) {
     throw new BadRequestError(
@@ -258,6 +262,7 @@ export async function updatePageCredentials(
       session,
       proxy,
       egressKey: proxyEgressKey,
+      rateLimitWaiter,
     });
     assertVerifiedAccountIdentity(
       stored.page.label,
@@ -281,6 +286,7 @@ export async function updatePageCredentials(
       proxy,
       egressKey: proxyEgressKey,
       requestObserver: null,
+      rateLimitWaiter,
     };
     const account = await findOnlyFansAccountByUsername(app.onlyFansAdapter, context, username);
     assertVerifiedAccountIdentity(

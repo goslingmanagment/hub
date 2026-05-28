@@ -52,7 +52,10 @@ describe("db write safety", () => {
   const encryptionKey = Buffer.alloc(32, 7);
 
   function createOnboardingApp(
-    verifySession: () => Promise<FanslyAccountMeResponse>,
+    verifySession: (contextInput: unknown) => Promise<FanslyAccountMeResponse>,
+    overrides?: {
+      syncSharedRateLimitEnabled?: boolean;
+    },
   ) {
     if (!testDb) {
       throw new Error("Test database is not available");
@@ -80,7 +83,7 @@ describe("db write safety", () => {
         onlyFansDefaultDelayMs: 1000,
         transactionLookbackDays: 7,
         transactionRescanCapDays: 30,
-        syncSharedRateLimitEnabled: false,
+        syncSharedRateLimitEnabled: overrides?.syncSharedRateLimitEnabled ?? false,
         syncPageExecutorConcurrency: 1,
         syncObservabilityRetentionDays: 30,
         healthSyncLightMaxAgeMinutes: 180,
@@ -92,8 +95,8 @@ describe("db write safety", () => {
         telegramReportHourUtc: 9,
       },
       adapter: {
-        async verifySession() {
-          const parsed = await verifySession();
+        async verifySession(contextInput: unknown) {
+          const parsed = await verifySession(contextInput);
           return {
             parsed,
             raw: parsed,
@@ -264,19 +267,25 @@ describe("db write safety", () => {
       name: "Lora",
     });
 
-    const app = createOnboardingApp(async () => ({
-      account: {
-        id: "acct-123",
-        username: "lora_verified",
-        displayName: "Lora Verified",
-        createdAt: 1_772_157_317_000,
-        followCount: 42,
-        subscriberCount: 7,
-        earningsWallet: { id: "wallet-1", balance: 123_45 },
-        walls: [{ id: "wall-1" }],
-        subscriptionTiers: [{ id: "tier-1" }],
-      },
-    }));
+    let verificationContext: Record<string, unknown> | null = null;
+    const app = createOnboardingApp(async (contextInput) => {
+      verificationContext = contextInput as Record<string, unknown>;
+      return {
+        account: {
+          id: "acct-123",
+          username: "lora_verified",
+          displayName: "Lora Verified",
+          createdAt: 1_772_157_317_000,
+          followCount: 42,
+          subscriberCount: 7,
+          earningsWallet: { id: "wallet-1", balance: 123_45 },
+          walls: [{ id: "wall-1" }],
+          subscriptionTiers: [{ id: "tier-1" }],
+        },
+      };
+    }, {
+      syncSharedRateLimitEnabled: true,
+    });
 
     const session = {
       authorization: "token",
@@ -338,6 +347,12 @@ describe("db write safety", () => {
     expect(proxyRows.rows[0]?.count).toBe(1);
     expect(proxyRows.rows[0]?.url).toBe("http://proxy.example");
     expect(proxyRows.rows[0]?.has_encrypted_auth).toBe(true);
+    expect(verificationContext).not.toBeNull();
+    const verification = verificationContext as Record<string, unknown>;
+    expect(verification).toMatchObject({
+      egressKey: "http://proxy.example:80",
+    });
+    expect(typeof verification.rateLimitWaiter).toBe("function");
   });
 
   it("leaves no persisted rows behind when Fansly auth verification fails during onboarding", async (context) => {
@@ -634,10 +649,13 @@ describe("db write safety", () => {
     });
 
     let verifiedEgressKey: string | null = null;
+    let verifiedRateLimitWaiter: unknown = null;
     const app = createTestAppContext(testDb, {
+      syncSharedRateLimitEnabled: true,
       adapter: {
-        async verifySession(contextInput: { egressKey?: string }) {
+        async verifySession(contextInput: { egressKey?: string; rateLimitWaiter?: unknown }) {
           verifiedEgressKey = contextInput.egressKey ?? null;
+          verifiedRateLimitWaiter = contextInput.rateLimitWaiter ?? null;
           return {
             parsed: {
               account: {
@@ -665,6 +683,7 @@ describe("db write safety", () => {
     `);
 
     expect(verifiedEgressKey).toBe("shared-proxy-pool");
+    expect(typeof verifiedRateLimitWaiter).toBe("function");
     expect(proxyRows.rows[0]).toEqual({
       url: "socks5://proxy.example:1080",
       rate_limit_scope_key: "shared-proxy-pool",
@@ -1200,14 +1219,18 @@ describe("db write safety", () => {
 
     let verifiedProxy: Record<string, unknown> | null = null;
     let verifiedEgressKey: unknown = null;
+    let verifiedRateLimitWaiter: unknown = null;
     const app = createTestAppContext(testDb, {
+      syncSharedRateLimitEnabled: true,
       adapter: {
         async verifySession(contextInput: {
           proxy?: Record<string, unknown> | null;
           egressKey?: string | null;
+          rateLimitWaiter?: unknown;
         }) {
           verifiedProxy = contextInput.proxy ?? null;
           verifiedEgressKey = contextInput.egressKey ?? null;
+          verifiedRateLimitWaiter = contextInput.rateLimitWaiter ?? null;
           return {
             parsed: {
               account: {
@@ -1246,6 +1269,7 @@ describe("db write safety", () => {
       password: "proxy-pass",
     });
     expect(verifiedEgressKey).toBe("shared-proxy-pool");
+    expect(typeof verifiedRateLimitWaiter).toBe("function");
     expect(proxyRows.rows).toEqual([
       {
         url: "socks5://proxy.example",
