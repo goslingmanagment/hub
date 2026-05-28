@@ -485,7 +485,7 @@ describe("sync repository timestamp normalization", () => {
     const renderedSql = renderSql(query as SQL);
 
     expect(renderedSql).toContain('"egress_endpoints"."rate_limit_scope_key"');
-    expect(renderedSql).toContain('regexp_match("egress_endpoints"."url"');
+    expect(renderedSql).toContain('canonical_proxy_egress_key("egress_endpoints"."url")');
     expect(sqlText).toContain('left join  on  = ');
     expect(sqlText).toContain('rl.egress_key as "egressKey"');
     expect(sqlText).toContain('group by rl.provider, rl.egress_key');
