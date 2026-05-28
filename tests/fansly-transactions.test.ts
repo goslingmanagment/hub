@@ -398,6 +398,226 @@ describe("syncTransactions", () => {
     );
   });
 
+  it("invalidates incremental Fansly progress when offset pages overlap", async () => {
+    const checkpoint = {
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    };
+    dbMocks.getCheckpoint.mockResolvedValue(checkpoint);
+    const telemetry = createTelemetry();
+    const getTransactionsPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-15T00:00:00.000Z")],
+        total: 2,
+        done: false,
+        raw: { page: 1 },
+      })
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-15T00:00:00.000Z")],
+        total: 2,
+        done: true,
+        raw: { page: 2 },
+      });
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    })).rejects.toThrow("Fansly incremental transaction scan saw overlapping rows between offset pages");
+
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "incremental_offset_overlap",
+      severity: "error",
+    }));
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]).toMatchObject({
+      platformAccountId: 1,
+      stream: "transactions",
+      cursorTimestamp: checkpoint.cursorTimestamp,
+      state: {
+        pageLabel: "fansly-page",
+        invalidatedIncrementalScan: {
+          reason: "incremental_offset_overlap",
+        },
+      },
+    });
+  });
+
+  it("preserves the cursor when invalidating resumed Fansly incremental progress", async () => {
+    const cursorTimestamp = new Date("2026-03-14T00:00:00.000Z");
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: null,
+      state: {
+        mode: "incremental",
+        completed: false,
+        provider: "fansly",
+        phase: "transactions",
+        cursorTimestamp: cursorTimestamp.toISOString(),
+        snapshotEnd: "2026-03-15T00:00:00.000Z",
+        after: "2026-03-07T00:00:00.000Z",
+        lookbackStart: "2026-03-07T00:00:00.000Z",
+        oldestPendingAt: null,
+        rescanCapStart: "2026-02-13T00:00:00.000Z",
+        providerReportedTotal: 2,
+        newestSeenAt: cursorTimestamp.toISOString(),
+        oldestSeenAt: "2026-03-14T12:00:00.000Z",
+        dirtyFrom: null,
+        processedTransactions: 1,
+        transactionPages: 1,
+        offset: 1,
+        olderThanBoundaryItems: 0,
+        olderThanBoundaryPages: 0,
+        consecutiveAllOlderPages: 0,
+        firstPageOlderThanBoundaryItems: 0,
+        earlyStoppedBeyondBoundary: false,
+        lastPageTransactionIds: ["tx-1"],
+      },
+    });
+    const getTransactionsPage = vi.fn().mockResolvedValueOnce({
+      items: [buildTransaction("tx-2", "2026-03-14T12:00:00.000Z")],
+      total: 3,
+      done: true,
+      raw: { page: "resume" },
+    });
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: createTelemetry() as never,
+    })).rejects.toThrow("Fansly incremental transaction total changed during an offset scan");
+
+    expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]).toMatchObject({
+      platformAccountId: 1,
+      stream: "transactions",
+      cursorTimestamp,
+      state: {
+        pageLabel: "fansly-page",
+        invalidatedIncrementalScan: {
+          reason: "incremental_total_changed",
+        },
+      },
+    });
+  });
+
+  it("preserves total mismatch errors when Fansly incremental invalidation fails", async () => {
+    const checkpoint = {
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    };
+    dbMocks.getCheckpoint.mockResolvedValue(checkpoint);
+    dbMocks.upsertCheckpointProgress
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("checkpoint write failed"));
+    const telemetry = createTelemetry();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi.fn().mockResolvedValueOnce({
+          items: [buildTransaction("tx-1", "2026-03-15T00:00:00.000Z")],
+          total: 2,
+          done: true,
+          raw: { page: 1 },
+        }),
+      },
+      logger,
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    })).rejects.toThrow("Fansly incremental transaction total differed from fetched rows");
+
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "incremental_total_mismatch",
+      severity: "error",
+    }));
+    expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]).toMatchObject({
+      platformAccountId: 1,
+      stream: "transactions",
+      cursorTimestamp: checkpoint.cursorTimestamp,
+      state: {
+        pageLabel: "fansly-page",
+        invalidatedIncrementalScan: {
+          reason: "incremental_total_mismatch",
+        },
+      },
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.any(Error),
+        originalErr: expect.any(Error),
+        provider: "fansly",
+        stream: "transactions",
+      }),
+      "Failed to invalidate unstable Fansly incremental checkpoint progress",
+    );
+  });
+
   it("warns once per run for an unknown transaction type", async () => {
     dbMocks.getCheckpoint.mockResolvedValue({
       cursorTimestamp: new Date("2026-03-08T00:00:00.000Z"),
@@ -628,7 +848,11 @@ describe("syncTransactions", () => {
       limit: 100,
     });
 
-    const yieldedState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1].state;
+    const yieldedProgress = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1];
+    expect(yieldedProgress).toMatchObject({
+      cursorTimestamp: checkpoint.cursorTimestamp,
+    });
+    const yieldedState = yieldedProgress?.state;
     expect(yieldedState).toMatchObject({
       mode: "incremental",
       provider: "fansly",

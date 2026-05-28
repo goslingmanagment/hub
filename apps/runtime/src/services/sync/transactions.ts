@@ -49,6 +49,7 @@ type FanslyTransactionIncrementalState = {
   completed: false;
   provider: "fansly";
   phase: "transactions";
+  cursorTimestamp: string | null;
   snapshotEnd: string;
   after: string | null;
   lookbackStart: string | null;
@@ -150,6 +151,7 @@ function parseFanslyTransactionIncrementalState(value: unknown): FanslyTransacti
   }
 
   const snapshotEnd = asIsoString(state.snapshotEnd);
+  const cursorTimestamp = asNullableIsoString(state.cursorTimestamp);
   const after = asNullableIsoString(state.after);
   const lookbackStart = asNullableIsoString(state.lookbackStart);
   const oldestPendingAt = asNullableIsoString(state.oldestPendingAt);
@@ -170,6 +172,7 @@ function parseFanslyTransactionIncrementalState(value: unknown): FanslyTransacti
 
   if (
     snapshotEnd === null ||
+    cursorTimestamp === undefined ||
     after === undefined ||
     lookbackStart === undefined ||
     oldestPendingAt === undefined ||
@@ -196,6 +199,7 @@ function parseFanslyTransactionIncrementalState(value: unknown): FanslyTransacti
     completed: false,
     provider: "fansly",
     phase: "transactions",
+    cursorTimestamp,
     snapshotEnd,
     after,
     lookbackStart,
@@ -215,6 +219,38 @@ function parseFanslyTransactionIncrementalState(value: unknown): FanslyTransacti
     earlyStoppedBeyondBoundary,
     lastPageTransactionIds,
   };
+}
+
+function addDays(date: Date, days: number) {
+  return new Date(date.getTime() + days * DAY_MS);
+}
+
+function resolveFanslyIncrementalCursorTimestamp(
+  checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
+  state: FanslyTransactionIncrementalState | null,
+  transactionLookbackDays: number,
+) {
+  if (checkpoint?.cursorTimestamp) {
+    return checkpoint.cursorTimestamp;
+  }
+
+  if (state?.cursorTimestamp) {
+    return new Date(state.cursorTimestamp);
+  }
+
+  if (state?.lookbackStart) {
+    return addDays(new Date(state.lookbackStart), transactionLookbackDays);
+  }
+
+  return null;
+}
+
+function progressCursorTimestamp(state: FanslyTransactionProgressState) {
+  if (state.mode !== "incremental" || !state.cursorTimestamp) {
+    return null;
+  }
+
+  return new Date(state.cursorTimestamp);
 }
 
 function resolveFanslyCommissionRate(
@@ -398,6 +434,7 @@ async function persistFanslyTransactionsPage(
     await upsertCheckpointProgress(dbTx, {
       platformAccountId: input.platformAccountId,
       stream: "transactions",
+      cursorTimestamp: progressCursorTimestamp(state),
       state,
     });
 
@@ -427,6 +464,7 @@ async function flushAndClearFanslyDirtyRange<TState extends FanslyTransactionPro
   await upsertCheckpointProgress(app.db, {
     platformAccountId,
     stream: "transactions",
+    cursorTimestamp: progressCursorTimestamp(nextState),
     state: nextState,
   });
 
@@ -441,11 +479,12 @@ async function invalidateFanslyIncrementalProgress(
   },
   checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
   reason: FanslyIncrementalInvalidationReason,
+  fallbackCursorTimestamp: Date | null,
 ) {
   await upsertCheckpointProgress(app.db, {
     platformAccountId: input.platformAccountId,
     stream: "transactions",
-    cursorTimestamp: checkpoint?.cursorTimestamp ?? null,
+    cursorTimestamp: checkpoint?.cursorTimestamp ?? fallbackCursorTimestamp,
     state: {
       pageLabel: input.pageLabel,
       invalidatedIncrementalScan: {
@@ -454,6 +493,37 @@ async function invalidateFanslyIncrementalProgress(
       },
     },
   });
+}
+
+async function safelyInvalidateFanslyIncrementalProgress(
+  app: AppContext,
+  input: {
+    pageLabel: string;
+    platformAccountId: number;
+  },
+  checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
+  reason: FanslyIncrementalInvalidationReason,
+  fallbackCursorTimestamp: Date | null,
+  originalErr: unknown,
+) {
+  try {
+    await invalidateFanslyIncrementalProgress(
+      app,
+      input,
+      checkpoint,
+      reason,
+      fallbackCursorTimestamp,
+    );
+  } catch (cleanupError) {
+    app.logger.warn({
+      err: cleanupError,
+      originalErr,
+      pageLabel: input.pageLabel,
+      platformAccountId: input.platformAccountId,
+      provider: "fansly",
+      stream: "transactions",
+    }, "Failed to invalidate unstable Fansly incremental checkpoint progress");
+  }
 }
 
 async function syncTransactionsIncremental(
@@ -517,6 +587,7 @@ async function syncTransactionsIncremental(
       completed: false,
       provider: "fansly",
       phase: "transactions",
+      cursorTimestamp: isoDateOrNull(checkpoint?.cursorTimestamp ?? null),
       snapshotEnd: new Date().toISOString(),
       after: isoDateOrNull(after),
       lookbackStart: isoDateOrNull(lookbackStart),
@@ -534,6 +605,18 @@ async function syncTransactionsIncremental(
       consecutiveAllOlderPages: 0,
       firstPageOlderThanBoundaryItems: 0,
       earlyStoppedBeyondBoundary: false,
+    };
+  }
+
+  const incrementalCursorTimestamp = resolveFanslyIncrementalCursorTimestamp(
+    checkpoint,
+    state,
+    app.config.transactionLookbackDays,
+  );
+  if (state.cursorTimestamp === null && incrementalCursorTimestamp) {
+    state = {
+      ...state,
+      cursorTimestamp: incrementalCursorTimestamp.toISOString(),
     };
   }
 
@@ -801,18 +884,14 @@ async function syncTransactionsIncremental(
     }
 
     if (error instanceof UnstableFanslyIncrementalScanError) {
-      try {
-        await invalidateFanslyIncrementalProgress(app, input, checkpoint, error.reason);
-      } catch (cleanupError) {
-        app.logger.warn({
-          err: cleanupError,
-          originalErr: error,
-          pageLabel: input.pageLabel,
-          platformAccountId: input.platformAccountId,
-          provider: "fansly",
-          stream: "transactions",
-        }, "Failed to invalidate unstable Fansly incremental checkpoint progress");
-      }
+      await safelyInvalidateFanslyIncrementalProgress(
+        app,
+        input,
+        checkpoint,
+        error.reason,
+        incrementalCursorTimestamp,
+        error,
+      );
     }
 
     throw error;
@@ -839,11 +918,19 @@ async function syncTransactionsIncremental(
         pageCount: state.transactionPages,
       },
     });
-    await invalidateFanslyIncrementalProgress(app, input, checkpoint, "incremental_total_mismatch");
-    throw new UnstableFanslyIncrementalScanError(
+    const error = new UnstableFanslyIncrementalScanError(
       "Fansly incremental transaction total differed from fetched rows",
       "incremental_total_mismatch",
     );
+    await safelyInvalidateFanslyIncrementalProgress(
+      app,
+      input,
+      checkpoint,
+      error.reason,
+      incrementalCursorTimestamp,
+      error,
+    );
+    throw error;
   }
 
   let checkpointAfter = null;
