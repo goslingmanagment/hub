@@ -88,6 +88,7 @@ export async function findOnlyFansAccountByUsername(
   context: OnlyFansRequestContext,
   username: string,
 ) {
+  const normalizedUsername = normalizeOnlyFansUsername(username);
   let cursor: string | null = null;
   let pageIndex = 0;
 
@@ -98,7 +99,9 @@ export async function findOnlyFansAccountByUsername(
       pageIndex,
     });
 
-    const match = response.parsed.accounts.find((account) => account.username === username);
+    const match = response.parsed.accounts.find((account) =>
+      normalizeOnlyFansUsername(account.username) === normalizedUsername
+    );
     if (match) {
       return match;
     }
@@ -108,4 +111,8 @@ export async function findOnlyFansAccountByUsername(
   } while (cursor);
 
   throw new Error(`OnlyMonster account "${username}" was not found for this token`);
+}
+
+function normalizeOnlyFansUsername(username: string) {
+  return username.trim().replace(/^@+/, "").toLowerCase();
 }

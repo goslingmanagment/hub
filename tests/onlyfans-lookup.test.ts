@@ -51,4 +51,22 @@ describe("findOnlyFansAccountByUsername", () => {
     expect(account.id).toBe(42);
     expect(listAccountsPage).toHaveBeenCalledTimes(1);
   });
+
+  it("normalizes pasted handles before matching accounts", async () => {
+    const listAccountsPage = vi.fn(async () => ({
+      parsed: {
+        accounts: [makeAccount({ username: "lora_of" })],
+        nextCursor: null,
+      },
+      raw: {},
+    }));
+
+    const account = await findOnlyFansAccountByUsername(
+      { listAccountsPage } as never,
+      { auth: { token: "om-token" } } as never,
+      " @LORA_OF ",
+    );
+
+    expect(account.id).toBe(42);
+  });
 });
