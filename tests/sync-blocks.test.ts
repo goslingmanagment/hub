@@ -463,6 +463,43 @@ describe("sync blocks service", () => {
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledTimes(1);
   });
 
+  it("allows OnlyFans message domains when the platform exposes DM streams", async () => {
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: {
+        id: 9,
+        label: "lana-of",
+        platform: "onlyfans",
+      },
+      proxy: null,
+    });
+    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.requestPageSync.mockResolvedValue([
+      { stream: "dm_conversations", requestedSeq: 2 },
+    ]);
+    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-of-messages");
+
+    const response = await triggerSyncBlock({ db: {} } as never, {
+      send: vi.fn(),
+    } as never, {
+      pageLabel: "lana-of",
+      block: "messages_live",
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(response).toMatchObject({
+      accepted: true,
+      action: "trigger",
+      pageLabel: "lana-of",
+      block: "messages_live",
+      requests: [{ stream: "dm_conversations", requestedSeq: 2 }],
+    });
+    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 9,
+      streams: ["dm_conversations"],
+      source: "manual",
+    }));
+  });
+
   it("resumes message history by re-requesting work and enqueueing a wakeup", async () => {
     dbMocks.findPageByLabel.mockResolvedValue({
       page: {

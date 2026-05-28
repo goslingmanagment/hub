@@ -5054,6 +5054,19 @@ describe("api integration", () => {
     expect(legacySearch.statusCode).toBe(200);
     expect(legacySearch.json().items).toEqual(search.json().items);
 
+    const spenderList = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&period=30d&limit=10&offset=0",
+      headers: {
+        authorization: `Bearer ${key}`,
+      },
+    });
+    expect(spenderList.statusCode).toBe(200);
+    expect(spenderList.json().scope).toMatchObject({
+      kind: "page",
+      platform: "fansly",
+    });
+
     const batch = await server.inject({
       method: "POST",
       url: "/api/v2/spenders:batch",
@@ -5099,6 +5112,12 @@ describe("api integration", () => {
           }),
         ]),
         lifetimeLastTransactionAt: expect.any(String),
+        subscription: {
+          status: "active",
+          expiresAt: "2026-03-20T12:00:00.000Z",
+          autoRenew: true,
+          autoRenewOffDetectedAt: null,
+        },
       }),
       {
         requestedFan: {
@@ -8469,12 +8488,31 @@ describe("api integration", () => {
     });
     expect(forbiddenMessages.statusCode).toBe(403);
 
+    const forbiddenFlags = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/fans/fansly/fan-001/flags",
+      headers: { cookie: leadCookie },
+      payload: { flags: ["vip"] },
+    });
+    expect(forbiddenFlags.statusCode).toBe(403);
+
     const ownerLogin = await server.inject({
       method: "POST",
       url: "/api/v1/auth/login",
       payload: { username: "dima", password: "owner-secret" },
     });
     const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    const ownerFlags = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/fans/fansly/fan-001/flags",
+      headers: { cookie: ownerCookie },
+      payload: { flags: ["vip"] },
+    });
+    expect(ownerFlags.statusCode).toBe(200);
+    expect(ownerFlags.json().flags).toEqual([
+      expect.objectContaining({ flag: "vip" }),
+    ]);
 
     const nonFansly = await server.inject({
       method: "GET",

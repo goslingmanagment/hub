@@ -147,17 +147,7 @@ const BLOCK_TASKS: Record<SyncBlockKey, readonly SyncStream[]> = {
   messages_history: ["dm_messages"],
 };
 
-function supportedBlocksForPlatform(platform: Platform) {
-  return platform === "fansly"
-    ? [...SYNC_DOMAIN_BLOCKS]
-    : ["connection", "financials"] satisfies SyncBlockKey[];
-}
-
 function blockTasksForPlatform(platform: Platform, block: SyncBlockKey) {
-  if (!supportedBlocksForPlatform(platform).includes(block)) {
-    return [] as SyncStream[];
-  }
-
   const supportedStreams = new Set(getSyncStreamsForPlatform(platform));
   return BLOCK_TASKS[block].filter((stream) => supportedStreams.has(stream));
 }

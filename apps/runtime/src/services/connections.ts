@@ -6,6 +6,7 @@ import {
 } from "@agency_hub_core/db";
 import type { SyncUxSummary, UpdateCredentialsBody } from "@agency_hub_core/contracts";
 import {
+  decryptJsonWithKeyVersion,
   encryptJson,
   normalizeProxyConfig,
   type StoredPlatformCredentialBundle,
@@ -50,6 +51,27 @@ function assertVerifiedAccountIdentity(
     `Submitted credentials belong to upstream account "${actualPlatformAccountId}", ` +
       `but page "${pageLabel}" is bound to "${expectedPlatformAccountId}"`,
   );
+}
+
+function decryptStoredCredentials(
+  app: Pick<AppContext, "config">,
+  stored: NonNullable<Awaited<ReturnType<typeof findPageByLabel>>>,
+): StoredPlatformCredentialBundle {
+  if (!stored.credentials) {
+    throw new BadRequestError(`Page "${stored.page.label}" has no stored credentials`);
+  }
+
+  const decrypted = decryptJsonWithKeyVersion<StoredPlatformCredentialBundle>(
+    stored.credentials.encryptedSession,
+    app.config.encryptionKeysByVersion,
+  );
+  if (decrypted.platform !== stored.page.platform) {
+    throw new BadRequestError(
+      `Stored credentials for page "${stored.page.label}" do not match platform ${stored.page.platform}`,
+    );
+  }
+
+  return decrypted;
 }
 
 function isAuthError(errorSummary: string | null): boolean {
@@ -188,10 +210,25 @@ export async function updatePageCredentials(
     );
   }
 
+  const storedCredentials = body.platform === "fansly"
+    ? body.session === undefined
+      ? decryptStoredCredentials(app, stored)
+      : null
+    : body.auth === undefined
+      ? decryptStoredCredentials(app, stored)
+      : null;
+
   // Verify credentials with platform adapter
   if (body.platform === "fansly") {
+    const session = body.session ?? (
+      storedCredentials?.platform === "fansly" ? storedCredentials.session : null
+    );
+    if (!session) {
+      throw new BadRequestError(`Page "${stored.page.label}" has no stored Fansly session`);
+    }
+
     const verification = await app.adapter.verifySession({
-      session: body.session,
+      session,
       proxy,
     });
     assertVerifiedAccountIdentity(
@@ -200,12 +237,23 @@ export async function updatePageCredentials(
       verification.parsed.account.id,
     );
   } else {
+    const auth = body.auth ?? (
+      storedCredentials?.platform === "onlyfans" ? storedCredentials.auth : null
+    );
+    if (!auth) {
+      throw new BadRequestError(`Page "${stored.page.label}" has no stored OnlyFans auth token`);
+    }
+    const username = body.username ?? stored.page.username;
+    if (!username) {
+      throw new BadRequestError(`Page "${stored.page.label}" has no stored OnlyFans username`);
+    }
+
     const context = {
-      auth: body.auth,
+      auth,
       proxy,
       requestObserver: null,
     };
-    const account = await findOnlyFansAccountByUsername(app.onlyFansAdapter, context, body.username);
+    const account = await findOnlyFansAccountByUsername(app.onlyFansAdapter, context, username);
     assertVerifiedAccountIdentity(
       stored.page.label,
       stored.page.platformAccountId,
@@ -214,20 +262,26 @@ export async function updatePageCredentials(
   }
 
   // Save encrypted credentials
-  const credentials: StoredPlatformCredentialBundle = body.platform === "fansly"
-    ? { platform: "fansly", session: body.session }
-    : { platform: "onlyfans", auth: body.auth };
+  const credentials: StoredPlatformCredentialBundle | null = body.platform === "fansly"
+    ? body.session
+      ? { platform: "fansly", session: body.session }
+      : null
+    : body.auth
+      ? { platform: "onlyfans", auth: body.auth }
+      : null;
 
-  const encrypted = encryptJson(
-    credentials,
-    app.config.encryptionKey,
-    app.config.encryptionKeyVersion,
-  );
-  await storePlatformCredentials(app.db, {
-    platformAccountId: stored.page.id,
-    encryptedSession: JSON.stringify(encrypted),
-    keyVersion: app.config.encryptionKeyVersion,
-  });
+  if (credentials) {
+    const encrypted = encryptJson(
+      credentials,
+      app.config.encryptionKey,
+      app.config.encryptionKeyVersion,
+    );
+    await storePlatformCredentials(app.db, {
+      platformAccountId: stored.page.id,
+      encryptedSession: JSON.stringify(encrypted),
+      keyVersion: app.config.encryptionKeyVersion,
+    });
+  }
 
   if (hasExplicitProxyInput) {
     if (proxy) {

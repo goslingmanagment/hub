@@ -764,20 +764,31 @@ export async function listWorkboardAllSpenders(
 export async function snoozeWorkboardFan(
   db: Database,
   input: { platformAccountId: number; fanId: number; days: 7 | 14 | 30 },
-): Promise<{ fanId: number; snoozedUntil: Date }> {
+): Promise<{ fanId: number; snoozedUntil: Date } | null> {
   const result = await db.execute<{
     fanId: NumericValue;
     snoozedUntil: TimestampValue;
   }>(sql`
     insert into workboard_snoozes (platform_account_id, fan_id, snoozed_until)
-    values (${input.platformAccountId}, ${input.fanId}, now() + (${input.days} || ' days')::interval)
+    select fp.platform_account_id,
+           fp.fan_id,
+           now() + (${input.days} || ' days')::interval
+    from page_fans fp
+    inner join fans f on f.id = fp.fan_id
+    where fp.platform_account_id = ${input.platformAccountId}
+      and fp.fan_id = ${input.fanId}
+      and f.deleted_detected_at is null
     on conflict (platform_account_id, fan_id)
     do update set snoozed_until = excluded.snoozed_until,
                   created_at = now()
     returning fan_id as "fanId", snoozed_until as "snoozedUntil"
   `);
 
-  const row = result.rows[0]!;
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
   return {
     fanId: normalizeNumber(row.fanId, "fanId"),
     snoozedUntil: requireTimestamp(row.snoozedUntil, "snoozedUntil"),
@@ -789,9 +800,12 @@ export async function unsnoozeWorkboardFan(
   input: { platformAccountId: number; fanId: number },
 ): Promise<void> {
   await db.execute(sql`
-    delete from workboard_snoozes
-    where platform_account_id = ${input.platformAccountId}
-      and fan_id = ${input.fanId}
+    delete from workboard_snoozes ws
+    using page_fans fp
+    where ws.platform_account_id = ${input.platformAccountId}
+      and ws.fan_id = ${input.fanId}
+      and fp.platform_account_id = ws.platform_account_id
+      and fp.fan_id = ws.fan_id
   `);
 }
 
@@ -827,7 +841,7 @@ export async function listWorkboardSnoozed(
            ws.snoozed_until as "snoozedUntil"
     from workboard_snoozes ws
     inner join fans f on f.id = ws.fan_id
-    left join page_fans fp
+    inner join page_fans fp
       on fp.platform_account_id = ws.platform_account_id
      and fp.fan_id = ws.fan_id
     left join fan_spend_lifetime slp

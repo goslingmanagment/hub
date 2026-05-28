@@ -19,6 +19,14 @@ export function buildPageRoute(pageLabel: string) {
   return `/pages/${pathSegment(pageLabel)}`;
 }
 
+export function decodeRouteSegment(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export function buildPageSectionRoute(pageLabel: string, section: string) {
   return `${buildPageRoute(pageLabel)}/${section}`;
 }

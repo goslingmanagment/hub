@@ -1597,7 +1597,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.setFanFlags,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
+    requireOwner(principal);
     const fan = await findPlatformFan(appContext.db, request.params.platform, request.params.platformUserId);
     if (!fan) {
       throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);

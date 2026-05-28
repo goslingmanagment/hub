@@ -41,6 +41,7 @@ export function CredentialsModal({
       await updateCredentials.mutateAsync(buildCredentialsBody({
         platform: connection.platform,
         values,
+        requireCredentials: false,
         hadStoredProxy,
         initialStoredProxy: hadStoredProxy ? { url: connection.proxyUrl!, hasAuth: connection.proxyHasAuth } : null,
       }));

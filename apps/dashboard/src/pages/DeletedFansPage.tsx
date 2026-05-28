@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { usePageDeletedFans } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
@@ -16,6 +16,10 @@ function joinAliases(values: Array<string | null>) {
 export function DeletedFansPage() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
   const [offset, setOffset] = useState(0);
+
+  useEffect(() => {
+    setOffset(0);
+  }, [pageLabel]);
 
   const { data, isLoading, isError } = usePageDeletedFans(
     pageLabel ?? "",

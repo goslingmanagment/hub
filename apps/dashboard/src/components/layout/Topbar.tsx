@@ -4,7 +4,7 @@ import { LogOut, ChevronDown } from "lucide-react";
 import { useLogout } from "@/api/queries";
 import { PeriodSelector } from "@/components/shared/PeriodSelector";
 import { clearDashboardSession } from "@/lib/queryClient";
-import { resolveFanLabelFromState } from "@/lib/navigation";
+import { buildPageRoute, decodeRouteSegment, resolveFanLabelFromState } from "@/lib/navigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface TopbarProps {
@@ -149,13 +149,13 @@ function buildBreadcrumbs(
   }
 
   if (parts[0] === "pages" && parts[1]) {
-    const pageLabel = parts[1];
+    const pageLabel = decodeRouteSegment(parts[1]);
     const page = pages.find((item) => item.label === pageLabel);
     const pageTitle = page?.label ?? pageLabel;
     const crumbs: { label: string; href?: string }[] = [
       { label: "Overview", href: "/" },
       parts.length > 2
-        ? { label: pageTitle, href: `/pages/${pageLabel}` }
+        ? { label: pageTitle, href: buildPageRoute(pageLabel) }
         : { label: pageTitle },
     ];
 
@@ -170,7 +170,7 @@ function buildBreadcrumbs(
     } else if (parts[2] === "workboard" || parts[2] === "crm") {
       crumbs.push({ label: "Workboard" });
     } else if (parts[2] === "fans" && parts[3] && parts[4]) {
-      const fanLabel = resolveFanLabelFromState(locationState) ?? parts[4];
+      const fanLabel = resolveFanLabelFromState(locationState) ?? decodeRouteSegment(parts[4]);
       crumbs.push({ label: fanLabel });
     }
 

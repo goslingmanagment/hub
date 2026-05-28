@@ -349,6 +349,43 @@ describe("workboard repository integration", () => {
     expect(snoozed).toHaveLength(0);
   });
 
+  it("does not snooze or list fans that are not members of the page", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createWorkboardPage(testDb, "workboard-snooze-scope");
+    const otherPage = await createWorkboardPage(testDb, "workboard-snooze-other");
+    const [otherFan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "wb-snooze-other-fan",
+      username: "wb_snooze_other",
+      displayName: "WB Snooze Other",
+    }]);
+    await upsertFanPage(testDb.db, {
+      platformAccountId: otherPage.id,
+      fanId: otherFan.id,
+      isFollower: true,
+      isSubscriber: false,
+    });
+
+    await expect(snoozeWorkboardFan(testDb.db, {
+      platformAccountId: page.id,
+      fanId: otherFan.id,
+      days: 7,
+    })).resolves.toBeNull();
+
+    await testDb.pool.query(`
+      insert into workboard_snoozes (platform_account_id, fan_id, snoozed_until)
+      values ($1, $2, now() + interval '7 days')
+    `, [page.id, otherFan.id]);
+
+    await expect(
+      listWorkboardSnoozed(testDb.db, { platformAccountId: page.id }),
+    ).resolves.toEqual([]);
+  });
+
   it("lists active_now and recently_active buckets from explicit external presence fields", async (context) => {
     if (!testDb) {
       context.skip();

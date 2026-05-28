@@ -8703,7 +8703,8 @@
                             "platform": {
                               "type": "string",
                               "enum": [
-                                "fansly"
+                                "fansly",
+                                "onlyfans"
                               ]
                             },
                             "platformUserId": {
@@ -11975,6 +11976,9 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -16613,8 +16617,10 @@
                                   "type": "string",
                                   "enum": [
                                     "light",
+                                    "fan_identities",
                                     "followers",
                                     "transactions",
+                                    "top_spenders",
                                     "subscribers",
                                     "dm_conversations",
                                     "dm_messages",
@@ -17200,8 +17206,10 @@
                             "type": "string",
                             "enum": [
                               "light",
+                              "fan_identities",
                               "followers",
                               "transactions",
+                              "top_spenders",
                               "subscribers",
                               "dm_conversations",
                               "dm_messages",
@@ -17411,8 +17419,10 @@
                         "type": "string",
                         "enum": [
                           "light",
+                          "fan_identities",
                           "followers",
                           "transactions",
+                          "top_spenders",
                           "subscribers",
                           "dm_conversations",
                           "dm_messages",
@@ -33081,8 +33091,7 @@
                       }
                     },
                     "required": [
-                      "platform",
-                      "session"
+                      "platform"
                     ]
                   },
                   {
@@ -33151,9 +33160,7 @@
                       }
                     },
                     "required": [
-                      "platform",
-                      "auth",
-                      "username"
+                      "platform"
                     ]
                   }
                 ]

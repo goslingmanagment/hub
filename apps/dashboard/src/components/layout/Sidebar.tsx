@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
-import { buildWorkboardRoute } from "@/lib/navigation";
+import { buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, decodeRouteSegment } from "@/lib/navigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
@@ -36,9 +36,10 @@ export function Sidebar({ user }: SidebarProps) {
     }
   }
 
-  function isPageActive(pageLabel: string) {
-    return location.pathname.startsWith(`/pages/${pageLabel}`);
-  }
+  const activePageLabel = (() => {
+    const parts = location.pathname.split("/").filter(Boolean);
+    return parts[0] === "pages" && parts[1] ? decodeRouteSegment(parts[1]) : null;
+  })();
 
   return (
     <nav className="w-[248px] bg-card border-r border-border flex flex-col fixed top-0 bottom-0 z-20">
@@ -73,11 +74,11 @@ export function Sidebar({ user }: SidebarProps) {
               <span className="text-[12px] text-text-muted font-normal">{pages.length} {pages.length === 1 ? "page" : "pages"}</span>
             </div>
             {pages.map((page) => {
-              const active = isPageActive(page.label);
+              const active = activePageLabel === page.label;
               return (
                 <div key={page.id}>
                   <NavLink
-                    to={`/pages/${page.label}`}
+                    to={buildPageRoute(page.label)}
                     className={`px-3.5 py-2 pl-9 text-[13px] rounded-md transition-colors flex items-center gap-2 font-[450] ${
                       active ? "bg-active-bg text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
                     }`}
@@ -88,7 +89,7 @@ export function Sidebar({ user }: SidebarProps) {
                   {active && (
                     <div className="ml-9 mt-0.5">
                       <NavLink
-                        to={`/pages/${page.label}/subscribers`}
+                        to={buildPageSectionRoute(page.label, "subscribers")}
                         className={({ isActive }) =>
                           `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
                             isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
@@ -99,7 +100,7 @@ export function Sidebar({ user }: SidebarProps) {
                       </NavLink>
                       {page.platform === "fansly" && (
                         <NavLink
-                          to={`/pages/${page.label}/followers`}
+                          to={buildPageSectionRoute(page.label, "followers")}
                           className={({ isActive }) =>
                             `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
                               isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
@@ -110,7 +111,7 @@ export function Sidebar({ user }: SidebarProps) {
                         </NavLink>
                       )}
                       <NavLink
-                        to={`/pages/${page.label}/top-supporters`}
+                        to={buildPageSectionRoute(page.label, "top-supporters")}
                         className={({ isActive }) =>
                           `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
                             isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
@@ -120,7 +121,7 @@ export function Sidebar({ user }: SidebarProps) {
                         <Trophy size={12} /> Top Supporters
                       </NavLink>
                       <NavLink
-                        to={`/pages/${page.label}/deleted-fans`}
+                        to={buildPageSectionRoute(page.label, "deleted-fans")}
                         className={({ isActive }) =>
                           `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
                             isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"

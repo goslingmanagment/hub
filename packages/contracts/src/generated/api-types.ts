@@ -2809,7 +2809,7 @@ export interface paths {
                             fan: {
                                 fanId: number;
                                 /** @enum {string} */
-                                platform: "fansly";
+                                platform: "fansly" | "onlyfans";
                                 platformUserId: string;
                                 pageAlias: string | null;
                                 username: string | null;
@@ -4871,7 +4871,7 @@ export interface paths {
                                 };
                                 streams: {
                                     /** @enum {string} */
-                                    stream: "light" | "followers" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                    stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                     /** @enum {string} */
                                     status: "idle" | "pending" | "running" | "retrying" | "blocked" | "paused";
                                     stalled: boolean;
@@ -4958,7 +4958,7 @@ export interface paths {
                                 /** @enum {string} */
                                 platform: "fansly" | "onlyfans";
                                 /** @enum {string} */
-                                stream: "light" | "followers" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                                stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                                 eventType: string;
                                 /** @enum {string} */
                                 severity: "info" | "warn" | "error";
@@ -5052,7 +5052,7 @@ export interface paths {
                             /** @enum {string} */
                             platform: "fansly" | "onlyfans";
                             /** @enum {string} */
-                            stream: "light" | "followers" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
+                            stream: "light" | "fan_identities" | "followers" | "transactions" | "top_spenders" | "subscribers" | "dm_conversations" | "dm_messages" | "followers_reconcile";
                             operation: string;
                             endpoint: string;
                             method: string;
@@ -9720,7 +9720,7 @@ export interface paths {
                     "application/json": {
                         /** @enum {string} */
                         platform: "fansly";
-                        session: {
+                        session?: {
                             authorization: string;
                             fanslyClientId?: string;
                             fanslyClientCheck?: string;
@@ -9734,10 +9734,10 @@ export interface paths {
                     } | {
                         /** @enum {string} */
                         platform: "onlyfans";
-                        auth: {
+                        auth?: {
                             token: string;
                         };
-                        username: string;
+                        username?: string;
                         proxy?: {
                             url: string;
                             username?: string | null;

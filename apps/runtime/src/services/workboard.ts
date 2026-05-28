@@ -15,6 +15,7 @@ import { millsToNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
+import { NotFoundError } from "./errors.ts";
 import { resolveAccessibleFanslyPage } from "./fansly-page.ts";
 
 type WorkboardSpenderSegment = WorkboardResponse["activeSpenders"]["items"][number]["segment"];
@@ -181,6 +182,9 @@ export async function snoozeWorkboardFanReport(
     fanId: body.fanId,
     days: body.days,
   });
+  if (!result) {
+    throw new NotFoundError(`Fan "${body.fanId}" not found on page "${pageLabel}"`);
+  }
 
   return {
     fanId: result.fanId,

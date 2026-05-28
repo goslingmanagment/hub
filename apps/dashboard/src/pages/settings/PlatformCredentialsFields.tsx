@@ -1,5 +1,5 @@
 import { buildProxyConfig } from "@agency_hub_core/shared";
-import type { VerifyCredentialsBody } from "@agency_hub_core/contracts";
+import type { UpdateCredentialsBody, VerifyCredentialsBody } from "@agency_hub_core/contracts";
 import { Field } from "@/components/shared/Field";
 import { ProxyInput } from "@/components/shared/ProxyInput";
 
@@ -91,17 +91,33 @@ export function PlatformCredentialsFields({
   );
 }
 
+export function buildCredentialsBody(input: {
+  platform: Platform;
+  values: PlatformCredentialsValues;
+  hadStoredProxy?: boolean;
+  initialStoredProxy?: { url: string; hasAuth: boolean } | null;
+  requireCredentials?: true;
+}): VerifyCredentialsBody;
+export function buildCredentialsBody(input: {
+  platform: Platform;
+  values: PlatformCredentialsValues;
+  hadStoredProxy?: boolean;
+  initialStoredProxy?: { url: string; hasAuth: boolean } | null;
+  requireCredentials: false;
+}): UpdateCredentialsBody;
 export function buildCredentialsBody({
   platform,
   values,
   hadStoredProxy = false,
   initialStoredProxy = null,
+  requireCredentials = true,
 }: {
   platform: Platform;
   values: PlatformCredentialsValues;
   hadStoredProxy?: boolean;
   initialStoredProxy?: { url: string; hasAuth: boolean } | null;
-}): VerifyCredentialsBody {
+  requireCredentials?: boolean;
+}): VerifyCredentialsBody | UpdateCredentialsBody {
   const proxyConfig = buildProxyConfig(values.proxyRaw);
   const preserveStoredProxyAuth = Boolean(
     initialStoredProxy?.hasAuth &&
@@ -119,24 +135,37 @@ export function buildCredentialsBody({
       : undefined;
 
   if (platform === "fansly") {
+    const session = {
+      authorization: values.authorization.trim(),
+      fanslyClientId: values.fanslyClientId.trim() || undefined,
+      fanslyClientCheck: values.fanslyClientCheck.trim() || undefined,
+      fanslySessionId: values.fanslySessionId.trim() || undefined,
+    };
+    const hasSessionInput = Boolean(
+      session.authorization ||
+        session.fanslyClientId ||
+        session.fanslyClientCheck ||
+        session.fanslySessionId,
+    );
+
     return {
       platform: "fansly",
-      session: {
-        authorization: values.authorization.trim(),
-        fanslyClientId: values.fanslyClientId.trim() || undefined,
-        fanslyClientCheck: values.fanslyClientCheck.trim() || undefined,
-        fanslySessionId: values.fanslySessionId.trim() || undefined,
-      },
+      ...(requireCredentials || hasSessionInput ? { session } : {}),
       proxy,
-    };
+    } as VerifyCredentialsBody | UpdateCredentialsBody;
   }
+
+  const auth = {
+    token: values.onlyFansToken.trim(),
+  };
+  const username = values.onlyFansUsername.trim();
+  const hasAuthInput = Boolean(auth.token);
+  const hasUsernameInput = Boolean(username);
 
   return {
     platform: "onlyfans",
-    auth: {
-      token: values.onlyFansToken.trim(),
-    },
-    username: values.onlyFansUsername.trim(),
+    ...(requireCredentials || hasAuthInput ? { auth } : {}),
+    ...(requireCredentials || hasUsernameInput ? { username } : {}),
     proxy,
-  };
+  } as VerifyCredentialsBody | UpdateCredentialsBody;
 }

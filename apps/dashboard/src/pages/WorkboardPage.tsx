@@ -23,6 +23,7 @@ import {
   type WorkboardCardVm,
 } from "./workboard/viewModel.js";
 import { formatMills } from "@/lib/format";
+import { buildPageRoute } from "@/lib/navigation";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext";
 import { toast } from "sonner";
 
@@ -374,7 +375,7 @@ export function WorkboardPage() {
   }
 
   if (pageCatalogState === "ready" && page && !isFanslyPage) {
-    return <Navigate to={`/pages/${page.label}`} replace />;
+    return <Navigate to={buildPageRoute(page.label)} replace />;
   }
 
   if (isLoading && !data && pageCatalogState !== "ready") {

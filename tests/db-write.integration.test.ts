@@ -806,6 +806,67 @@ describe("db write safety", () => {
     ]);
   });
 
+  it("updates proxy settings without requiring credentials to be re-entered", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "proxy-only-credentials-model",
+      name: "Proxy Only Credentials Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-only-credentials-page",
+    });
+
+    let verifiedAuthorization: string | null = null;
+    const app = createTestAppContext(testDb, {
+      adapter: {
+        async verifySession(contextInput: { session: { authorization: string } }) {
+          verifiedAuthorization = contextInput.session.authorization;
+          return {
+            parsed: {
+              account: {
+                id: "acct-1",
+                username: "lana",
+                displayName: "Lana",
+                followCount: 0,
+                subscriberCount: 0,
+              },
+            },
+            raw: null,
+          };
+        },
+      } as never,
+    });
+
+    await updatePageCredentials(app, page.label, {
+      platform: "fansly",
+      session: {
+        authorization: "stored-token",
+      },
+    });
+    verifiedAuthorization = null;
+
+    await updatePageCredentials(app, page.label, {
+      platform: "fansly",
+      proxy: {
+        url: "http://8.8.8.8:8080",
+      },
+    });
+
+    const proxyRows = await testDb.pool.query(`
+      select url
+      from egress_endpoints
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(verifiedAuthorization).toBe("stored-token");
+    expect(proxyRows.rows).toEqual([{ url: "http://8.8.8.8:8080" }]);
+  });
+
   it("verifies OnlyMonster account access before persisting an OnlyFans page", async (context) => {
     if (!testDb) {
       context.skip();

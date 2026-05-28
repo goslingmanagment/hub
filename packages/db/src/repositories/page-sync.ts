@@ -1647,7 +1647,10 @@ export async function requestPageSync(
       }
 
       const nextRequestSeq = current.requestSeq + 1;
-      const requestPayload = input.requestPayloadByStream?.[stream] ?? {};
+      const rawRequestPayload = input.requestPayloadByStream?.[stream] ?? {};
+      const requestPayload = Object.keys(rawRequestPayload).length > 0
+        ? { ...rawRequestPayload, revision: nextRequestSeq }
+        : rawRequestPayload;
       const nextStatus: PageSyncStatus = current.status === "paused"
         ? "paused"
         : current.status === "blocked"

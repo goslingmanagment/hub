@@ -8,6 +8,7 @@ import type {
   SyncMonitorResponse,
   SyncOverviewResponse,
   SyncRunItem,
+  UpdateCredentialsBody,
   VerifyCredentialsBody,
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
@@ -100,6 +101,9 @@ export function useAdminSyncBlockTrigger() {
       api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/trigger", body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+      void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
+      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
+      void qc.invalidateQueries({ queryKey: ["overview"] });
     },
   });
 }
@@ -112,6 +116,9 @@ export function useAdminSyncBlockPause() {
       api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/pause", body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+      void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
+      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
+      void qc.invalidateQueries({ queryKey: ["overview"] });
     },
   });
 }
@@ -124,6 +131,9 @@ export function useAdminSyncBlockResume() {
       api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/resume", body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+      void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
+      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
+      void qc.invalidateQueries({ queryKey: ["overview"] });
     },
   });
 }
@@ -136,6 +146,9 @@ export function useAdminSyncBlockReset() {
       api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/reset", body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+      void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
+      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
+      void qc.invalidateQueries({ queryKey: ["overview"] });
     },
   });
 }
@@ -144,7 +157,7 @@ export function useAdminUpdateCredentials(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
-    mutationFn: (body: VerifyCredentialsBody) =>
+    mutationFn: (body: UpdateCredentialsBody) =>
       api.patch(`/api/v1/admin/pages/${pathSegment(pageLabel)}/credentials`, body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["admin", "connections"] });

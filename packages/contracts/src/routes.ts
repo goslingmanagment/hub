@@ -1686,16 +1686,20 @@ export const syncMonitorActiveRunSchema = z.object({
   lastActivityAt: isoTimestamp,
 });
 
+const extendedSyncStreamEnum = z.enum([
+  "light",
+  "fan_identities",
+  "followers",
+  "transactions",
+  "top_spenders",
+  "subscribers",
+  "dm_conversations",
+  "dm_messages",
+  "followers_reconcile",
+]);
+
 export const syncMonitorStreamItemSchema = z.object({
-  stream: z.enum([
-    "light",
-    "followers",
-    "transactions",
-    "subscribers",
-    "dm_conversations",
-    "dm_messages",
-    "followers_reconcile",
-  ]),
+  stream: extendedSyncStreamEnum,
   status: syncMonitorStatusEnum,
   stalled: z.boolean(),
   pending: z.boolean(),
@@ -1772,15 +1776,7 @@ export const syncMonitorRecentEventSchema = z.object({
   pageId: z.number().int(),
   pageLabel: z.string(),
   platform: platformEnum,
-  stream: z.enum([
-    "light",
-    "followers",
-    "transactions",
-    "subscribers",
-    "dm_conversations",
-    "dm_messages",
-    "followers_reconcile",
-  ]),
+  stream: extendedSyncStreamEnum,
   eventType: z.string(),
   severity: z.enum(["info", "warn", "error"]),
   message: z.string(),
@@ -1814,15 +1810,7 @@ export const syncRequestItemSchema = z.object({
   timestamp: isoTimestamp,
   pageLabel: z.string(),
   platform: platformEnum,
-  stream: z.enum([
-    "light",
-    "followers",
-    "transactions",
-    "subscribers",
-    "dm_conversations",
-    "dm_messages",
-    "followers_reconcile",
-  ]),
+  stream: extendedSyncStreamEnum,
   operation: z.string(),
   endpoint: z.string(),
   method: z.string(),
@@ -1859,18 +1847,6 @@ const syncBlockStateEnum = z.enum([
   "failed",
   "paused",
   "not_available",
-]);
-
-const extendedSyncStreamEnum = z.enum([
-  "light",
-  "fan_identities",
-  "followers",
-  "transactions",
-  "top_spenders",
-  "subscribers",
-  "dm_conversations",
-  "dm_messages",
-  "followers_reconcile",
 ]);
 
 const simpleConnectionStatusEnum = z.enum(["connected", "not_connected", "error"]);
@@ -2245,6 +2221,12 @@ const onlyfansCredentialsSchema = z.object({
   }).nullable().optional(),
 });
 
+const credentialProxySchema = z.object({
+  url: z.string().min(1),
+  username: z.string().nullable().optional(),
+  password: z.string().nullable().optional(),
+}).nullable().optional();
+
 export const verifyCredentialsBodySchema = z.discriminatedUnion("platform", [
   fanslyCredentialsSchema,
   onlyfansCredentialsSchema,
@@ -2306,8 +2288,17 @@ export const updatePageBodySchema = z.object({
 });
 
 export const updateCredentialsBodySchema = z.discriminatedUnion("platform", [
-  fanslyCredentialsSchema,
-  onlyfansCredentialsSchema,
+  z.object({
+    platform: z.literal("fansly"),
+    session: fanslyCredentialsSchema.shape.session.optional(),
+    proxy: credentialProxySchema,
+  }),
+  z.object({
+    platform: z.literal("onlyfans"),
+    auth: onlyfansCredentialsSchema.shape.auth.optional(),
+    username: z.string().min(1).optional(),
+    proxy: credentialProxySchema,
+  }),
 ]);
 
 export const verifyPageResponseSchema = z.object({
@@ -2687,7 +2678,7 @@ export const routeSchemas = {
   spenders: {
     tags: ["spenders"],
     summary: "List ranked spenders for a scoped platform view",
-    security: cookieOnlySecurity,
+    security: cookieOrBearerSecurity,
     querystring: spenderListQuerySchema,
     response: {
       200: spenderListResponseSchema,

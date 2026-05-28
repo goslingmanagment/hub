@@ -381,6 +381,7 @@ function AddChatterModal({
   const [username, setUsername] = useState("");
   const [selectedPage, setSelectedPage] = useState("");
   const [isPending, setIsPending] = useState(false);
+  const [createdUsername, setCreatedUsername] = useState<string | null>(null);
 
   const issueKey = useAdminIssueApiKey(username.trim());
 
@@ -390,7 +391,10 @@ function AddChatterModal({
 
     setIsPending(true);
     try {
-      await createUser.mutateAsync({ username: trimmed, role: "chatter" });
+      if (createdUsername !== trimmed) {
+        await createUser.mutateAsync({ username: trimmed, role: "chatter" });
+        setCreatedUsername(trimmed);
+      }
 
       const body: AdminIssueApiKeyBody = selectedPage
         ? { pageLabel: selectedPage }
