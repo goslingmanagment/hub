@@ -286,6 +286,7 @@ async function createFanslyLightPage(
     label: string;
     authorization: string;
     proxyUrl?: string | null;
+    rateLimitScopeKey?: string | null;
   },
 ) {
   const page = await createFanslyPage(testDb.db, {
@@ -311,6 +312,7 @@ async function createFanslyLightPage(
       url: input.proxyUrl,
       encryptedAuth: null,
       keyVersion: null,
+      rateLimitScopeKey: input.rateLimitScopeKey,
     });
   }
 
@@ -325,6 +327,7 @@ async function createOnlyFansLightPage(
     token: string;
     accountId: number;
     proxyUrl?: string | null;
+    rateLimitScopeKey?: string | null;
   },
 ) {
   const page = await createOnlyFansPage(testDb.db, {
@@ -343,6 +346,7 @@ async function createOnlyFansLightPage(
       url: input.proxyUrl,
       encryptedAuth: null,
       keyVersion: null,
+      rateLimitScopeKey: input.rateLimitScopeKey,
     });
   }
 
@@ -370,6 +374,7 @@ async function requestLightSync(
     platformAccountId: number;
     provider: "fansly" | "onlyfans";
     proxyUrl?: string | null;
+    egressKey?: string | null;
   },
 ) {
   await ensurePageSyncStates(app.db, {
@@ -387,7 +392,7 @@ async function requestLightSync(
     platformAccountId: input.platformAccountId,
     priority: resolvePageSyncPriority("light", "manual"),
     provider: input.provider,
-    egressKey: buildProxyEgressKey(input.proxyUrl ? { url: input.proxyUrl } : null),
+    egressKey: input.egressKey ?? buildProxyEgressKey(input.proxyUrl ? { url: input.proxyUrl } : null),
   });
 
   return requests;
@@ -468,11 +473,13 @@ describe("sync integration", () => {
       name: "Planner Regression",
     });
     const proxyUrl = "socks5://planner-proxy.example";
+    const egressKey = "planner-shared-proxy";
     const page = await createFanslyLightPage(testDb, {
       modelId: model.id,
       label: "planner-regression-page",
       authorization: "planner-regression",
       proxyUrl,
+      rateLimitScopeKey: egressKey,
     });
     const app = createTestAppContext(testDb, {
       databaseUrl: testDb.connectionString,
@@ -502,6 +509,7 @@ describe("sync integration", () => {
       platform: "fansly",
       priority: resolvePageSyncPriority("light", "manual"),
       proxyUrl,
+      egressKey,
     });
     expect(pages[0]?.requestedAt?.toISOString()).toBe(now.toISOString());
     expect(boss.send).toHaveBeenCalledWith(
@@ -511,7 +519,7 @@ describe("sync integration", () => {
         singletonKey: String(page.id),
         priority: resolvePageSyncPriority("light", "manual"),
         group: {
-          id: buildSyncPageExecuteGroupId("fansly", buildProxyEgressKey({ url: proxyUrl })),
+          id: buildSyncPageExecuteGroupId("fansly", egressKey),
         },
       },
     );

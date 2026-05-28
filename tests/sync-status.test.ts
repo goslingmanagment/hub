@@ -146,6 +146,7 @@ function buildVisiblePage(overrides: Record<string, unknown> = {}) {
     modelName: "Lana",
     hasCredentials: true,
     proxyUrl: null,
+    egressKey: "direct",
     proxyHasAuth: false,
     ...overrides,
   };
@@ -619,6 +620,7 @@ describe("sync status service", () => {
         label: "lana-proxy",
         username: "lana_proxy",
         proxyUrl: "http://127.0.0.1:18080",
+        egressKey: "http://127.0.0.1:18080",
       }),
     ]);
     dbMocks.listPageSyncStates.mockResolvedValue([

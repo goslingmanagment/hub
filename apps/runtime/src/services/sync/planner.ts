@@ -5,7 +5,6 @@ import {
   markPageSyncEnqueued,
   scheduleDuePageSync,
 } from "@agency_hub_core/db";
-import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -43,7 +42,7 @@ export async function runSyncPlannerCycle(
       platformAccountId: page.pageId,
       priority: page.priority,
       provider: page.platform,
-      egressKey: buildProxyEgressKey(page.proxyUrl ? { url: page.proxyUrl } : null),
+      egressKey: page.egressKey,
     });
 
     if (wakeupId) {

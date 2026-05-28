@@ -10,7 +10,6 @@ import {
   type SyncRequestSource,
   type SyncStream,
 } from "@agency_hub_core/db";
-import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -107,7 +106,7 @@ export async function requestPageSync(
     platformAccountId: storedPage.page.id,
     priority,
     provider: storedPage.page.platform,
-    egressKey: buildProxyEgressKey(storedPage.proxy ? { url: storedPage.proxy.url } : null),
+    egressKey: storedPage.proxy?.rateLimitScopeKey ?? storedPage.proxy?.url ?? "direct",
   });
 
   return {

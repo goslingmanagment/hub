@@ -58,6 +58,7 @@ describe("connections service", () => {
         followerCount: 20,
         hasCredentials: true,
         proxyUrl: null,
+        egressKey: "direct",
         proxyHasAuth: false,
       }],
       syncUxByPageId: new Map([[7, syncUx]]),

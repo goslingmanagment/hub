@@ -12,7 +12,7 @@ import {
   resumePageSync,
   type SyncStream,
 } from "@agency_hub_core/db";
-import { buildProxyEgressKey, type Platform } from "@agency_hub_core/shared";
+import type { Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -288,7 +288,7 @@ async function enqueueBlockWakeup(
   input: {
     platformAccountId: number;
     platform: Platform;
-    proxyUrl: string | null;
+    egressKey: string;
     tasks: SyncStream[];
     reason: "manual" | "reset";
   },
@@ -301,7 +301,7 @@ async function enqueueBlockWakeup(
     platformAccountId: input.platformAccountId,
     priority,
     provider: input.platform,
-    egressKey: buildProxyEgressKey(input.proxyUrl ? { url: input.proxyUrl } : null),
+    egressKey: input.egressKey,
   });
 }
 
@@ -403,7 +403,7 @@ export async function triggerSyncBlock(
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,
     platform: stored.page.platform,
-    proxyUrl: stored.proxy?.url ?? null,
+    egressKey: stored.proxy?.rateLimitScopeKey ?? stored.proxy?.url ?? "direct",
     tasks,
     reason: "manual",
   });
@@ -487,7 +487,7 @@ export async function resumeSyncBlock(
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,
     platform: stored.page.platform,
-    proxyUrl: stored.proxy?.url ?? null,
+    egressKey: stored.proxy?.rateLimitScopeKey ?? stored.proxy?.url ?? "direct",
     tasks,
     reason: "manual",
   });
@@ -554,7 +554,7 @@ export async function resetSyncBlock(
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,
     platform: stored.page.platform,
-    proxyUrl: stored.proxy?.url ?? null,
+    egressKey: stored.proxy?.rateLimitScopeKey ?? stored.proxy?.url ?? "direct",
     tasks,
     reason: "reset",
   });

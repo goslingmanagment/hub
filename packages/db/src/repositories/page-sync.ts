@@ -324,6 +324,7 @@ export interface PageSyncState {
 export interface PageSyncLease extends PageSyncState {
   platform: "fansly" | "onlyfans";
   proxyUrl: string | null;
+  egressKey: string;
 }
 
 export interface PageSyncWakeupRow {
@@ -332,6 +333,7 @@ export interface PageSyncWakeupRow {
   priority: number;
   requestedAt: Date | null;
   proxyUrl: string | null;
+  egressKey: string;
 }
 
 function normalizeNumber(value: NumericValue, field: string) {
@@ -513,6 +515,7 @@ function normalizePageSyncLease(row: Record<string, unknown>): PageSyncLease {
     ...normalizePageSyncState(row),
     platform: asPlatform(row.platform, "platform"),
     proxyUrl: typeof row.proxyUrl === "string" ? row.proxyUrl : null,
+    egressKey: typeof row.egressKey === "string" ? row.egressKey : "direct",
   };
 }
 
@@ -1114,6 +1117,7 @@ export async function listRunnablePageSync(
       select st.page_id as "pageId",
              p.platform as "platform",
              ee.url as "proxyUrl",
+             coalesce(ee.rate_limit_scope_key, ee.url, 'direct') as "egressKey",
              st.stream as "stream",
              st.requested_at as "requestedAt",
              st.request_source as "requestSource"
@@ -1130,9 +1134,10 @@ export async function listRunnablePageSync(
            rs."platform" as "platform",
            max(${streamPriorityBySourceSql('rs."stream"', 'rs."requestSource"')})::int as "priority",
            min(rs."requestedAt") as "requestedAt",
-           rs."proxyUrl" as "proxyUrl"
+           rs."proxyUrl" as "proxyUrl",
+           rs."egressKey" as "egressKey"
     from runnable_streams rs
-    group by rs."pageId", rs."platform", rs."proxyUrl"
+    group by rs."pageId", rs."platform", rs."proxyUrl", rs."egressKey"
     order by max(${streamPriorityBySourceSql('rs."stream"', 'rs."requestSource"')}) desc,
              min(rs."requestedAt") asc nulls last,
              rs."pageId" asc
@@ -1144,6 +1149,7 @@ export async function listRunnablePageSync(
     priority: normalizeNumber(row.priority as NumericValue, "priority"),
     requestedAt: normalizeTimestamp(row.requestedAt as TimestampValue, "requestedAt"),
     proxyUrl: typeof row.proxyUrl === "string" ? row.proxyUrl : null,
+    egressKey: typeof row.egressKey === "string" ? row.egressKey : "direct",
   })) satisfies PageSyncWakeupRow[];
 }
 
@@ -1250,7 +1256,8 @@ export async function acquirePageSyncLease(
     )
     select acquired.*,
            p.platform as "platform",
-           ee.url as "proxyUrl"
+           ee.url as "proxyUrl",
+           coalesce(ee.rate_limit_scope_key, ee.url, 'direct') as "egressKey"
     from acquired
     inner join ${pages} p on p.id = acquired."pageId"
     left join ${egressEndpoints} ee on ee.platform_account_id = acquired."pageId"

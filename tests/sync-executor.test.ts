@@ -117,6 +117,7 @@ describe("sync executor", () => {
     requestSource: "manual",
     platform: "fansly",
     proxyUrl: "socks5://proxy.example",
+    egressKey: "shared-proxy-pool",
     createdAt: new Date("2026-03-14T12:00:00.000Z"),
     updatedAt: new Date("2026-03-14T12:00:00.000Z"),
   } as const;
@@ -152,6 +153,7 @@ describe("sync executor", () => {
       },
       proxy: {
         url: "socks5://proxy.example",
+        rateLimitScopeKey: "shared-proxy-pool",
       },
     });
     dbMocks.heartbeatPageSyncLease.mockResolvedValue(true);
@@ -189,6 +191,7 @@ describe("sync executor", () => {
         priority: 45,
         requestedAt: new Date("2026-03-14T12:00:00.000Z"),
         proxyUrl: "socks5://proxy.example",
+        egressKey: "shared-proxy-pool",
       },
     ]);
     handlerMocks.executeStreamChunk.mockResolvedValue({
@@ -220,7 +223,7 @@ describe("sync executor", () => {
         singletonKey: undefined,
         priority: 45,
         group: {
-          id: "fansly:socks5://proxy.example:1080",
+          id: "fansly:shared-proxy-pool",
         },
       }),
     );
@@ -250,6 +253,7 @@ describe("sync executor", () => {
         priority: 45,
         requestedAt: new Date("2026-03-14T12:00:00.000Z"),
         proxyUrl: "socks5://proxy.example",
+        egressKey: "shared-proxy-pool",
       },
     ]);
     handlerMocks.executeStreamChunk.mockResolvedValue({
@@ -293,6 +297,7 @@ describe("sync executor", () => {
         priority: 45,
         requestedAt: new Date("2026-03-14T12:00:00.000Z"),
         proxyUrl: "socks5://proxy.example",
+        egressKey: "shared-proxy-pool",
       }])
       .mockResolvedValueOnce([]);
     handlerMocks.executeStreamChunk
@@ -346,6 +351,7 @@ describe("sync executor", () => {
       priority: 45,
       requestedAt: new Date("2026-03-14T12:00:00.000Z"),
       proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
     }]);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,

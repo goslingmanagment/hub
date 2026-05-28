@@ -21,7 +21,6 @@ import {
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import { OnlyMonsterApiError } from "@agency_hub_core/onlyfans";
-import { buildProxyEgressKey } from "@agency_hub_core/shared";
 import type { JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -130,7 +129,7 @@ async function createChunkTelemetry(
     provider: storedPage.page.platform,
     stream: taskLease.stream,
     trigger,
-    egressKey: buildProxyEgressKey(storedPage.proxy ? { url: storedPage.proxy.url } : null),
+    egressKey: taskLease.egressKey,
   }, {
     runStartedAt: run.startedAt,
   });
@@ -168,7 +167,7 @@ async function resolveSyncPageWakeupTarget(
 
   return {
     provider: page.page.platform,
-    egressKey: buildProxyEgressKey(page.proxy ? { url: page.proxy.url } : null),
+    egressKey: page.proxy?.rateLimitScopeKey ?? page.proxy?.url ?? "direct",
   };
 }
 

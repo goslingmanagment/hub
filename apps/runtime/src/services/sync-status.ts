@@ -12,7 +12,6 @@ import {
   type SyncStream,
   type SyncMonitorStreamRow,
 } from "@agency_hub_core/db";
-import { buildProxyEgressKey } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
@@ -257,9 +256,9 @@ function parseDependencyWaitingFor(summary: string | null | undefined): string[]
 
 function buildRuntimeGroupId(page: {
   platform: "fansly" | "onlyfans";
-  proxyUrl: string | null;
+  egressKey?: string | null;
 }) {
-  return `${page.platform}:${buildProxyEgressKey(page.proxyUrl ? { url: page.proxyUrl } : null)}`;
+  return `${page.platform}:${page.egressKey ?? "direct"}`;
 }
 
 function hasActiveProgress(task: PageSyncState, now: Date) {

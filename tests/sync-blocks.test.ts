@@ -357,7 +357,10 @@ describe("sync blocks service", () => {
         label: "lana",
         platform: "fansly",
       },
-      proxy: null,
+      proxy: {
+        url: "socks5://proxy.example",
+        rateLimitScopeKey: "shared-proxy-pool",
+      },
     });
     dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
     dbMocks.requestPageSync.mockResolvedValue([
@@ -392,6 +395,7 @@ describe("sync blocks service", () => {
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       platformAccountId: 7,
       provider: "fansly",
+      egressKey: "shared-proxy-pool",
       priority: resolvePageSyncPriority("transactions", "manual"),
     }));
   });

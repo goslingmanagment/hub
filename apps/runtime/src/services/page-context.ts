@@ -161,11 +161,15 @@ export function resolveStoredProxyConfig(
     )
     : null;
 
-  return normalizeProxyConfig({
+  const proxy = normalizeProxyConfig({
     url: storedProxy.url,
     username: auth?.username ?? null,
     password: auth?.password ?? null,
   });
+  return {
+    ...proxy,
+    egressKey: storedProxy.rateLimitScopeKey ?? storedProxy.url,
+  };
 }
 
 export async function resolvePageContext(app: AppContext, label: string) {

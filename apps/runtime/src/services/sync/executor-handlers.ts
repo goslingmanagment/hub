@@ -51,7 +51,6 @@ import {
 import { sql } from "drizzle-orm";
 import {
   buildFanslyDmConversationMetadata,
-  buildProxyEgressKey,
   fanslyFollowIdToDate,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
   getFanslyDmMessageSyncExcludedReason,
@@ -182,7 +181,7 @@ function createPageRateLimitWaiter(
   pageContext: ResolvedPageContext,
 ) {
   return createSyncRateLimitWaiter(app, {
-    egressKey: buildProxyEgressKey(pageContext.proxy),
+    egressKey: pageContext.proxy?.egressKey ?? "direct",
   });
 }
 
