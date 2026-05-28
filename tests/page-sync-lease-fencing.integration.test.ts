@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   acquirePageSyncLease,
+  completePageSync,
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
@@ -271,6 +272,104 @@ describe("page sync lease fencing", () => {
         leasedSeq: null,
         leaseToken: null,
       });
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("keeps active leases running when a manual request arrives", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "running-request-model",
+        name: "Running Request Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "running-request-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["light"],
+        source: "manual",
+        now,
+      });
+
+      const lease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "worker-1",
+        leaseToken: "lease-1",
+        leaseTtlMs: 60_000,
+        now,
+      });
+      if (!lease) {
+        throw new Error("Expected to acquire a page sync lease");
+      }
+      const leasedSeq = lease.leasedSeq ?? lease.requestSeq;
+      const nextRequestSeq = lease.requestSeq + 1;
+      const countRunnableLightRows = async () => {
+        const result = await testDb.pool.query<{ count: number }>(
+          `
+            select count(*)::int as count
+            from page_sync_states
+            where page_id = $1
+              and stream = 'light'
+              and request_seq > applied_seq
+              and status <> 'paused'
+              and blocker_kind is null
+              and leased_seq is null
+          `,
+          [page.id],
+        );
+
+        return result.rows[0]?.count ?? 0;
+      };
+
+      const nextRequestAt = new Date(now.getTime() + 1_000);
+      const requests = await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["light"],
+        source: "manual",
+        now: nextRequestAt,
+      });
+
+      expect(requests).toEqual([{ stream: "light", requestedSeq: nextRequestSeq }]);
+      expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
+        status: "running",
+        requestSeq: nextRequestSeq,
+        appliedSeq: lease.appliedSeq,
+        leasedSeq,
+        leaseToken: "lease-1",
+      });
+      expect(await countRunnableLightRows()).toBe(0);
+
+      await completePageSync(testDb.db, {
+        pageId: page.id,
+        stream: "light",
+        requestSeq: leasedSeq,
+        leaseToken: lease.leaseToken ?? "",
+        now: new Date(now.getTime() + 2_000),
+      });
+
+      expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
+        status: "pending",
+        requestSeq: nextRequestSeq,
+        appliedSeq: leasedSeq,
+        leasedSeq: null,
+        leaseToken: null,
+      });
+      expect(await countRunnableLightRows()).toBe(1);
     } finally {
       await testDb.stop();
     }

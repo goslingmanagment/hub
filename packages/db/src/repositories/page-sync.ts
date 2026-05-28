@@ -1780,7 +1780,9 @@ export async function requestPageSync(
         ? "paused"
         : current.status === "blocked"
           ? "blocked"
-          : "pending";
+          : current.status === "running"
+            ? "running"
+            : "pending";
 
       await database.execute(sql`
         update ${pageSyncStates}
