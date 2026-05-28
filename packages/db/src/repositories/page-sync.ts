@@ -777,7 +777,10 @@ async function repairLegacyLightTrustedPageSyncStates(
     from ${pages} p
     where st.page_id = p.id
       and ${pageClause}
-      and st.stream = any(ARRAY['transactions'::sync_stream, 'subscribers'::sync_stream])
+      and (
+        st.stream = 'transactions'::sync_stream
+        or (st.stream = 'subscribers'::sync_stream and p.platform = 'fansly')
+      )
       and st.status = 'idle'
       and st.request_seq = 0
       and st.applied_seq = 0

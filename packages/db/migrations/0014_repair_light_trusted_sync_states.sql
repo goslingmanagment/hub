@@ -28,7 +28,10 @@ SET status = 'pending'::page_sync_status,
     updated_at = now()
 FROM pages AS p
 WHERE st.page_id = p.id
-  AND st.stream = ANY(ARRAY['transactions'::sync_stream, 'subscribers'::sync_stream])
+  AND (
+    st.stream = 'transactions'::sync_stream
+    OR (st.stream = 'subscribers'::sync_stream AND p.platform = 'fansly')
+  )
   AND st.status = 'idle'
   AND st.request_seq = 0
   AND st.applied_seq = 0
