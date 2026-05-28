@@ -202,6 +202,7 @@ describe("sync status service", () => {
       modelName: "Lana",
       hasCredentials: true,
       proxyUrl: null,
+      egressKey: "direct",
       proxyHasAuth: false,
     }]);
     dbMocks.listPageSyncStates.mockResolvedValue([
@@ -261,6 +262,7 @@ describe("sync status service", () => {
       modelName: "Lana",
       hasCredentials: true,
       proxyUrl: null,
+      egressKey: "direct",
       proxyHasAuth: false,
     }]);
     dbMocks.listPageSyncStates.mockResolvedValue([
@@ -318,6 +320,7 @@ describe("sync status service", () => {
       modelName: "Lana",
       hasCredentials: true,
       proxyUrl: null,
+      egressKey: "direct",
       proxyHasAuth: false,
     }]);
     dbMocks.listPageSyncStates.mockResolvedValue([
