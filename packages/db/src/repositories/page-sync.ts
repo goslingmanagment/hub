@@ -1614,6 +1614,11 @@ export async function markPageSyncAuthBlocked(
         consecutive_failures = consecutive_failures + 1,
         last_error_code = ${input.errorCode},
         last_error_summary = ${input.errorSummary},
+        lease_owner = null,
+        lease_token = null,
+        leased_seq = null,
+        lease_heartbeat_at = null,
+        lease_expires_at = null,
         updated_at = ${now}
     where page_id = ${input.pageId}
       and status <> 'paused'

@@ -8,6 +8,8 @@ import {
   createModel,
   ensurePageSyncStates,
   getPageSyncState,
+  heartbeatPageSyncLease,
+  markPageSyncAuthBlocked,
   PageSyncLeaseLostError,
   pausePageSync,
   reclaimExpiredPageSync,
@@ -374,6 +376,84 @@ describe("page sync lease fencing", () => {
         leaseToken: null,
       });
       expect(await countRunnableLightRows()).toBe(1);
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("fences active leases when auth blocking a page", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "auth-block-lease-model",
+        name: "Auth Block Lease Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "auth-block-lease-page",
+      });
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+      });
+
+      const now = new Date("2026-03-16T12:00:00.000Z");
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["light"],
+        source: "manual",
+        now,
+      });
+      const lease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "worker-1",
+        leaseToken: "lease-auth-block",
+        leaseTtlMs: 60_000,
+        now,
+      });
+      if (!lease) {
+        throw new Error("Expected to acquire a page sync lease");
+      }
+      const leasedSeq = lease.leasedSeq ?? lease.requestSeq;
+
+      await markPageSyncAuthBlocked(testDb.db, {
+        pageId: page.id,
+        errorCode: "auth_blocked",
+        errorSummary: "session expired",
+        now: new Date(now.getTime() + 1_000),
+      });
+
+      expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
+        status: "blocked",
+        blockerKind: "auth",
+        leasedSeq: null,
+        leaseOwner: null,
+        leaseToken: null,
+        leaseHeartbeatAt: null,
+        leaseExpiresAt: null,
+      });
+      await expect(heartbeatPageSyncLease(testDb.db, {
+        pageId: page.id,
+        stream: "light",
+        leaseToken: "lease-auth-block",
+        leaseTtlMs: 60_000,
+        now: new Date(now.getTime() + 2_000),
+      })).resolves.toBe(false);
+      await expect(completePageSync(testDb.db, {
+        pageId: page.id,
+        stream: "light",
+        requestSeq: leasedSeq,
+        leaseToken: "lease-auth-block",
+        now: new Date(now.getTime() + 3_000),
+      })).resolves.toBe(false);
+      expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
+        status: "blocked",
+        blockerKind: "auth",
+        appliedSeq: lease.appliedSeq,
+      });
     } finally {
       await testDb.stop();
     }
