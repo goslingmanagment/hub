@@ -215,16 +215,26 @@ function isPrivateIpv6(hostname: string) {
     return isPrivateIpv4(mappedIpv4);
   }
 
+  const groups = parseIpv6Groups(normalized);
+  if (!groups) {
+    return false;
+  }
+
+  const [firstGroup = 0] = groups;
+  const isUnspecified = groups.every((group) => group === 0);
+  const isLoopback = groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1;
+  const isUniqueLocal = (firstGroup & 0xfe00) === 0xfc00;
+  const isLinkLocal = (firstGroup & 0xffc0) === 0xfe80;
+  const isSiteLocal = (firstGroup & 0xffc0) === 0xfec0;
+  const isMulticast = (firstGroup & 0xff00) === 0xff00;
+
   return (
-    normalized === "::" ||
-    normalized === "::1" ||
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd") ||
-    normalized.startsWith("fe80:") ||
-    normalized.startsWith("::ffff:127.") ||
-    normalized.startsWith("::ffff:10.") ||
-    normalized.startsWith("::ffff:192.168.") ||
-    /^::ffff:172\.(1[6-9]|2\d|3[01])\./.test(normalized)
+    isUnspecified ||
+    isLoopback ||
+    isUniqueLocal ||
+    isLinkLocal ||
+    isSiteLocal ||
+    isMulticast
   );
 }
 

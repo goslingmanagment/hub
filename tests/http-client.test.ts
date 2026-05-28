@@ -345,6 +345,10 @@ describe("shared http client helpers", () => {
     expect(() => assertProxyTargetAllowed({ url: "socks5://[::ffff:0a00:1]:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "socks5://[::ffff:ac10:1]:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "socks5://[::ffff:c0a8:101]:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[fe80::1]:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[fe90::1]:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[febf::1]:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[ff02::1]:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "http://proxy.example:8080" })).not.toThrow();
   });
 
