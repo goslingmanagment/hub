@@ -1,5 +1,9 @@
 import { findPageByLabel } from "@agency_hub_core/db";
-import { normalizeProxyConfig, type ProxyConfig } from "@agency_hub_core/shared";
+import {
+  buildProxyEgressKey,
+  normalizeProxyConfig,
+  type ProxyConfig,
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { NotFoundError } from "./errors.ts";
@@ -15,24 +19,34 @@ export async function setPageProxy(
   const normalizedProxy = normalizeProxyConfig(proxy);
   await assertAllowedProxyTarget(normalizedProxy);
   const pageContext = await resolvePageContext(app, pageLabel);
+  const preservesStoredProxyRoute = Boolean(
+    pageContext.proxy && pageContext.proxy.url === normalizedProxy.url,
+  );
+  const proxyEgressKey = preservesStoredProxyRoute
+    ? pageContext.egressKey
+    : buildProxyEgressKey(normalizedProxy);
 
   if (pageContext.platform === "fansly") {
     await app.adapter.verifySession({
       session: pageContext.session,
       proxy: normalizedProxy,
+      egressKey: proxyEgressKey,
     });
   } else {
     await app.onlyFansAdapter.getAccount(
       {
         auth: pageContext.auth,
         proxy: normalizedProxy,
+        egressKey: proxyEgressKey,
         requestObserver: null,
       },
       getOnlyMonsterAccountId(pageContext.page.metadata),
     );
   }
 
-  await saveProxy(app, pageContext.page.id, normalizedProxy);
+  await saveProxy(app, pageContext.page.id, normalizedProxy, {
+    rateLimitScopeKey: preservesStoredProxyRoute ? proxyEgressKey : undefined,
+  });
 }
 
 export async function removePageProxy(

@@ -598,6 +598,79 @@ describe("db write safety", () => {
     });
   });
 
+  it("preserves a custom proxy egress scope when updating the same proxy route", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "same-route-proxy-model",
+      name: "Same Route Proxy Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "same-route-proxy-page",
+    });
+
+    const encryptedSession = JSON.stringify(
+      encryptJson<StoredPlatformCredentialBundle>(
+        {
+          platform: "fansly",
+          session: {
+            authorization: "token",
+          },
+        },
+        encryptionKey,
+        1,
+      ),
+    );
+    await storeFanslySession(testDb.db, page.id, encryptedSession, 1);
+    await storeProxyConfig(testDb.db, page.id, {
+      url: "socks5://proxy.example:1080",
+      encryptedAuth: null,
+      keyVersion: null,
+      rateLimitScopeKey: "shared-proxy-pool",
+    });
+
+    let verifiedEgressKey: string | null = null;
+    const app = createTestAppContext(testDb, {
+      adapter: {
+        async verifySession(contextInput: { egressKey?: string }) {
+          verifiedEgressKey = contextInput.egressKey ?? null;
+          return {
+            parsed: {
+              account: {
+                id: "acct-1",
+                username: "lana",
+                displayName: "Lana",
+                followCount: 0,
+                subscriberCount: 0,
+              },
+            },
+            raw: null,
+          };
+        },
+      } as never,
+    });
+
+    await setPageProxy(app, page.label, {
+      url: "socks5://proxy.example:1080",
+    });
+
+    const proxyRows = await testDb.pool.query(`
+      select url, rate_limit_scope_key
+      from egress_endpoints
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(verifiedEgressKey).toBe("shared-proxy-pool");
+    expect(proxyRows.rows[0]).toEqual({
+      url: "socks5://proxy.example:1080",
+      rate_limit_scope_key: "shared-proxy-pool",
+    });
+  });
+
   it("resolves legacy inline-auth proxy URLs when loading page context", async (context) => {
     if (!testDb) {
       context.skip();
