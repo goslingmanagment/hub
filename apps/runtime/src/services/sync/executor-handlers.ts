@@ -181,7 +181,7 @@ function createPageRateLimitWaiter(
   pageContext: ResolvedPageContext,
 ) {
   return createSyncRateLimitWaiter(app, {
-    egressKey: pageContext.proxy?.egressKey ?? "direct",
+    egressKey: pageContext.egressKey,
   });
 }
 
@@ -305,6 +305,7 @@ function buildOnlyFansRequestContext(app: AppContext, input: ExecutorRequestCont
   return {
     auth: input.pageContext.auth,
     proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
@@ -897,6 +898,7 @@ export async function executeTopSpendersChunk(
   const requestContext = {
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
@@ -1233,6 +1235,7 @@ export async function executeTransactionsChunk(
       requestContext: {
         session: input.pageContext.session,
         proxy: input.pageContext.proxy,
+        egressKey: input.pageContext.egressKey,
         requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
         rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
       },
@@ -1297,6 +1300,7 @@ export async function executeSubscribersChunk(
   const requestContext = {
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
@@ -1538,6 +1542,7 @@ export async function executeFollowersChunk(
   const requestContext = {
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
@@ -1803,6 +1808,7 @@ export async function executeFollowersReconcileChunk(
   const requestContext = {
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
@@ -2094,6 +2100,7 @@ async function executeOnlyFansDmConversationsChunk(
   const requestContext = {
     auth: input.pageContext.auth,
     proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
@@ -2390,6 +2397,7 @@ export async function executeDmConversationsChunk(
   const requestContext = {
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
@@ -2851,6 +2859,7 @@ async function executeOnlyFansDmMessagesChunk(
   const requestContext = {
     auth: input.pageContext.auth,
     proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(
       input.telemetry.getRequestObserver(),
       input.budget,
@@ -3208,6 +3217,7 @@ export async function executeDmMessagesChunk(
   const requestContext = {
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(
       input.telemetry.getRequestObserver(),
       input.budget,

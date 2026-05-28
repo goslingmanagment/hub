@@ -3,6 +3,7 @@ import type { FanslySessionBundle, HttpRequestObserver, ProxyConfig } from "@age
 export interface FanslyRequestContext {
   session: FanslySessionBundle;
   proxy?: ProxyConfig | null;
+  egressKey?: string | null;
   requestObserver?: HttpRequestObserver | null;
   rateLimitWaiter?: ((scopes: Array<{
     provider: "fansly" | "onlyfans";

@@ -10,7 +10,6 @@ import {
   findPageByLabel,
 } from "@agency_hub_core/db";
 import {
-  buildProxyEgressKey,
   createProxyRequestDispatcher,
   createRequestDispatcher,
   creatableUserRoles,
@@ -45,6 +44,7 @@ import {
   loadFanslySessionBundleFromFile,
   loadOnlyMonsterTokenBundleFromFile,
   resolveStoredProxyConfig,
+  resolveStoredProxyEgressKey,
   type ResolvedPageContext,
 } from "./services/page-context.ts";
 import { requestPageSync, waitForRequestedSyncRequests } from "./services/sync-control.ts";
@@ -249,6 +249,7 @@ async function resolvePageRoute(app: Awaited<ReturnType<typeof createAppContext>
     pageLabel: stored.page.label,
     platform: stored.page.platform,
     proxy: resolveStoredProxyConfig(app, stored.proxy),
+    egressKey: resolveStoredProxyEgressKey(stored.proxy),
   };
 }
 
@@ -256,12 +257,13 @@ async function resolvePageEgressSummary(input: {
   pageLabel: string;
   platform: "fansly" | "onlyfans";
   proxy: ProxyConfig | null;
+  egressKey: string;
 }) {
   try {
     return {
       ...input,
       route: input.proxy ? formatMaskedProxyUrl(input.proxy) : "direct",
-      egressKey: buildProxyEgressKey(input.proxy),
+      egressKey: input.egressKey,
       exitIp: await lookupExitIpViaDispatcher(input.proxy),
       exitIpError: null,
     };
@@ -269,7 +271,7 @@ async function resolvePageEgressSummary(input: {
     return {
       ...input,
       route: input.proxy ? formatMaskedProxyUrl(input.proxy) : "direct",
-      egressKey: buildProxyEgressKey(input.proxy),
+      egressKey: input.egressKey,
       exitIp: null,
       exitIpError: describeExitIpLookupError(error),
     };
@@ -714,6 +716,7 @@ export function buildProgram() {
           pageLabel: context.page.label,
           platform: context.platform,
           proxy: context.proxy,
+          egressKey: context.egressKey,
         });
         if (context.platform === "fansly") {
           const verified = await refreshPageMetadata(app, context, "light");

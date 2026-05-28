@@ -562,7 +562,7 @@ export class OnlyFansAdapter {
       ]);
     }
 
-    const egressKey = buildProxyEgressKey(context.proxy);
+    const egressKey = context.egressKey ?? buildProxyEgressKey(context.proxy);
     const categoryKey = `${egressKey}:${category}`;
     const globalKey = egressKey;
     const categoryGate = this.enterRateLimitChain(this.rateLimitChains.get(categoryKey) ?? Promise.resolve());

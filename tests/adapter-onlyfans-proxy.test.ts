@@ -116,4 +116,40 @@ describe("adapter hardening", () => {
     expect(waitMs).toBeGreaterThanOrEqual(15);
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(15);
   });
+
+  it("uses explicit egress keys for in-memory fallback buckets", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T00:00:00.000Z"));
+
+    try {
+      const {
+        OnlyFansAdapter,
+      } = await loadAdapters();
+
+      const adapter = new OnlyFansAdapter({
+        baseUrl: "https://onlyfans.example",
+        defaultDelayMs: 25,
+      });
+      const auth = {
+        token: "om-token",
+      };
+
+      await (adapter as any).waitForRateLimit({
+        auth,
+        proxy: { url: "http://proxy-a.example:8080" },
+        egressKey: "shared-proxy-pool",
+      }, "accounts", 25);
+      const delayed = (adapter as any).waitForRateLimit({
+        auth,
+        proxy: { url: "http://proxy-b.example:8080" },
+        egressKey: "shared-proxy-pool",
+      }, "transactions", 25);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(await delayed).toBe(25);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

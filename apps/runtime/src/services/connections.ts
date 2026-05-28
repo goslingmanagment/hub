@@ -6,6 +6,7 @@ import {
 } from "@agency_hub_core/db";
 import type { SyncUxSummary, UpdateCredentialsBody } from "@agency_hub_core/contracts";
 import {
+  buildProxyEgressKey,
   decryptJsonWithKeyVersion,
   encryptJson,
   normalizeProxyConfig,
@@ -18,7 +19,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
-import { removeProxy, resolveStoredProxyConfig, saveProxy } from "./page-context.ts";
+import { removeProxy, resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSnapshot } from "./sync-status.ts";
@@ -203,6 +204,7 @@ export async function updatePageCredentials(
   }
 
   const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
+  const storedEgressKey = resolveStoredProxyEgressKey(stored.proxy);
   const hasExplicitProxyInput = body.proxy !== undefined;
   const explicitProxy = body.proxy ? normalizeProxyInput(body.proxy) : null;
   if (explicitProxy) {
@@ -215,6 +217,12 @@ export async function updatePageCredentials(
         (storedProxy.username !== null || storedProxy.password !== null)
       ? storedProxy
       : explicitProxy;
+  const proxyEgressKey = proxy && storedProxy &&
+      proxy.url === storedProxy.url &&
+      proxy.username === storedProxy.username &&
+      proxy.password === storedProxy.password
+    ? storedEgressKey
+    : buildProxyEgressKey(proxy);
 
   if (stored.page.platform !== body.platform) {
     throw new BadRequestError(
@@ -242,6 +250,7 @@ export async function updatePageCredentials(
     const verification = await app.adapter.verifySession({
       session,
       proxy,
+      egressKey: proxyEgressKey,
     });
     assertVerifiedAccountIdentity(
       stored.page.label,
@@ -263,6 +272,7 @@ export async function updatePageCredentials(
     const context = {
       auth,
       proxy,
+      egressKey: proxyEgressKey,
       requestObserver: null,
     };
     const account = await findOnlyFansAccountByUsername(app.onlyFansAdapter, context, username);

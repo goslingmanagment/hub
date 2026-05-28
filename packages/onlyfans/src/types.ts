@@ -3,6 +3,7 @@ import type { HttpRequestObserver, OnlyMonsterTokenBundle, ProxyConfig } from "@
 export interface OnlyFansRequestContext {
   auth: OnlyMonsterTokenBundle;
   proxy?: ProxyConfig | null;
+  egressKey?: string | null;
   requestObserver?: HttpRequestObserver | null;
   rateLimitWaiter?: ((scopes: Array<{
     provider: "fansly" | "onlyfans";

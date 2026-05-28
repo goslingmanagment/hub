@@ -9,6 +9,7 @@ import {
   updatePageMetadata,
 } from "@agency_hub_core/db";
 import {
+  buildProxyEgressKey,
   encryptJson,
   normalizeProxyConfig,
   redactSensitiveText,
@@ -103,6 +104,7 @@ export async function onboardFanslyPage(
   const verification = await app.adapter.verifySession({
     session: input.session,
     proxy,
+    egressKey: buildProxyEgressKey(proxy),
   });
   const verified = verification.parsed;
 
@@ -168,6 +170,7 @@ export async function onboardOnlyFansPage(
   const lookupContext = {
     auth: input.auth,
     proxy,
+    egressKey: buildProxyEgressKey(proxy),
   };
   const account = await findOnlyFansAccountByUsername(
     app.onlyFansAdapter,

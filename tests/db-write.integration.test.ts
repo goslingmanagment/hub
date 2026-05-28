@@ -644,10 +644,10 @@ describe("db write safety", () => {
 
     expect(contextResult.proxy).toEqual({
       url: "socks5://127.0.0.1:1080",
-      egressKey: "socks5://127.0.0.1:1080",
       username: "legacy-user",
       password: "legacy-pass",
     });
+    expect(contextResult.egressKey).toBe("socks5://127.0.0.1:1080");
   });
 
   it("backfills canonical egress keys for legacy inline-auth proxy URLs", async (context) => {
@@ -961,10 +961,10 @@ describe("db write safety", () => {
     expect(contextResult.session.authorization).toBe("legacy-token");
     expect(contextResult.proxy).toEqual({
       url: "socks5://127.0.0.1:1080",
-      egressKey: "socks5://127.0.0.1:1080",
       username: "legacy-user",
       password: "legacy-pass",
     });
+    expect(contextResult.egressKey).toBe("socks5://127.0.0.1:1080");
   });
 
   it("deletes proxy rows when a page proxy is removed", async (context) => {
@@ -1056,7 +1056,6 @@ describe("db write safety", () => {
     expect(verifyCallCount).toBe(1);
     expect(verifiedProxy).toEqual({
       url: "socks5://127.0.0.1:1080",
-      egressKey: "socks5://127.0.0.1:1080",
       username: "proxy-user",
       password: "proxy-pass",
     });

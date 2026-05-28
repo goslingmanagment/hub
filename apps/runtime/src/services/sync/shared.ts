@@ -287,13 +287,14 @@ export async function refreshPageMetadata(
   telemetry?: SyncRunTelemetry,
 ) {
   const rateLimitWaiter = createSyncRateLimitWaiter(app, {
-    egressKey: pageContext.proxy?.egressKey ?? "direct",
+    egressKey: pageContext.egressKey,
   });
 
   if (pageContext.platform === "fansly") {
     const accountMe = await app.adapter.getAccountMe({
       session: pageContext.session,
       proxy: pageContext.proxy,
+      egressKey: pageContext.egressKey,
       requestObserver: telemetry?.getRequestObserver() ?? null,
       rateLimitWaiter,
     });
@@ -316,6 +317,7 @@ export async function refreshPageMetadata(
     {
       auth: pageContext.auth,
       proxy: pageContext.proxy,
+      egressKey: pageContext.egressKey,
       requestObserver: telemetry?.getRequestObserver() ?? null,
       rateLimitWaiter,
     },

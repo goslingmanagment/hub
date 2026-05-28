@@ -166,10 +166,7 @@ export function resolveStoredProxyConfig(
     username: auth?.username ?? null,
     password: auth?.password ?? null,
   });
-  return {
-    ...proxy,
-    egressKey: storedProxy.rateLimitScopeKey ?? buildProxyEgressKey(proxy),
-  };
+  return proxy;
 }
 
 export function resolveStoredProxyEgressKey(
@@ -220,6 +217,7 @@ function resolveStoredPageContext(
   }
 
   const proxy = resolveStoredProxyConfig(app, stored.proxy);
+  const egressKey = resolveStoredProxyEgressKey(stored.proxy);
 
   if (stored.page.platform === "fansly") {
     let session: FanslySessionBundle;
@@ -249,6 +247,7 @@ function resolveStoredPageContext(
       platform: "fansly" as const,
       session,
       proxy,
+      egressKey,
     };
   }
 
@@ -279,6 +278,7 @@ function resolveStoredPageContext(
     platform: "onlyfans" as const,
     auth,
     proxy,
+    egressKey,
   };
 }
 
