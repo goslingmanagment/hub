@@ -358,7 +358,9 @@ async function persistFanslyTransactionsPage(
         sourceDestinationAmountMills: destinationAmountMills,
         creatorNetAmountMills,
         rawDestinationTax: item.destinationTax,
-        newBalanceMills: item.newBalance64 ? toMills(item.newBalance64) : null,
+        newBalanceMills: item.newBalance64 !== null && item.newBalance64 !== undefined
+          ? toMills(item.newBalance64)
+          : null,
         senderId: item.senderId,
         receiverId: item.receiverId,
         occurredAt: new Date(item.createdAt),

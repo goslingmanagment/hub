@@ -145,7 +145,7 @@ describe("syncTransactions", () => {
             amount: 10,
             destinationAmount: 10,
             destinationTax: null,
-            newBalance64: null,
+            newBalance64: 0,
             senderId: null,
             receiverId: null,
             createdAt: new Date("2026-03-10T00:00:00.000Z").getTime(),
@@ -180,6 +180,7 @@ describe("syncTransactions", () => {
       expect.objectContaining({
         rawType: 20001,
         canonicalType: "tip",
+        newBalanceMills: 0n,
       }),
     );
     expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
