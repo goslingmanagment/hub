@@ -63,7 +63,9 @@ describe("compose config", () => {
     expect(postgres).not.toContain("env_file:");
     expect(postgres).toContain("POSTGRES_PASSWORD");
     expect(api).toContain('"127.0.0.1:3000:3000"');
+    expect(api).toContain("image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}");
     expect(api).toContain(".env.production");
+    expect(worker).toContain("image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}");
     expect(worker).toContain("WORKER_HEALTH_FILE");
     expect(worker).toContain("stale worker health file");
   });
@@ -83,6 +85,9 @@ describe("compose config", () => {
     const rollback = getShellFunction(text, "rollback_remote_stack");
 
     expect(schemaCapture).toContain("set -euo pipefail");
+    expect(schemaCapture).toContain("pg_advisory_lock(31415, 27182)");
+    expect(schemaCapture).toContain("pg_advisory_unlock(31415, 27182)");
+    expect(schemaCapture).toContain("deploy_schema_migrations");
     expect(schemaCapture).toContain("to_regclass");
     expect(schemaCapture).not.toContain("$$public$$");
     expect(schemaCapture).not.toContain("$$schema_migrations$$");
@@ -101,6 +106,8 @@ describe("compose config", () => {
     const composeUpIndex = text.indexOf("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build", recreateIndex);
     const composeFailedIndex = text.indexOf("ROLLBACK_COMPOSE_RECREATE_FAILED=1", recreateIndex);
     const failIndex = text.indexOf("fail \"docker compose failed while recreating the production stack\"", recreateIndex);
+    const restoreBeforePostgresIndex = rollback!.indexOf("restore_remote_release_files");
+    const startPostgresIndex = rollback!.indexOf("${REMOTE_COMPOSE} up -d postgres");
 
     expect(rollback).not.toBeNull();
     expect(recreateIndex).toBeGreaterThan(-1);
@@ -110,6 +117,8 @@ describe("compose config", () => {
     expect(failIndex).toBeGreaterThan(composeFailedIndex);
     expect(rollback).toContain("ROLLBACK_COMPOSE_RECREATE_FAILED:-0");
     expect(rollback).toContain("${REMOTE_COMPOSE} up -d postgres");
+    expect(restoreBeforePostgresIndex).toBeGreaterThan(-1);
+    expect(startPostgresIndex).toBeGreaterThan(restoreBeforePostgresIndex);
     expect(rollback).toContain("Rollback skipped; unable to capture current schema migration state");
   });
 
@@ -121,10 +130,24 @@ describe("compose config", () => {
     expect(text).toContain("capture_remote_release_files");
     expect(text).toContain("ROLLBACK_RELEASE_ARCHIVE=");
     expect(text).toContain("ROLLBACK_RELEASE_FILES_CAPTURED=1");
+    expect(text).toContain("[[ -e docker-compose.production.yml ]]");
+    expect(text).toContain('files+=(\\"\\$file\\")');
     expect(rollback).toContain("restore_remote_release_files");
     expect(rollback!.indexOf("restore_remote_release_files")).toBeLessThan(
       rollback!.indexOf("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build"),
     );
+  });
+
+  it("deploy-production.sh captures rollback images from running containers", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const captureRollbackImage = getShellFunction(text, "capture_remote_rollback_image");
+
+    expect(captureRollbackImage).not.toBeNull();
+    expect(text).toContain('REMOTE_RUNTIME_IMAGE_ENV="RUNTIME_IMAGE=$(printf \'%q\' "$IMAGE_TAG")"');
+    expect(captureRollbackImage).toContain("${REMOTE_COMPOSE} ps -q api");
+    expect(captureRollbackImage).toContain("${REMOTE_COMPOSE} ps -q worker");
+    expect(captureRollbackImage).toContain("docker inspect -f '{{.Image}}'");
+    expect(captureRollbackImage).not.toContain("docker image inspect $(printf '%q' \"$IMAGE_TAG\")");
   });
 
   it("deploy-production.sh restores release files on pre-recreate validation failures", async () => {

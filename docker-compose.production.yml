@@ -17,7 +17,7 @@ services:
 
   api:
     build: .
-    image: agency_hub_core/runtime:production
+    image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
     restart: unless-stopped
     env_file:
       - .env.production
@@ -41,7 +41,7 @@ services:
       start_period: 20s
 
   worker:
-    image: agency_hub_core/runtime:production
+    image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
     restart: unless-stopped
     env_file:
       - .env.production

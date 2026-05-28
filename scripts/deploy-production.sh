@@ -142,6 +142,7 @@ ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback"
 IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate"
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
+ROLLBACK_RELEASE_FILES_RESTORED=0
 SCHEMA_BASELINE_CAPTURED=0
 ROLLBACK_COMPOSE_RECREATE_FAILED=0
 ROLLBACK_COMPATIBLE_MIGRATIONS=(
@@ -150,7 +151,8 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
-REMOTE_COMPOSE="docker compose --env-file .env.production -f docker-compose.production.yml"
+REMOTE_RUNTIME_IMAGE_ENV="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_TAG")"
+REMOTE_COMPOSE="${REMOTE_RUNTIME_IMAGE_ENV} docker compose --env-file .env.production -f docker-compose.production.yml"
 REMOTE_RELEASE_FILES=()
 for file in \
   Dockerfile \
@@ -188,7 +190,7 @@ dump_remote_diagnostics() {
 
 capture_remote_rollback_image() {
   local result
-  result="$(run_remote "set -euo pipefail; if docker image inspect $(printf '%q' "$IMAGE_TAG") >/dev/null 2>&1; then docker tag $(printf '%q' "$IMAGE_TAG") $(printf '%q' "$ROLLBACK_IMAGE_TAG"); printf available; else printf missing; fi" || true)"
+  result="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; container_id=\$(${REMOTE_COMPOSE} ps -q api 2>/dev/null || true); if [[ -z \"\$container_id\" ]]; then container_id=\$(${REMOTE_COMPOSE} ps -q worker 2>/dev/null || true); fi; if [[ -n \"\$container_id\" ]]; then image_id=\$(docker inspect -f '{{.Image}}' \"\$container_id\"); docker tag \"\$image_id\" $(printf '%q' "$ROLLBACK_IMAGE_TAG"); printf available; else printf missing; fi" || true)"
   if [[ "$result" == "available" ]]; then
     ROLLBACK_IMAGE_AVAILABLE=1
     log "Captured rollback image as ${ROLLBACK_IMAGE_TAG}"
@@ -202,7 +204,7 @@ capture_remote_release_files() {
   local file_args
   file_args="$(remote_release_file_args)"
 
-  if run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; tar -cf - ${file_args}" >"$ROLLBACK_RELEASE_ARCHIVE"; then
+  if run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; [[ -e docker-compose.production.yml ]]; files=(); for file in ${file_args}; do if [[ -e \"\$file\" ]]; then files+=(\"\$file\"); fi; done; (( \${#files[@]} > 0 )); tar -cf - \"\${files[@]}\"" >"$ROLLBACK_RELEASE_ARCHIVE"; then
     ROLLBACK_RELEASE_FILES_CAPTURED=1
     log "Captured rollback release files"
   else
@@ -219,6 +221,7 @@ restore_remote_release_files() {
 
   ssh "${SSH_ARGS[@]}" "$REMOTE" "mkdir -p ${REMOTE_APP_DIR_ESCAPED} && tar -xf - -C ${REMOTE_APP_DIR_ESCAPED}" \
     <"$ROLLBACK_RELEASE_ARCHIVE"
+  ROLLBACK_RELEASE_FILES_RESTORED=1
 }
 
 is_rollback_compatible_migration() {
@@ -275,6 +278,13 @@ rollback_remote_stack() {
     return 0
   fi
 
+  if [[ "${ROLLBACK_COMPOSE_RECREATE_FAILED:-0}" == "1" ]]; then
+    if ! restore_remote_release_files; then
+      log "Automatic rollback cannot prove the previous image is compatible with the current release files"
+      return 0
+    fi
+  fi
+
   if ! capture_remote_schema_migrations "$SCHEMA_AFTER_FILE"; then
     if [[ "${ROLLBACK_COMPOSE_RECREATE_FAILED:-0}" == "1" ]]; then
       run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} up -d postgres" \
@@ -299,7 +309,7 @@ rollback_remote_stack() {
   fi
 
   log "Rolling back remote stack to ${ROLLBACK_IMAGE_TAG}"
-  if ! restore_remote_release_files; then
+  if [[ "${ROLLBACK_RELEASE_FILES_RESTORED:-0}" != "1" ]] && ! restore_remote_release_files; then
     log "Automatic rollback cannot prove the previous image is compatible with the current release files"
     return 0
   fi
@@ -320,7 +330,25 @@ rollback_remote_stack() {
 capture_remote_schema_migrations() {
   local output_file="$1"
 
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu; export PGPASSWORD=\"\$POSTGRES_PASSWORD\"; if [ \"\$(psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select to_regclass('\''public.schema_migrations'\'') is not null\")\" = \"t\" ]; then psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select id from schema_migrations order by id\"; fi'" >"$output_file"
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
+export PGPASSWORD=\"\$POSTGRES_PASSWORD\"
+psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -v ON_ERROR_STOP=1 -Atq <<'\''SQL'\''
+DO \$deploy_schema_capture\$
+BEGIN
+  PERFORM pg_advisory_lock(31415, 27182);
+  CREATE TEMP TABLE deploy_schema_migrations(id text) ON COMMIT DROP;
+  IF to_regclass(\$q\$public.schema_migrations\$q\$) IS NOT NULL THEN
+    INSERT INTO deploy_schema_migrations EXECUTE \$q\$select id from schema_migrations order by id\$q\$;
+  END IF;
+END
+\$deploy_schema_capture\$;
+SELECT id FROM deploy_schema_migrations ORDER BY id;
+DO \$deploy_schema_capture\$
+BEGIN
+  PERFORM pg_advisory_unlock(31415, 27182);
+END
+\$deploy_schema_capture\$;
+SQL'" >"$output_file"
 }
 
 remote_curl_status() {
