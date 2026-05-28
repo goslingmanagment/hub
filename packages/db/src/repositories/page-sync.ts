@@ -553,7 +553,7 @@ function computeTrustedStreamTimestamp(
     lastFollowerSyncAt: Date | null;
   },
 ) {
-  if (stream === "light" || stream === "transactions" || stream === "subscribers") {
+  if (stream === "light") {
     return page.lastLightSyncAt;
   }
 
