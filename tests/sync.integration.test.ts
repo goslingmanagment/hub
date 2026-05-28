@@ -555,7 +555,7 @@ describe("sync integration", () => {
             rate_limit_scope_key = null
         where platform_account_id = $2
       `,
-      ["socks5://legacy-user:legacy-pass@planner-proxy.example:1080", page.id],
+      ["socks5://legacy-user:p@ss@planner-proxy.example:1080", page.id],
     );
     const app = createTestAppContext(testDb, {
       databaseUrl: testDb.connectionString,

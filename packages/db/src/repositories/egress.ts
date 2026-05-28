@@ -4,7 +4,7 @@ export function egressKeySql(
   rateLimitScopeKey: SQLWrapper,
   proxyUrl: SQLWrapper,
 ) {
-  const urlMatch = sql`regexp_match(${proxyUrl}, '^([a-z][a-z0-9+.-]*)://(?:[^/@?#]+@)?([^/:?#]+)(?::([0-9]+))?')`;
+  const urlMatch = sql`regexp_match(${proxyUrl}, '^([a-z][a-z0-9+.-]*)://(?:[^/?#]*@)?([^/:?#]+)(?::([0-9]+))?')`;
   const scheme = sql`lower((${urlMatch})[1])`;
   const host = sql`lower((${urlMatch})[2])`;
   const port = sql`(${urlMatch})[3]`;
