@@ -542,56 +542,92 @@ describe("sync integration", () => {
       slug: "planner-legacy-proxy",
       name: "Planner Legacy Proxy",
     });
-    const page = await createFanslyLightPage(testDb, {
-      modelId: model.id,
-      label: "planner-legacy-proxy-page",
-      authorization: "planner-legacy-proxy",
-      proxyUrl: "socks5://planner-proxy.example:1080",
-    });
-    await testDb.pool.query(
-      `
-        update egress_endpoints
-        set url = $1,
-            rate_limit_scope_key = null
-        where platform_account_id = $2
-      `,
-      ["socks5://legacy-user:p@ss@planner-proxy.example:1080", page.id],
-    );
+    const cases = [
+      {
+        label: "planner-legacy-proxy-page",
+        url: "socks5://legacy-user:p@ss@planner-proxy.example:1080",
+        expectedEgressKey: "socks5://planner-proxy.example:1080",
+      },
+      {
+        label: "planner-legacy-leading-zero-port-page",
+        url: "socks5://legacy-user:legacy-pass@proxy.example:01080",
+        expectedEgressKey: "socks5://proxy.example:1080",
+      },
+      {
+        label: "planner-legacy-ipv6-page",
+        url: "socks5://legacy-user:legacy-pass@[2001:0db8:0:0:0:0:0:1]",
+        expectedEgressKey: "socks5://[2001:db8::1]:1080",
+      },
+      {
+        label: "planner-legacy-mapped-ipv6-page",
+        url: "socks5://legacy-user:legacy-pass@[::ffff:192.0.2.1]:1080",
+        expectedEgressKey: "socks5://[::ffff:c000:201]:1080",
+      },
+      {
+        label: "planner-legacy-invalid-port-page",
+        url: "socks5://legacy-user:legacy-pass@proxy.example:999999999999999999",
+        expectedEgressKey: "direct",
+      },
+    ] as const;
+    const pagesById = new Map<number, { expectedEgressKey: string }>();
+    for (const testCase of cases) {
+      const page = await createFanslyLightPage(testDb, {
+        modelId: model.id,
+        label: testCase.label,
+        authorization: testCase.label,
+        proxyUrl: "socks5://planner-proxy.example:1080",
+      });
+      await testDb.pool.query(
+        `
+          update egress_endpoints
+          set url = $1,
+              rate_limit_scope_key = null
+          where platform_account_id = $2
+        `,
+        [testCase.url, page.id],
+      );
+      pagesById.set(page.id, { expectedEgressKey: testCase.expectedEgressKey });
+    }
     const app = createTestAppContext(testDb, {
       databaseUrl: testDb.connectionString,
     });
     const now = new Date("2026-03-20T12:05:00.000Z");
 
-    await ensurePageSyncStates(app.db, {
-      pageId: page.id,
-      now,
-    });
-    await requestPageSyncRows(app.db, {
-      pageId: page.id,
-      streams: ["light"],
-      source: "manual",
-      now,
-    });
+    for (const pageId of pagesById.keys()) {
+      await ensurePageSyncStates(app.db, {
+        pageId,
+        now,
+      });
+      await requestPageSyncRows(app.db, {
+        pageId,
+        streams: ["light"],
+        source: "manual",
+        now,
+      });
+    }
 
     const boss = {
-      send: vi.fn(async () => "planner-job-legacy-proxy"),
+      send: vi.fn(async (_queue: string, payload: { platformAccountId: number }) =>
+        `planner-job-${payload.platformAccountId}`),
     };
 
     const pages = await runSyncPlannerCycle(app, boss as never, now);
 
-    expect(pages[0]).toMatchObject({
-      pageId: page.id,
-      egressKey: "socks5://planner-proxy.example:1080",
-    });
-    expect(boss.send).toHaveBeenCalledWith(
-      SYNC_PAGE_EXECUTE_QUEUE,
-      { platformAccountId: page.id },
-      expect.objectContaining({
-        group: {
-          id: buildSyncPageExecuteGroupId("fansly", "socks5://planner-proxy.example:1080"),
-        },
-      }),
-    );
+    expect(pages).toHaveLength(cases.length);
+    for (const page of pages) {
+      const expected = pagesById.get(page.pageId);
+      expect(expected).toBeDefined();
+      expect(page.egressKey).toBe(expected?.expectedEgressKey);
+      expect(boss.send).toHaveBeenCalledWith(
+        SYNC_PAGE_EXECUTE_QUEUE,
+        { platformAccountId: page.pageId },
+        expect.objectContaining({
+          group: {
+            id: buildSyncPageExecuteGroupId("fansly", expected?.expectedEgressKey ?? ""),
+          },
+        }),
+      );
+    }
   });
 
   it("converges a Fansly all-scope sync through page sync state and executor wakeups", async (context) => {
