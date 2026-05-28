@@ -975,7 +975,7 @@ describe("db write safety", () => {
     ]);
 
     const migration = await readFile(
-      "packages/db/migrations/0015_repair_egress_rate_limit_scope_key.sql",
+      "packages/db/migrations/0017_reapply_egress_rate_limit_scope_key_repair.sql",
       "utf8",
     );
     await testDb.pool.query(migration);

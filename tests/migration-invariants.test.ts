@@ -38,4 +38,17 @@ describe("database migration invariants", () => {
     expect(migration).toContain("IS DISTINCT FROM");
     expect(migration).toContain("EXCEPTION WHEN others THEN");
   });
+
+  it("reapplies corrected egress key repair as a new migration", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0017_reapply_egress_rate_limit_scope_key_repair.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain("canonical_proxy_egress_key(url) AS canonical_key");
+    expect(migration).toContain("rate_limit_scope_key IS NULL OR");
+    expect(migration).toContain("rate_limit_scope_key ~ '^(http|https|socks5)://'");
+    expect(migration).toContain("canonical.canonical_scope_key IS NOT DISTINCT FROM canonical.canonical_key");
+    expect(migration).toContain("IS DISTINCT FROM");
+  });
 });
