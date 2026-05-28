@@ -4,6 +4,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -807,6 +808,10 @@ export const pageDmThreads = pgTable(
       table.platformAccountId,
       table.platformConversationId,
     ),
+    idAccountUniq: unique("page_dm_threads_id_account_uniq").on(
+      table.id,
+      table.platformAccountId,
+    ),
     fanIdx: index("page_dm_threads_account_fan_idx").on(
       table.platformAccountId,
       table.fanId,
@@ -877,6 +882,11 @@ export const pageDmMessages = pgTable(
       table.createdAt.desc(),
       table.id.desc(),
     ),
+    conversationAccountFk: foreignKey({
+      name: "page_dm_messages_conversation_account_fk",
+      columns: [table.conversationId, table.platformAccountId],
+      foreignColumns: [pageDmThreads.id, pageDmThreads.platformAccountId],
+    }).onDelete("cascade"),
   }),
 );
 

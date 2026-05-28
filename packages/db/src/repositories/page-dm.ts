@@ -849,6 +849,7 @@ export async function getPageConversationMessages(
            total_tip_amount_cents as "tipAmountCents"
     from page_dm_messages
     where conversation_id = ${conversation.id}
+      and platform_account_id = ${input.platformAccountId}
     order by created_at desc, platform_message_id desc, id desc
     limit ${limit}
   `);
@@ -933,6 +934,7 @@ export async function getPageConversationPreview(
         select *
         from page_dm_messages
         where conversation_id = ${conversation.id}
+          and platform_account_id = ${input.platformAccountId}
         order by created_at desc, platform_message_id desc, id desc
         limit ${limit}
       ) newest
