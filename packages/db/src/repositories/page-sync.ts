@@ -1485,13 +1485,16 @@ export async function retryPageSync(
   const retryAt = new Date(now.getTime() + resolveRetryDelayMs(nextFailures));
   const result = await db.execute(sql`
     update ${pageSyncStates}
-    set status = 'retrying',
+    set status = case
+                   when request_seq > ${input.requestSeq} then 'pending'::page_sync_status
+                   else 'retrying'::page_sync_status
+                 end,
         leased_seq = null,
         progressed_at = coalesce(${input.progressedAt ?? null}, progressed_at),
         finished_at = ${now},
-        failed_at = ${now},
-        retry_kind = ${input.retryKind},
-        retry_at = ${retryAt},
+        failed_at = case when request_seq > ${input.requestSeq} then failed_at else ${now} end,
+        retry_kind = case when request_seq > ${input.requestSeq} then null else ${input.retryKind} end,
+        retry_at = case when request_seq > ${input.requestSeq} then null::timestamptz else ${retryAt} end,
         blocker_kind = null,
         blocker_code = null,
         blocker_message = null,
@@ -1499,9 +1502,9 @@ export async function retryPageSync(
         phase = ${input.phase ?? null},
         work_class = ${input.workClass ?? null},
         progress = ${input.progress ?? {}},
-        consecutive_failures = ${nextFailures},
-        last_error_code = ${input.errorCode},
-        last_error_summary = ${input.errorSummary},
+        consecutive_failures = case when request_seq > ${input.requestSeq} then 0 else ${nextFailures} end,
+        last_error_code = case when request_seq > ${input.requestSeq} then null else ${input.errorCode} end,
+        last_error_summary = case when request_seq > ${input.requestSeq} then null else ${input.errorSummary} end,
         lease_owner = null,
         lease_token = null,
         lease_heartbeat_at = null,
@@ -1777,13 +1780,17 @@ export async function requestPageSync(
       const requestPayload = Object.keys(rawRequestPayload).length > 0
         ? { ...rawRequestPayload, revision: nextRequestSeq }
         : rawRequestPayload;
+      const leaseExpired = current.leasedSeq !== null &&
+        current.leaseExpiresAt !== null &&
+        current.leaseExpiresAt.getTime() <= now.getTime();
       const nextStatus: PageSyncStatus = current.status === "paused"
         ? "paused"
         : current.status === "blocked"
           ? "blocked"
-          : current.status === "running"
+          : current.status === "running" && !leaseExpired
             ? "running"
             : "pending";
+      const clearExpiredLease = leaseExpired && nextStatus === "pending";
 
       await database.execute(sql`
         update ${pageSyncStates}
@@ -1794,6 +1801,11 @@ export async function requestPageSync(
             status = ${nextStatus}::page_sync_status,
             retry_kind = case when ${nextStatus === "pending"} then null else retry_kind end,
             retry_at = case when ${nextStatus === "pending"} then null else retry_at end,
+            leased_seq = case when ${clearExpiredLease} then null else leased_seq end,
+            lease_owner = case when ${clearExpiredLease} then null else lease_owner end,
+            lease_token = case when ${clearExpiredLease} then null else lease_token end,
+            lease_heartbeat_at = case when ${clearExpiredLease} then null else lease_heartbeat_at end,
+            lease_expires_at = case when ${clearExpiredLease} then null else lease_expires_at end,
             updated_at = ${now}
         where page_id = ${input.pageId}
           and stream = ${stream}
@@ -1807,6 +1819,11 @@ export async function requestPageSync(
         status: nextStatus,
         retryKind: nextStatus === "pending" ? null : current.retryKind,
         retryAt: nextStatus === "pending" ? null : current.retryAt,
+        leasedSeq: clearExpiredLease ? null : current.leasedSeq,
+        leaseOwner: clearExpiredLease ? null : current.leaseOwner,
+        leaseToken: clearExpiredLease ? null : current.leaseToken,
+        leaseHeartbeatAt: clearExpiredLease ? null : current.leaseHeartbeatAt,
+        leaseExpiresAt: clearExpiredLease ? null : current.leaseExpiresAt,
         updatedAt: now,
       });
 

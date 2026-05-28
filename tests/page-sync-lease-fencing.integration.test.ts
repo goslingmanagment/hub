@@ -11,6 +11,7 @@ import {
   pausePageSync,
   reclaimExpiredPageSync,
   requestPageSync,
+  retryPageSync,
   runWithPageSyncExecutionContext,
   upsertCheckpoint,
   withOwnedPageSyncTransaction,
@@ -370,6 +371,155 @@ describe("page sync lease fencing", () => {
         leaseToken: null,
       });
       expect(await countRunnableLightRows()).toBe(1);
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("keeps newer manual requests pending when an older lease retries", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "retry-request-model",
+        name: "Retry Request Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "retry-request-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["followers"],
+        source: "manual",
+        now,
+      });
+
+      const lease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "worker-1",
+        leaseToken: "lease-1",
+        leaseTtlMs: 60_000,
+        now,
+      });
+      if (!lease) {
+        throw new Error("Expected to acquire a page sync lease");
+      }
+      const leasedSeq = lease.leasedSeq ?? lease.requestSeq;
+      const nextRequestSeq = lease.requestSeq + 1;
+
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["followers"],
+        source: "manual",
+        now: new Date(now.getTime() + 1_000),
+      });
+
+      await retryPageSync(testDb.db, {
+        pageId: page.id,
+        stream: "followers",
+        requestSeq: leasedSeq,
+        leaseToken: lease.leaseToken ?? "",
+        retryKind: "transport",
+        errorCode: "http_500",
+        errorSummary: "Upstream failed",
+        now: new Date(now.getTime() + 2_000),
+      });
+
+      expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({
+        status: "pending",
+        requestSeq: nextRequestSeq,
+        appliedSeq: lease.appliedSeq,
+        leasedSeq: null,
+        leaseToken: null,
+        retryKind: null,
+        retryAt: null,
+        consecutiveFailures: 0,
+        lastErrorCode: null,
+      });
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("clears expired leases when a manual request arrives", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "expired-request-model",
+        name: "Expired Request Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "expired-request-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["followers"],
+        source: "manual",
+        now,
+      });
+
+      const lease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "worker-1",
+        leaseToken: "lease-1",
+        leaseTtlMs: 1_000,
+        now,
+      });
+      if (!lease) {
+        throw new Error("Expected to acquire a page sync lease");
+      }
+
+      const requestedAt = new Date(now.getTime() + 2_000);
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["followers"],
+        source: "manual",
+        now: requestedAt,
+      });
+
+      expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({
+        status: "pending",
+        requestSeq: lease.requestSeq + 1,
+        appliedSeq: lease.appliedSeq,
+        leasedSeq: null,
+        leaseToken: null,
+      });
+
+      const nextLease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "worker-2",
+        leaseToken: "lease-2",
+        leaseTtlMs: 60_000,
+        now: requestedAt,
+      });
+      expect(nextLease).toMatchObject({
+        pageId: page.id,
+        stream: "followers",
+        leaseToken: "lease-2",
+      });
     } finally {
       await testDb.stop();
     }
