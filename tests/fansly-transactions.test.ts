@@ -294,6 +294,64 @@ describe("syncTransactions", () => {
     }));
   });
 
+  it("refuses to finalize an incremental Fansly scan when the provider total changes mid-scan", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    });
+    const telemetry = createTelemetry();
+    const getTransactionsPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-15T00:00:00.000Z")],
+        total: 2,
+        done: false,
+        raw: { page: 1 },
+      })
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-2", "2026-03-14T12:00:00.000Z")],
+        total: 3,
+        done: true,
+        raw: { page: 2 },
+      });
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    })).rejects.toThrow("Fansly incremental transaction total changed during an offset scan");
+
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "incremental_total_changed",
+      severity: "error",
+    }));
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual(["tx-1"]);
+  });
+
   it("warns once per run for an unknown transaction type", async () => {
     dbMocks.getCheckpoint.mockResolvedValue({
       cursorTimestamp: new Date("2026-03-08T00:00:00.000Z"),

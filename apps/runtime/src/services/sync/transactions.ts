@@ -66,6 +66,7 @@ type FanslyTransactionIncrementalState = {
   consecutiveAllOlderPages: number;
   firstPageOlderThanBoundaryItems: number;
   earlyStoppedBeyondBoundary: boolean;
+  lastPageTransactionIds?: string[];
 };
 
 type FanslyTransactionProgressState =
@@ -113,6 +114,15 @@ function asBoolean(value: unknown) {
   return typeof value === "boolean" ? value : null;
 }
 
+function asStringArray(value: unknown) {
+  if (value === undefined) {
+    return undefined;
+  }
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : null;
+}
+
 function parseFanslyTransactionIncrementalState(value: unknown): FanslyTransactionIncrementalState | null {
   const state = asRecord(value);
   if (
@@ -142,6 +152,7 @@ function parseFanslyTransactionIncrementalState(value: unknown): FanslyTransacti
   const consecutiveAllOlderPages = asNonNegativeInt(state.consecutiveAllOlderPages);
   const firstPageOlderThanBoundaryItems = asNonNegativeInt(state.firstPageOlderThanBoundaryItems);
   const earlyStoppedBeyondBoundary = asBoolean(state.earlyStoppedBeyondBoundary);
+  const lastPageTransactionIds = asStringArray(state.lastPageTransactionIds);
 
   if (
     snapshotEnd === null ||
@@ -160,7 +171,8 @@ function parseFanslyTransactionIncrementalState(value: unknown): FanslyTransacti
     olderThanBoundaryPages === null ||
     consecutiveAllOlderPages === null ||
     firstPageOlderThanBoundaryItems === null ||
-    earlyStoppedBeyondBoundary === null
+    earlyStoppedBeyondBoundary === null ||
+    lastPageTransactionIds === null
   ) {
     return null;
   }
@@ -187,6 +199,7 @@ function parseFanslyTransactionIncrementalState(value: unknown): FanslyTransacti
     consecutiveAllOlderPages,
     firstPageOlderThanBoundaryItems,
     earlyStoppedBeyondBoundary,
+    lastPageTransactionIds,
   };
 }
 
@@ -548,6 +561,39 @@ async function syncTransactionsIncremental(
         input.requestContext,
         { after, limit: 100, offset: requestOffset },
       );
+      if (
+        state.providerReportedTotal !== null &&
+        page.total !== null &&
+        page.total !== state.providerReportedTotal
+      ) {
+        await input.telemetry.addAnomaly({
+          code: "incremental_total_changed",
+          severity: "error",
+          message: "Fansly incremental transaction total changed during an offset scan",
+          details: {
+            previousTotal: state.providerReportedTotal,
+            currentTotal: page.total,
+            page: state.transactionPages,
+            offset: requestOffset,
+          },
+        });
+        throw new Error("Fansly incremental transaction total changed during an offset scan");
+      }
+
+      const overlappingTransactionIds = findPageOverlap(state.lastPageTransactionIds, page.items);
+      if (overlappingTransactionIds.length > 0) {
+        await input.telemetry.addAnomaly({
+          code: "incremental_offset_overlap",
+          severity: "error",
+          message: "Fansly incremental transaction scan saw overlapping rows between offset pages",
+          details: {
+            overlappingTransactionIds,
+            page: state.transactionPages,
+            offset: requestOffset,
+          },
+        });
+        throw new Error("Fansly incremental transaction scan saw overlapping rows between offset pages");
+      }
 
       await persistRawPayload(app.db, {
         platformAccountId: input.platformAccountId,
@@ -615,6 +661,7 @@ async function syncTransactionsIncremental(
         consecutiveAllOlderPages,
         firstPageOlderThanBoundaryItems,
         earlyStoppedBeyondBoundary,
+        lastPageTransactionIds: transactionIdsForPage(page.items),
       };
 
       await persistFanslyTransactionsPage(
@@ -718,6 +765,24 @@ async function syncTransactionsIncremental(
     input.platformAccountId,
     state.dirtyFrom ? new Date(state.dirtyFrom) : null,
   );
+
+  if (
+    !state.earlyStoppedBeyondBoundary &&
+    state.providerReportedTotal !== null &&
+    state.providerReportedTotal !== state.processedTransactions
+  ) {
+    await input.telemetry.addAnomaly({
+      code: "incremental_total_mismatch",
+      severity: "error",
+      message: "Provider-reported transaction total differed from the fetched transaction rows",
+      details: {
+        providerReportedTotal: state.providerReportedTotal,
+        fetchedRows: state.processedTransactions,
+        pageCount: state.transactionPages,
+      },
+    });
+    throw new Error("Fansly incremental transaction total differed from fetched rows");
+  }
 
   let checkpointAfter = null;
   if (newestSeenAt) {
