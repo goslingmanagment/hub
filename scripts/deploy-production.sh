@@ -221,7 +221,7 @@ restore_remote_release_files() {
   fi
 
   ssh "${SSH_ARGS[@]}" "$REMOTE" "mkdir -p ${REMOTE_APP_DIR_ESCAPED} && tar -xf - -C ${REMOTE_APP_DIR_ESCAPED}" \
-    <"$ROLLBACK_RELEASE_ARCHIVE"
+    <"$ROLLBACK_RELEASE_ARCHIVE" || return 1
   ROLLBACK_RELEASE_FILES_RESTORED=1
 }
 

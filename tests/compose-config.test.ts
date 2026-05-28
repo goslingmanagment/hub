@@ -135,6 +135,7 @@ describe("compose config", () => {
     expect(text).toContain("ROLLBACK_RELEASE_FILES_CAPTURED=1");
     expect(text).toContain("[[ -e docker-compose.production.yml ]]");
     expect(text).toContain('files+=(\\"\\$file\\")');
+    expect(text).toContain('<"$ROLLBACK_RELEASE_ARCHIVE" || return 1');
     expect(rollback).toContain("restore_remote_release_files");
     expect(rollback!.indexOf("restore_remote_release_files")).toBeLessThan(
       rollback!.indexOf("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build"),
