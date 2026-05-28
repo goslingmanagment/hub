@@ -18,6 +18,7 @@ import {
   listNotificationIncidents,
   markPageSyncAuthBlocked,
   openNotificationIncident,
+  resolveNotificationIncident,
   startSyncRun,
 } from "@agency_hub_core/db";
 
@@ -430,6 +431,149 @@ describe("notification incidents integration", () => {
       errorCode: "auth_blocked",
       errorSummary: "session expired",
     }));
+  });
+
+  it("retries wrapped unique violations when concurrent opens lose the insert race", async () => {
+    const now = new Date("2026-03-15T12:00:00.000Z");
+    const incident = {
+      id: 1,
+      incidentKey: "auth_blocked:1",
+      kind: "auth_blocked",
+      platformAccountId: 1,
+      stream: null,
+      status: "open",
+      openedAt: now,
+      lastSeenAt: now,
+      resolvedAt: null,
+      errorCode: "auth_blocked",
+      errorSummary: "session expired",
+      metadata: {},
+      updatedAt: now,
+    };
+    let transactionCount = 0;
+    const fakeDb = {
+      async transaction(callback: (tx: unknown) => Promise<unknown>) {
+        transactionCount += 1;
+        if (transactionCount === 1) {
+          return callback({
+            execute: vi.fn(async () => ({ rows: [] })),
+            insert: vi.fn(() => ({
+              values: vi.fn(() => ({
+                returning: vi.fn(async () => {
+                  const error = new Error("insert failed") as Error & { cause: { code: string } };
+                  error.cause = { code: "23505" };
+                  throw error;
+                }),
+              })),
+            })),
+          });
+        }
+
+        return callback({
+          execute: vi.fn(async () => ({
+            rows: [{
+              id: 1,
+              status: "open",
+              resolvedAt: null,
+              lastSeenAt: now,
+            }],
+          })),
+          update: vi.fn(() => ({
+            set: vi.fn(() => ({
+              where: vi.fn(() => ({
+                returning: vi.fn(async () => [incident]),
+              })),
+            })),
+          })),
+        });
+      },
+    };
+
+    const result = await openNotificationIncident(fakeDb as never, {
+      incidentKey: "auth_blocked:1",
+      kind: "auth_blocked",
+      platformAccountId: 1,
+      errorCode: "auth_blocked",
+      errorSummary: "session expired",
+      now,
+    });
+
+    expect(transactionCount).toBe(2);
+    expect(result.transition).toBe("existing");
+    expect(result.incident).toMatchObject({
+      id: 1,
+      status: "open",
+    });
+  });
+
+  it("does not reopen a resolved incident from a stale open retry", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "stale-open-model",
+      name: "Stale Open Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "stale-open-page",
+    });
+
+    const incidentKey = `auth_blocked:${page.id}`;
+    const openedAt = new Date("2026-03-15T12:00:00.000Z");
+    const staleSeenAt = new Date("2026-03-15T12:00:01.000Z");
+    const resolvedAt = new Date("2026-03-15T12:00:02.000Z");
+    const laterSeenAt = new Date("2026-03-15T12:00:03.000Z");
+
+    await openNotificationIncident(testDb.db, {
+      incidentKey,
+      kind: "auth_blocked",
+      platformAccountId: page.id,
+      errorCode: "auth_blocked",
+      errorSummary: "session expired",
+      now: openedAt,
+    });
+    await resolveNotificationIncident(testDb.db, {
+      incidentKey,
+      now: resolvedAt,
+    });
+
+    const staleResult = await openNotificationIncident(testDb.db, {
+      incidentKey,
+      kind: "auth_blocked",
+      platformAccountId: page.id,
+      errorCode: "auth_blocked",
+      errorSummary: "stale duplicate open",
+      now: staleSeenAt,
+    });
+
+    expect(staleResult.transition).toBe("existing");
+    expect(staleResult.incident.status).toBe("resolved");
+    let incident = await getNotificationIncidentByKey(testDb.db, incidentKey);
+    expect(incident).toMatchObject({
+      status: "resolved",
+      errorSummary: "session expired",
+    });
+    expect(incident?.lastSeenAt.toISOString()).toBe(resolvedAt.toISOString());
+
+    const laterResult = await openNotificationIncident(testDb.db, {
+      incidentKey,
+      kind: "auth_blocked",
+      platformAccountId: page.id,
+      errorCode: "auth_blocked",
+      errorSummary: "session expired again",
+      now: laterSeenAt,
+    });
+
+    expect(laterResult.transition).toBe("reopened");
+    incident = await getNotificationIncidentByKey(testDb.db, incidentKey);
+    expect(incident).toMatchObject({
+      status: "open",
+      errorSummary: "session expired again",
+    });
+    expect(incident?.lastSeenAt.toISOString()).toBe(laterSeenAt.toISOString());
   });
 
   it("clears auth_blocked state and resolves page-level incidents after successful verification recovery", async (context) => {

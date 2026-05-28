@@ -13,6 +13,19 @@ type LockedNotificationIncidentRow = NotificationIncidentRow & {
   status: NotificationIncidentStatus;
 };
 
+function normalizeDate(value: Date | string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  return value instanceof Date ? value : new Date(value);
+}
+
+function isAfter(value: Date | string | null | undefined, reference: Date) {
+  const date = normalizeDate(value);
+  return date !== null && date.getTime() > reference.getTime();
+}
+
 function isUniqueViolation(error: unknown): boolean {
   if (typeof error !== "object" || error === null) {
     return false;
@@ -23,6 +36,22 @@ function isUniqueViolation(error: unknown): boolean {
   }
 
   return "cause" in error && isUniqueViolation(error.cause);
+}
+
+async function readNotificationIncidentForReturn(
+  db: Database,
+  incidentId: number,
+) {
+  const [incident] = await db.select()
+    .from(notificationIncidents)
+    .where(eq(notificationIncidents.id, incidentId))
+    .limit(1);
+
+  if (!incident) {
+    throw new Error(`Notification incident "${incidentId}" could not be read`);
+  }
+
+  return incident;
 }
 
 export async function getNotificationIncidentByKey(db: Database, incidentKey: string) {
@@ -173,7 +202,10 @@ export async function openNotificationIncident(
     try {
       return await db.transaction(async (tx) => {
         const lockedResult = await tx.execute(sql<LockedNotificationIncidentRow>`
-          select *
+          select id,
+                 status,
+                 resolved_at as "resolvedAt",
+                 last_seen_at as "lastSeenAt"
           from ${notificationIncidents}
           where ${notificationIncidents.incidentKey} = ${input.incidentKey}
           for update
@@ -197,6 +229,13 @@ export async function openNotificationIncident(
 
         if (locked.status === "resolved") {
           const lockedId = Number(locked.id);
+          if (isAfter(locked.resolvedAt, now)) {
+            return {
+              incident: await readNotificationIncidentForReturn(tx as unknown as Database, lockedId),
+              transition: "existing" as const,
+            };
+          }
+
           const [reopened] = await tx.update(notificationIncidents)
             .set(values)
             .where(eq(notificationIncidents.id, lockedId))
@@ -213,6 +252,13 @@ export async function openNotificationIncident(
         }
 
         const lockedId = Number(locked.id);
+        if (isAfter(locked.lastSeenAt, now)) {
+          return {
+            incident: await readNotificationIncidentForReturn(tx as unknown as Database, lockedId),
+            transition: "existing" as const,
+          };
+        }
+
         const [existing] = await tx.update(notificationIncidents)
           .set(existingUpdate)
           .where(eq(notificationIncidents.id, lockedId))
