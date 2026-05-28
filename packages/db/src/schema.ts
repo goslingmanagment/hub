@@ -276,6 +276,11 @@ export const syncRuns = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (table) => ({
+    idPageStreamUniq: unique("sync_runs_id_page_stream_uniq").on(
+      table.id,
+      table.pageId,
+      table.stream,
+    ),
     pageStreamIdx: index("sync_runs_page_stream_idx").on(
       table.pageId,
       table.stream,
@@ -322,6 +327,11 @@ export const syncHttpAttempts = pgTable("sync_http_attempts",
       table.attemptNumber,
     ),
     retentionIdx: index("sync_http_attempts_retention_idx").on(table.startedAt),
+    runPageStreamFk: foreignKey({
+      name: "sync_http_attempts_run_page_stream_fk",
+      columns: [table.syncRunId, table.pageId, table.stream],
+      foreignColumns: [syncRuns.id, syncRuns.pageId, syncRuns.stream],
+    }).onDelete("cascade"),
   }),
 );
 
@@ -349,6 +359,11 @@ export const syncRunEvents = pgTable(
   (table) => ({
     runEmittedIdx: index("sync_run_events_run_emitted_idx").on(table.syncRunId, table.emittedAt),
     emittedIdx: index("sync_run_events_emitted_idx").on(table.emittedAt),
+    runPageStreamFk: foreignKey({
+      name: "sync_run_events_run_page_stream_fk",
+      columns: [table.syncRunId, table.pageId, table.stream],
+      foreignColumns: [syncRuns.id, syncRuns.pageId, syncRuns.stream],
+    }).onDelete("cascade"),
   }),
 );
 
