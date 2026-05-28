@@ -546,6 +546,11 @@ export function computeCurrentPageSyncSlot(
   return Math.max(-1, Math.floor((nowSeconds - slotOffsetSeconds) / cadenceSeconds));
 }
 
+export function normalizePageSyncRequestStreams(streams: readonly SyncStream[]) {
+  return [...new Set(streams)].sort((left, right) =>
+    SYNC_STREAM_POLICY[left].streamIndex - SYNC_STREAM_POLICY[right].streamIndex);
+}
+
 function computeTrustedStreamTimestamp(
   stream: SyncStream,
   page: {
@@ -1724,6 +1729,7 @@ export async function requestPageSync(
   },
 ) {
   const now = input.now ?? new Date();
+  const requestedStreams = normalizePageSyncRequestStreams(input.streams);
   const results: Array<{ stream: SyncStream; requestedSeq: number }> = [];
 
   await ensurePageSyncStates(db, {
@@ -1734,7 +1740,7 @@ export async function requestPageSync(
 
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
-    for (const stream of input.streams) {
+    for (const stream of requestedStreams) {
       const current = await lockPageSyncStateForRequest(database, input.pageId, stream);
       if (!current) {
         throw new Error(`Sync stream "${stream}" does not exist for page ${input.pageId}`);

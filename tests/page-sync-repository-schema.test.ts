@@ -5,6 +5,7 @@ import {
   heartbeatPageSyncLease,
   listPageSyncStates,
   listRunnablePageSync,
+  normalizePageSyncRequestStreams,
 } from "../packages/db/src/repositories/page-sync.ts";
 import { sql, type SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
@@ -55,5 +56,20 @@ describe("page-sync repository schema alignment", () => {
     expect(statements[1]).toContain(expectedAliasedFrom);
     expect(statements[2]).toContain(expectedUpdate);
     expect(statements[3]).toContain(expectedAliasedUpdate);
+  });
+
+  it("normalizes requested streams before row locks are taken", () => {
+    expect(normalizePageSyncRequestStreams([
+      "dm_messages",
+      "transactions",
+      "light",
+      "transactions",
+      "dm_conversations",
+    ])).toEqual([
+      "light",
+      "transactions",
+      "dm_conversations",
+      "dm_messages",
+    ]);
   });
 });
