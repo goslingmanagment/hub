@@ -4,7 +4,10 @@ import {
   upsertCheckpoint,
   upsertCheckpointProgress,
 } from "../packages/db/src/repositories/sync.ts";
-import { runWithPageSyncExecutionContext } from "../packages/db/src/repositories/sync-context.ts";
+import {
+  PageSyncLeaseLostError,
+  runWithPageSyncExecutionContext,
+} from "../packages/db/src/repositories/sync-context.ts";
 import { sql, type SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
 import { pageSyncCursors, pageSyncStates } from "../packages/db/src/schema.ts";
@@ -82,5 +85,29 @@ describe("sync checkpoint repository schema alignment", () => {
       expect(statement).not.toContain(["sync", "tasks"].join("_"));
       expect(statement).not.toContain(["sync", "checkpoints"].join("_"));
     }
+  });
+
+  it("throws PageSyncLeaseLostError when fenced checkpoint writes lose ownership", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      rows: [{
+        owned: false,
+      }],
+    });
+    const db = {
+      execute,
+    } as never;
+
+    await expect(runWithPageSyncExecutionContext({
+      pageId: 55,
+      stream: "transactions",
+      requestSeq: 7,
+      leaseToken: "lease-1",
+    }, async () => upsertCheckpoint(db, {
+      platformAccountId: 55,
+      stream: "transactions",
+      cursorText: "cursor-a",
+      state: { phase: "a" },
+      lastSuccessfulRunId: null,
+    }))).rejects.toBeInstanceOf(PageSyncLeaseLostError);
   });
 });

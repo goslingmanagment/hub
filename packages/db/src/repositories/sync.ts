@@ -31,7 +31,7 @@ import {
   type SyncRequestSource,
   type SyncStream,
 } from "./page-sync.ts";
-import { getPageSyncExecutionContext } from "./sync-context.ts";
+import { PageSyncLeaseLostError, getPageSyncExecutionContext } from "./sync-context.ts";
 
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
@@ -530,7 +530,7 @@ async function upsertCheckpointRow(
     `);
 
     if (!result.rows[0]?.owned) {
-      throw new Error(`Page sync lease lost for ${input.platformAccountId}:${input.stream}`);
+      throw new PageSyncLeaseLostError(`Page sync lease lost for ${input.platformAccountId}:${input.stream}`);
     }
   } else {
     await db.insert(pageSyncCursors).values({
