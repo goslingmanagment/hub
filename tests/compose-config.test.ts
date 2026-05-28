@@ -110,12 +110,13 @@ describe("compose config", () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const rollback = getShellFunction(text, "rollback_remote_stack");
 
+    expect(rollback).not.toBeNull();
     expect(text).toContain("capture_remote_release_files");
     expect(text).toContain("ROLLBACK_RELEASE_ARCHIVE=");
     expect(text).toContain("ROLLBACK_RELEASE_FILES_CAPTURED=1");
     expect(rollback).toContain("restore_remote_release_files");
-    expect(rollback.indexOf("restore_remote_release_files")).toBeLessThan(
-      rollback.indexOf("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build"),
+    expect(rollback!.indexOf("restore_remote_release_files")).toBeLessThan(
+      rollback!.indexOf("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build"),
     );
   });
 
