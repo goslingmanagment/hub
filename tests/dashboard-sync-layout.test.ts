@@ -17,6 +17,7 @@ const queryMocks = vi.hoisted(() => ({
   useAdminSyncRunDetail: vi.fn(),
   useAdminSyncTrigger: vi.fn(),
   useAdminSyncTriggerAll: vi.fn(),
+  useAdminVerifyPage: vi.fn(),
   useAuthMe: vi.fn(),
   useLogout: vi.fn(),
   useOverview: vi.fn(),
@@ -344,6 +345,7 @@ describe("dashboard sync layout", () => {
     queryMocks.useAdminSyncRunDetail.mockReset();
     queryMocks.useAdminSyncTrigger.mockReset();
     queryMocks.useAdminSyncTriggerAll.mockReset();
+    queryMocks.useAdminVerifyPage.mockReset();
     queryMocks.useAuthMe.mockReset();
     queryMocks.useLogout.mockReset();
     queryMocks.useOverview.mockReset();
@@ -409,6 +411,10 @@ describe("dashboard sync layout", () => {
       mutateAsync: vi.fn(),
     });
     queryMocks.useAdminSyncTriggerAll.mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn(),
+    });
+    queryMocks.useAdminVerifyPage.mockReturnValue({
       isPending: false,
       mutateAsync: vi.fn(),
     });
@@ -503,6 +509,78 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Pages failed to load");
     expect(html).toContain("Pages API unavailable");
     expect(html).not.toContain("No pages configured");
+  });
+
+  it("keeps the pages table visible when models fail to load", () => {
+    queryMocks.useAdminPages.mockReturnValue({
+      data: [{
+        id: 1,
+        label: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        username: "lana",
+        displayName: "Lana",
+        connectionStatus: "active",
+        lastLightSyncAt: null,
+        lastFollowerSyncAt: null,
+        lastSyncError: null,
+        subscriberCount: buildPageMetric(12),
+        followerCount: buildPageMetric(34),
+        proxyUrl: null,
+        proxyHasAuth: false,
+        syncUx: buildSyncUx(),
+      }],
+      isLoading: false,
+    });
+    queryMocks.useAdminModels.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Models API unavailable"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=pages"]);
+
+    expect(html).toContain("Models API unavailable");
+    expect(html).toContain("lana");
+    expect(html).not.toContain("Models failed to load");
+  });
+
+  it("keeps the pages table visible when connections fail to load", () => {
+    queryMocks.useAdminPages.mockReturnValue({
+      data: [{
+        id: 1,
+        label: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        username: "lana",
+        displayName: "Lana",
+        connectionStatus: "active",
+        lastLightSyncAt: null,
+        lastFollowerSyncAt: null,
+        lastSyncError: null,
+        subscriberCount: buildPageMetric(12),
+        followerCount: buildPageMetric(34),
+        proxyUrl: null,
+        proxyHasAuth: false,
+        syncUx: buildSyncUx(),
+      }],
+      isLoading: false,
+    });
+    queryMocks.useAdminConnections.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Connections API unavailable"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=pages"]);
+
+    expect(html).toContain("Connections API unavailable");
+    expect(html).toContain("lana");
+    expect(html).not.toContain("Connections failed to load");
   });
 
   it("supports settings tab deep links for the sync workspace", () => {

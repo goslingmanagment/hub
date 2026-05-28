@@ -47,7 +47,7 @@ export function PagesTab() {
   const [deletePage, setDeletePage] = useState<AssignedPage | null>(null);
   const [credsConnection, setCredsConnection] = useState<CredentialsModalConnection | null>(null);
 
-  if ((pagesLoading && !pages) || (modelsLoading && !models) || (connectionsLoading && !connections)) {
+  if (pagesLoading && !pages) {
     return (
       <div className="py-12 text-center text-sm text-text-muted">Loading pages...</div>
     );
@@ -63,31 +63,19 @@ export function PagesTab() {
     );
   }
 
-  if (modelsError && !models) {
-    return (
-      <StatusPanel
-        title="Models failed to load"
-        description={modelsErrorValue instanceof Error ? modelsErrorValue.message : "The models catalog could not be fetched."}
-        tone="error"
-      />
-    );
-  }
-
-  if (connectionsError && !connections) {
-    return (
-      <StatusPanel
-        title="Connections failed to load"
-        description={connectionsErrorValue instanceof Error ? connectionsErrorValue.message : "The connections catalog could not be fetched."}
-        tone="error"
-      />
-    );
-  }
-
   const items = pages ?? [];
   const modelList = models ?? [];
   const connectionList = connections ?? [];
+  const modelsUnavailable = (modelsLoading && !models) || (modelsError && !models);
+  const connectionsUnavailable = (connectionsLoading && !connections) || (connectionsError && !connections);
+  const createDisabled = modelsUnavailable || modelList.length === 0;
 
   function openCredentials(page: AssignedPage) {
+    if (connectionsUnavailable) {
+      toast.error("Connections catalog is unavailable");
+      return;
+    }
+
     const conn = connectionList.find((c) => c.label === page.label);
     setCredsConnection({
       label: page.label,
@@ -105,18 +93,29 @@ export function PagesTab() {
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            disabled={modelList.length === 0}
+            disabled={createDisabled}
             className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
           >
             Create Page
           </button>
         </div>
 
-        {modelList.length === 0 && (
+        {(modelsUnavailable || connectionsUnavailable) && (
+          <div className="mb-3 rounded-lg border border-border bg-hover-alt px-3 py-2 text-sm text-text-muted">
+            {modelsUnavailable && (
+              <p>{modelsErrorValue instanceof Error ? modelsErrorValue.message : "Models catalog is unavailable; create and edit are disabled."}</p>
+            )}
+            {connectionsUnavailable && (
+              <p>{connectionsErrorValue instanceof Error ? connectionsErrorValue.message : "Connections catalog is unavailable; credentials are disabled."}</p>
+            )}
+          </div>
+        )}
+
+        {!modelsUnavailable && modelList.length === 0 && (
           <p className="mb-3 text-sm text-text-muted">Create a model first before adding pages.</p>
         )}
 
-        {items.length === 0 && modelList.length > 0 && (
+        {items.length === 0 && !modelsUnavailable && modelList.length > 0 && (
           <p className="text-sm text-text-muted">No pages configured.</p>
         )}
 
@@ -143,6 +142,8 @@ export function PagesTab() {
                     onEdit={() => setEditPage(page)}
                     onDelete={() => setDeletePage(page)}
                     onCredentials={() => openCredentials(page)}
+                    editDisabled={modelsUnavailable || modelList.length === 0}
+                    credentialsDisabled={connectionsUnavailable}
                   />
                 ))}
               </tbody>
@@ -154,7 +155,7 @@ export function PagesTab() {
       {showCreate && (
         <CreatePageModal models={modelList} onClose={() => setShowCreate(false)} />
       )}
-      {editPage && (
+      {editPage && !modelsUnavailable && modelList.length > 0 && (
         <EditPageModal page={editPage} models={modelList} onClose={() => setEditPage(null)} />
       )}
       {deletePage && (
@@ -172,11 +173,15 @@ function PageRow({
   onEdit,
   onDelete,
   onCredentials,
+  editDisabled,
+  credentialsDisabled,
 }: {
   page: AssignedPage;
   onEdit: () => void;
   onDelete: () => void;
   onCredentials: () => void;
+  editDisabled: boolean;
+  credentialsDisabled: boolean;
 }) {
   const verifyPage = useAdminVerifyPage(page.label);
 
@@ -213,7 +218,8 @@ function PageRow({
           <button
             type="button"
             onClick={onEdit}
-            className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
+            disabled={editDisabled}
+            className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover disabled:opacity-50"
           >
             Edit
           </button>
@@ -227,8 +233,9 @@ function PageRow({
           </button>
           <button
             type="button"
+            disabled={credentialsDisabled}
             onClick={onCredentials}
-            className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
+            className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover disabled:opacity-50"
           >
             Creds
           </button>
