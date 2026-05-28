@@ -348,7 +348,7 @@ describe("db write safety", () => {
     expect(proxyRows.rows[0]?.url).toBe("http://proxy.example");
     expect(proxyRows.rows[0]?.has_encrypted_auth).toBe(true);
     expect(verificationContext).not.toBeNull();
-    const verification = verificationContext as Record<string, unknown>;
+    const verification = verificationContext as unknown as Record<string, unknown>;
     expect(verification).toMatchObject({
       egressKey: "http://proxy.example:80",
     });
