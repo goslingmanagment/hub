@@ -729,6 +729,59 @@ async function lockPageSyncStateForRequest(
   };
 }
 
+async function repairLegacyLightTrustedPageSyncStates(
+  db: Database,
+  input: {
+    pageId?: number;
+    now: Date;
+  },
+) {
+  const pageClause = input.pageId === undefined
+    ? sql`true`
+    : sql`st.page_id = ${input.pageId}`;
+
+  await db.execute(sql`
+    update ${pageSyncStates} st
+    set status = 'pending'::page_sync_status,
+        request_seq = 1,
+        request_source = 'recovery'::sync_request_source,
+        request_payload = '{}'::jsonb,
+        requested_at = ${input.now},
+        enqueued_at = null,
+        started_at = null,
+        progressed_at = null,
+        finished_at = null,
+        succeeded_at = null,
+        failed_at = null,
+        retry_kind = null,
+        retry_at = null,
+        blocker_kind = null,
+        blocker_code = null,
+        blocker_message = null,
+        blocked_at = null,
+        phase = null,
+        progress = '{}'::jsonb,
+        lease_owner = null,
+        lease_token = null,
+        lease_heartbeat_at = null,
+        lease_expires_at = null,
+        consecutive_failures = 0,
+        last_error_code = null,
+        last_error_summary = null,
+        updated_at = ${input.now}
+    from ${pages} p
+    where st.page_id = p.id
+      and ${pageClause}
+      and st.stream = any(ARRAY['transactions'::sync_stream, 'subscribers'::sync_stream])
+      and st.status = 'idle'
+      and st.request_seq = 0
+      and st.applied_seq = 0
+      and st.request_source is null
+      and st.requested_at is null
+      and st.succeeded_at is not null
+  `);
+}
+
 export async function ensurePageSyncStates(
   db: Database,
   input?: {
@@ -801,6 +854,11 @@ export async function ensurePageSyncStates(
   if (values.length > 0) {
     await db.insert(pageSyncStates).values(values).onConflictDoNothing();
   }
+
+  await repairLegacyLightTrustedPageSyncStates(db, {
+    pageId: input?.pageId,
+    now,
+  });
 
   const refreshedRows = await listPageSyncStates(
     db,
