@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   acquirePageSyncLease,
+  blockPageSync,
   completePageSync,
   createFanslyPage,
   createModel,
@@ -444,6 +445,84 @@ describe("page sync lease fencing", () => {
         leaseToken: null,
         retryKind: null,
         retryAt: null,
+        consecutiveFailures: 0,
+        lastErrorCode: null,
+      });
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("keeps newer manual requests pending when an older lease blocks", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "block-request-model",
+        name: "Block Request Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "block-request-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["followers"],
+        source: "manual",
+        now,
+      });
+
+      const lease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "worker-1",
+        leaseToken: "lease-1",
+        leaseTtlMs: 60_000,
+        now,
+      });
+      if (!lease) {
+        throw new Error("Expected to acquire a page sync lease");
+      }
+      const leasedSeq = lease.leasedSeq ?? lease.requestSeq;
+      const nextRequestSeq = lease.requestSeq + 1;
+
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["followers"],
+        source: "manual",
+        now: new Date(now.getTime() + 1_000),
+      });
+
+      await blockPageSync(testDb.db, {
+        pageId: page.id,
+        stream: "followers",
+        requestSeq: leasedSeq,
+        leaseToken: lease.leaseToken ?? "",
+        blockerKind: "manual_action_required",
+        blockerCode: "upstream_blocked",
+        blockerMessage: "Upstream blocked",
+        errorCode: "http_403",
+        errorSummary: "Upstream blocked",
+        now: new Date(now.getTime() + 2_000),
+      });
+
+      expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({
+        status: "pending",
+        requestSeq: nextRequestSeq,
+        appliedSeq: lease.appliedSeq,
+        leasedSeq: null,
+        leaseToken: null,
+        blockerKind: null,
+        blockerCode: null,
         consecutiveFailures: 0,
         lastErrorCode: null,
       });

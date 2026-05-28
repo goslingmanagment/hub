@@ -1543,23 +1543,26 @@ export async function blockPageSync(
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
   const result = await db.execute(sql`
     update ${pageSyncStates}
-    set status = 'blocked',
+    set status = case
+                   when request_seq > ${input.requestSeq} then 'pending'::page_sync_status
+                   else 'blocked'::page_sync_status
+                 end,
         leased_seq = null,
         progressed_at = coalesce(${input.progressedAt ?? null}, progressed_at),
         finished_at = ${now},
-        failed_at = ${now},
+        failed_at = case when request_seq > ${input.requestSeq} then failed_at else ${now} end,
         retry_kind = null,
         retry_at = null,
-        blocker_kind = ${input.blockerKind},
-        blocker_code = ${input.blockerCode},
-        blocker_message = ${input.blockerMessage},
-        blocked_at = coalesce(blocked_at, ${now}),
+        blocker_kind = case when request_seq > ${input.requestSeq} then null else ${input.blockerKind} end,
+        blocker_code = case when request_seq > ${input.requestSeq} then null else ${input.blockerCode} end,
+        blocker_message = case when request_seq > ${input.requestSeq} then null else ${input.blockerMessage} end,
+        blocked_at = case when request_seq > ${input.requestSeq} then null else coalesce(blocked_at, ${now}) end,
         phase = ${input.phase ?? null},
         work_class = ${input.workClass ?? null},
         progress = ${input.progress ?? {}},
-        consecutive_failures = ${nextFailures},
-        last_error_code = ${input.errorCode},
-        last_error_summary = ${input.errorSummary},
+        consecutive_failures = case when request_seq > ${input.requestSeq} then 0 else ${nextFailures} end,
+        last_error_code = case when request_seq > ${input.requestSeq} then null else ${input.errorCode} end,
+        last_error_summary = case when request_seq > ${input.requestSeq} then null else ${input.errorSummary} end,
         lease_owner = null,
         lease_token = null,
         lease_heartbeat_at = null,
