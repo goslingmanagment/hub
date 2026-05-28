@@ -132,6 +132,7 @@ fi
 STACK_RECREATED=0
 ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback"
 ROLLBACK_IMAGE_AVAILABLE=0
+ROLLBACK_RELEASE_FILES_CAPTURED=0
 SCHEMA_BASELINE_CAPTURED=0
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
@@ -155,6 +156,16 @@ run_remote() {
   ssh "${SSH_ARGS[@]}" "$REMOTE" "bash -lc $(printf '%q' "$command")"
 }
 
+remote_release_file_args() {
+  local quoted=()
+  local file
+  for file in "${REMOTE_RELEASE_FILES[@]}"; do
+    quoted+=("$(printf '%q' "$file")")
+  done
+
+  printf '%s ' "${quoted[@]}"
+}
+
 dump_remote_diagnostics() {
   log "Remote verification failed; collecting docker compose status and recent logs"
   run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; ${REMOTE_COMPOSE} ps; printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 postgres api worker; exit 0" \
@@ -171,6 +182,29 @@ capture_remote_rollback_image() {
     ROLLBACK_IMAGE_AVAILABLE=0
     log "No previous remote image found for rollback"
   fi
+}
+
+capture_remote_release_files() {
+  local file_args
+  file_args="$(remote_release_file_args)"
+
+  if run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; tar -cf - ${file_args}" >"$ROLLBACK_RELEASE_ARCHIVE"; then
+    ROLLBACK_RELEASE_FILES_CAPTURED=1
+    log "Captured rollback release files"
+  else
+    ROLLBACK_RELEASE_FILES_CAPTURED=0
+    log "Unable to capture rollback release files"
+  fi
+}
+
+restore_remote_release_files() {
+  if [[ "${ROLLBACK_RELEASE_FILES_CAPTURED:-0}" != "1" ]]; then
+    log "Rollback skipped; release file baseline was not captured"
+    return 1
+  fi
+
+  ssh "${SSH_ARGS[@]}" "$REMOTE" "mkdir -p ${REMOTE_APP_DIR_ESCAPED} && tar -xf - -C ${REMOTE_APP_DIR_ESCAPED}" \
+    <"$ROLLBACK_RELEASE_ARCHIVE"
 }
 
 read_remote_env_value() {
@@ -206,6 +240,11 @@ rollback_remote_stack() {
   fi
 
   log "Rolling back remote stack to ${ROLLBACK_IMAGE_TAG}"
+  if ! restore_remote_release_files; then
+    log "Automatic rollback cannot prove the previous image is compatible with the current release files"
+    return 0
+  fi
+
   run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; docker tag $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$IMAGE_TAG"); ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build" \
     || {
       log "Rollback command failed"
@@ -307,10 +346,12 @@ SYNC_FILE="${TEMP_DIR}/sync.json"
 DASHBOARD_FILE="${TEMP_DIR}/dashboard.html"
 SCHEMA_BEFORE_FILE="${TEMP_DIR}/schema-before.txt"
 SCHEMA_AFTER_FILE="${TEMP_DIR}/schema-after.txt"
+ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"
 
 log "Validating remote Docker access"
 run_remote "set -euo pipefail; docker version >/dev/null"
 capture_remote_rollback_image
+capture_remote_release_files
 
 log "Building ${IMAGE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
 docker build --platform="${BUILD_PLATFORM}" -t "$IMAGE_TAG" "$ROOT_DIR"

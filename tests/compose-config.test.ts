@@ -105,4 +105,17 @@ describe("compose config", () => {
     expect(composeUpIndex).toBeGreaterThan(stackMarkedIndex);
     expect(failIndex).toBeGreaterThan(composeUpIndex);
   });
+
+  it("deploy-production.sh restores captured release files before rollback recreate", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const rollback = getShellFunction(text, "rollback_remote_stack");
+
+    expect(text).toContain("capture_remote_release_files");
+    expect(text).toContain("ROLLBACK_RELEASE_ARCHIVE=");
+    expect(text).toContain("ROLLBACK_RELEASE_FILES_CAPTURED=1");
+    expect(rollback).toContain("restore_remote_release_files");
+    expect(rollback.indexOf("restore_remote_release_files")).toBeLessThan(
+      rollback.indexOf("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build"),
+    );
+  });
 });
