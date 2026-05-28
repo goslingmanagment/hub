@@ -67,8 +67,12 @@ export function PagesTab() {
   const items = pages ?? [];
   const modelList = models ?? [];
   const connectionList = connections ?? [];
-  const modelsUnavailable = (modelsLoading && !models) || (modelsError && !models);
-  const connectionsUnavailable = (connectionsLoading && !connections) || (connectionsError && !connections);
+  const modelsDependencyLoading = modelsLoading && !models;
+  const modelsDependencyError = modelsError && !models;
+  const connectionsDependencyLoading = connectionsLoading && !connections;
+  const connectionsDependencyError = connectionsError && !connections;
+  const modelsUnavailable = modelsDependencyLoading || modelsDependencyError;
+  const connectionsUnavailable = connectionsDependencyLoading || connectionsDependencyError;
   const createDisabled = modelsUnavailable || modelList.length === 0;
 
   function openCredentials(page: AssignedPage) {
@@ -113,10 +117,16 @@ export function PagesTab() {
 
         {(modelsUnavailable || connectionsUnavailable) && (
           <div className="mb-3 rounded-lg border border-border bg-hover-alt px-3 py-2 text-sm text-text-muted">
-            {modelsUnavailable && (
+            {modelsDependencyLoading && (
+              <p>Loading models catalog; create and edit are temporarily disabled.</p>
+            )}
+            {modelsDependencyError && (
               <p>{modelsErrorValue instanceof Error ? modelsErrorValue.message : "Models catalog is unavailable; create and edit are disabled."}</p>
             )}
-            {connectionsUnavailable && (
+            {connectionsDependencyLoading && (
+              <p>Loading connections catalog; credentials are temporarily disabled.</p>
+            )}
+            {connectionsDependencyError && (
               <p>{connectionsErrorValue instanceof Error ? connectionsErrorValue.message : "Connections catalog is unavailable; credentials are disabled."}</p>
             )}
           </div>

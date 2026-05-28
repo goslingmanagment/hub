@@ -143,10 +143,15 @@ export function SyncPageList({
 
   if (pages.length === 0) {
     return (
-      <EmptyState
-        title="No pages configured"
-        description="Add a page to start syncing."
-      />
+      <div className="space-y-3">
+        {isError && data && (
+          <StaleDataNotice error={error} />
+        )}
+        <EmptyState
+          title="No pages configured"
+          description="Add a page to start syncing."
+        />
+      </div>
     );
   }
 

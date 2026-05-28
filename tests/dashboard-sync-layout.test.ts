@@ -506,6 +506,8 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=models"]);
 
+    expect(html).toContain("role=\"status\"");
+    expect(html).toContain("aria-live=\"polite\"");
     expect(html).toContain("Showing cached data");
     expect(html).toContain("Models API timeout");
     expect(html).toContain("Lana");
@@ -599,6 +601,41 @@ describe("dashboard sync layout", () => {
     expect(html).not.toContain("Connections failed to load");
   });
 
+  it("uses loading copy for pending page dependencies", () => {
+    queryMocks.useAdminPages.mockReturnValue({
+      data: [{
+        id: 1,
+        label: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        username: "lana",
+        displayName: "Lana",
+        connectionStatus: "active",
+        lastLightSyncAt: null,
+        lastFollowerSyncAt: null,
+        lastSyncError: null,
+        subscriberCount: buildPageMetric(12),
+        followerCount: buildPageMetric(34),
+        proxyUrl: null,
+        proxyHasAuth: false,
+        syncUx: buildSyncUx(),
+      }],
+      isLoading: false,
+    });
+    queryMocks.useAdminModels.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=pages"]);
+
+    expect(html).toContain("Loading models catalog");
+    expect(html).toContain("lana");
+    expect(html).not.toContain("Models catalog is unavailable");
+  });
+
   it("supports settings tab deep links for the sync workspace", () => {
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
@@ -635,6 +672,26 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Showing cached data");
     expect(html).toContain("Sync overview timeout");
     expect(html).toContain("Financials");
+    expect(html).not.toContain("Sync status failed to load");
+  });
+
+  it("shows stale sync overview warnings for cached empty page lists", () => {
+    queryMocks.useSyncOverview.mockReturnValue({
+      data: {
+        generatedAt: "2026-03-24T12:00:00.000Z",
+        diagnosis: null,
+        pages: [],
+      },
+      isLoading: false,
+      isError: true,
+      error: new Error("Sync overview timeout"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
+
+    expect(html).toContain("Showing cached data");
+    expect(html).toContain("Sync overview timeout");
+    expect(html).toContain("No pages configured");
     expect(html).not.toContain("Sync status failed to load");
   });
 
