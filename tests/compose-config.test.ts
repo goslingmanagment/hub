@@ -85,10 +85,13 @@ describe("compose config", () => {
     const rollback = getShellFunction(text, "rollback_remote_stack");
 
     expect(schemaCapture).toContain("set -euo pipefail");
-    expect(schemaCapture).toContain("pg_advisory_lock(31415, 27182)");
-    expect(schemaCapture).toContain("pg_advisory_unlock(31415, 27182)");
+    expect(schemaCapture).toContain("BEGIN;");
+    expect(schemaCapture).toContain("pg_advisory_xact_lock(31415, 27182)");
     expect(schemaCapture).toContain("deploy_schema_migrations");
+    expect(schemaCapture).toContain("EXECUTE \\$q\\$insert into deploy_schema_migrations select id from schema_migrations order by id\\$q\\$");
+    expect(schemaCapture).toContain("COMMIT;");
     expect(schemaCapture).toContain("to_regclass");
+    expect(schemaCapture).not.toContain("INSERT INTO deploy_schema_migrations EXECUTE");
     expect(schemaCapture).not.toContain("$$public$$");
     expect(schemaCapture).not.toContain("$$schema_migrations$$");
     expect(schemaCapture).not.toContain("|| true");

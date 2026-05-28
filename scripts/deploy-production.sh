@@ -333,21 +333,18 @@ capture_remote_schema_migrations() {
   run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
 export PGPASSWORD=\"\$POSTGRES_PASSWORD\"
 psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -v ON_ERROR_STOP=1 -Atq <<'\''SQL'\''
+BEGIN;
 DO \$deploy_schema_capture\$
 BEGIN
-  PERFORM pg_advisory_lock(31415, 27182);
+  PERFORM pg_advisory_xact_lock(31415, 27182);
   CREATE TEMP TABLE deploy_schema_migrations(id text) ON COMMIT DROP;
   IF to_regclass(\$q\$public.schema_migrations\$q\$) IS NOT NULL THEN
-    INSERT INTO deploy_schema_migrations EXECUTE \$q\$select id from schema_migrations order by id\$q\$;
+    EXECUTE \$q\$insert into deploy_schema_migrations select id from schema_migrations order by id\$q\$;
   END IF;
 END
 \$deploy_schema_capture\$;
 SELECT id FROM deploy_schema_migrations ORDER BY id;
-DO \$deploy_schema_capture\$
-BEGIN
-  PERFORM pg_advisory_unlock(31415, 27182);
-END
-\$deploy_schema_capture\$;
+COMMIT;
 SQL'" >"$output_file"
 }
 
