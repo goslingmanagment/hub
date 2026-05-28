@@ -2,10 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   acquirePageSyncLease,
+  computePageSyncSlotOffsetSeconds,
   heartbeatPageSyncLease,
   listPageSyncStates,
   listRunnablePageSync,
   normalizePageSyncRequestStreams,
+  requestPageSync,
+  SYNC_STREAM_POLICY,
+  type SyncStream,
 } from "../packages/db/src/repositories/page-sync.ts";
 import { sql, type SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
@@ -15,6 +19,49 @@ const DIALECT = new PgDialect();
 
 function renderSql(query: SQL) {
   return DIALECT.sqlToQuery(query).sql;
+}
+
+function buildPageSyncStateRow(pageId: number, stream: SyncStream, now: Date) {
+  const policy = SYNC_STREAM_POLICY[stream];
+
+  return {
+    pageId,
+    stream,
+    status: "idle",
+    requestSeq: 0,
+    leasedSeq: null,
+    appliedSeq: 1,
+    requestSource: null,
+    requestPayload: {},
+    cadenceSeconds: policy.cadenceSeconds,
+    slotOffsetSeconds: computePageSyncSlotOffsetSeconds(pageId, stream),
+    lastScheduledSlot: 0,
+    requestedAt: null,
+    enqueuedAt: null,
+    startedAt: null,
+    progressedAt: null,
+    finishedAt: now,
+    succeededAt: now,
+    failedAt: null,
+    retryKind: null,
+    retryAt: null,
+    blockerKind: null,
+    blockerCode: null,
+    blockerMessage: null,
+    blockedAt: null,
+    phase: null,
+    workClass: policy.defaultWorkClass,
+    progress: {},
+    leaseOwner: null,
+    leaseToken: null,
+    leaseHeartbeatAt: null,
+    leaseExpiresAt: null,
+    consecutiveFailures: 0,
+    lastErrorCode: null,
+    lastErrorSummary: null,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 describe("page-sync repository schema alignment", () => {
@@ -66,6 +113,82 @@ describe("page-sync repository schema alignment", () => {
       "transactions",
       "dm_conversations",
     ])).toEqual([
+      "light",
+      "transactions",
+      "dm_conversations",
+      "dm_messages",
+    ]);
+  });
+
+  it("requestPageSync takes row locks in normalized stream order", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    const pageId = 55;
+    const existingRows = [
+      "light",
+      "transactions",
+      "top_spenders",
+      "subscribers",
+      "followers",
+      "followers_reconcile",
+      "dm_conversations",
+      "dm_messages",
+    ].map((stream) => buildPageSyncStateRow(pageId, stream as SyncStream, now));
+    const lockedStreams: unknown[] = [];
+    const execute = vi.fn(async (query: SQL) => {
+      const rendered = DIALECT.sqlToQuery(query).sql;
+      const params = DIALECT.sqlToQuery(query).params;
+
+      if (rendered.includes("for update")) {
+        lockedStreams.push(params[1]);
+        return {
+          rows: [{
+            requestSeq: 0,
+            status: "idle",
+          }],
+        };
+      }
+
+      if (rendered.includes('from "pages" p') && rendered.includes("last_light_sync_at")) {
+        return {
+          rows: [{
+            id: pageId,
+            platform: "fansly",
+            lastLightSyncAt: now,
+            lastFollowerSyncAt: now,
+            followerCount: 0,
+            activeFollowerCount: 0,
+          }],
+        };
+      }
+
+      if (rendered.includes('from "page_sync_states"')) {
+        return { rows: existingRows };
+      }
+
+      return { rows: [] };
+    });
+    const insert = vi.fn();
+    const db = {
+      execute,
+      insert,
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({ execute })),
+    } as never;
+
+    const result = await requestPageSync(db, {
+      pageId,
+      streams: ["dm_messages", "transactions", "light", "transactions", "dm_conversations"],
+      source: "manual",
+      now,
+    });
+
+    expect(insert).not.toHaveBeenCalled();
+    expect(result.map((row) => row.stream)).toEqual([
+      "light",
+      "transactions",
+      "dm_conversations",
+      "dm_messages",
+    ]);
+    expect(lockedStreams).toEqual([
       "light",
       "transactions",
       "dm_conversations",
