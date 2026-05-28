@@ -15,6 +15,7 @@ import {
   listApiKeys,
   listUserPageAssignments,
   listUsers,
+  lockUserForApiKeyRotation,
   revokeApiKeysByIds,
   revokeApiKeysForUser,
   revokeAuthSessionsForUser,
@@ -387,6 +388,7 @@ export async function issueChatterApiKey(
   const tokenDigest = sha256Hex(rawKey);
   await app.db.transaction(async (tx) => {
     const dbTx = tx as unknown as typeof app.db;
+    await lockUserForApiKeyRotation(dbTx, user.id);
     if (page) {
       await assignUserToPage(dbTx, user.id, page.id);
     }

@@ -178,6 +178,15 @@ export async function findActiveApiKeysForUser(db: Database, userId: number) {
   });
 }
 
+export async function lockUserForApiKeyRotation(db: Database, userId: number) {
+  await db.execute(sql`
+    select id
+    from ${users}
+    where id = ${userId}
+    for update
+  `);
+}
+
 export async function revokeApiKeysForUser(
   db: Database,
   userId: number,
