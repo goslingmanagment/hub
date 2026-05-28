@@ -456,6 +456,36 @@ describe("dashboard sync layout", () => {
     expect(html).not.toContain("Update Credentials");
   });
 
+  it("shows an explicit sync overview load error", () => {
+    queryMocks.useSyncOverview.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Sync API unavailable"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
+
+    expect(html).toContain("Sync status failed to load");
+    expect(html).toContain("Sync API unavailable");
+    expect(html).not.toContain("No pages configured");
+  });
+
+  it("shows an explicit sync detail load error instead of page not found", () => {
+    queryMocks.usePageSyncBlocks.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Details API unavailable"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync&page=lana"]);
+
+    expect(html).toContain("Sync page failed to load");
+    expect(html).toContain("Details API unavailable");
+    expect(html).not.toContain("Page not found");
+  });
+
   it("shows overall and page-level worker diagnostics on the sync overview", () => {
     const overview = buildSyncOverview();
     overview.diagnosis = buildSyncDiagnosis();

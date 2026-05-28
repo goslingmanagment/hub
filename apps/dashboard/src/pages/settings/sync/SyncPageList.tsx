@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { useSyncOverview } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { SyncBlockRow } from "./SyncBlockRow.js";
 import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
 import {
@@ -121,10 +122,20 @@ export function SyncPageList({
 }: {
   onSelectPage: (pageLabel: string) => void;
 }) {
-  const { data, isLoading } = useSyncOverview();
+  const { data, isLoading, isError, error } = useSyncOverview();
 
   if (isLoading && !data) {
     return <p className="text-sm text-text-muted">Loading sync status...</p>;
+  }
+
+  if (isError && !data) {
+    return (
+      <StatusPanel
+        title="Sync status failed to load"
+        description={error instanceof Error ? error.message : "The sync overview could not be fetched."}
+        tone="error"
+      />
+    );
   }
 
   const pages = data?.pages ?? [];

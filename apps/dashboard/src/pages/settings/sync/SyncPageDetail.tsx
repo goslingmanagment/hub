@@ -1,6 +1,7 @@
 import type { SyncBlockStatus, SyncBlocksPage } from "@agency_hub_core/contracts";
 import { usePageSyncBlocks } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatRelativeTime } from "@/lib/format";
 import { SyncBlockBadge } from "./SyncBlockRow.js";
 import { SyncBlockActions } from "./SyncBlockActions.js";
@@ -290,7 +291,7 @@ export function SyncPageDetail({
   pageLabel: string;
   onBack: () => void;
 }) {
-  const { data, isLoading } = usePageSyncBlocks(pageLabel);
+  const { data, isLoading, isError, error } = usePageSyncBlocks(pageLabel);
 
   if (isLoading && !data) {
     return (
@@ -303,6 +304,25 @@ export function SyncPageDetail({
           &larr; Back to overview
         </button>
         <p className="text-sm text-text-muted">Loading page details...</p>
+      </div>
+    );
+  }
+
+  if (isError && !data) {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-xs text-text-muted hover:text-text-secondary transition-colors mb-3"
+        >
+          &larr; Back to overview
+        </button>
+        <StatusPanel
+          title="Sync page failed to load"
+          description={error instanceof Error ? error.message : "The page sync details could not be fetched."}
+          tone="error"
+        />
       </div>
     );
   }
