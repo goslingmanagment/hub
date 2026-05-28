@@ -38,6 +38,11 @@ const runtimeExternal = [
   "zod",
   "zod-to-json-schema",
 ];
+const bundledPackageOptions = { external: [] };
+const nodeBundledPackageOptions = {
+  ...bundledPackageOptions,
+  banner: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
+};
 
 async function cleanDist(relativePath) {
   await rm(path.join(workspaceRoot, relativePath), {
@@ -64,6 +69,9 @@ async function buildPackage(packageDir, entryPoints, options = {}) {
 
   for (const externalPackage of options.external ?? runtimeExternal) {
     args.push(`--external:${externalPackage}`);
+  }
+  if (options.banner) {
+    args.push(`--banner:js=${options.banner}`);
   }
 
   const { stdout, stderr } = await execFileAsync(pnpmBin, [
@@ -93,25 +101,32 @@ await Promise.all([
 
 await buildPackage("packages/shared/dist", {
   browser: "packages/shared/src/browser.ts",
-  index: "packages/shared/src/index.ts",
+}, {
+  ...bundledPackageOptions,
+  platform: "browser",
+  target: "es2022",
 });
+
+await buildPackage("packages/shared/dist", {
+  index: "packages/shared/src/index.ts",
+}, nodeBundledPackageOptions);
 
 await buildPackage("packages/contracts/dist", {
   index: "packages/contracts/src/index.ts",
-});
+}, nodeBundledPackageOptions);
 
 await buildPackage("packages/fansly/dist", {
   index: "packages/fansly/src/index.ts",
-});
+}, nodeBundledPackageOptions);
 
 await buildPackage("packages/onlyfans/dist", {
   index: "packages/onlyfans/src/index.ts",
-});
+}, nodeBundledPackageOptions);
 
 await buildPackage("packages/db/dist", {
   index: "packages/db/src/index.ts",
   migrate: "packages/db/src/migrate.ts",
-});
+}, nodeBundledPackageOptions);
 
 await buildPackage("apps/runtime/dist", {
   api: "apps/runtime/src/api.ts",
