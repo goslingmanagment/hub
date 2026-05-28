@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ConnectionItem } from "@agency_hub_core/contracts";
+import { getProxyStringError } from "@agency_hub_core/shared";
 import { useAdminUpdateCredentials } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { toast } from "sonner";
@@ -26,6 +27,7 @@ export function CredentialsModal({
   });
 
   const hadStoredProxy = connection.proxyUrl != null;
+  const proxyError = getProxyStringError(values.proxyRaw);
 
   const title = `Update ${connection.label} credentials`;
 
@@ -73,7 +75,7 @@ export function CredentialsModal({
         </button>
         <button
           type="button"
-          disabled={updateCredentials.isPending}
+          disabled={updateCredentials.isPending || Boolean(proxyError)}
           onClick={handleSubmit}
           className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
         >

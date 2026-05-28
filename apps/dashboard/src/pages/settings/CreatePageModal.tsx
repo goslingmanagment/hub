@@ -4,6 +4,7 @@ import type {
   ModelListItem,
   VerifyCredentialsResponse,
 } from "@agency_hub_core/contracts";
+import { getProxyStringError } from "@agency_hub_core/shared";
 import { useAdminCreatePage, useAdminVerifyCredentials } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Field } from "@/components/shared/Field";
@@ -74,17 +75,16 @@ export function CreatePageModal({
   }
 
   async function handleCreate() {
-    const credBody = buildCredentialsBody({
-      platform,
-      values: credentials,
-    });
-    const body: CreatePageBody = {
-      ...credBody,
-      modelSlug,
-      label: label.trim(),
-    } as CreatePageBody;
-
     try {
+      const credBody = buildCredentialsBody({
+        platform,
+        values: credentials,
+      });
+      const body: CreatePageBody = {
+        ...credBody,
+        modelSlug,
+        label: label.trim(),
+      } as CreatePageBody;
       const result = await createPage.mutateAsync(body);
       if (result.syncQueued) {
         toast.success("Page created — initial sync queued");
@@ -97,12 +97,16 @@ export function CreatePageModal({
     }
   }
 
-  const canVerify =
-    platform === "fansly"
+  const proxyError = getProxyStringError(credentials.proxyRaw);
+  const hasRequiredCredentials = platform === "fansly"
       ? credentials.authorization.trim().length > 0
       : credentials.onlyFansToken.trim().length > 0 && credentials.onlyFansUsername.trim().length > 0;
+  const canVerify = !proxyError && hasRequiredCredentials;
 
-  const canCreate = verifyState === "verified" && label.trim().length > 0 && modelSlug.length > 0;
+  const canCreate = verifyState === "verified" &&
+    !proxyError &&
+    label.trim().length > 0 &&
+    modelSlug.length > 0;
 
   return (
     <ModalShell title="Create Page" onClose={onClose}>

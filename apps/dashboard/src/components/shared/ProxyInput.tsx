@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { formatProxyPreview, buildProxyConfig } from "@agency_hub_core/shared";
+import { formatProxyPreview, buildProxyConfig, getProxyStringError } from "@agency_hub_core/shared";
 import { useAdminTestProxy } from "@/api/queries";
 import { Field } from "./Field.js";
 
@@ -24,6 +24,7 @@ export function ProxyInput({
 
   const preview = formatProxyPreview(value);
   const proxyConfig = buildProxyConfig(value);
+  const proxyError = getProxyStringError(value);
 
   async function handleTest() {
     if (!proxyConfig) return;
@@ -49,7 +50,7 @@ export function ProxyInput({
           />
           <button
             type="button"
-            disabled={!proxyConfig || testProxy.isPending}
+            disabled={!proxyConfig || Boolean(proxyError) || testProxy.isPending}
             onClick={handleTest}
             className="shrink-0 rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
           >
@@ -64,6 +65,11 @@ export function ProxyInput({
           {initialStoredProxy?.hasAuth && value === initialStoredProxy.url && (
             <span> &middot; stored auth will be preserved</span>
           )}
+        </div>
+      )}
+      {proxyError && (
+        <div className="px-1 text-xs text-danger">
+          {proxyError}
         </div>
       )}
 

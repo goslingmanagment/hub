@@ -73,6 +73,19 @@ export function formatProxyPreview(raw: string): string | null {
   }
 }
 
+export function getProxyStringError(raw: string): string | null {
+  if (raw.trim().length === 0) {
+    return null;
+  }
+
+  try {
+    parseProxyString(raw);
+    return null;
+  } catch {
+    return "Invalid proxy URL";
+  }
+}
+
 /**
  * Convenience wrapper for form submission.
  * Returns a ProxyConfig if the raw string is non-empty, otherwise `undefined`.

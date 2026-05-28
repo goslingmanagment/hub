@@ -1,4 +1,4 @@
-import { buildProxyConfig } from "@agency_hub_core/shared";
+import { buildProxyConfig, getProxyStringError } from "@agency_hub_core/shared";
 import type { UpdateCredentialsBody, VerifyCredentialsBody } from "@agency_hub_core/contracts";
 import { Field } from "@/components/shared/Field";
 import { ProxyInput } from "@/components/shared/ProxyInput";
@@ -118,6 +118,11 @@ export function buildCredentialsBody({
   initialStoredProxy?: { url: string; hasAuth: boolean } | null;
   requireCredentials?: boolean;
 }): VerifyCredentialsBody | UpdateCredentialsBody {
+  const proxyError = getProxyStringError(values.proxyRaw);
+  if (proxyError) {
+    throw new Error(proxyError);
+  }
+
   const proxyConfig = buildProxyConfig(values.proxyRaw);
   const preserveStoredProxyAuth = Boolean(
     initialStoredProxy?.hasAuth &&
