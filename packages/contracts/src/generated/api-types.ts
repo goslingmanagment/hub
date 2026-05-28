@@ -324,7 +324,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Log out the current session */
+        /** Clear the current session cookie if one is present */
         post: {
             parameters: {
                 query?: never;
