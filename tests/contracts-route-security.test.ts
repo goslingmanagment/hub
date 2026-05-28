@@ -15,6 +15,6 @@ describe("route schema security", () => {
   });
 
   it("documents logout as an idempotent cookie-clearing route", () => {
-    expect(routeSchemas.logout.security).toBeUndefined();
+    expect((routeSchemas.logout as { security?: unknown }).security).toBeUndefined();
   });
 });
