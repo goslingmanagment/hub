@@ -2,7 +2,15 @@ WITH parsed AS (
   SELECT id,
          lower(split_part(url, '://', 1)) AS protocol,
          regexp_replace(
-           split_part(regexp_replace(url, '^[^:]+://', ''), '/', 1),
+           split_part(
+             split_part(
+               split_part(regexp_replace(url, '^[^:]+://', ''), '/', 1),
+               '?',
+               1
+             ),
+             '#',
+             1
+           ),
            '^.*@',
            ''
          ) AS authority

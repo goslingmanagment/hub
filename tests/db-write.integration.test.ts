@@ -651,9 +651,17 @@ describe("db write safety", () => {
       slug: "proxy-migration-model",
       name: "Proxy Migration Model",
     });
-    const page = await createFanslyPage(testDb.db, {
+    const inlineAuthPage = await createFanslyPage(testDb.db, {
       modelId: model.id,
-      label: "proxy-migration-page",
+      label: "proxy-migration-inline-auth",
+    });
+    const queryPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-migration-query",
+    });
+    const fragmentPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-migration-fragment",
     });
 
     await testDb.pool.query(`
@@ -664,8 +672,18 @@ describe("db write safety", () => {
         encrypted_auth,
         key_version,
         rate_limit_scope_key
-      ) values ($1, 'proxy', $2, null, null, null)
-    `, [page.id, "socks5://legacy-user:legacy-pass@127.0.0.1"]);
+      ) values
+        ($1, 'proxy', $2, null, null, null),
+        ($3, 'proxy', $4, null, null, null),
+        ($5, 'proxy', $6, null, null, null)
+    `, [
+      inlineAuthPage.id,
+      "socks5://legacy-user:legacy-pass@127.0.0.1",
+      queryPage.id,
+      "socks5://legacy-user:legacy-pass@127.0.0.1?pool=a",
+      fragmentPage.id,
+      "socks5://legacy-user:legacy-pass@127.0.0.1#primary",
+    ]);
 
     const migration = await readFile(
       "packages/db/migrations/0013_backfill_egress_rate_limit_scope_key.sql",
@@ -674,14 +692,26 @@ describe("db write safety", () => {
     await testDb.pool.query(migration);
 
     const proxyRows = await testDb.pool.query(`
-      select rate_limit_scope_key
+      select url, rate_limit_scope_key
       from egress_endpoints
-      where platform_account_id = $1
-    `, [page.id]);
+      where platform_account_id = any($1::int[])
+      order by id
+    `, [[inlineAuthPage.id, queryPage.id, fragmentPage.id]]);
 
-    expect(proxyRows.rows[0]).toEqual({
-      rate_limit_scope_key: "socks5://127.0.0.1:1080",
-    });
+    expect(proxyRows.rows).toEqual([
+      {
+        url: "socks5://legacy-user:legacy-pass@127.0.0.1",
+        rate_limit_scope_key: "socks5://127.0.0.1:1080",
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@127.0.0.1?pool=a",
+        rate_limit_scope_key: "socks5://127.0.0.1:1080",
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@127.0.0.1#primary",
+        rate_limit_scope_key: "socks5://127.0.0.1:1080",
+      },
+    ]);
   });
 
   it("reads stored credentials and proxy auth using historical encryption keys", async (context) => {
