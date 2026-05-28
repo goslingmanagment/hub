@@ -2110,10 +2110,12 @@ export async function buildApiServer(appContext: AppContext) {
       } else {
         await refreshPageMetadata(appContext, pageContext, "light");
       }
+      const recoveredAt = new Date();
       await handleSuccessfulPageVerificationRecovery(appContext, {
         platformAccountId: pageContext.page.id,
         pageLabel: pageContext.page.label,
         platform: pageContext.platform,
+        recoveredAt,
       });
       return {
         verified: true,

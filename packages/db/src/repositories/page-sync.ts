@@ -1623,8 +1623,13 @@ export async function markPageSyncAuthBlocked(
 export async function clearPageSyncAuthBlock(
   db: Database,
   pageId: number,
-  now = new Date(),
+  input: Date | {
+    maxFailureAt?: Date;
+    now?: Date;
+  } = new Date(),
 ) {
+  const now = input instanceof Date ? input : input.now ?? new Date();
+  const maxFailureAt = input instanceof Date ? undefined : input.maxFailureAt;
   await db.execute(sql`
     update ${pageSyncStates}
     set status = case
@@ -1640,6 +1645,10 @@ export async function clearPageSyncAuthBlock(
         updated_at = ${now}
     where page_id = ${pageId}
       and blocker_kind = 'auth'
+      and (
+        ${maxFailureAt ?? null}::timestamptz is null or
+        coalesce(failed_at, blocked_at, updated_at) <= ${maxFailureAt ?? null}
+      )
   `);
 }
 

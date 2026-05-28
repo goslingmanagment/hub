@@ -1,4 +1,4 @@
-import { and, count, desc, eq, sql } from "drizzle-orm";
+import { and, count, desc, eq, lte, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { notificationIncidents, pages, telegramDeliveryAttempts } from "../schema.ts";
@@ -291,10 +291,19 @@ export async function resolveNotificationIncident(
   input: {
     incidentKey: string;
     metadata?: Record<string, unknown>;
+    maxLastSeenAt?: Date;
     now?: Date;
   },
 ): Promise<NotificationIncidentRow | null> {
   const now = input.now ?? new Date();
+  const clauses = [
+    eq(notificationIncidents.incidentKey, input.incidentKey),
+    eq(notificationIncidents.status, "open"),
+  ];
+  if (input.maxLastSeenAt) {
+    clauses.push(lte(notificationIncidents.lastSeenAt, input.maxLastSeenAt));
+  }
+
   const [resolved] = await db.update(notificationIncidents)
     .set({
       status: "resolved",
@@ -303,10 +312,7 @@ export async function resolveNotificationIncident(
       metadata: input.metadata ?? {},
       updatedAt: now,
     })
-    .where(and(
-      eq(notificationIncidents.incidentKey, input.incidentKey),
-      eq(notificationIncidents.status, "open"),
-    ))
+    .where(and(...clauses))
     .returning();
 
   return resolved ?? null;

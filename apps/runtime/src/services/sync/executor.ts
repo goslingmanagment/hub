@@ -407,6 +407,7 @@ export async function executeNextSyncPageChunk(
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
       }
 
+      const recoveredAt = new Date();
       await telemetry.finish("success", null, {
         chunkBudget: {
           requestCount: budget.totalRequests,
@@ -418,6 +419,7 @@ export async function executeNextSyncPageChunk(
         platformAccountId,
         pageLabel: pageContext.page.label,
         platform: pageContext.platform,
+        recoveredAt,
         stream: taskLease.stream,
       });
       const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
@@ -438,6 +440,7 @@ export async function executeNextSyncPageChunk(
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
     }
 
+    const recoveredAt = new Date();
     await telemetry.finish("partial", null, {
       yieldReason: result.yieldReason,
       chunkBudget: {
@@ -450,6 +453,7 @@ export async function executeNextSyncPageChunk(
       platformAccountId,
       pageLabel: pageContext.page.label,
       platform: pageContext.platform,
+      recoveredAt,
       stream: taskLease.stream,
     });
     const continuationPriority = await resolveContinuationPriority(app, platformAccountId);

@@ -149,12 +149,16 @@ async function resolveIncidentAndNotify(
     platformAccountId: number;
     pageLabel: string;
     platform: "fansly" | "onlyfans";
+    recoveredAt?: Date;
     stream?: SyncStream | null;
   },
 ) {
+  const recoveredAt = input.recoveredAt ?? new Date();
   try {
     const resolved = await resolveNotificationIncident(app.db, {
       incidentKey: incidentKey(input),
+      maxLastSeenAt: recoveredAt,
+      now: recoveredAt,
       metadata: {
         pageLabel: input.pageLabel,
         platform: input.platform,
@@ -267,20 +271,25 @@ export async function resolveSyncChunkRecoveryIncidents(
     platformAccountId: number;
     pageLabel: string;
     platform: "fansly" | "onlyfans";
+    recoveredAt?: Date;
     stream: SyncStream;
   },
 ) {
+  const recoveredAt = input.recoveredAt ?? new Date();
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "auth_blocked",
+    recoveredAt,
   });
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "proxy_failed",
+    recoveredAt,
   });
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "stream_failed_threshold",
+    recoveredAt,
   });
 }
 
@@ -290,10 +299,15 @@ export async function handleSuccessfulPageVerificationRecovery(
     platformAccountId: number;
     pageLabel: string;
     platform: "fansly" | "onlyfans";
+    recoveredAt?: Date;
   },
 ) {
+  const recoveredAt = input.recoveredAt ?? new Date();
   try {
-    await clearPageSyncAuthBlock(app.db, input.platformAccountId);
+    await clearPageSyncAuthBlock(app.db, input.platformAccountId, {
+      maxFailureAt: recoveredAt,
+      now: recoveredAt,
+    });
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,
@@ -304,9 +318,11 @@ export async function handleSuccessfulPageVerificationRecovery(
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "auth_blocked",
+    recoveredAt,
   });
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "proxy_failed",
+    recoveredAt,
   });
 }

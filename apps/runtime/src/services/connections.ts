@@ -328,10 +328,12 @@ export async function updatePageCredentials(
     }
   }
 
+  const recoveredAt = new Date();
   await handleSuccessfulPageVerificationRecovery(app, {
     platformAccountId: stored.page.id,
     pageLabel: stored.page.label,
     platform: stored.page.platform,
+    recoveredAt,
   });
 
   return { updated: true, verified: true };

@@ -14,6 +14,7 @@ import {
   ensurePageSyncStates,
   finishSyncRequestAttempt,
   getNotificationIncidentByKey,
+  getPageSyncState,
   insertSyncRequestAttempt,
   listNotificationIncidents,
   markPageSyncAuthBlocked,
@@ -651,5 +652,89 @@ describe("notification incidents integration", () => {
       }),
     ]));
     expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not clear newer page-level failures from stale verification recovery", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "stale-recovery-model",
+      name: "Stale Recovery Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "stale-recovery-page",
+    });
+    await ensurePageSyncStates(testDb.db, {
+      pageId: page.id,
+    });
+
+    const recoveredAt = new Date("2026-03-15T12:00:00.000Z");
+    const newerFailureAt = new Date("2026-03-15T12:00:01.000Z");
+
+    await markPageSyncAuthBlocked(testDb.db, {
+      pageId: page.id,
+      errorCode: "auth_blocked",
+      errorSummary: "new session failure",
+      now: newerFailureAt,
+    });
+    await openNotificationIncident(testDb.db, {
+      incidentKey: `auth_blocked:${page.id}`,
+      kind: "auth_blocked",
+      platformAccountId: page.id,
+      errorCode: "auth_blocked",
+      errorSummary: "new session failure",
+      metadata: {
+        pageLabel: page.label,
+        platform: "fansly",
+      },
+      now: newerFailureAt,
+    });
+    await openNotificationIncident(testDb.db, {
+      incidentKey: `proxy_failed:${page.id}`,
+      kind: "proxy_failed",
+      platformAccountId: page.id,
+      errorCode: "transport",
+      errorSummary: "new proxy failure",
+      metadata: {
+        pageLabel: page.label,
+        platform: "fansly",
+      },
+      now: newerFailureAt,
+    });
+
+    const app = createTestAppContext(testDb);
+    await handleSuccessfulPageVerificationRecovery(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      recoveredAt,
+    });
+
+    expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
+      status: "blocked",
+      blockerKind: "auth",
+      lastErrorSummary: "new session failure",
+    });
+
+    const incidents = await listNotificationIncidents(testDb.db, {
+      platformAccountId: page.id,
+    });
+    expect(incidents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "auth_blocked",
+        status: "open",
+        errorSummary: "new session failure",
+      }),
+      expect.objectContaining({
+        kind: "proxy_failed",
+        status: "open",
+        errorSummary: "new proxy failure",
+      }),
+    ]));
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 });

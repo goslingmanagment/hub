@@ -720,22 +720,26 @@ export function buildProgram() {
         });
         if (context.platform === "fansly") {
           const verified = await refreshPageMetadata(app, context, "light");
+          const recoveredAt = new Date();
           printPageEgressSummary(await egressSummaryPromise);
           await handleSuccessfulPageVerificationRecovery(app, {
             platformAccountId: context.page.id,
             pageLabel: context.page.label,
             platform: context.platform,
+            recoveredAt,
           });
           console.log(
             `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.id})`,
           );
         } else {
           const verified = await refreshPageMetadata(app, context, "light");
+          const recoveredAt = new Date();
           printPageEgressSummary(await egressSummaryPromise);
           await handleSuccessfulPageVerificationRecovery(app, {
             platformAccountId: context.page.id,
             pageLabel: context.page.label,
             platform: context.platform,
+            recoveredAt,
           });
           console.log(
             `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.platform_account_id})`,
