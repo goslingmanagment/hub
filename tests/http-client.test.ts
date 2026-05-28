@@ -341,6 +341,11 @@ describe("shared http client helpers", () => {
     expect(() => assertProxyTargetAllowed({ url: "http://127.0.0.1:8080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "socks5://localhost:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "http://192.168.1.10:8080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[::127.0.0.1]:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[::7f00:1]:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[::0a00:1]:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[::ac10:1]:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[::c0a8:101]:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "socks5://[::ffff:7f00:1]:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "socks5://[::ffff:0a00:1]:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "socks5://[::ffff:ac10:1]:1080" })).toThrow();
@@ -349,6 +354,7 @@ describe("shared http client helpers", () => {
     expect(() => assertProxyTargetAllowed({ url: "socks5://[fe90::1]:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "socks5://[febf::1]:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "socks5://[ff02::1]:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://[::0808:0808]:1080" })).not.toThrow();
     expect(() => assertProxyTargetAllowed({ url: "http://proxy.example:8080" })).not.toThrow();
   });
 

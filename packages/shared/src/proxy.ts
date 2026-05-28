@@ -187,14 +187,15 @@ function replaceDottedIpv4Tail(hostname: string) {
   return `${hostname.slice(0, lastColon)}:${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
 }
 
-function mappedIpv6ToIpv4(hostname: string) {
+function embeddedIpv6ToIpv4(hostname: string) {
   const groups = parseIpv6Groups(hostname);
   if (!groups) {
     return null;
   }
 
   const isMapped = groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff;
-  if (!isMapped) {
+  const isCompatible = groups.slice(0, 6).every((group) => group === 0);
+  if (!isMapped && !isCompatible) {
     return null;
   }
 
@@ -210,9 +211,9 @@ function mappedIpv6ToIpv4(hostname: string) {
 
 function isPrivateIpv6(hostname: string) {
   const normalized = hostname.toLowerCase();
-  const mappedIpv4 = mappedIpv6ToIpv4(normalized);
-  if (mappedIpv4) {
-    return isPrivateIpv4(mappedIpv4);
+  const embeddedIpv4 = embeddedIpv6ToIpv4(normalized);
+  if (embeddedIpv4) {
+    return isPrivateIpv4(embeddedIpv4);
   }
 
   const groups = parseIpv6Groups(normalized);
