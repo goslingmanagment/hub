@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
 
@@ -41,6 +42,9 @@ export function CredentialsTab() {
   return (
     <>
       <div className="space-y-3">
+        {isError && connections && (
+          <StaleDataNotice error={error} />
+        )}
         {items.length === 0 && (
           <p className="text-sm text-text-muted">No connections configured.</p>
         )}

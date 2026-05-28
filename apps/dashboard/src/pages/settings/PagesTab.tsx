@@ -10,6 +10,7 @@ import {
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
 import { toast } from "sonner";
 import { CreatePageModal } from "./CreatePageModal.js";
@@ -88,6 +89,16 @@ export function PagesTab() {
   return (
     <>
       <div>
+        {pagesError && pages && (
+          <StaleDataNotice error={pagesErrorValue} className="mb-3" />
+        )}
+        {modelsError && models && (
+          <StaleDataNotice title="Models refresh failed" error={modelsErrorValue} className="mb-3" />
+        )}
+        {connectionsError && connections && (
+          <StaleDataNotice title="Connections refresh failed" error={connectionsErrorValue} className="mb-3" />
+        )}
+
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-bold text-text-primary">Pages</h2>
           <button

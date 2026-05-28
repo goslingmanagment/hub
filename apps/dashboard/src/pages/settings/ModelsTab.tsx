@@ -3,6 +3,7 @@ import type { ModelListItem } from "@agency_hub_core/contracts";
 import { useAdminModels, useAdminDeleteModel } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { toast } from "sonner";
 import { CreateModelModal } from "./CreateModelModal.js";
 import { EditModelModal } from "./EditModelModal.js";
@@ -44,6 +45,10 @@ export function ModelsTab() {
             Create Model
           </button>
         </div>
+
+        {isError && models && (
+          <StaleDataNotice error={error} className="mb-3" />
+        )}
 
         {items.length === 0 && (
           <p className="text-sm text-text-muted">No models configured.</p>

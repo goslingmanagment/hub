@@ -496,6 +496,22 @@ describe("dashboard sync layout", () => {
     expect(html).not.toContain("No models configured");
   });
 
+  it("shows a stale-data warning when models refresh fails with cached data", () => {
+    queryMocks.useAdminModels.mockReturnValue({
+      data: [{ id: 1, slug: "lana", name: "Lana", pageCount: 1 }],
+      isLoading: false,
+      isError: true,
+      error: new Error("Models API timeout"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=models"]);
+
+    expect(html).toContain("Showing cached data");
+    expect(html).toContain("Models API timeout");
+    expect(html).toContain("Lana");
+    expect(html).not.toContain("Models failed to load");
+  });
+
   it("shows pages catalog load errors", () => {
     queryMocks.useAdminPages.mockReturnValue({
       data: undefined,
@@ -604,6 +620,22 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Sync status failed to load");
     expect(html).toContain("Sync API unavailable");
     expect(html).not.toContain("No pages configured");
+  });
+
+  it("shows a stale-data warning when sync overview refresh fails with cached data", () => {
+    queryMocks.useSyncOverview.mockReturnValue({
+      data: buildSyncOverview(),
+      isLoading: false,
+      isError: true,
+      error: new Error("Sync overview timeout"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
+
+    expect(html).toContain("Showing cached data");
+    expect(html).toContain("Sync overview timeout");
+    expect(html).toContain("Financials");
+    expect(html).not.toContain("Sync status failed to load");
   });
 
   it("shows an explicit sync detail load error instead of page not found", () => {

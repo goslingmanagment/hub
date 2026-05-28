@@ -4,6 +4,7 @@ import { useSyncOverview } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { SyncBlockRow } from "./SyncBlockRow.js";
 import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
 import {
@@ -151,6 +152,9 @@ export function SyncPageList({
 
   return (
     <div className="space-y-3">
+      {isError && data && (
+        <StaleDataNotice error={error} />
+      )}
       {data?.diagnosis && (
         <SyncDiagnosisNotice diagnosis={data.diagnosis} />
       )}

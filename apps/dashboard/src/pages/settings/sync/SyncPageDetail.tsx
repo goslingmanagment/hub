@@ -2,6 +2,7 @@ import type { SyncBlockStatus, SyncBlocksPage } from "@agency_hub_core/contracts
 import { usePageSyncBlocks } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
 import { SyncBlockBadge } from "./SyncBlockRow.js";
 import { SyncBlockActions } from "./SyncBlockActions.js";
@@ -349,6 +350,9 @@ export function SyncPageDetail({
     <div>
       <PageHeader page={page} onBack={onBack} />
       <div className="space-y-3">
+        {isError && data && (
+          <StaleDataNotice error={error} />
+        )}
         {page.diagnosis && (
           <SyncDiagnosisNotice diagnosis={page.diagnosis} />
         )}
