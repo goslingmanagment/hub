@@ -92,4 +92,17 @@ describe("compose config", () => {
     expect(rollback).toContain("schema migration baseline was not captured");
     expect(rollback).toContain("unable to capture current schema migration state");
   });
+
+  it("deploy-production.sh routes compose recreate failures through rollback handling", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const recreateIndex = text.indexOf("log \"Recreating the remote production stack\"");
+    const stackMarkedIndex = text.indexOf("STACK_RECREATED=1", recreateIndex);
+    const composeUpIndex = text.indexOf("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build", recreateIndex);
+    const failIndex = text.indexOf("fail \"docker compose failed while recreating the production stack\"", recreateIndex);
+
+    expect(recreateIndex).toBeGreaterThan(-1);
+    expect(stackMarkedIndex).toBeGreaterThan(recreateIndex);
+    expect(composeUpIndex).toBeGreaterThan(stackMarkedIndex);
+    expect(failIndex).toBeGreaterThan(composeUpIndex);
+  });
 });
