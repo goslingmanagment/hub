@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import {
+  buildProxyEgressKey,
   normalizeProxyConfig,
   decryptJsonWithKeyVersion,
   encryptJson,
@@ -134,6 +135,7 @@ export async function saveProxy(
     url: normalized.url,
     encryptedAuth,
     keyVersion: encryptedAuth ? app.config.encryptionKeyVersion : null,
+    rateLimitScopeKey: buildProxyEgressKey(normalized),
   });
 }
 

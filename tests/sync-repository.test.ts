@@ -475,7 +475,7 @@ describe("sync repository timestamp normalization", () => {
     const query = execute.mock.calls[0]?.[0];
     const sqlText = extractSqlText(query);
 
-    expect(sqlText).toContain('coalesce(, \'direct\') as "egressKey"');
+    expect(sqlText).toContain('coalesce(, , \'direct\') as "egressKey"');
     expect(sqlText).toContain('left join  on  = ');
     expect(sqlText).toContain('rl.egress_key as "egressKey"');
     expect(sqlText).toContain('group by rl.provider, rl.egress_key');

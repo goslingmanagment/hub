@@ -1,6 +1,6 @@
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 
-import type { Platform, ProxyConfig } from "@agency_hub_core/shared";
+import { buildProxyEgressKey, type Platform, type ProxyConfig } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import {
@@ -235,8 +235,11 @@ export async function storeProxyConfig(
     url: string;
     encryptedAuth: string | null;
     keyVersion: number | null;
+    rateLimitScopeKey?: string | null;
   },
 ) {
+  const rateLimitScopeKey = input.rateLimitScopeKey ?? buildProxyEgressKey({ url: input.url });
+
   const [proxy] = await db
     .insert(egressEndpoints)
     .values({
@@ -244,6 +247,7 @@ export async function storeProxyConfig(
       url: input.url,
       encryptedAuth: input.encryptedAuth,
       keyVersion: input.keyVersion,
+      rateLimitScopeKey,
     })
     .onConflictDoUpdate({
       target: egressEndpoints.platformAccountId,
@@ -251,6 +255,7 @@ export async function storeProxyConfig(
         url: input.url,
         encryptedAuth: input.encryptedAuth,
         keyVersion: input.keyVersion,
+        rateLimitScopeKey,
         updatedAt: new Date(),
       },
     })
