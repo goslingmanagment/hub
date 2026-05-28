@@ -1356,10 +1356,21 @@ async function seedSyncMonitorScenario(
     errorMessage: "Old rate limit",
   });
 
+  await testDb.pool.query(`
+    insert into egress_endpoints (
+      platform_account_id,
+      kind,
+      url,
+      encrypted_auth,
+      key_version,
+      rate_limit_scope_key
+    ) values ($1, 'proxy', 'socks5://proxy.example', null, null, 'socks5://proxy.example:1080')
+  `, [pageId]);
+
   await testDb.db.insert(syncRateLimits).values({
     provider: "fansly",
     scope: "global",
-    egressKey: "direct",
+    egressKey: "socks5://proxy.example:1080",
     minSpacingMs: 1_000,
     nextAvailableAt: retryAt,
   });
