@@ -2052,8 +2052,15 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     const { request: undiciRequest } = await import("undici");
-    const proxy = normalizeProxyConfig(request.body.proxy);
-    await assertAllowedProxyTarget(proxy);
+    let proxy: ReturnType<typeof normalizeProxyConfig>;
+    try {
+      proxy = normalizeProxyConfig(request.body.proxy);
+      await assertAllowedProxyTarget(proxy);
+    } catch (error) {
+      throw new BadRequestError(
+        `Proxy test failed: ${redactSensitiveText(error instanceof Error ? error.message : "Invalid proxy URL")}`,
+      );
+    }
     const dispatcher = createProxyRequestDispatcher(proxy);
     try {
       const { statusCode, body: responseBody } = await undiciRequest(

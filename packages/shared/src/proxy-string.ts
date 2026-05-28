@@ -2,6 +2,7 @@ import type { ProxyConfig } from "./types.ts";
 
 const PROTOCOL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 const DEFAULT_PROTOCOL = "socks5://";
+const SUPPORTED_PROXY_PROTOCOLS = new Set(["http:", "https:", "socks5:"]);
 
 /**
  * Parse a raw proxy string into a ProxyConfig.
@@ -32,6 +33,11 @@ export function parseProxyString(raw: string): ProxyConfig | null {
   }
 
   const parsed = new URL(urlString);
+  if (!SUPPORTED_PROXY_PROTOCOLS.has(parsed.protocol)) {
+    throw new Error(
+      `Unsupported proxy protocol "${parsed.protocol}". Expected http://, https://, or socks5://`,
+    );
+  }
 
   const username = parsed.username.length > 0
     ? decodeURIComponent(parsed.username)
@@ -81,7 +87,11 @@ export function getProxyStringError(raw: string): string | null {
   try {
     parseProxyString(raw);
     return null;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Unsupported proxy protocol")) {
+      return error.message;
+    }
+
     return "Invalid proxy URL";
   }
 }

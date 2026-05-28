@@ -29,6 +29,19 @@ describe("buildCredentialsBody", () => {
     })).toThrow("Invalid proxy URL");
   });
 
+  it("rejects unsupported proxy protocols before submission", () => {
+    for (const proxyRaw of ["ftp://proxy.example:21", "socks4://proxy.example:1080"]) {
+      expect(() => buildCredentialsBody({
+        platform: "fansly",
+        values: {
+          ...baseFanslyValues,
+          proxyRaw,
+        },
+        requireCredentials: false,
+      })).toThrow("Unsupported proxy protocol");
+    }
+  });
+
   it("still sends null when a stored proxy is intentionally cleared", () => {
     expect(buildCredentialsBody({
       platform: "fansly",

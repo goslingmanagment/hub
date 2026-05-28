@@ -11,6 +11,7 @@ import {
 import {
   encryptJson,
   normalizeProxyConfig,
+  redactSensitiveText,
   toMills,
   type FanslySessionBundle,
   type OnlyMonsterTokenBundle,
@@ -20,7 +21,7 @@ import {
 import type { OnlyMonsterAccount } from "@agency_hub_core/onlyfans";
 
 import type { AppContext } from "../bootstrap.ts";
-import { ConflictError, NotFoundError } from "./errors.ts";
+import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { buildFanslyMetadata } from "./fansly.ts";
 import { buildOnlyFansMetadata, findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
@@ -71,6 +72,16 @@ function rethrowPageIdentityConflict(error: unknown): never {
   throw error;
 }
 
+function normalizeProxyInput(proxy: ProxyConfig) {
+  try {
+    return normalizeProxyConfig(proxy);
+  } catch (error) {
+    throw new BadRequestError(
+      `Invalid proxy URL: ${redactSensitiveText(error instanceof Error ? error.message : "Invalid proxy URL")}`,
+    );
+  }
+}
+
 export async function onboardFanslyPage(
   app: FanslyOnboardingContext,
   input: {
@@ -85,7 +96,7 @@ export async function onboardFanslyPage(
     throw new NotFoundError(`Model "${input.modelSlug}" does not exist`);
   }
 
-  const proxy = input.proxy ? normalizeProxyConfig(input.proxy) : null;
+  const proxy = input.proxy ? normalizeProxyInput(input.proxy) : null;
   if (proxy) {
     await assertAllowedProxyTarget(proxy);
   }
@@ -150,7 +161,7 @@ export async function onboardOnlyFansPage(
     throw new NotFoundError(`Model "${input.modelSlug}" does not exist`);
   }
 
-  const proxy = input.proxy ? normalizeProxyConfig(input.proxy) : null;
+  const proxy = input.proxy ? normalizeProxyInput(input.proxy) : null;
   if (proxy) {
     await assertAllowedProxyTarget(proxy);
   }

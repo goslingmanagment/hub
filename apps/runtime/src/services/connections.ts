@@ -9,7 +9,9 @@ import {
   decryptJsonWithKeyVersion,
   encryptJson,
   normalizeProxyConfig,
+  redactSensitiveText,
   type StoredPlatformCredentialBundle,
+  type ProxyConfig,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -122,6 +124,16 @@ function classifyConnectionStatus(
   return "active";
 }
 
+function normalizeProxyInput(proxy: ProxyConfig) {
+  try {
+    return normalizeProxyConfig(proxy);
+  } catch (error) {
+    throw new BadRequestError(
+      `Invalid proxy URL: ${redactSensitiveText(error instanceof Error ? error.message : "Invalid proxy URL")}`,
+    );
+  }
+}
+
 export async function listConnectionStatuses(
   app: AppContext,
   input?: {
@@ -192,7 +204,7 @@ export async function updatePageCredentials(
 
   const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
   const hasExplicitProxyInput = body.proxy !== undefined;
-  const explicitProxy = body.proxy ? normalizeProxyConfig(body.proxy) : null;
+  const explicitProxy = body.proxy ? normalizeProxyInput(body.proxy) : null;
   if (explicitProxy) {
     await assertAllowedProxyTarget(explicitProxy);
   }
