@@ -139,10 +139,11 @@ fi
 
 STACK_RECREATED=0
 ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback"
+IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate"
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
 SCHEMA_BASELINE_CAPTURED=0
-ROLLBACK_ALLOW_UNVERIFIED_SCHEMA=0
+ROLLBACK_COMPOSE_RECREATE_FAILED=0
 ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0013_backfill_egress_rate_limit_scope_key.sql"
   "0014_repair_light_trusted_sync_states.sql"
@@ -275,14 +276,19 @@ rollback_remote_stack() {
   fi
 
   if ! capture_remote_schema_migrations "$SCHEMA_AFTER_FILE"; then
-    if [[ "${ROLLBACK_ALLOW_UNVERIFIED_SCHEMA:-0}" == "1" ]]; then
-      log "Unable to capture current schema migration state; continuing rollback because stack recreate failed before verification"
-    else
+    if [[ "${ROLLBACK_COMPOSE_RECREATE_FAILED:-0}" == "1" ]]; then
+      run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} up -d postgres" \
+        || log "Unable to start postgres for rollback schema verification"
+    fi
+
+    if ! capture_remote_schema_migrations "$SCHEMA_AFTER_FILE"; then
       log "Rollback skipped; unable to capture current schema migration state"
       log "Automatic rollback cannot prove the previous image is compatible with the current database"
       return 0
     fi
-  elif ! cmp -s "$SCHEMA_BEFORE_FILE" "$SCHEMA_AFTER_FILE"; then
+  fi
+
+  if ! cmp -s "$SCHEMA_BEFORE_FILE" "$SCHEMA_AFTER_FILE"; then
     if schema_migration_delta_allows_rollback; then
       log "Schema migrations changed only by rollback-compatible data migrations; continuing automatic rollback"
     else
@@ -406,15 +412,16 @@ run_remote "set -euo pipefail; docker version >/dev/null"
 capture_remote_rollback_image
 capture_remote_release_files
 
-log "Building ${IMAGE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
-docker build --platform="${BUILD_PLATFORM}" -t "$IMAGE_TAG" "$ROOT_DIR"
+log "Building ${IMAGE_CANDIDATE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
+docker build --platform="${BUILD_PLATFORM}" -t "$IMAGE_CANDIDATE_TAG" "$ROOT_DIR"
 
-log "Loading ${IMAGE_TAG} on ${REMOTE}"
-docker save "$IMAGE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
+log "Loading ${IMAGE_CANDIDATE_TAG} on ${REMOTE}"
+docker save "$IMAGE_CANDIDATE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
 
 log "Syncing release files to ${REMOTE}:${APP_DIR}"
 tar -C "$ROOT_DIR" -cf - "${REMOTE_RELEASE_FILES[@]}" | ssh "${SSH_ARGS[@]}" "$REMOTE" \
-  "mkdir -p ${REMOTE_APP_DIR_ESCAPED} && tar -xf - -C ${REMOTE_APP_DIR_ESCAPED}"
+  "mkdir -p ${REMOTE_APP_DIR_ESCAPED} && tar -xf - -C ${REMOTE_APP_DIR_ESCAPED}" \
+  || fail_after_release_sync "Unable to sync release files to remote"
 
 log "Validating remote prerequisites"
 run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.production && docker compose version >/dev/null && ${REMOTE_COMPOSE} config >/dev/null" \
@@ -430,9 +437,11 @@ else
 fi
 
 log "Recreating the remote production stack"
+run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$IMAGE_TAG")" \
+  || fail_after_release_sync "Unable to promote candidate image tag after validation"
 STACK_RECREATED=1
 if ! run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build"; then
-  ROLLBACK_ALLOW_UNVERIFIED_SCHEMA=1
+  ROLLBACK_COMPOSE_RECREATE_FAILED=1
   fail "docker compose failed while recreating the production stack"
 fi
 

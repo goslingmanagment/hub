@@ -99,17 +99,18 @@ describe("compose config", () => {
     const recreateIndex = text.indexOf("log \"Recreating the remote production stack\"");
     const stackMarkedIndex = text.indexOf("STACK_RECREATED=1", recreateIndex);
     const composeUpIndex = text.indexOf("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build", recreateIndex);
-    const unverifiedRollbackIndex = text.indexOf("ROLLBACK_ALLOW_UNVERIFIED_SCHEMA=1", recreateIndex);
+    const composeFailedIndex = text.indexOf("ROLLBACK_COMPOSE_RECREATE_FAILED=1", recreateIndex);
     const failIndex = text.indexOf("fail \"docker compose failed while recreating the production stack\"", recreateIndex);
 
     expect(rollback).not.toBeNull();
     expect(recreateIndex).toBeGreaterThan(-1);
     expect(stackMarkedIndex).toBeGreaterThan(recreateIndex);
     expect(composeUpIndex).toBeGreaterThan(stackMarkedIndex);
-    expect(unverifiedRollbackIndex).toBeGreaterThan(composeUpIndex);
-    expect(failIndex).toBeGreaterThan(unverifiedRollbackIndex);
-    expect(rollback).toContain("ROLLBACK_ALLOW_UNVERIFIED_SCHEMA:-0");
-    expect(rollback).toContain("continuing rollback because stack recreate failed before verification");
+    expect(composeFailedIndex).toBeGreaterThan(composeUpIndex);
+    expect(failIndex).toBeGreaterThan(composeFailedIndex);
+    expect(rollback).toContain("ROLLBACK_COMPOSE_RECREATE_FAILED:-0");
+    expect(rollback).toContain("${REMOTE_COMPOSE} up -d postgres");
+    expect(rollback).toContain("Rollback skipped; unable to capture current schema migration state");
   });
 
   it("deploy-production.sh restores captured release files before rollback recreate", async () => {
@@ -130,6 +131,7 @@ describe("compose config", () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const failAfterReleaseSync = getShellFunction(text, "fail_after_release_sync");
     const syncIndex = text.indexOf("log \"Syncing release files");
+    const syncFailIndex = text.indexOf("fail_after_release_sync \"Unable to sync release files to remote\"");
     const validationIndex = text.indexOf("log \"Validating remote prerequisites\"");
     const validationFailIndex = text.indexOf("fail_after_release_sync \"Remote prerequisite validation failed after syncing release files\"");
     const envFailIndex = text.indexOf("fail_after_release_sync \"Unable to read monitoring token after syncing release files\"");
@@ -137,9 +139,36 @@ describe("compose config", () => {
     expect(failAfterReleaseSync).not.toBeNull();
     expect(failAfterReleaseSync).toContain("restore_remote_release_files");
     expect(syncIndex).toBeGreaterThan(-1);
+    expect(syncFailIndex).toBeGreaterThan(syncIndex);
     expect(validationIndex).toBeGreaterThan(syncIndex);
     expect(validationFailIndex).toBeGreaterThan(validationIndex);
     expect(envFailIndex).toBeGreaterThan(validationIndex);
+  });
+
+  it("deploy-production.sh promotes candidate images only after validation", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const candidateIndex = text.indexOf("IMAGE_CANDIDATE_TAG=");
+    const buildCandidateIndex = text.indexOf('docker build --platform="${BUILD_PLATFORM}" -t "$IMAGE_CANDIDATE_TAG"');
+    const loadCandidateIndex = text.indexOf('docker save "$IMAGE_CANDIDATE_TAG"');
+    const validationIndex = text.indexOf("log \"Validating remote prerequisites\"");
+    const schemaCaptureIndex = text.indexOf("Captured remote schema migration state for rollback safety");
+    const recreateIndex = text.indexOf("log \"Recreating the remote production stack\"");
+    const promoteIndex = text.indexOf(
+      'docker tag $(printf \'%q\' "$IMAGE_CANDIDATE_TAG") $(printf \'%q\' "$IMAGE_TAG")',
+      recreateIndex,
+    );
+    const deployComposeUpIndex = text.indexOf(
+      "${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build",
+      promoteIndex,
+    );
+
+    expect(candidateIndex).toBeGreaterThan(-1);
+    expect(buildCandidateIndex).toBeGreaterThan(candidateIndex);
+    expect(loadCandidateIndex).toBeGreaterThan(buildCandidateIndex);
+    expect(validationIndex).toBeGreaterThan(loadCandidateIndex);
+    expect(recreateIndex).toBeGreaterThan(schemaCaptureIndex);
+    expect(promoteIndex).toBeGreaterThan(schemaCaptureIndex);
+    expect(deployComposeUpIndex).toBeGreaterThan(promoteIndex);
   });
 
   it("deploy-production.sh allows rollback across known data-only migrations", async () => {
