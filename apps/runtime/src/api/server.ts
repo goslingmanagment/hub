@@ -2005,10 +2005,15 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
     const body = request.body;
     try {
+      const proxy = body.proxy ? normalizeProxyConfig(body.proxy) : null;
+      if (proxy) {
+        await assertAllowedProxyTarget(proxy);
+      }
+
       if (body.platform === "fansly") {
         const result = await appContext.adapter.verifySession({
           session: body.session,
-          proxy: body.proxy ?? null,
+          proxy,
         });
         return {
           valid: true as const,
@@ -2018,7 +2023,7 @@ export async function buildApiServer(appContext: AppContext) {
         };
       } else {
         const { findOnlyFansAccountByUsername } = await import("../services/onlyfans.ts");
-        const context = { auth: body.auth, proxy: body.proxy ?? null };
+        const context = { auth: body.auth, proxy };
         const account = await findOnlyFansAccountByUsername(
           appContext.onlyFansAdapter,
           context,

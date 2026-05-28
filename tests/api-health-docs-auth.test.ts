@@ -35,6 +35,8 @@ const { SESSION_COOKIE_NAME } = await import("../apps/runtime/src/services/auth.
 
 function createRouteTestContext(input?: {
   healthSyncMonitoringToken?: string | null;
+  adapter?: AppContext["adapter"];
+  onlyFansAdapter?: AppContext["onlyFansAdapter"];
 }) {
   const encryptionKey = Buffer.alloc(32, 7);
 
@@ -73,8 +75,8 @@ function createRouteTestContext(input?: {
     logger: createLogger("silent"),
     pool: {} as AppContext["pool"],
     db: {} as AppContext["db"],
-    adapter: {} as AppContext["adapter"],
-    onlyFansAdapter: {} as AppContext["onlyFansAdapter"],
+    adapter: input?.adapter ?? {} as AppContext["adapter"],
+    onlyFansAdapter: input?.onlyFansAdapter ?? {} as AppContext["onlyFansAdapter"],
     async close() {},
   } satisfies AppContext;
 }
@@ -290,6 +292,45 @@ describe("health and docs route auth", () => {
         },
       });
       expect(ownerDocs.statusCode).toBe(200);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("admin credential verification", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects private proxy targets before verifying credentials", async () => {
+    routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
+    const verifySession = vi.fn();
+    const server = await buildApiServer(createRouteTestContext({
+      adapter: { verifySession } as unknown as AppContext["adapter"],
+    }));
+
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/admin/credentials/verify",
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=owner-token`,
+        },
+        payload: {
+          platform: "fansly",
+          session: {
+            authorization: "fansly-token",
+          },
+          proxy: {
+            url: "socks5://127.0.0.1:1080",
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(JSON.stringify(response.json())).toContain("Proxy host");
+      expect(verifySession).not.toHaveBeenCalled();
     } finally {
       await server.close();
     }
