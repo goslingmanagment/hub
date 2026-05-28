@@ -134,6 +134,7 @@ ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback"
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
 SCHEMA_BASELINE_CAPTURED=0
+ROLLBACK_ALLOW_UNVERIFIED_SCHEMA=0
 ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0013_backfill_egress_rate_limit_scope_key.sql"
   "0014_repair_light_trusted_sync_states.sql"
@@ -266,12 +267,14 @@ rollback_remote_stack() {
   fi
 
   if ! capture_remote_schema_migrations "$SCHEMA_AFTER_FILE"; then
-    log "Rollback skipped; unable to capture current schema migration state"
-    log "Automatic rollback cannot prove the previous image is compatible with the current database"
-    return 0
-  fi
-
-  if ! cmp -s "$SCHEMA_BEFORE_FILE" "$SCHEMA_AFTER_FILE"; then
+    if [[ "${ROLLBACK_ALLOW_UNVERIFIED_SCHEMA:-0}" == "1" ]]; then
+      log "Unable to capture current schema migration state; continuing rollback because stack recreate failed before verification"
+    else
+      log "Rollback skipped; unable to capture current schema migration state"
+      log "Automatic rollback cannot prove the previous image is compatible with the current database"
+      return 0
+    fi
+  elif ! cmp -s "$SCHEMA_BEFORE_FILE" "$SCHEMA_AFTER_FILE"; then
     if schema_migration_delta_allows_rollback; then
       log "Schema migrations changed only by rollback-compatible data migrations; continuing automatic rollback"
     else
@@ -419,6 +422,7 @@ fi
 log "Recreating the remote production stack"
 STACK_RECREATED=1
 if ! run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build"; then
+  ROLLBACK_ALLOW_UNVERIFIED_SCHEMA=1
   fail "docker compose failed while recreating the production stack"
 fi
 

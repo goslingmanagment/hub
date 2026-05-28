@@ -95,15 +95,21 @@ describe("compose config", () => {
 
   it("deploy-production.sh routes compose recreate failures through rollback handling", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
+    const rollback = getShellFunction(text, "rollback_remote_stack");
     const recreateIndex = text.indexOf("log \"Recreating the remote production stack\"");
     const stackMarkedIndex = text.indexOf("STACK_RECREATED=1", recreateIndex);
     const composeUpIndex = text.indexOf("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build", recreateIndex);
+    const unverifiedRollbackIndex = text.indexOf("ROLLBACK_ALLOW_UNVERIFIED_SCHEMA=1", recreateIndex);
     const failIndex = text.indexOf("fail \"docker compose failed while recreating the production stack\"", recreateIndex);
 
+    expect(rollback).not.toBeNull();
     expect(recreateIndex).toBeGreaterThan(-1);
     expect(stackMarkedIndex).toBeGreaterThan(recreateIndex);
     expect(composeUpIndex).toBeGreaterThan(stackMarkedIndex);
-    expect(failIndex).toBeGreaterThan(composeUpIndex);
+    expect(unverifiedRollbackIndex).toBeGreaterThan(composeUpIndex);
+    expect(failIndex).toBeGreaterThan(unverifiedRollbackIndex);
+    expect(rollback).toContain("ROLLBACK_ALLOW_UNVERIFIED_SCHEMA:-0");
+    expect(rollback).toContain("continuing rollback because stack recreate failed before verification");
   });
 
   it("deploy-production.sh restores captured release files before rollback recreate", async () => {
