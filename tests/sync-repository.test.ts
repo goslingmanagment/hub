@@ -16,6 +16,14 @@ import {
   reserveSyncProviderRateLimit,
   resolvePageSyncPriority,
 } from "../packages/db/src/repositories/sync.ts";
+import type { SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
+import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
+
+const DIALECT = new PgDialect();
+
+function renderSql(query: SQL) {
+  return DIALECT.sqlToQuery(query).sql;
+}
 
 function extractQueryParams(query: {
   queryChunks?: unknown[];
@@ -474,8 +482,11 @@ describe("sync repository timestamp normalization", () => {
 
     const query = execute.mock.calls[0]?.[0];
     const sqlText = extractSqlText(query);
+    const renderedSql = renderSql(query as SQL);
 
-    expect(sqlText).toContain('coalesce(, , \'direct\') as "egressKey"');
+    expect(renderedSql).toContain(
+      'coalesce("egress_endpoints"."rate_limit_scope_key", "egress_endpoints"."url", \'direct\') as "egressKey"',
+    );
     expect(sqlText).toContain('left join  on  = ');
     expect(sqlText).toContain('rl.egress_key as "egressKey"');
     expect(sqlText).toContain('group by rl.provider, rl.egress_key');
