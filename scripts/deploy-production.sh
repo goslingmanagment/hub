@@ -187,7 +187,19 @@ rollback_remote_stack() {
     return 0
   fi
 
-  if schema_migrations_changed_since_baseline; then
+  if [[ "${SCHEMA_BASELINE_CAPTURED:-0}" != "1" ]]; then
+    log "Rollback skipped; schema migration baseline was not captured"
+    log "Automatic rollback cannot prove the previous image is compatible with the current database"
+    return 0
+  fi
+
+  if ! capture_remote_schema_migrations "$SCHEMA_AFTER_FILE"; then
+    log "Rollback skipped; unable to capture current schema migration state"
+    log "Automatic rollback cannot prove the previous image is compatible with the current database"
+    return 0
+  fi
+
+  if ! cmp -s "$SCHEMA_BEFORE_FILE" "$SCHEMA_AFTER_FILE"; then
     log "Rollback skipped; schema_migrations changed during this deploy"
     log "The previous image may not be compatible with the migrated database; inspect diagnostics before choosing a manual rollback"
     return 0
@@ -210,16 +222,7 @@ rollback_remote_stack() {
 capture_remote_schema_migrations() {
   local output_file="$1"
 
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu; export PGPASSWORD=\"\$POSTGRES_PASSWORD\"; if [ \"\$(psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select count(*) from information_schema.tables where table_schema = \$\$public\$\$ and table_name = \$\$schema_migrations\$\$\")\" = \"1\" ]; then psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select id from schema_migrations order by id\"; fi'" >"$output_file"
-}
-
-schema_migrations_changed_since_baseline() {
-  if [[ "${SCHEMA_BASELINE_CAPTURED:-0}" != "1" ]]; then
-    return 1
-  fi
-
-  capture_remote_schema_migrations "$SCHEMA_AFTER_FILE" || return 1
-  ! cmp -s "$SCHEMA_BEFORE_FILE" "$SCHEMA_AFTER_FILE"
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu; export PGPASSWORD=\"\$POSTGRES_PASSWORD\"; if [ \"\$(psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select to_regclass('\''public.schema_migrations'\'') is not null\")\" = \"t\" ]; then psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atqc \"select id from schema_migrations order by id\"; fi'" >"$output_file"
 }
 
 remote_curl_status() {
@@ -327,7 +330,7 @@ if capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"; then
   SCHEMA_BASELINE_CAPTURED=1
   log "Captured remote schema migration state for rollback safety"
 else
-  log "Unable to capture remote schema migration state; rollback will only restore the image"
+  log "Unable to capture remote schema migration state; automatic rollback will be skipped"
 fi
 
 log "Recreating the remote production stack"

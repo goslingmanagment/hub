@@ -80,10 +80,16 @@ describe("compose config", () => {
   it("deploy-production.sh fails loudly when schema baseline capture breaks", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const schemaCapture = getShellFunction(text, "capture_remote_schema_migrations");
+    const rollback = getShellFunction(text, "rollback_remote_stack");
 
     expect(schemaCapture).toContain("set -euo pipefail");
-    expect(schemaCapture).toContain("information_schema.tables");
+    expect(schemaCapture).toContain("to_regclass");
+    expect(schemaCapture).not.toContain("$$public$$");
+    expect(schemaCapture).not.toContain("$$schema_migrations$$");
     expect(schemaCapture).not.toContain("|| true");
     expect(schemaCapture).not.toContain("2>/dev/null");
+    expect(rollback).toContain('SCHEMA_BASELINE_CAPTURED:-0');
+    expect(rollback).toContain("schema migration baseline was not captured");
+    expect(rollback).toContain("unable to capture current schema migration state");
   });
 });
