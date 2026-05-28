@@ -75,6 +75,20 @@ type FanslyTransactionProgressState =
 
 type FanslyTransactionPage = Awaited<ReturnType<AppContext["adapter"]["getTransactionsPage"]>>;
 type FanslyTransactionItem = FanslyTransactionPage["items"][number];
+type FanslyIncrementalInvalidationReason =
+  | "incremental_total_changed"
+  | "incremental_offset_overlap"
+  | "incremental_total_mismatch";
+
+class UnstableFanslyIncrementalScanError extends Error {
+  constructor(
+    message: string,
+    readonly reason: FanslyIncrementalInvalidationReason,
+  ) {
+    super(message);
+    this.name = "UnstableFanslyIncrementalScanError";
+  }
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -419,6 +433,29 @@ async function flushAndClearFanslyDirtyRange<TState extends FanslyTransactionPro
   return nextState;
 }
 
+async function invalidateFanslyIncrementalProgress(
+  app: AppContext,
+  input: {
+    pageLabel: string;
+    platformAccountId: number;
+  },
+  checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
+  reason: FanslyIncrementalInvalidationReason,
+) {
+  await upsertCheckpointProgress(app.db, {
+    platformAccountId: input.platformAccountId,
+    stream: "transactions",
+    cursorTimestamp: checkpoint?.cursorTimestamp ?? null,
+    state: {
+      pageLabel: input.pageLabel,
+      invalidatedIncrementalScan: {
+        reason,
+        invalidatedAt: new Date().toISOString(),
+      },
+    },
+  });
+}
+
 async function syncTransactionsIncremental(
   app: AppContext,
   input: {
@@ -577,7 +614,10 @@ async function syncTransactionsIncremental(
             offset: requestOffset,
           },
         });
-        throw new Error("Fansly incremental transaction total changed during an offset scan");
+        throw new UnstableFanslyIncrementalScanError(
+          "Fansly incremental transaction total changed during an offset scan",
+          "incremental_total_changed",
+        );
       }
 
       const overlappingTransactionIds = findPageOverlap(state.lastPageTransactionIds, page.items);
@@ -592,7 +632,10 @@ async function syncTransactionsIncremental(
             offset: requestOffset,
           },
         });
-        throw new Error("Fansly incremental transaction scan saw overlapping rows between offset pages");
+        throw new UnstableFanslyIncrementalScanError(
+          "Fansly incremental transaction scan saw overlapping rows between offset pages",
+          "incremental_offset_overlap",
+        );
       }
 
       await persistRawPayload(app.db, {
@@ -757,6 +800,21 @@ async function syncTransactionsIncremental(
       }, "Failed to flush Fansly dirty range after incremental error");
     }
 
+    if (error instanceof UnstableFanslyIncrementalScanError) {
+      try {
+        await invalidateFanslyIncrementalProgress(app, input, checkpoint, error.reason);
+      } catch (cleanupError) {
+        app.logger.warn({
+          err: cleanupError,
+          originalErr: error,
+          pageLabel: input.pageLabel,
+          platformAccountId: input.platformAccountId,
+          provider: "fansly",
+          stream: "transactions",
+        }, "Failed to invalidate unstable Fansly incremental checkpoint progress");
+      }
+    }
+
     throw error;
   }
 
@@ -781,7 +839,11 @@ async function syncTransactionsIncremental(
         pageCount: state.transactionPages,
       },
     });
-    throw new Error("Fansly incremental transaction total differed from fetched rows");
+    await invalidateFanslyIncrementalProgress(app, input, checkpoint, "incremental_total_mismatch");
+    throw new UnstableFanslyIncrementalScanError(
+      "Fansly incremental transaction total differed from fetched rows",
+      "incremental_total_mismatch",
+    );
   }
 
   let checkpointAfter = null;

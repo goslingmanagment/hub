@@ -295,10 +295,11 @@ describe("syncTransactions", () => {
   });
 
   it("refuses to finalize an incremental Fansly scan when the provider total changes mid-scan", async () => {
-    dbMocks.getCheckpoint.mockResolvedValue({
+    const checkpoint = {
       cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
       state: {},
-    });
+    };
+    dbMocks.getCheckpoint.mockResolvedValue(checkpoint);
     const telemetry = createTelemetry();
     const getTransactionsPage = vi
       .fn()
@@ -350,6 +351,51 @@ describe("syncTransactions", () => {
     }));
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
     expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual(["tx-1"]);
+    const invalidatedProgress = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1];
+    expect(invalidatedProgress).toMatchObject({
+      platformAccountId: 1,
+      stream: "transactions",
+      cursorTimestamp: checkpoint.cursorTimestamp,
+      state: {
+        pageLabel: "fansly-page",
+        invalidatedIncrementalScan: {
+          reason: "incremental_total_changed",
+        },
+      },
+    });
+    expect(invalidatedProgress?.state).not.toMatchObject({ mode: "incremental" });
+
+    dbMocks.getCheckpoint.mockResolvedValueOnce({
+      cursorTimestamp: invalidatedProgress?.cursorTimestamp,
+      state: invalidatedProgress?.state,
+    });
+    getTransactionsPage.mockReset().mockResolvedValueOnce({
+      items: [
+        buildTransaction("tx-1", "2026-03-15T00:00:00.000Z"),
+        buildTransaction("tx-2", "2026-03-14T12:00:00.000Z"),
+      ],
+      total: 2,
+      done: true,
+      raw: { page: "retry" },
+    });
+
+    await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 124,
+      telemetry: createTelemetry() as never,
+    });
+
+    expect(getTransactionsPage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ offset: 0 }),
+    );
   });
 
   it("warns once per run for an unknown transaction type", async () => {
