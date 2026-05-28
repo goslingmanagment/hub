@@ -626,11 +626,19 @@ describe("db write safety", () => {
       ),
     );
     await storeFanslySession(testDb.db, page.id, encryptedSession, 1);
-    await storeProxyConfig(testDb.db, page.id, {
-      url: "socks5://legacy-user:legacy-pass@127.0.0.1:1080",
-      encryptedAuth: null,
-      keyVersion: null,
-    });
+    await testDb.pool.query(
+      `
+        insert into egress_endpoints (
+          platform_account_id,
+          kind,
+          url,
+          encrypted_auth,
+          key_version,
+          rate_limit_scope_key
+        ) values ($1, 'proxy', $2, null, null, null)
+      `,
+      [page.id, "socks5://legacy-user:legacy-pass@127.0.0.1:1080"],
+    );
 
     const contextResult = await resolvePageContext(createTestAppContext(testDb), page.label);
 

@@ -13,6 +13,7 @@ import {
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
 
 export interface RequestedSyncRequest {
@@ -106,7 +107,7 @@ export async function requestPageSync(
     platformAccountId: storedPage.page.id,
     priority,
     provider: storedPage.page.platform,
-    egressKey: storedPage.proxy?.rateLimitScopeKey ?? storedPage.proxy?.url ?? "direct",
+    egressKey: resolveStoredProxyEgressKey(storedPage.proxy),
   });
 
   return {

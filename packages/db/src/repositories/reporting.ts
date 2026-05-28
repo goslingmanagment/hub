@@ -33,6 +33,7 @@ import {
   pageAliasHistoryMatchSql,
   pageAliasMatchSql,
 } from "./search.ts";
+import { egressKeySql } from "./egress.ts";
 
 function applyPageScope<T>(clauses: T[], pageIds?: number[]) {
   if (pageIds !== undefined) {
@@ -88,7 +89,7 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
     modelName: models.name,
     hasCredentials: sql<boolean>`${pageCredentials.id} is not null`,
     proxyUrl: egressEndpoints.url,
-    egressKey: sql<string>`coalesce(${egressEndpoints.rateLimitScopeKey}, ${egressEndpoints.url}, 'direct')`,
+    egressKey: egressKeySql(egressEndpoints.rateLimitScopeKey, egressEndpoints.url),
     proxyHasAuth: sql<boolean>`${egressEndpoints.encryptedAuth} is not null`,
   }).from(pages)
     .innerJoin(models, eq(models.id, pages.modelId))

@@ -17,6 +17,7 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, NotFoundError } from "./errors.ts";
+import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import {
   getSyncStatusSnapshot,
   SYNC_DOMAIN_BLOCKS,
@@ -403,7 +404,7 @@ export async function triggerSyncBlock(
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,
     platform: stored.page.platform,
-    egressKey: stored.proxy?.rateLimitScopeKey ?? stored.proxy?.url ?? "direct",
+    egressKey: resolveStoredProxyEgressKey(stored.proxy),
     tasks,
     reason: "manual",
   });
@@ -487,7 +488,7 @@ export async function resumeSyncBlock(
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,
     platform: stored.page.platform,
-    egressKey: stored.proxy?.rateLimitScopeKey ?? stored.proxy?.url ?? "direct",
+    egressKey: resolveStoredProxyEgressKey(stored.proxy),
     tasks,
     reason: "manual",
   });
@@ -554,7 +555,7 @@ export async function resetSyncBlock(
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,
     platform: stored.page.platform,
-    egressKey: stored.proxy?.rateLimitScopeKey ?? stored.proxy?.url ?? "direct",
+    egressKey: resolveStoredProxyEgressKey(stored.proxy),
     tasks,
     reason: "reset",
   });

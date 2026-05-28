@@ -31,6 +31,7 @@ import {
   type SyncRequestSource,
   type SyncStream,
 } from "./page-sync.ts";
+import { egressKeySql } from "./egress.ts";
 import { PageSyncLeaseLostError, getPageSyncExecutionContext } from "./sync-context.ts";
 
 type TimestampValue = Date | string | null | undefined;
@@ -1436,7 +1437,7 @@ export async function listSyncMonitorStreamRows(
              ${pages.displayName} as "displayName",
              ${models.slug} as "modelSlug",
              ${models.name} as "modelName",
-             coalesce(${egressEndpoints.rateLimitScopeKey}, ${egressEndpoints.url}, 'direct') as "egressKey"
+             ${egressKeySql(egressEndpoints.rateLimitScopeKey, egressEndpoints.url)} as "egressKey"
       from ${pages}
       inner join ${models} on ${models.id} = ${pages.modelId}
       left join ${egressEndpoints} on ${egressEndpoints.platformAccountId} = ${pages.id}

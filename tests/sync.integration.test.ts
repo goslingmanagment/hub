@@ -532,6 +532,68 @@ describe("sync integration", () => {
     expect(stateRows[0]?.enqueuedAt?.toISOString()).toBe(now.toISOString());
   });
 
+  it("uses canonical egress keys for legacy proxy rows without stored scope keys", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "planner-legacy-proxy",
+      name: "Planner Legacy Proxy",
+    });
+    const page = await createFanslyLightPage(testDb, {
+      modelId: model.id,
+      label: "planner-legacy-proxy-page",
+      authorization: "planner-legacy-proxy",
+      proxyUrl: "socks5://planner-proxy.example:1080",
+    });
+    await testDb.pool.query(
+      `
+        update egress_endpoints
+        set url = $1,
+            rate_limit_scope_key = null
+        where platform_account_id = $2
+      `,
+      ["socks5://legacy-user:legacy-pass@planner-proxy.example:1080", page.id],
+    );
+    const app = createTestAppContext(testDb, {
+      databaseUrl: testDb.connectionString,
+    });
+    const now = new Date("2026-03-20T12:05:00.000Z");
+
+    await ensurePageSyncStates(app.db, {
+      pageId: page.id,
+      now,
+    });
+    await requestPageSyncRows(app.db, {
+      pageId: page.id,
+      streams: ["light"],
+      source: "manual",
+      now,
+    });
+
+    const boss = {
+      send: vi.fn(async () => "planner-job-legacy-proxy"),
+    };
+
+    const pages = await runSyncPlannerCycle(app, boss as never, now);
+
+    expect(pages[0]).toMatchObject({
+      pageId: page.id,
+      egressKey: "socks5://planner-proxy.example:1080",
+    });
+    expect(boss.send).toHaveBeenCalledWith(
+      SYNC_PAGE_EXECUTE_QUEUE,
+      { platformAccountId: page.id },
+      expect.objectContaining({
+        group: {
+          id: buildSyncPageExecuteGroupId("fansly", "socks5://planner-proxy.example:1080"),
+        },
+      }),
+    );
+  });
+
   it("converges a Fansly all-scope sync through page sync state and executor wakeups", async (context) => {
     if (!testDb) {
       context.skip();

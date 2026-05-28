@@ -29,6 +29,7 @@ import {
   notifySyncChunkFailureIncident,
   resolveSyncChunkRecoveryIncidents,
 } from "../notification-incidents.ts";
+import { resolveStoredProxyEgressKey } from "../page-context.ts";
 import { SYNC_PAGE_EXECUTE_QUEUE, sendSyncPageWakeup, type SyncPageExecutePayload } from "../sync-queue.ts";
 import { normalizeSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
@@ -167,7 +168,7 @@ async function resolveSyncPageWakeupTarget(
 
   return {
     provider: page.page.platform,
-    egressKey: page.proxy?.rateLimitScopeKey ?? page.proxy?.url ?? "direct",
+    egressKey: resolveStoredProxyEgressKey(page.proxy),
   };
 }
 

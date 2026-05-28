@@ -8,6 +8,7 @@ import {
   pageSyncStates,
   pages,
 } from "../schema.ts";
+import { egressKeySql } from "./egress.ts";
 
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
@@ -1117,7 +1118,7 @@ export async function listRunnablePageSync(
       select st.page_id as "pageId",
              p.platform as "platform",
              ee.url as "proxyUrl",
-             coalesce(ee.rate_limit_scope_key, ee.url, 'direct') as "egressKey",
+             ${egressKeySql(sql`ee.rate_limit_scope_key`, sql`ee.url`)} as "egressKey",
              st.stream as "stream",
              st.requested_at as "requestedAt",
              st.request_source as "requestSource"
@@ -1257,7 +1258,7 @@ export async function acquirePageSyncLease(
     select acquired.*,
            p.platform as "platform",
            ee.url as "proxyUrl",
-           coalesce(ee.rate_limit_scope_key, ee.url, 'direct') as "egressKey"
+           ${egressKeySql(sql`ee.rate_limit_scope_key`, sql`ee.url`)} as "egressKey"
     from acquired
     inner join ${pages} p on p.id = acquired."pageId"
     left join ${egressEndpoints} ee on ee.platform_account_id = acquired."pageId"

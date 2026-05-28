@@ -484,9 +484,8 @@ describe("sync repository timestamp normalization", () => {
     const sqlText = extractSqlText(query);
     const renderedSql = renderSql(query as SQL);
 
-    expect(renderedSql).toContain(
-      'coalesce("egress_endpoints"."rate_limit_scope_key", "egress_endpoints"."url", \'direct\') as "egressKey"',
-    );
+    expect(renderedSql).toContain('"egress_endpoints"."rate_limit_scope_key"');
+    expect(renderedSql).toContain('regexp_match("egress_endpoints"."url"');
     expect(sqlText).toContain('left join  on  = ');
     expect(sqlText).toContain('rl.egress_key as "egressKey"');
     expect(sqlText).toContain('group by rl.provider, rl.egress_key');

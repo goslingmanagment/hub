@@ -168,8 +168,18 @@ export function resolveStoredProxyConfig(
   });
   return {
     ...proxy,
-    egressKey: storedProxy.rateLimitScopeKey ?? storedProxy.url,
+    egressKey: storedProxy.rateLimitScopeKey ?? buildProxyEgressKey(proxy),
   };
+}
+
+export function resolveStoredProxyEgressKey(
+  storedProxy: NonNullable<Awaited<ReturnType<typeof findPageByLabel>>>["proxy"],
+) {
+  if (!storedProxy) {
+    return "direct";
+  }
+
+  return storedProxy.rateLimitScopeKey ?? buildProxyEgressKey({ url: storedProxy.url });
 }
 
 export async function resolvePageContext(app: AppContext, label: string) {
