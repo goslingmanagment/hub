@@ -34,6 +34,7 @@ describe("database migration invariants", () => {
 
     expect(migration).toContain("rate_limit_scope_key IS NULL OR");
     expect(migration).toContain("rate_limit_scope_key ~ '^(http|https|socks5)://'");
+    expect(migration).toContain("canonical.canonical_scope_key IS NOT DISTINCT FROM canonical.canonical_key");
     expect(migration).toContain("IS DISTINCT FROM");
     expect(migration).toContain("EXCEPTION WHEN others THEN");
   });
