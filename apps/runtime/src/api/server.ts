@@ -114,6 +114,7 @@ import {
   insertDeliveryAttempt,
   listDeliveryAttempts,
   listNotificationIncidentsWithPages,
+  recordNotificationIncidentRecovery,
   resolveNotificationIncident,
   updateTelegramSettings,
 } from "@agency_hub_core/db";
@@ -2483,21 +2484,33 @@ export async function buildApiServer(appContext: AppContext) {
     }
 
     const incidentKey = (rows[0] as any).incident_key as string;
-    await resolveNotificationIncident(appContext.db, { incidentKey });
-
-    // Best-effort send "Manually resolved" to Telegram
-    const delivery = await sendTelegramMessage(appContext, {
-      text: `✅ Manually resolved\nIncident: ${incidentKey}`,
+    const resolvedAt = new Date();
+    await recordNotificationIncidentRecovery(appContext.db, {
+      incidentKey,
+      recoveredAt: resolvedAt,
+      now: resolvedAt,
+    });
+    const resolved = await resolveNotificationIncident(appContext.db, {
+      incidentKey,
+      maxLastSeenAt: resolvedAt,
+      now: resolvedAt,
     });
 
-    if (delivery.status === "sent" || delivery.status === "failed") {
-      await insertDeliveryAttempt(appContext.db, {
-        kind: "incident_manually_resolved",
-        status: delivery.status,
-        notificationIncidentId: incidentId,
-        messageId: delivery.status === "sent" ? delivery.messageId : null,
-        error: delivery.status === "failed" ? delivery.error : null,
+    if (resolved) {
+      // Best-effort send "Manually resolved" to Telegram
+      const delivery = await sendTelegramMessage(appContext, {
+        text: `✅ Manually resolved\nIncident: ${incidentKey}`,
       });
+
+      if (delivery.status === "sent" || delivery.status === "failed") {
+        await insertDeliveryAttempt(appContext.db, {
+          kind: "incident_manually_resolved",
+          status: delivery.status,
+          notificationIncidentId: incidentId,
+          messageId: delivery.status === "sent" ? delivery.messageId : null,
+          error: delivery.status === "failed" ? delivery.error : null,
+        });
+      }
     }
 
     return { ok: true as const };
