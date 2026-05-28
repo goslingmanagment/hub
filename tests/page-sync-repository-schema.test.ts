@@ -129,7 +129,7 @@ describe("page-sync repository schema alignment", () => {
     ]);
   });
 
-  it("requestPageSync takes row locks in normalized stream order", async () => {
+  it("requestPageSync locks page rows before updating requested streams in normalized order", async () => {
     const now = new Date("2026-03-24T12:00:00.000Z");
     const pageId = 55;
     const existingRows = [
@@ -142,19 +142,20 @@ describe("page-sync repository schema alignment", () => {
       "dm_conversations",
       "dm_messages",
     ].map((stream) => buildPageSyncStateRow(pageId, stream as SyncStream, now));
-    const lockedStreams: unknown[] = [];
+    const lockedStatements: string[] = [];
+    const updatedStreams: unknown[] = [];
     const execute = vi.fn(async (query: SQL) => {
       const rendered = DIALECT.sqlToQuery(query).sql;
       const params = DIALECT.sqlToQuery(query).params;
 
-      if (rendered.includes("for update")) {
-        lockedStreams.push(params[1]);
-        return {
-          rows: [{
-            requestSeq: 0,
-            status: "idle",
-          }],
-        };
+      if (rendered.includes('from "page_sync_states"') && rendered.includes("for update")) {
+        lockedStatements.push(rendered);
+        return { rows: existingRows };
+      }
+
+      if (rendered.includes('update "page_sync_states"') && rendered.includes("stream = $")) {
+        updatedStreams.push(findStreamParam(params));
+        return { rows: [] };
       }
 
       if (rendered.includes('from "pages" p') && rendered.includes("last_light_sync_at")) {
@@ -197,7 +198,10 @@ describe("page-sync repository schema alignment", () => {
       "dm_conversations",
       "dm_messages",
     ]);
-    expect(lockedStreams).toEqual([
+    expect(lockedStatements).toHaveLength(1);
+    expect(lockedStatements[0]).toContain("order by page_id asc");
+    expect(lockedStatements[0]).toContain("for update");
+    expect(updatedStreams).toEqual([
       "light",
       "transactions",
       "dm_conversations",

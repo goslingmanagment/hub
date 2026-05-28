@@ -623,11 +623,14 @@ function buildSeedPageSyncState(
   };
 }
 
-export async function listPageSyncStates(
+async function listPageSyncStatesInternal(
   db: Database,
   input?: {
     pageId?: number;
     streams?: SyncStream[];
+  },
+  options?: {
+    lock?: boolean;
   },
 ) {
   const clauses = [sql`true`];
@@ -680,9 +683,20 @@ export async function listPageSyncStates(
     from ${pageSyncStates}
     where ${and(...clauses)}
     order by page_id asc, ${streamOrderSql("stream")} asc
+    ${options?.lock ? sql`for update` : sql``}
   `);
 
   return result.rows.map((row) => normalizePageSyncState(row));
+}
+
+export async function listPageSyncStates(
+  db: Database,
+  input?: {
+    pageId?: number;
+    streams?: SyncStream[];
+  },
+) {
+  return listPageSyncStatesInternal(db, input);
 }
 
 export async function getPageSyncState(
@@ -696,42 +710,6 @@ export async function getPageSyncState(
   });
 
   return rows[0] ?? null;
-}
-
-async function lockPageSyncStateForRequest(
-  db: Database,
-  pageId: number,
-  stream: SyncStream,
-) {
-  const result = await db.execute<Record<string, unknown>>(sql`
-    select request_seq as "requestSeq",
-           status as "status"
-    from ${pageSyncStates}
-    where page_id = ${pageId}
-      and stream = ${stream}
-    for update
-  `);
-  const row = result.rows[0];
-  if (!row) {
-    return null;
-  }
-
-  const rawStatus = typeof row.status === "string" ? row.status : null;
-  if (
-    rawStatus !== "idle" &&
-    rawStatus !== "pending" &&
-    rawStatus !== "running" &&
-    rawStatus !== "retrying" &&
-    rawStatus !== "blocked" &&
-    rawStatus !== "paused"
-  ) {
-    throw new Error(`Expected status to be a supported page sync status, got ${String(row.status)}`);
-  }
-
-  return {
-    requestSeq: normalizeNumber(row.requestSeq as NumericValue, "requestSeq"),
-    status: rawStatus,
-  };
 }
 
 async function repairLegacyLightTrustedPageSyncStates(
@@ -915,10 +893,22 @@ export async function refreshPageSyncDependencies(
   },
 ) {
   const now = input?.now ?? new Date();
-  const rows = await listPageSyncStates(
-    db,
-    input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
-  );
+  await db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const rows = await listPageSyncStatesInternal(
+      database,
+      input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
+      { lock: true },
+    );
+    await refreshLockedPageSyncDependencies(database, rows, now);
+  });
+}
+
+async function refreshLockedPageSyncDependencies(
+  db: Database,
+  rows: PageSyncState[],
+  now: Date,
+) {
   const rowsByPage = new Map<number, PageSyncState[]>();
   for (const row of rows) {
     const current = rowsByPage.get(row.pageId) ?? [];
@@ -926,60 +916,61 @@ export async function refreshPageSyncDependencies(
     rowsByPage.set(row.pageId, current);
   }
 
-  await db.transaction(async (tx) => {
-    const database = tx as unknown as Database;
-    for (const [pageId, pageRows] of rowsByPage) {
-      const streamByName = new Map(pageRows.map((row) => [row.stream, row] as const));
-      for (const row of pageRows) {
-        const dependencies = (SYNC_STREAM_DEPENDENCIES[row.stream] ?? [])
-          .filter((dependency) => streamByName.has(dependency));
-        if (dependencies.length === 0) {
+  for (const [pageId, pageRows] of rowsByPage) {
+    const streamByName = new Map(pageRows.map((row) => [row.stream, row] as const));
+    for (const row of pageRows) {
+      const dependencies = (SYNC_STREAM_DEPENDENCIES[row.stream] ?? [])
+        .filter((dependency) => streamByName.has(dependency));
+      if (dependencies.length === 0) {
+        continue;
+      }
+
+      const unmet = dependencies.filter((dependency) => !dependencyMet(streamByName, dependency));
+      if (unmet.length > 0) {
+        const shouldBlock = row.status !== "paused" && row.status !== "running" &&
+          (row.requestSeq > row.appliedSeq || row.status === "pending" || row.status === "retrying");
+        if (!shouldBlock) {
           continue;
         }
 
-        const unmet = dependencies.filter((dependency) => !dependencyMet(streamByName, dependency));
-        if (unmet.length > 0) {
-          const shouldBlock = row.status !== "paused" && row.status !== "running" &&
-            (row.requestSeq > row.appliedSeq || row.status === "pending" || row.status === "retrying");
-          if (!shouldBlock) {
-            continue;
-          }
-
-          await database.execute(sql`
-            update ${pageSyncStates}
-            set status = 'blocked',
-                blocker_kind = 'dependency',
-                blocker_code = 'unmet_dependency',
-                blocker_message = ${`Waiting for ${unmet.join(", ")}`},
-                blocked_at = coalesce(blocked_at, ${now}),
-                retry_kind = null,
-                retry_at = null,
-                updated_at = ${now}
-            where page_id = ${pageId}
-              and stream = ${row.stream}
-          `);
-          continue;
-        }
-
-        if (row.blockerKind !== "dependency") {
-          continue;
-        }
-
-        const nextStatus: PageSyncStatus = row.requestSeq > row.appliedSeq ? "pending" : "idle";
-        await database.execute(sql`
+        await db.execute(sql`
           update ${pageSyncStates}
-          set status = ${nextStatus}::page_sync_status,
-              blocker_kind = null,
-              blocker_code = null,
-              blocker_message = null,
-              blocked_at = null,
+          set status = 'blocked',
+              blocker_kind = 'dependency',
+              blocker_code = 'unmet_dependency',
+              blocker_message = ${`Waiting for ${unmet.join(", ")}`},
+              blocked_at = coalesce(blocked_at, ${now}),
+              retry_kind = null,
+              retry_at = null,
               updated_at = ${now}
           where page_id = ${pageId}
             and stream = ${row.stream}
+            and status <> 'paused'
+            and status <> 'running'
+            and (request_seq > applied_seq or status in ('pending', 'retrying'))
         `);
+        continue;
       }
+
+      if (row.blockerKind !== "dependency") {
+        continue;
+      }
+
+      const nextStatus: PageSyncStatus = row.requestSeq > row.appliedSeq ? "pending" : "idle";
+      await db.execute(sql`
+        update ${pageSyncStates}
+        set status = ${nextStatus}::page_sync_status,
+            blocker_kind = null,
+            blocker_code = null,
+            blocker_message = null,
+            blocked_at = null,
+            updated_at = ${now}
+        where page_id = ${pageId}
+          and stream = ${row.stream}
+          and blocker_kind = 'dependency'
+      `);
     }
-  });
+  }
 }
 
 export async function reclaimExpiredPageSync(
@@ -1761,8 +1752,11 @@ export async function requestPageSync(
 
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
+    const lockedRows = await listPageSyncStatesInternal(database, { pageId: input.pageId }, { lock: true });
+    const lockedRowsByStream = new Map(lockedRows.map((row) => [row.stream, row] as const));
+
     for (const stream of requestedStreams) {
-      const current = await lockPageSyncStateForRequest(database, input.pageId, stream);
+      const current = lockedRowsByStream.get(stream);
       if (!current) {
         throw new Error(`Sync stream "${stream}" does not exist for page ${input.pageId}`);
       }
@@ -1791,17 +1785,29 @@ export async function requestPageSync(
         where page_id = ${input.pageId}
           and stream = ${stream}
       `);
+      lockedRowsByStream.set(stream, {
+        ...current,
+        requestSeq: nextRequestSeq,
+        requestSource: input.source,
+        requestPayload,
+        requestedAt: now,
+        status: nextStatus,
+        retryKind: nextStatus === "pending" ? null : current.retryKind,
+        retryAt: nextStatus === "pending" ? null : current.retryAt,
+        updatedAt: now,
+      });
 
       results.push({
         stream,
         requestedSeq: nextRequestSeq,
       });
     }
-  });
 
-  await refreshPageSyncDependencies(db, {
-    pageId: input.pageId,
-    now,
+    await refreshLockedPageSyncDependencies(
+      database,
+      lockedRows.map((row) => lockedRowsByStream.get(row.stream) ?? row),
+      now,
+    );
   });
 
   return results;
