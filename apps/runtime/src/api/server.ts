@@ -11,7 +11,7 @@ import {
   routeSchemas,
   type RevenueDailyTypedItem,
   type UpdateCredentialsBody,
-} from "@agency_hub_core/contracts";
+} from "../../../../packages/contracts/src/routes.ts";
 import {
   CatalogModelNotFoundError,
   CatalogPageNotFoundError,
