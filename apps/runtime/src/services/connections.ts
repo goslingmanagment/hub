@@ -210,7 +210,12 @@ export async function updatePageCredentials(
   if (explicitProxy) {
     await assertAllowedProxyTarget(explicitProxy);
   }
-  const reusesStoredProxyAuth = explicitProxy && storedProxy && explicitProxy.url === storedProxy.url &&
+  const storedProxyRouteKey = storedProxy ? buildProxyEgressKey(storedProxy) : null;
+  const explicitProxyRouteKey = explicitProxy ? buildProxyEgressKey(explicitProxy) : null;
+  const matchesStoredProxyRoute = Boolean(
+    storedProxyRouteKey && explicitProxyRouteKey && storedProxyRouteKey === explicitProxyRouteKey,
+  );
+  const reusesStoredProxyAuth = explicitProxy && storedProxy && matchesStoredProxyRoute &&
     explicitProxy.username === null && explicitProxy.password === null &&
     (storedProxy.username !== null || storedProxy.password !== null);
   const proxy = body.proxy === undefined
@@ -218,7 +223,10 @@ export async function updatePageCredentials(
     : reusesStoredProxyAuth
       ? storedProxy
       : explicitProxy;
-  const preservesStoredProxyRoute = Boolean(proxy && storedProxy && proxy.url === storedProxy.url);
+  const proxyRouteKey = proxy ? buildProxyEgressKey(proxy) : null;
+  const preservesStoredProxyRoute = Boolean(
+    proxyRouteKey && storedProxyRouteKey && proxyRouteKey === storedProxyRouteKey,
+  );
   const proxyEgressKey = preservesStoredProxyRoute
     ? storedEgressKey
     : buildProxyEgressKey(proxy);

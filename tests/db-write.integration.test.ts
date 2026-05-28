@@ -627,7 +627,7 @@ describe("db write safety", () => {
     );
     await storeFanslySession(testDb.db, page.id, encryptedSession, 1);
     await storeProxyConfig(testDb.db, page.id, {
-      url: "socks5://proxy.example:1080",
+      url: "socks5://proxy.example",
       encryptedAuth: null,
       keyVersion: null,
       rateLimitScopeKey: "shared-proxy-pool",
@@ -1118,7 +1118,7 @@ describe("db write safety", () => {
     });
 
     await saveProxy(createTestAppContext(testDb), page.id, {
-      url: "socks5://proxy-user:proxy-pass@proxy.example:1080",
+      url: "socks5://proxy-user:proxy-pass@proxy.example",
     });
 
     let verifyCallCount = 0;
@@ -1159,13 +1159,13 @@ describe("db write safety", () => {
 
     expect(verifyCallCount).toBe(1);
     expect(verifiedProxy).toEqual({
-      url: "socks5://proxy.example:1080",
+      url: "socks5://proxy.example",
       username: "proxy-user",
       password: "proxy-pass",
     });
     expect(proxyRows.rows).toEqual([
       {
-        url: "socks5://proxy.example:1080",
+        url: "socks5://proxy.example",
         has_encrypted_auth: true,
       },
     ]);
@@ -1187,7 +1187,7 @@ describe("db write safety", () => {
     });
 
     await saveProxy(createTestAppContext(testDb), page.id, {
-      url: "socks5://proxy-user:proxy-pass@proxy.example:1080",
+      url: "socks5://proxy-user:proxy-pass@proxy.example",
     });
     await testDb.pool.query(
       `
@@ -1241,14 +1241,14 @@ describe("db write safety", () => {
     `);
 
     expect(verifiedProxy).toEqual({
-      url: "socks5://proxy.example:1080",
+      url: "socks5://proxy.example",
       username: "proxy-user",
       password: "proxy-pass",
     });
     expect(verifiedEgressKey).toBe("shared-proxy-pool");
     expect(proxyRows.rows).toEqual([
       {
-        url: "socks5://proxy.example:1080",
+        url: "socks5://proxy.example",
         rate_limit_scope_key: "shared-proxy-pool",
       },
     ]);

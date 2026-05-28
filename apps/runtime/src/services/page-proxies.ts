@@ -19,12 +19,14 @@ export async function setPageProxy(
   const normalizedProxy = normalizeProxyConfig(proxy);
   await assertAllowedProxyTarget(normalizedProxy);
   const pageContext = await resolvePageContext(app, pageLabel);
+  const storedProxyRouteKey = pageContext.proxy ? buildProxyEgressKey(pageContext.proxy) : null;
+  const proxyRouteKey = buildProxyEgressKey(normalizedProxy);
   const preservesStoredProxyRoute = Boolean(
-    pageContext.proxy && pageContext.proxy.url === normalizedProxy.url,
+    storedProxyRouteKey && proxyRouteKey === storedProxyRouteKey,
   );
   const proxyEgressKey = preservesStoredProxyRoute
     ? pageContext.egressKey
-    : buildProxyEgressKey(normalizedProxy);
+    : proxyRouteKey;
 
   if (pageContext.platform === "fansly") {
     await app.adapter.verifySession({
