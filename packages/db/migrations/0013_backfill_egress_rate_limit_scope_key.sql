@@ -1,7 +1,11 @@
 WITH parsed AS (
   SELECT id,
          lower(split_part(url, '://', 1)) AS protocol,
-         split_part(regexp_replace(url, '^[^:]+://', ''), '/', 1) AS authority
+         regexp_replace(
+           split_part(regexp_replace(url, '^[^:]+://', ''), '/', 1),
+           '^.*@',
+           ''
+         ) AS authority
   FROM egress_endpoints
   WHERE rate_limit_scope_key IS NULL
 ),

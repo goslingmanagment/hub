@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -636,6 +638,49 @@ describe("db write safety", () => {
       url: "socks5://127.0.0.1:1080",
       username: "legacy-user",
       password: "legacy-pass",
+    });
+  });
+
+  it("backfills canonical egress keys for legacy inline-auth proxy URLs", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "proxy-migration-model",
+      name: "Proxy Migration Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-migration-page",
+    });
+
+    await testDb.pool.query(`
+      insert into egress_endpoints (
+        platform_account_id,
+        kind,
+        url,
+        encrypted_auth,
+        key_version,
+        rate_limit_scope_key
+      ) values ($1, 'proxy', $2, null, null, null)
+    `, [page.id, "socks5://legacy-user:legacy-pass@127.0.0.1"]);
+
+    const migration = await readFile(
+      "packages/db/migrations/0013_backfill_egress_rate_limit_scope_key.sql",
+      "utf8",
+    );
+    await testDb.pool.query(migration);
+
+    const proxyRows = await testDb.pool.query(`
+      select rate_limit_scope_key
+      from egress_endpoints
+      where platform_account_id = $1
+    `, [page.id]);
+
+    expect(proxyRows.rows[0]).toEqual({
+      rate_limit_scope_key: "socks5://127.0.0.1:1080",
     });
   });
 
