@@ -509,7 +509,7 @@ describe("db write safety", () => {
     });
 
     await saveProxy(createTestAppContext(testDb), page.id, {
-      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+      url: "socks5://proxy-user:proxy-pass@proxy.example:1080",
     });
 
     const proxyRows = await testDb.pool.query(`
@@ -519,7 +519,7 @@ describe("db write safety", () => {
     `);
 
     expect(proxyRows.rows[0]).toEqual({
-      url: "socks5://127.0.0.1:1080",
+      url: "socks5://proxy.example:1080",
       has_encrypted_auth: true,
     });
   });
@@ -1014,7 +1014,7 @@ describe("db write safety", () => {
     });
 
     await saveProxy(createTestAppContext(testDb), page.id, {
-      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+      url: "socks5://proxy-user:proxy-pass@proxy.example:1080",
     });
 
     let verifyCallCount = 0;
@@ -1055,14 +1055,97 @@ describe("db write safety", () => {
 
     expect(verifyCallCount).toBe(1);
     expect(verifiedProxy).toEqual({
-      url: "socks5://127.0.0.1:1080",
+      url: "socks5://proxy.example:1080",
       username: "proxy-user",
       password: "proxy-pass",
     });
     expect(proxyRows.rows).toEqual([
       {
-        url: "socks5://127.0.0.1:1080",
+        url: "socks5://proxy.example:1080",
         has_encrypted_auth: true,
+      },
+    ]);
+  });
+
+  it("preserves custom egress scope keys when reusing stored proxy auth", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "stored-proxy-scope-model",
+      name: "Stored Proxy Scope Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "stored-proxy-scope-page",
+    });
+
+    await saveProxy(createTestAppContext(testDb), page.id, {
+      url: "socks5://proxy-user:proxy-pass@proxy.example:1080",
+    });
+    await testDb.pool.query(
+      `
+        update egress_endpoints
+        set rate_limit_scope_key = 'shared-proxy-pool'
+        where platform_account_id = $1
+      `,
+      [page.id],
+    );
+
+    let verifiedProxy: Record<string, unknown> | null = null;
+    let verifiedEgressKey: unknown = null;
+    const app = createTestAppContext(testDb, {
+      adapter: {
+        async verifySession(contextInput: {
+          proxy?: Record<string, unknown> | null;
+          egressKey?: string | null;
+        }) {
+          verifiedProxy = contextInput.proxy ?? null;
+          verifiedEgressKey = contextInput.egressKey ?? null;
+          return {
+            parsed: {
+              account: {
+                id: "acct-1",
+                username: "lana",
+                displayName: "Lana",
+                followCount: 0,
+                subscriberCount: 0,
+              },
+            },
+            raw: null,
+          };
+        },
+      } as never,
+    });
+
+    await updatePageCredentials(app, page.label, {
+      platform: "fansly",
+      session: {
+        authorization: "replacement-token",
+      },
+      proxy: {
+        url: "socks5://proxy.example:1080",
+      },
+    });
+
+    const proxyRows = await testDb.pool.query(`
+      select url, rate_limit_scope_key
+      from egress_endpoints
+      where platform_account_id = ${page.id}
+    `);
+
+    expect(verifiedProxy).toEqual({
+      url: "socks5://proxy.example:1080",
+      username: "proxy-user",
+      password: "proxy-pass",
+    });
+    expect(verifiedEgressKey).toBe("shared-proxy-pool");
+    expect(proxyRows.rows).toEqual([
+      {
+        url: "socks5://proxy.example:1080",
+        rate_limit_scope_key: "shared-proxy-pool",
       },
     ]);
   });

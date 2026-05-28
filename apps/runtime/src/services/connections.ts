@@ -210,17 +210,16 @@ export async function updatePageCredentials(
   if (explicitProxy) {
     await assertAllowedProxyTarget(explicitProxy);
   }
+  const reusesStoredProxyAuth = explicitProxy && storedProxy && explicitProxy.url === storedProxy.url &&
+    explicitProxy.username === null && explicitProxy.password === null &&
+    (storedProxy.username !== null || storedProxy.password !== null);
   const proxy = body.proxy === undefined
     ? storedProxy
-    : explicitProxy && storedProxy && explicitProxy.url === storedProxy.url &&
-        explicitProxy.username === null && explicitProxy.password === null &&
-        (storedProxy.username !== null || storedProxy.password !== null)
+    : reusesStoredProxyAuth
       ? storedProxy
       : explicitProxy;
-  const proxyEgressKey = proxy && storedProxy &&
-      proxy.url === storedProxy.url &&
-      proxy.username === storedProxy.username &&
-      proxy.password === storedProxy.password
+  const preservesStoredProxyRoute = Boolean(proxy && storedProxy && proxy.url === storedProxy.url);
+  const proxyEgressKey = preservesStoredProxyRoute
     ? storedEgressKey
     : buildProxyEgressKey(proxy);
 
@@ -307,7 +306,9 @@ export async function updatePageCredentials(
 
   if (hasExplicitProxyInput) {
     if (proxy) {
-      await saveProxy(app, stored.page.id, proxy);
+      await saveProxy(app, stored.page.id, proxy, {
+        rateLimitScopeKey: preservesStoredProxyRoute ? stored.proxy?.rateLimitScopeKey : undefined,
+      });
     } else {
       await removeProxy(app, stored.page.id);
     }

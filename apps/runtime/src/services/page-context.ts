@@ -116,6 +116,9 @@ export async function saveProxy(
   app: Pick<AppContext, "config" | "db">,
   platformAccountId: number,
   proxy: ProxyConfig,
+  options?: {
+    rateLimitScopeKey?: string | null;
+  },
 ) {
   const normalized = normalizeProxyConfig(proxy);
   const encryptedAuth = normalized.username || normalized.password
@@ -135,7 +138,7 @@ export async function saveProxy(
     url: normalized.url,
     encryptedAuth,
     keyVersion: encryptedAuth ? app.config.encryptionKeyVersion : null,
-    rateLimitScopeKey: buildProxyEgressKey(normalized),
+    rateLimitScopeKey: options?.rateLimitScopeKey ?? buildProxyEgressKey(normalized),
   });
 }
 
