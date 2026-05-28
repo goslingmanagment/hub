@@ -693,6 +693,42 @@ export async function getPageSyncState(
   return rows[0] ?? null;
 }
 
+async function lockPageSyncStateForRequest(
+  db: Database,
+  pageId: number,
+  stream: SyncStream,
+) {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select request_seq as "requestSeq",
+           status as "status"
+    from ${pageSyncStates}
+    where page_id = ${pageId}
+      and stream = ${stream}
+    for update
+  `);
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  const rawStatus = typeof row.status === "string" ? row.status : null;
+  if (
+    rawStatus !== "idle" &&
+    rawStatus !== "pending" &&
+    rawStatus !== "running" &&
+    rawStatus !== "retrying" &&
+    rawStatus !== "blocked" &&
+    rawStatus !== "paused"
+  ) {
+    throw new Error(`Expected status to be a supported page sync status, got ${String(row.status)}`);
+  }
+
+  return {
+    requestSeq: normalizeNumber(row.requestSeq as NumericValue, "requestSeq"),
+    status: rawStatus,
+  };
+}
+
 export async function ensurePageSyncStates(
   db: Database,
   input?: {
@@ -1641,7 +1677,7 @@ export async function requestPageSync(
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     for (const stream of input.streams) {
-      const current = await getPageSyncState(database, input.pageId, stream);
+      const current = await lockPageSyncStateForRequest(database, input.pageId, stream);
       if (!current) {
         throw new Error(`Sync stream "${stream}" does not exist for page ${input.pageId}`);
       }
