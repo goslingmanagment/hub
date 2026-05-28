@@ -11,6 +11,7 @@ import {
   reclaimExpiredPageSync,
   requestPageSync,
   runWithPageSyncExecutionContext,
+  upsertCheckpoint,
   withOwnedPageSyncTransaction,
 } from "@agency_hub_core/db";
 
@@ -103,6 +104,106 @@ describe("page sync lease fencing", () => {
         "select count(*)::int as count from lease_fencing_probe",
       );
       expect(probeRows.rows[0]?.count).toBe(0);
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("rejects checkpoint writes that race with lease loss", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "checkpoint-lease-model",
+        name: "Checkpoint Lease Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "checkpoint-lease-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+      });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["transactions"],
+        source: "manual",
+      });
+
+      const lease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "worker-1",
+        leaseToken: "lease-1",
+        leaseTtlMs: 60_000,
+      });
+      if (!lease) {
+        throw new Error("Expected to acquire a page sync lease");
+      }
+
+      const client = await testDb.pool.connect();
+      try {
+        await client.query("begin");
+        await client.query(
+          `
+            select 1
+            from page_sync_states
+            where page_id = $1
+              and stream = 'transactions'
+            for update
+          `,
+          [page.id],
+        );
+
+        const checkpointWrite = runWithPageSyncExecutionContext({
+          pageId: page.id,
+          stream: lease.stream,
+          requestSeq: lease.leasedSeq ?? lease.requestSeq,
+          leaseToken: lease.leaseToken ?? "",
+        }, async () => upsertCheckpoint(testDb.db, {
+          platformAccountId: page.id,
+          stream: lease.stream,
+          cursorText: "cursor-after-reset",
+          cursorTimestamp: new Date("2026-03-24T12:00:00.000Z"),
+          state: { phase: "after-reset" },
+          lastSuccessfulRunId: null,
+        }));
+
+        await client.query(
+          `
+            update page_sync_states
+            set status = 'paused',
+                leased_seq = null,
+                lease_owner = null,
+                lease_token = null,
+                lease_heartbeat_at = null,
+                lease_expires_at = null
+            where page_id = $1
+              and stream = 'transactions'
+          `,
+          [page.id],
+        );
+        await client.query("commit");
+
+        await expect(checkpointWrite).rejects.toBeInstanceOf(PageSyncLeaseLostError);
+      } finally {
+        await client.query("rollback").catch(() => undefined);
+        client.release();
+      }
+
+      const checkpointRows = await testDb.pool.query<{ count: number }>(
+        `
+          select count(*)::int as count
+          from page_sync_cursors
+          where page_id = $1
+            and stream = 'transactions'
+        `,
+        [page.id],
+      );
+      expect(checkpointRows.rows[0]?.count).toBe(0);
     } finally {
       await testDb.stop();
     }

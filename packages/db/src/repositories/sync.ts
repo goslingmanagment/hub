@@ -480,11 +480,12 @@ async function upsertCheckpointRow(
       with owned_task as (
         select leased_seq
         from ${pageSyncStates}
-        where page_id = ${input.platformAccountId}
-          and stream = ${input.stream}
-          and lease_token = ${executionContext.leaseToken}
-          and leased_seq = ${executionContext.requestSeq}
-      ),
+	        where page_id = ${input.platformAccountId}
+	          and stream = ${input.stream}
+	          and lease_token = ${executionContext.leaseToken}
+	          and leased_seq = ${executionContext.requestSeq}
+	        for update
+	      ),
       checkpoint_upsert as (
         insert into ${pageSyncCursors} (
           page_id,

@@ -82,6 +82,7 @@ describe("sync checkpoint repository schema alignment", () => {
       expect(statement).toContain("on conflict (page_id, stream)");
       expect(statement.split(expectedInsert)).toHaveLength(2);
       expect(statement).toContain("stream");
+      expect(statement).toContain("for update");
       expect(statement).not.toContain(["sync", "tasks"].join("_"));
       expect(statement).not.toContain(["sync", "checkpoints"].join("_"));
     }
