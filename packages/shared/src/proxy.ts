@@ -125,8 +125,96 @@ function isIpv6Literal(hostname: string) {
   return hostname.includes(":");
 }
 
+function parseIpv6Groups(hostname: string) {
+  const withoutZone = hostname.split("%", 1)[0]?.toLowerCase() ?? "";
+  const normalized = withoutZone.includes(".")
+    ? replaceDottedIpv4Tail(withoutZone)
+    : withoutZone;
+  if (!normalized) {
+    return null;
+  }
+
+  const compressedParts = normalized.split("::");
+  if (compressedParts.length > 2) {
+    return null;
+  }
+
+  const left = compressedParts[0]
+    ? compressedParts[0].split(":").filter((part) => part.length > 0)
+    : [];
+  const right = compressedParts.length === 2 && compressedParts[1]
+    ? compressedParts[1].split(":").filter((part) => part.length > 0)
+    : [];
+  const missingGroupCount = compressedParts.length === 2
+    ? 8 - left.length - right.length
+    : 0;
+  if (missingGroupCount < 0 || (compressedParts.length === 1 && left.length !== 8)) {
+    return null;
+  }
+
+  const groups = [
+    ...left,
+    ...Array.from({ length: missingGroupCount }, () => "0"),
+    ...right,
+  ];
+  if (groups.length !== 8) {
+    return null;
+  }
+
+  const parsed = groups.map((group) => {
+    if (!/^[0-9a-f]{1,4}$/i.test(group)) {
+      return Number.NaN;
+    }
+    return Number.parseInt(group, 16);
+  });
+  return parsed.every((group) => Number.isInteger(group) && group >= 0 && group <= 0xffff)
+    ? parsed
+    : null;
+}
+
+function replaceDottedIpv4Tail(hostname: string) {
+  const lastColon = hostname.lastIndexOf(":");
+  if (lastColon === -1) {
+    return hostname;
+  }
+
+  const ipv4Tail = hostname.slice(lastColon + 1);
+  if (!isIpv4Literal(ipv4Tail)) {
+    return hostname;
+  }
+
+  const [a = 0, b = 0, c = 0, d = 0] = ipv4Tail.split(".").map((part) => Number.parseInt(part, 10));
+  return `${hostname.slice(0, lastColon)}:${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+}
+
+function mappedIpv6ToIpv4(hostname: string) {
+  const groups = parseIpv6Groups(hostname);
+  if (!groups) {
+    return null;
+  }
+
+  const isMapped = groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff;
+  if (!isMapped) {
+    return null;
+  }
+
+  const high = groups[6] ?? 0;
+  const low = groups[7] ?? 0;
+  return [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff,
+  ].join(".");
+}
+
 function isPrivateIpv6(hostname: string) {
   const normalized = hostname.toLowerCase();
+  const mappedIpv4 = mappedIpv6ToIpv4(normalized);
+  if (mappedIpv4) {
+    return isPrivateIpv4(mappedIpv4);
+  }
+
   return (
     normalized === "::" ||
     normalized === "::1" ||
