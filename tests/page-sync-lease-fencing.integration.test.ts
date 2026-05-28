@@ -14,6 +14,7 @@ import {
   requestPageSync,
   retryPageSync,
   runWithPageSyncExecutionContext,
+  scheduleDuePageSync,
   upsertCheckpoint,
   withOwnedPageSyncTransaction,
 } from "@agency_hub_core/db";
@@ -372,6 +373,68 @@ describe("page sync lease fencing", () => {
         leaseToken: null,
       });
       expect(await countRunnableLightRows()).toBe(1);
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("keeps active leases running when the scheduler races after its setup phase", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "schedule-lease-model",
+        name: "Schedule Lease Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "schedule-lease-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["light"],
+        source: "manual",
+        now,
+      });
+
+      const dbWithInjectedLease = Object.create(testDb.db) as typeof testDb.db;
+      let transactionCount = 0;
+      dbWithInjectedLease.transaction = async (callback) => {
+        transactionCount += 1;
+        if (transactionCount === 2) {
+          await acquirePageSyncLease(testDb.db, {
+            pageId: page.id,
+            workerId: "worker-1",
+            leaseToken: "lease-1",
+            leaseTtlMs: 60_000,
+            now,
+          });
+        }
+        return testDb.db.transaction(callback);
+      };
+
+      await scheduleDuePageSync(dbWithInjectedLease, {
+        pageId: page.id,
+        now,
+      });
+
+      expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
+        status: "running",
+        requestSeq: 2,
+        appliedSeq: 0,
+        leasedSeq: 2,
+        leaseToken: "lease-1",
+      });
     } finally {
       await testDb.stop();
     }

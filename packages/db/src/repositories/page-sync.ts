@@ -1035,13 +1035,14 @@ export async function scheduleDuePageSync(
   });
   await reclaimExpiredPageSync(db, now);
 
-  const rows = await listPageSyncStates(
-    db,
-    input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
-  );
-
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
+    const rows = await listPageSyncStatesInternal(
+      database,
+      input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
+      { lock: true },
+    );
+
     for (const row of rows) {
       if (row.status === "paused") {
         continue;
