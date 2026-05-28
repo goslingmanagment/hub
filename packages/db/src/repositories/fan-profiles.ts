@@ -19,7 +19,7 @@ export async function appendFanProfile(
   return db.transaction(async (tx) => {
     // Serialize version assignment per fan/page so version numbers stay gapless and monotonic.
     await tx.execute(sql`
-      select pg_advisory_xact_lock(${input.platformAccountId}, ${input.fanId})
+      select pg_advisory_xact_lock(hashtextextended(${`${input.platformAccountId}:${input.fanId}`}, 0))
     `);
 
     const [latest] = await tx
