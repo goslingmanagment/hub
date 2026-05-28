@@ -75,6 +75,7 @@ function parseNormalizedProxyConfig(proxy: ProxyConfig): NormalizedProxyConfig {
   const inlinePassword = decodeUrlCredential(parsed.password);
   const username = resolveCredentialField("username", proxy.username, inlineUsername);
   const password = resolveCredentialField("password", proxy.password, inlinePassword);
+  parsed.hostname = parsed.hostname.toLowerCase();
 
   return {
     url: normalizeProxyUrl(parsed),

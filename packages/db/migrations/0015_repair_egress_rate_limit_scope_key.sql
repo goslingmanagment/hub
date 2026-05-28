@@ -38,6 +38,7 @@ $$;
 WITH parsed AS (
   SELECT id,
          lower(split_part(url, '://', 1)) AS protocol,
+         rate_limit_scope_key,
          regexp_replace(
            split_part(
              split_part(
@@ -53,11 +54,15 @@ WITH parsed AS (
          ) AS authority
   FROM egress_endpoints
   WHERE kind = 'proxy'
-    AND rate_limit_scope_key IS NULL
+    AND (
+      rate_limit_scope_key IS NULL OR
+      rate_limit_scope_key ~ '^(http|https|socks5)://'
+    )
 ),
 authority_parts AS (
   SELECT parsed.id,
          parsed.protocol,
+         parsed.rate_limit_scope_key,
          (matched.parts)[1] AS raw_host,
          (matched.parts)[2] AS raw_port
   FROM parsed
@@ -73,6 +78,7 @@ authority_parts AS (
 canonical AS (
   SELECT id,
          protocol,
+         rate_limit_scope_key,
          pg_temp.canonical_proxy_host(raw_host) AS host,
          COALESCE(
            NULLIF(raw_port, ''),
@@ -88,6 +94,7 @@ canonical AS (
 validated AS (
   SELECT id,
          protocol,
+         rate_limit_scope_key,
          host,
          CASE
            WHEN port_text ~ '^[0-9]{1,5}$' THEN port_text::integer
@@ -100,4 +107,6 @@ SET rate_limit_scope_key = validated.protocol || '://' || validated.host || ':' 
 FROM validated
 WHERE e.id = validated.id
   AND validated.host <> ''
-  AND validated.port BETWEEN 1 AND 65535;
+  AND validated.port BETWEEN 1 AND 65535
+  AND validated.rate_limit_scope_key IS DISTINCT FROM
+    validated.protocol || '://' || validated.host || ':' || validated.port::text;

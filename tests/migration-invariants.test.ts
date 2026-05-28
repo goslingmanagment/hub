@@ -25,4 +25,16 @@ describe("database migration invariants", () => {
     expect(migration).toContain("st.stream = 'transactions'::sync_stream");
     expect(migration).toContain("st.stream = 'subscribers'::sync_stream AND p.platform = 'fansly'");
   });
+
+  it("keeps egress key repair idempotent and scoped to URL-like keys", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0015_repair_egress_rate_limit_scope_key.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain("rate_limit_scope_key IS NULL OR");
+    expect(migration).toContain("rate_limit_scope_key ~ '^(http|https|socks5)://'");
+    expect(migration).toContain("IS DISTINCT FROM");
+    expect(migration).toContain("EXCEPTION WHEN others THEN");
+  });
 });

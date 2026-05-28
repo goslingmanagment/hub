@@ -671,6 +671,26 @@ describe("db write safety", () => {
       modelId: model.id,
       label: "proxy-migration-ipv6",
     });
+    const uppercaseHostPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-migration-uppercase-host",
+    });
+    const mappedIpv6Page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-migration-mapped-ipv6",
+    });
+    const invalidIpv6Page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-migration-invalid-ipv6",
+    });
+    const invalidPortPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-migration-invalid-port",
+    });
+    const extraAuthorityPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-migration-extra-authority",
+    });
 
     await testDb.pool.query(`
       insert into egress_endpoints (
@@ -685,7 +705,12 @@ describe("db write safety", () => {
         ($3, 'proxy', $4, null, null, null),
         ($5, 'proxy', $6, null, null, null),
         ($7, 'proxy', $8, null, null, null),
-        ($9, 'proxy', $10, null, null, null)
+        ($9, 'proxy', $10, null, null, null),
+        ($11, 'proxy', $12, null, null, null),
+        ($13, 'proxy', $14, null, null, null),
+        ($15, 'proxy', $16, null, null, null),
+        ($17, 'proxy', $18, null, null, null),
+        ($19, 'proxy', $20, null, null, null)
     `, [
       inlineAuthPage.id,
       "socks5://legacy-user:legacy-pass@127.0.0.1",
@@ -697,6 +722,16 @@ describe("db write safety", () => {
       "socks5://legacy-user:legacy-pass@proxy.example:01080",
       ipv6Page.id,
       "socks5://legacy-user:legacy-pass@[2001:0db8:0:0:0:0:0:1]",
+      uppercaseHostPage.id,
+      "socks5://legacy-user:legacy-pass@Proxy.EXAMPLE",
+      mappedIpv6Page.id,
+      "socks5://legacy-user:legacy-pass@[::ffff:192.0.2.1]:1080",
+      invalidIpv6Page.id,
+      "socks5://legacy-user:legacy-pass@[bad:host]:1080",
+      invalidPortPage.id,
+      "socks5://legacy-user:legacy-pass@proxy.example:999999999999999999",
+      extraAuthorityPage.id,
+      "socks5://legacy-user:legacy-pass@proxy.example:1080:garbage",
     ]);
 
     const migration = await readFile(
@@ -710,7 +745,18 @@ describe("db write safety", () => {
       from egress_endpoints
       where platform_account_id = any($1::int[])
       order by id
-    `, [[inlineAuthPage.id, queryPage.id, fragmentPage.id, leadingZeroPortPage.id, ipv6Page.id]]);
+    `, [[
+      inlineAuthPage.id,
+      queryPage.id,
+      fragmentPage.id,
+      leadingZeroPortPage.id,
+      ipv6Page.id,
+      uppercaseHostPage.id,
+      mappedIpv6Page.id,
+      invalidIpv6Page.id,
+      invalidPortPage.id,
+      extraAuthorityPage.id,
+    ]]);
 
     expect(proxyRows.rows).toEqual([
       {
@@ -732,6 +778,114 @@ describe("db write safety", () => {
       {
         url: "socks5://legacy-user:legacy-pass@[2001:0db8:0:0:0:0:0:1]",
         rate_limit_scope_key: "socks5://[2001:db8::1]:1080",
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@Proxy.EXAMPLE",
+        rate_limit_scope_key: "socks5://proxy.example:1080",
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@[::ffff:192.0.2.1]:1080",
+        rate_limit_scope_key: "socks5://[::ffff:c000:201]:1080",
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@[bad:host]:1080",
+        rate_limit_scope_key: null,
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@proxy.example:999999999999999999",
+        rate_limit_scope_key: null,
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@proxy.example:1080:garbage",
+        rate_limit_scope_key: null,
+      },
+    ]);
+  });
+
+  it("repairs non-null canonical egress keys from previously applied migrations", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "proxy-repair-model",
+      name: "Proxy Repair Model",
+    });
+    const uppercaseHostPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-repair-uppercase-host",
+    });
+    const leadingZeroPortPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-repair-leading-zero-port",
+    });
+    const ipv6Page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-repair-ipv6",
+    });
+    const customScopePage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "proxy-repair-custom-scope",
+    });
+
+    await testDb.pool.query(`
+      insert into egress_endpoints (
+        platform_account_id,
+        kind,
+        url,
+        encrypted_auth,
+        key_version,
+        rate_limit_scope_key
+      ) values
+        ($1, 'proxy', $2, null, null, $3),
+        ($4, 'proxy', $5, null, null, $6),
+        ($7, 'proxy', $8, null, null, $9),
+        ($10, 'proxy', $11, null, null, $12)
+    `, [
+      uppercaseHostPage.id,
+      "socks5://legacy-user:legacy-pass@Proxy.EXAMPLE",
+      "socks5://Proxy.EXAMPLE:1080",
+      leadingZeroPortPage.id,
+      "socks5://legacy-user:legacy-pass@proxy.example:01080",
+      "socks5://proxy.example:01080",
+      ipv6Page.id,
+      "socks5://legacy-user:legacy-pass@[2001:0db8:0:0:0:0:0:1]",
+      "socks5://[2001:0db8:0:0:0:0:0:1]:1080",
+      customScopePage.id,
+      "socks5://legacy-user:legacy-pass@proxy.example",
+      "shared-proxy-pool",
+    ]);
+
+    const migration = await readFile(
+      "packages/db/migrations/0015_repair_egress_rate_limit_scope_key.sql",
+      "utf8",
+    );
+    await testDb.pool.query(migration);
+
+    const proxyRows = await testDb.pool.query(`
+      select url, rate_limit_scope_key
+      from egress_endpoints
+      where platform_account_id = any($1::int[])
+      order by id
+    `, [[uppercaseHostPage.id, leadingZeroPortPage.id, ipv6Page.id, customScopePage.id]]);
+
+    expect(proxyRows.rows).toEqual([
+      {
+        url: "socks5://legacy-user:legacy-pass@Proxy.EXAMPLE",
+        rate_limit_scope_key: "socks5://proxy.example:1080",
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@proxy.example:01080",
+        rate_limit_scope_key: "socks5://proxy.example:1080",
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@[2001:0db8:0:0:0:0:0:1]",
+        rate_limit_scope_key: "socks5://[2001:db8::1]:1080",
+      },
+      {
+        url: "socks5://legacy-user:legacy-pass@proxy.example",
+        rate_limit_scope_key: "shared-proxy-pool",
       },
     ]);
   });

@@ -148,6 +148,7 @@ ROLLBACK_COMPOSE_RECREATE_FAILED=0
 ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0013_backfill_egress_rate_limit_scope_key.sql"
   "0014_repair_light_trusted_sync_states.sql"
+  "0015_repair_egress_rate_limit_scope_key.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

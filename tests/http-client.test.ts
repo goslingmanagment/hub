@@ -366,6 +366,12 @@ describe("shared http client helpers", () => {
     expect(buildProxyEgressKey({
       url: "socks5://proxy.example",
     })).toBe("socks5://proxy.example:1080");
+    expect(buildProxyEgressKey({
+      url: "socks5://Proxy.EXAMPLE:01080",
+    })).toBe("socks5://proxy.example:1080");
+    expect(buildProxyEgressKey({
+      url: "socks5://[::ffff:192.0.2.1]:1080",
+    })).toBe("socks5://[::ffff:c000:201]:1080");
     expect(buildSyncPageExecuteGroupId("fansly", "socks5://proxy.example:1080")).toBe(
       "fansly:socks5://proxy.example:1080",
     );
