@@ -1632,6 +1632,7 @@ export async function pausePageSync(
   const streams = normalizePageSyncRequestStreams(input.streams);
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
+    await listPageSyncStatesInternal(database, { pageId: input.pageId }, { lock: true });
     for (const stream of streams) {
       await database.execute(sql`
         update ${pageSyncStates}
@@ -1665,6 +1666,7 @@ export async function resumePageSync(
   const streams = normalizePageSyncRequestStreams(input.streams);
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
+    await listPageSyncStatesInternal(database, { pageId: input.pageId }, { lock: true });
     for (const stream of streams) {
       await database.execute(sql`
         update ${pageSyncStates}
@@ -1698,6 +1700,7 @@ export async function resetPageSync(
   const streams = normalizePageSyncRequestStreams(input.streams);
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
+    await listPageSyncStatesInternal(database, { pageId: input.pageId }, { lock: true });
     for (const stream of streams) {
       await database.execute(sql`
         update ${pageSyncStates}

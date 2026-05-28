@@ -214,14 +214,18 @@ describe("page-sync repository schema alignment", () => {
     const pageId = 55;
     const requestedStreams: SyncStream[] = ["dm_messages", "transactions", "light", "transactions", "dm_conversations"];
 
-    async function captureUpdatedStreams(
+    async function captureControlQueryOrder(
       run: (db: never) => Promise<void>,
     ) {
       const updatedStreams: unknown[] = [];
+      const lockedStatements: string[] = [];
       const execute = vi.fn(async (query: SQL) => {
         const rendered = DIALECT.sqlToQuery(query).sql;
         const params = DIALECT.sqlToQuery(query).params;
 
+        if (rendered.includes('from "page_sync_states"') && rendered.includes("for update")) {
+          lockedStatements.push(rendered);
+        }
         if (rendered.includes('update "page_sync_states"') && rendered.includes("stream = $")) {
           updatedStreams.push(findStreamParam(params));
         }
@@ -236,34 +240,43 @@ describe("page-sync repository schema alignment", () => {
       await run(db);
 
       expect((db as { transaction: ReturnType<typeof vi.fn> }).transaction).toHaveBeenCalledTimes(1);
-      return updatedStreams;
+      return { lockedStatements, updatedStreams };
     }
 
-    await expect(captureUpdatedStreams((db) => pausePageSync(db, {
+    await expect(captureControlQueryOrder((db) => pausePageSync(db, {
       pageId,
       streams: requestedStreams,
       now,
-    }))).resolves.toEqual([
-      "light",
-      "transactions",
-      "dm_conversations",
-      "dm_messages",
-    ]);
-    await expect(captureUpdatedStreams((db) => resumePageSync(db, {
+    }))).resolves.toMatchObject({
+      updatedStreams: [
+        "light",
+        "transactions",
+        "dm_conversations",
+        "dm_messages",
+      ],
+    });
+    await expect(captureControlQueryOrder((db) => resumePageSync(db, {
       pageId,
       streams: requestedStreams,
       now,
-    }))).resolves.toEqual([
-      "light",
-      "transactions",
-      "dm_conversations",
-      "dm_messages",
-    ]);
-    await expect(captureUpdatedStreams((db) => resetPageSync(db, {
+    }))).resolves.toMatchObject({
+      updatedStreams: [
+        "light",
+        "transactions",
+        "dm_conversations",
+        "dm_messages",
+      ],
+    });
+    const resetControl = await captureControlQueryOrder((db) => resetPageSync(db, {
       pageId,
       streams: requestedStreams,
       now,
-    }))).resolves.toEqual([
+    }));
+
+    expect(resetControl.lockedStatements).toHaveLength(1);
+    expect(resetControl.lockedStatements[0]).toContain("order by page_id asc");
+    expect(resetControl.lockedStatements[0]).toContain("for update");
+    expect(resetControl.updatedStreams).toEqual([
       "light",
       "transactions",
       "dm_conversations",
