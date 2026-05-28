@@ -206,6 +206,8 @@ describe("compose config", () => {
     expect(text).toContain("0013_backfill_egress_rate_limit_scope_key.sql");
     expect(text).toContain("0014_repair_light_trusted_sync_states.sql");
     expect(text).toContain("0015_repair_egress_rate_limit_scope_key.sql");
+    expect(text).toContain("0016_canonical_proxy_egress_key_function.sql");
+    expect(text).toContain("0017_reapply_egress_rate_limit_scope_key_repair.sql");
     expect(text).toContain("schema_migration_delta_allows_rollback");
     expect(rollback).toContain("Schema migrations changed only by rollback-compatible data migrations");
     expect(rollback).toContain("Rollback skipped; schema_migrations changed during this deploy");

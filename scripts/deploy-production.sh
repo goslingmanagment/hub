@@ -149,6 +149,8 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0013_backfill_egress_rate_limit_scope_key.sql"
   "0014_repair_light_trusted_sync_states.sql"
   "0015_repair_egress_rate_limit_scope_key.sql"
+  "0016_canonical_proxy_egress_key_function.sql"
+  "0017_reapply_egress_rate_limit_scope_key_repair.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
