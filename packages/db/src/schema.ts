@@ -225,6 +225,13 @@ export const notificationIncidents = pgTable(
   }),
 );
 
+export const notificationIncidentRecoveries = pgTable("notification_incident_recoveries", {
+  incidentKey: text("incident_key").primaryKey(),
+  recoveredAt: timestamp("recovered_at", { withTimezone: true }).notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const telegramSettings = pgTable("telegram_settings", {
   id: integer("id").primaryKey().default(1),
   enabled: boolean("enabled").default(true).notNull(),

@@ -470,6 +470,7 @@ export async function executeNextSyncPageChunk(
       endpoint: taskLease.stream,
       action: `executing ${taskLease.stream} sync chunk`,
     });
+    const failedAt = new Date();
     const provider = storedPage.page.platform;
     const pageLabel = storedPage.page.label;
     const hasProxy = storedPage.proxy !== null;
@@ -488,6 +489,7 @@ export async function executeNextSyncPageChunk(
         phase: taskLease.phase,
         workClass: taskLease.workClass ?? "live",
         progress: taskLease.progress,
+        now: failedAt,
       });
       if (!blockResult.updated) {
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
@@ -516,6 +518,7 @@ export async function executeNextSyncPageChunk(
         platform: provider,
         errorCode: failure.error.code,
         errorSummary: failure.summary,
+        occurredAt: failedAt,
       });
       return {
         kind: "blocked",
@@ -542,6 +545,7 @@ export async function executeNextSyncPageChunk(
         phase: taskLease.phase,
         workClass: taskLease.workClass ?? "live",
         progress: taskLease.progress,
+        now: failedAt,
       });
       if (!blockResult.updated) {
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
@@ -554,7 +558,7 @@ export async function executeNextSyncPageChunk(
         return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "failed", continuationPriority);
       }
     } else {
-      const retried = await retryPageSync(app.db, {
+      const retryResult = await retryPageSync(app.db, {
         pageId: platformAccountId,
         stream: taskLease.stream,
         requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
@@ -565,9 +569,17 @@ export async function executeNextSyncPageChunk(
         phase: taskLease.phase,
         workClass: taskLease.workClass ?? "live",
         progress: taskLease.progress,
+        now: failedAt,
       });
-      if (!retried) {
+      if (!retryResult.updated) {
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
+      }
+      if (!retryResult.retried) {
+        await telemetry.finish("failed", failure, {
+          chunkStatus: "stale_retry",
+        });
+        const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
+        return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "failed", continuationPriority);
       }
     }
 
@@ -591,6 +603,7 @@ export async function executeNextSyncPageChunk(
       previousConsecutiveFailures: taskLease.consecutiveFailures,
       errorCode: failure.error.code,
       errorSummary: failure.summary,
+      occurredAt: failedAt,
     });
     const continuationPriority = classified.mode === "retry"
       ? await resolveContinuationPriority(app, platformAccountId)

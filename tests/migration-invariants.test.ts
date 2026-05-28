@@ -51,4 +51,15 @@ describe("database migration invariants", () => {
     expect(migration).toContain("canonical.canonical_scope_key IS NOT DISTINCT FROM canonical.canonical_key");
     expect(migration).toContain("IS DISTINCT FROM");
   });
+
+  it("adds durable notification incident recovery watermarks", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0018_notification_incident_recovery_watermarks.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS "notification_incident_recoveries"');
+    expect(migration).toContain('"incident_key" text PRIMARY KEY');
+    expect(migration).toContain('"recovered_at" timestamptz NOT NULL');
+  });
 });

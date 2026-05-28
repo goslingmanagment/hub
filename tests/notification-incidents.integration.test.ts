@@ -737,4 +737,61 @@ describe("notification incidents integration", () => {
     ]));
     expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
+
+  it("does not open delayed failures that occurred before recovery", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "delayed-failure-recovery-model",
+      name: "Delayed Failure Recovery Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "delayed-failure-recovery-page",
+    });
+
+    const failureAt = new Date("2026-03-15T12:00:00.000Z");
+    const recoveredAt = new Date("2026-03-15T12:00:01.000Z");
+    const laterFailureAt = new Date("2026-03-15T12:00:02.000Z");
+    const app = createTestAppContext(testDb);
+
+    await handleSuccessfulPageVerificationRecovery(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      recoveredAt,
+    });
+
+    await notifyAuthFailedIncident(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      errorCode: "auth_blocked",
+      errorSummary: "old delayed failure",
+      occurredAt: failureAt,
+    });
+
+    expect(await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`)).toBeNull();
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
+
+    await notifyAuthFailedIncident(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      errorCode: "auth_blocked",
+      errorSummary: "new failure after recovery",
+      occurredAt: laterFailureAt,
+    });
+
+    const incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
+    expect(incident).toMatchObject({
+      status: "open",
+      errorSummary: "new failure after recovery",
+    });
+    expect(incident?.lastSeenAt.toISOString()).toBe(laterFailureAt.toISOString());
+    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+  });
 });

@@ -70,6 +70,11 @@ export interface PageSyncBlockResult {
   blocked: boolean;
 }
 
+export interface PageSyncRetryResult {
+  updated: boolean;
+  retried: boolean;
+}
+
 export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
   light: {
     stream: "light",
@@ -1485,12 +1490,12 @@ export async function retryPageSync(
     progress?: Record<string, unknown>;
     now?: Date;
   },
-) {
+): Promise<PageSyncRetryResult> {
   const now = input.now ?? new Date();
   const row = await getPageSyncState(db, input.pageId, input.stream);
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
   const retryAt = new Date(now.getTime() + resolveRetryDelayMs(nextFailures));
-  const result = await db.execute(sql`
+  const result = await db.execute(sql<{ status: PageSyncStatus; retryKind: string | null }>`
     update ${pageSyncStates}
     set status = case
                    when request_seq > ${input.requestSeq} then 'pending'::page_sync_status
@@ -1521,9 +1526,15 @@ export async function retryPageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+    returning status,
+              retry_kind as "retryKind"
   `);
 
-  return (result.rowCount ?? 0) > 0;
+  const updated = result.rows[0] ?? null;
+  return {
+    updated: updated !== null,
+    retried: updated?.status === "retrying" && updated.retryKind === input.retryKind,
+  };
 }
 
 export async function blockPageSync(

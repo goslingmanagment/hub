@@ -1,13 +1,20 @@
 import { and, count, desc, eq, lte, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { notificationIncidents, pages, telegramDeliveryAttempts } from "../schema.ts";
+import {
+  notificationIncidentRecoveries,
+  notificationIncidents,
+  pages,
+  telegramDeliveryAttempts,
+} from "../schema.ts";
 
 export type NotificationIncidentKind = "auth_blocked" | "proxy_failed" | "stream_failed_threshold";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";
+export type GuardedNotificationIncidentTransition = NotificationIncidentTransition | "suppressed";
 const MAX_OPEN_INCIDENT_ATTEMPTS = 3;
+const INCIDENT_ADVISORY_LOCK_SEED = 837_451_029;
 
 type LockedNotificationIncidentRow = NotificationIncidentRow & {
   status: NotificationIncidentStatus;
@@ -54,6 +61,32 @@ async function readNotificationIncidentForReturn(
   }
 
   return incident;
+}
+
+async function lockNotificationIncidentKey(
+  db: Database,
+  incidentKey: string,
+) {
+  await db.execute(sql`
+    select pg_advisory_xact_lock(hashtextextended(${incidentKey}, ${INCIDENT_ADVISORY_LOCK_SEED}))
+  `);
+}
+
+async function getNotificationIncidentRecovery(
+  db: Database,
+  incidentKey: string,
+) {
+  const [recovery] = await db.select()
+    .from(notificationIncidentRecoveries)
+    .where(eq(notificationIncidentRecoveries.incidentKey, incidentKey))
+    .limit(1);
+
+  return recovery ?? null;
+}
+
+function isAtOrAfter(value: Date | string | null | undefined, reference: Date) {
+  const date = normalizeDate(value);
+  return date !== null && date.getTime() >= reference.getTime();
 }
 
 export async function getNotificationIncidentByKey(db: Database, incidentKey: string) {
@@ -161,7 +194,7 @@ export async function listNotificationIncidentsWithPages(
   };
 }
 
-export async function openNotificationIncident(
+async function openNotificationIncidentInternal(
   db: Database,
   input: {
     incidentKey: string;
@@ -173,19 +206,23 @@ export async function openNotificationIncident(
     metadata?: Record<string, unknown>;
     now?: Date;
   },
+  guard?: {
+    occurredAt: Date;
+  },
 ): Promise<{
-  incident: NotificationIncidentRow;
-  transition: NotificationIncidentTransition;
+  incident: NotificationIncidentRow | null;
+  transition: GuardedNotificationIncidentTransition;
 }> {
   const now = input.now ?? new Date();
+  const eventTime = guard?.occurredAt ?? now;
   const values = {
     incidentKey: input.incidentKey,
     kind: input.kind,
     platformAccountId: input.platformAccountId,
     stream: input.stream ?? null,
     status: "open" as const,
-    openedAt: now,
-    lastSeenAt: now,
+    openedAt: eventTime,
+    lastSeenAt: eventTime,
     resolvedAt: null,
     errorCode: input.errorCode ?? null,
     errorSummary: input.errorSummary ?? null,
@@ -193,7 +230,7 @@ export async function openNotificationIncident(
     updatedAt: now,
   };
   const existingUpdate = {
-    lastSeenAt: now,
+    lastSeenAt: eventTime,
     errorCode: input.errorCode ?? null,
     errorSummary: input.errorSummary ?? null,
     metadata: input.metadata ?? {},
@@ -203,6 +240,20 @@ export async function openNotificationIncident(
   for (let attempt = 0; attempt < MAX_OPEN_INCIDENT_ATTEMPTS; attempt += 1) {
     try {
       return await db.transaction(async (tx) => {
+        await lockNotificationIncidentKey(tx as unknown as Database, input.incidentKey);
+        if (guard) {
+          const recovery = await getNotificationIncidentRecovery(
+            tx as unknown as Database,
+            input.incidentKey,
+          );
+          if (recovery && isAtOrAfter(recovery.recoveredAt, guard.occurredAt)) {
+            return {
+              incident: null,
+              transition: "suppressed" as const,
+            };
+          }
+        }
+
         const lockedResult = await tx.execute(sql<LockedNotificationIncidentRow>`
           select id,
                  status,
@@ -284,6 +335,85 @@ export async function openNotificationIncident(
   }
 
   throw new Error(`Notification incident "${input.incidentKey}" could not be opened`);
+}
+
+export async function openNotificationIncident(
+  db: Database,
+  input: {
+    incidentKey: string;
+    kind: NotificationIncidentKind;
+    platformAccountId: number;
+    stream?: NotificationIncidentRow["stream"] | null;
+    errorCode?: string | null;
+    errorSummary?: string | null;
+    metadata?: Record<string, unknown>;
+    now?: Date;
+  },
+): Promise<{
+  incident: NotificationIncidentRow;
+  transition: NotificationIncidentTransition;
+}> {
+  const result = await openNotificationIncidentInternal(db, input);
+  if (!result.incident || result.transition === "suppressed") {
+    throw new Error(`Notification incident "${input.incidentKey}" was unexpectedly suppressed`);
+  }
+
+  return result as {
+    incident: NotificationIncidentRow;
+    transition: NotificationIncidentTransition;
+  };
+}
+
+export async function openNotificationIncidentWithRecoveryGuard(
+  db: Database,
+  input: {
+    incidentKey: string;
+    kind: NotificationIncidentKind;
+    platformAccountId: number;
+    stream?: NotificationIncidentRow["stream"] | null;
+    errorCode?: string | null;
+    errorSummary?: string | null;
+    metadata?: Record<string, unknown>;
+    occurredAt: Date;
+    now?: Date;
+  },
+): Promise<{
+  incident: NotificationIncidentRow | null;
+  transition: GuardedNotificationIncidentTransition;
+}> {
+  return openNotificationIncidentInternal(db, input, {
+    occurredAt: input.occurredAt,
+  });
+}
+
+export async function recordNotificationIncidentRecovery(
+  db: Database,
+  input: {
+    incidentKey: string;
+    recoveredAt: Date;
+    metadata?: Record<string, unknown>;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  await db.transaction(async (tx) => {
+    await lockNotificationIncidentKey(tx as unknown as Database, input.incidentKey);
+    await tx.insert(notificationIncidentRecoveries)
+      .values({
+        incidentKey: input.incidentKey,
+        recoveredAt: input.recoveredAt,
+        metadata: input.metadata ?? {},
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: notificationIncidentRecoveries.incidentKey,
+        set: {
+          recoveredAt: sql`greatest(${notificationIncidentRecoveries.recoveredAt}, excluded.recovered_at)`,
+          metadata: input.metadata ?? {},
+          updatedAt: now,
+        },
+      });
+  });
 }
 
 export async function resolveNotificationIncident(

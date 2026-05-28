@@ -570,7 +570,7 @@ describe("page sync lease fencing", () => {
         now: new Date(now.getTime() + 1_000),
       });
 
-      await retryPageSync(testDb.db, {
+      const retryResult = await retryPageSync(testDb.db, {
         pageId: page.id,
         stream: "followers",
         requestSeq: leasedSeq,
@@ -579,6 +579,10 @@ describe("page sync lease fencing", () => {
         errorCode: "http_500",
         errorSummary: "Upstream failed",
         now: new Date(now.getTime() + 2_000),
+      });
+      expect(retryResult).toEqual({
+        updated: true,
+        retried: false,
       });
 
       expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({

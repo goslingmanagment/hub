@@ -3,7 +3,8 @@ import {
   getTelegramSettings,
   hasRecentTerminalProxyFailure,
   insertDeliveryAttempt,
-  openNotificationIncident,
+  openNotificationIncidentWithRecoveryGuard,
+  recordNotificationIncidentRecovery,
   resolveNotificationIncident,
   type NotificationIncidentKind,
   type SyncStream,
@@ -89,10 +90,12 @@ async function openIncidentAndNotify(
     stream?: SyncStream | null;
     errorCode?: string | null;
     errorSummary?: string | null;
+    occurredAt?: Date;
   },
 ) {
   try {
-    const result = await openNotificationIncident(app.db, {
+    const occurredAt = input.occurredAt ?? new Date();
+    const result = await openNotificationIncidentWithRecoveryGuard(app.db, {
       incidentKey: incidentKey(input),
       kind: input.kind,
       platformAccountId: input.platformAccountId,
@@ -104,9 +107,10 @@ async function openIncidentAndNotify(
         platform: input.platform,
         stream: input.stream ?? null,
       },
+      occurredAt,
     });
 
-    if (result.transition === "existing") {
+    if (result.transition === "existing" || result.transition === "suppressed" || !result.incident) {
       return;
     }
 
@@ -154,16 +158,23 @@ async function resolveIncidentAndNotify(
   },
 ) {
   const recoveredAt = input.recoveredAt ?? new Date();
+  const metadata = {
+    pageLabel: input.pageLabel,
+    platform: input.platform,
+    stream: input.stream ?? null,
+  };
   try {
+    await recordNotificationIncidentRecovery(app.db, {
+      incidentKey: incidentKey(input),
+      recoveredAt,
+      metadata,
+      now: recoveredAt,
+    });
     const resolved = await resolveNotificationIncident(app.db, {
       incidentKey: incidentKey(input),
       maxLastSeenAt: recoveredAt,
       now: recoveredAt,
-      metadata: {
-        pageLabel: input.pageLabel,
-        platform: input.platform,
-        stream: input.stream ?? null,
-      },
+      metadata,
     });
 
     if (!resolved) {
@@ -217,6 +228,7 @@ export async function notifyAuthFailedIncident(
     platform: "fansly" | "onlyfans";
     errorCode?: string | null;
     errorSummary: string;
+    occurredAt?: Date;
   },
 ) {
   await openIncidentAndNotify(app, {
@@ -237,6 +249,7 @@ export async function notifySyncChunkFailureIncident(
     previousConsecutiveFailures: number;
     errorCode?: string | null;
     errorSummary: string;
+    occurredAt?: Date;
   },
 ) {
   try {

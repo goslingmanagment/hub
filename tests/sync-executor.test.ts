@@ -144,7 +144,7 @@ describe("sync executor", () => {
     dbMocks.acquirePageSyncLease.mockResolvedValue(null);
     dbMocks.blockPageSync.mockResolvedValue({ updated: true, blocked: true });
     dbMocks.completePageSync.mockResolvedValue(true);
-    dbMocks.retryPageSync.mockResolvedValue(true);
+    dbMocks.retryPageSync.mockResolvedValue({ updated: true, retried: true });
     dbMocks.findPageById.mockResolvedValue({
       page: {
         id: 55,
@@ -434,7 +434,7 @@ describe("sync executor", () => {
     } as never;
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    dbMocks.retryPageSync.mockResolvedValueOnce(false);
+    dbMocks.retryPageSync.mockResolvedValueOnce({ updated: false, retried: false });
     handlerMocks.executeStreamChunk.mockRejectedValue(new Error("temporary upstream failure"));
 
     const result = await executeNextSyncPageChunk(app, 55);
@@ -454,6 +454,53 @@ describe("sync executor", () => {
       stream: null,
       runId: 777,
       needsContinuation: false,
+    });
+  });
+
+  it("continues newer pending work when stale retry persistence does not apply", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.retryPageSync.mockResolvedValueOnce({ updated: true, retried: false });
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 40,
+      requestedAt: new Date("2026-03-14T12:00:01.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockRejectedValue(new Error("temporary upstream failure"));
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      requestSeq: 3,
+      leaseToken: "lease-1",
+      retryKind: "transient_network",
+    }));
+    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
+      "failed",
+      expect.objectContaining({
+        summary: "temporary upstream failure",
+      }),
+      {
+        chunkStatus: "stale_retry",
+      },
+    );
+    expect(result).toMatchObject({
+      kind: "failed",
+      platformAccountId: 55,
+      stream: "followers",
+      runId: 777,
+      needsContinuation: true,
+      continuationPriority: 40,
     });
   });
 
