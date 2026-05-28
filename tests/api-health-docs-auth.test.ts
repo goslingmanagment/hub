@@ -35,6 +35,7 @@ const { SESSION_COOKIE_NAME } = await import("../apps/runtime/src/services/auth.
 
 function createRouteTestContext(input?: {
   healthSyncMonitoringToken?: string | null;
+  syncSharedRateLimitEnabled?: boolean;
   adapter?: AppContext["adapter"];
   onlyFansAdapter?: AppContext["onlyFansAdapter"];
 }) {
@@ -61,7 +62,7 @@ function createRouteTestContext(input?: {
       onlyFansDefaultDelayMs: 1000,
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
-      syncSharedRateLimitEnabled: false,
+      syncSharedRateLimitEnabled: input?.syncSharedRateLimitEnabled ?? false,
       syncPageExecutorConcurrency: 1,
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,
@@ -331,6 +332,129 @@ describe("admin credential verification", () => {
       expect(response.statusCode).toBe(400);
       expect(JSON.stringify(response.json())).toContain("Proxy host");
       expect(verifySession).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("passes egress key and shared rate limiter into Fansly credential verification", async () => {
+    routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
+    let verificationContext: Record<string, unknown> | null = null;
+    const server = await buildApiServer(createRouteTestContext({
+      syncSharedRateLimitEnabled: true,
+      adapter: {
+        async verifySession(contextInput: Record<string, unknown>) {
+          verificationContext = contextInput;
+          return {
+            parsed: {
+              account: {
+                id: "fansly-acct",
+                username: "lora",
+                displayName: "Lora",
+                followCount: 0,
+                subscriberCount: 0,
+              },
+            },
+            raw: null,
+          };
+        },
+      } as unknown as AppContext["adapter"],
+    }));
+
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/admin/credentials/verify",
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=owner-token`,
+        },
+        payload: {
+          platform: "fansly",
+          session: {
+            authorization: "fansly-token",
+          },
+          proxy: {
+            url: "socks5://proxy.example:1080",
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        valid: true,
+        platform: "fansly",
+        username: "lora",
+        displayName: "Lora",
+      });
+      expect(verificationContext).toMatchObject({
+        egressKey: "socks5://proxy.example:1080",
+      });
+      expect(typeof verificationContext?.rateLimitWaiter).toBe("function");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("passes egress key and shared rate limiter into OnlyFans credential verification", async () => {
+    routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
+    let requestContext: Record<string, unknown> | null = null;
+    const server = await buildApiServer(createRouteTestContext({
+      syncSharedRateLimitEnabled: true,
+      onlyFansAdapter: {
+        async listAccountsPage(contextInput: Record<string, unknown>) {
+          requestContext = contextInput;
+          return {
+            parsed: {
+              accounts: [{
+                id: 42,
+                platform_account_id: "of-acct-42",
+                platform: "onlyfans",
+                name: "Lora OF",
+                email: null,
+                avatar: "https://example.com/lora.png",
+                username: "lora_of",
+                organisation_id: "org-1",
+                subscribe_price: null,
+                subscription_expiration_date: null,
+              }],
+              nextCursor: null,
+            },
+            raw: null,
+          };
+        },
+      } as unknown as AppContext["onlyFansAdapter"],
+    }));
+
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/admin/credentials/verify",
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=owner-token`,
+        },
+        payload: {
+          platform: "onlyfans",
+          auth: {
+            token: "onlyfans-token",
+          },
+          username: "lora_of",
+          proxy: {
+            url: "https://proxy.example:443",
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        valid: true,
+        platform: "onlyfans",
+        username: "lora_of",
+        displayName: "Lora OF",
+      });
+      expect(requestContext).toMatchObject({
+        egressKey: "https://proxy.example:443",
+      });
+      expect(typeof requestContext?.rateLimitWaiter).toBe("function");
     } finally {
       await server.close();
     }

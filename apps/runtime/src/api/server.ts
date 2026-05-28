@@ -46,6 +46,7 @@ import {
 import {
   createLogger,
   createProxyRequestDispatcher,
+  buildProxyEgressKey,
   encryptJson,
   millsToNumber,
   normalizeProxyConfig,
@@ -183,6 +184,7 @@ import { sql } from "drizzle-orm";
 import { listStatus, getStatusDetail } from "../services/sync.ts";
 import { requestAllPagesSync, requestPageSync } from "../services/sync-control.ts";
 import { refreshPageMetadata } from "../services/sync/shared.ts";
+import { createSyncRateLimitWaiter } from "../services/sync/rate-limiter.ts";
 import { buildOverallSyncUx } from "../services/sync-ux.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "../services/page-onboarding.ts";
 
@@ -2012,11 +2014,15 @@ export async function buildApiServer(appContext: AppContext) {
       if (proxy) {
         await assertAllowedProxyTarget(proxy);
       }
+      const egressKey = buildProxyEgressKey(proxy);
+      const rateLimitWaiter = createSyncRateLimitWaiter(appContext, { egressKey });
 
       if (body.platform === "fansly") {
         const result = await appContext.adapter.verifySession({
           session: body.session,
           proxy,
+          egressKey,
+          rateLimitWaiter,
         });
         return {
           valid: true as const,
@@ -2026,7 +2032,13 @@ export async function buildApiServer(appContext: AppContext) {
         };
       } else {
         const { findOnlyFansAccountByUsername } = await import("../services/onlyfans.ts");
-        const context = { auth: body.auth, proxy };
+        const context = {
+          auth: body.auth,
+          proxy,
+          egressKey,
+          requestObserver: null,
+          rateLimitWaiter,
+        };
         const account = await findOnlyFansAccountByUsername(
           appContext.onlyFansAdapter,
           context,
