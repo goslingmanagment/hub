@@ -956,7 +956,7 @@ async function refreshLockedPageSyncDependencies(
         continue;
       }
 
-      if (row.blockerKind !== "dependency") {
+      if (row.blockerKind !== "dependency" || row.status === "paused") {
         continue;
       }
 
@@ -972,6 +972,7 @@ async function refreshLockedPageSyncDependencies(
         where page_id = ${pageId}
           and stream = ${row.stream}
           and blocker_kind = 'dependency'
+          and status <> 'paused'
       `);
     }
   }

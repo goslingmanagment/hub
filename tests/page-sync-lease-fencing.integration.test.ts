@@ -11,6 +11,7 @@ import {
   PageSyncLeaseLostError,
   pausePageSync,
   reclaimExpiredPageSync,
+  refreshPageSyncDependencies,
   requestPageSync,
   retryPageSync,
   runWithPageSyncExecutionContext,
@@ -751,6 +752,70 @@ describe("page sync lease fencing", () => {
       const state = await getPageSyncState(testDb.db, page.id, "dm_messages");
       expect(state).toMatchObject({
         status: "blocked",
+        blockerKind: "dependency",
+        blockerCode: "unmet_dependency",
+      });
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("keeps paused dependency-blocked streams paused when dependencies refresh", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "paused-dependency-model",
+        name: "Paused Dependency Model",
+      });
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "paused-dependency-page",
+      });
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["dm_messages"],
+        source: "manual",
+        now,
+      });
+      await pausePageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["dm_messages"],
+        now: new Date(now.getTime() + 1_000),
+      });
+      await testDb.pool.query(
+        `
+          update page_sync_states
+          set applied_seq = greatest(applied_seq, request_seq),
+              succeeded_at = $1,
+              updated_at = $1
+          where page_id = $2
+            and stream = any($3::sync_stream[])
+        `,
+        [
+          new Date(now.getTime() + 2_000),
+          page.id,
+          ["light", "top_spenders", "transactions", "subscribers", "followers", "dm_conversations"],
+        ],
+      );
+
+      await refreshPageSyncDependencies(testDb.db, {
+        pageId: page.id,
+        now: new Date(now.getTime() + 3_000),
+      });
+
+      expect(await getPageSyncState(testDb.db, page.id, "dm_messages")).toMatchObject({
+        status: "paused",
         blockerKind: "dependency",
         blockerCode: "unmet_dependency",
       });
