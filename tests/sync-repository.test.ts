@@ -463,6 +463,25 @@ describe("sync repository timestamp normalization", () => {
     expect(sqlText).toContain("'partial_window'::dm_message_coverage_status");
   });
 
+  it("scopes monitor rate-limit rows to the page egress key", async () => {
+    const execute = vi.fn().mockResolvedValue({ rows: [] });
+    const db = { execute } as never;
+
+    await listSyncMonitorStreamRows(db, {
+      pageIds: [55],
+      windowStart: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    const query = execute.mock.calls[0]?.[0];
+    const sqlText = extractSqlText(query);
+
+    expect(sqlText).toContain('coalesce(, \'direct\') as "egressKey"');
+    expect(sqlText).toContain('left join  on  = ');
+    expect(sqlText).toContain('rl.egress_key as "egressKey"');
+    expect(sqlText).toContain('group by rl.provider, rl.egress_key');
+    expect(sqlText).toContain('and prl."egressKey" = ps."egressKey"');
+  });
+
   it("sorts rate-limit locks deterministically before taking row locks", async () => {
     const lockedScopes: Array<[unknown, unknown, unknown]> = [];
     const execute = vi.fn().mockImplementation(async (query) => {

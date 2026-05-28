@@ -1434,9 +1434,11 @@ export async function listSyncMonitorStreamRows(
              ${pages.username} as "username",
              ${pages.displayName} as "displayName",
              ${models.slug} as "modelSlug",
-             ${models.name} as "modelName"
+             ${models.name} as "modelName",
+             coalesce(${egressEndpoints.url}, 'direct') as "egressKey"
       from ${pages}
       inner join ${models} on ${models.id} = ${pages.modelId}
+      left join ${egressEndpoints} on ${egressEndpoints.platformAccountId} = ${pages.id}
       where ${and(...pageClauses)}
     ),
     page_streams as (
@@ -1447,6 +1449,7 @@ export async function listSyncMonitorStreamRows(
              vp."displayName",
              vp."modelSlug",
              vp."modelName",
+             vp."egressKey",
              s.stream::sync_stream as "stream"
       from visible_pages vp
       cross join lateral unnest(
@@ -1627,10 +1630,11 @@ export async function listSyncMonitorStreamRows(
     ),
     provider_rate_limits as (
       select rl.provider as "platform",
+             rl.egress_key as "egressKey",
              max(rl.next_available_at) as "providerNextAvailableAt",
              max(rl.min_spacing_ms)::int as "providerMinSpacingMs"
       from ${syncRateLimits} rl
-      group by rl.provider
+      group by rl.provider, rl.egress_key
     )
     select ps."pageId" as "pageId",
            ps."pageLabel" as "pageLabel",
@@ -1716,7 +1720,9 @@ export async function listSyncMonitorStreamRows(
     left join recent_attempt_counts rac
       on rac."pageId" = ps."pageId"
      and rac."stream" = ps."stream"
-    left join provider_rate_limits prl on prl."platform" = ps."platform"
+    left join provider_rate_limits prl
+      on prl."platform" = ps."platform"
+     and prl."egressKey" = ps."egressKey"
     left join fan_counts fc on fc."pageId" = ps."pageId"
     left join follower_counts foc on foc."pageId" = ps."pageId"
     left join subscriber_counts scnt on scnt."pageId" = ps."pageId"
