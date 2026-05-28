@@ -39,6 +39,14 @@ fail() {
   exit 1
 }
 
+fail_after_release_sync() {
+  if [[ "${STACK_RECREATED:-0}" != "1" ]]; then
+    restore_remote_release_files || log "Unable to restore remote release files after pre-recreate failure"
+  fi
+
+  fail "$@"
+}
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
@@ -409,8 +417,10 @@ tar -C "$ROOT_DIR" -cf - "${REMOTE_RELEASE_FILES[@]}" | ssh "${SSH_ARGS[@]}" "$R
   "mkdir -p ${REMOTE_APP_DIR_ESCAPED} && tar -xf - -C ${REMOTE_APP_DIR_ESCAPED}"
 
 log "Validating remote prerequisites"
-run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.production && docker compose version >/dev/null && ${REMOTE_COMPOSE} config >/dev/null"
-SYNC_MONITORING_TOKEN="$(read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN")"
+run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.production && docker compose version >/dev/null && ${REMOTE_COMPOSE} config >/dev/null" \
+  || fail_after_release_sync "Remote prerequisite validation failed after syncing release files"
+SYNC_MONITORING_TOKEN="$(read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN")" \
+  || fail_after_release_sync "Unable to read monitoring token after syncing release files"
 
 if capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"; then
   SCHEMA_BASELINE_CAPTURED=1

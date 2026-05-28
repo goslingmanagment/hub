@@ -126,6 +126,22 @@ describe("compose config", () => {
     );
   });
 
+  it("deploy-production.sh restores release files on pre-recreate validation failures", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const failAfterReleaseSync = getShellFunction(text, "fail_after_release_sync");
+    const syncIndex = text.indexOf("log \"Syncing release files");
+    const validationIndex = text.indexOf("log \"Validating remote prerequisites\"");
+    const validationFailIndex = text.indexOf("fail_after_release_sync \"Remote prerequisite validation failed after syncing release files\"");
+    const envFailIndex = text.indexOf("fail_after_release_sync \"Unable to read monitoring token after syncing release files\"");
+
+    expect(failAfterReleaseSync).not.toBeNull();
+    expect(failAfterReleaseSync).toContain("restore_remote_release_files");
+    expect(syncIndex).toBeGreaterThan(-1);
+    expect(validationIndex).toBeGreaterThan(syncIndex);
+    expect(validationFailIndex).toBeGreaterThan(validationIndex);
+    expect(envFailIndex).toBeGreaterThan(validationIndex);
+  });
+
   it("deploy-production.sh allows rollback across known data-only migrations", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const rollback = getShellFunction(text, "rollback_remote_stack");
