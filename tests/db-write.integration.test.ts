@@ -636,6 +636,7 @@ describe("db write safety", () => {
 
     expect(contextResult.proxy).toEqual({
       url: "socks5://127.0.0.1:1080",
+      egressKey: "socks5://127.0.0.1:1080",
       username: "legacy-user",
       password: "legacy-pass",
     });
@@ -952,6 +953,7 @@ describe("db write safety", () => {
     expect(contextResult.session.authorization).toBe("legacy-token");
     expect(contextResult.proxy).toEqual({
       url: "socks5://127.0.0.1:1080",
+      egressKey: "socks5://127.0.0.1:1080",
       username: "legacy-user",
       password: "legacy-pass",
     });
@@ -1046,6 +1048,7 @@ describe("db write safety", () => {
     expect(verifyCallCount).toBe(1);
     expect(verifiedProxy).toEqual({
       url: "socks5://127.0.0.1:1080",
+      egressKey: "socks5://127.0.0.1:1080",
       username: "proxy-user",
       password: "proxy-pass",
     });

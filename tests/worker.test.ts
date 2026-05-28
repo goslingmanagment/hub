@@ -60,6 +60,7 @@ describe("sync planner", () => {
         priority: 60,
         requestedAt: now,
         proxyUrl: "socks5://proxy-a.example",
+        egressKey: "socks5://proxy-a.example:1080",
       },
       {
         pageId: 22,
@@ -67,6 +68,7 @@ describe("sync planner", () => {
         priority: 45,
         requestedAt: now,
         proxyUrl: null,
+        egressKey: "direct",
       },
     ]);
     queueMocks.sendSyncPageWakeup
@@ -132,6 +134,7 @@ describe("sync planner", () => {
         priority: 60,
         requestedAt: now,
         proxyUrl: null,
+        egressKey: "direct",
       },
     ]);
     queueMocks.sendSyncPageWakeup.mockResolvedValue(null);
