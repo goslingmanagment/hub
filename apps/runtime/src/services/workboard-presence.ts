@@ -79,6 +79,7 @@ export async function getWorkboardPresenceReport(
       {
         session: pageContext.session,
         proxy: pageContext.proxy,
+        egressKey: pageContext.egressKey,
       },
       platformAccountId,
       {

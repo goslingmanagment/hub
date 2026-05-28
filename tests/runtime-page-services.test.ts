@@ -6,10 +6,13 @@ const repoMocks = vi.hoisted(() => ({
   getPageConversationPreview: vi.fn(),
   getPageConversationMessages: vi.fn(),
   getPageDmSyncCoverage: vi.fn(),
+  listFanslyFanPageIdentityBackfillTargets: vi.fn(),
+  listWorkboardPresence: vi.fn(),
   listWorkboardSubscribers: vi.fn(),
   listWorkboardActiveSpenders: vi.fn(),
   listWorkboardAllSpenders: vi.fn(),
   listWorkboardSnoozed: vi.fn(),
+  upsertFanPageExternalPresences: vi.fn(),
   millsToNumber: (value: bigint) => Number(value),
 }));
 
@@ -20,6 +23,19 @@ const authMocks = vi.hoisted(() => ({
 
 const syncStatusMocks = vi.hoisted(() => ({
   getSyncStatusSnapshot: vi.fn(),
+}));
+
+const fanslyPageMocks = vi.hoisted(() => ({
+  resolveAccessibleFanslyPage: vi.fn(),
+}));
+
+const pageContextMocks = vi.hoisted(() => ({
+  resolvePageContext: vi.fn(),
+}));
+
+const fanHydrationMocks = vi.hoisted(() => ({
+  upsertHydratedFansForPage: vi.fn(),
+  upsertHydratedFansForPageDetailed: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", () => repoMocks);
@@ -50,9 +66,21 @@ vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
     requiresAction: false,
   }),
 }));
+vi.mock("../apps/runtime/src/services/fansly-page.ts", () => ({
+  resolveAccessibleFanslyPage: fanslyPageMocks.resolveAccessibleFanslyPage,
+}));
+vi.mock("../apps/runtime/src/services/page-context.ts", () => ({
+  resolvePageContext: pageContextMocks.resolvePageContext,
+}));
+vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", () => ({
+  upsertHydratedFansForPage: fanHydrationMocks.upsertHydratedFansForPage,
+  upsertHydratedFansForPageDetailed: fanHydrationMocks.upsertHydratedFansForPageDetailed,
+}));
 
+import { backfillFanslyPageAliases } from "../apps/runtime/src/services/fansly-page-alias-backfill.ts";
 import { getPageConversationPreviewReport } from "../apps/runtime/src/services/conversations.ts";
 import { getWorkboardReport } from "../apps/runtime/src/services/workboard.ts";
+import { getWorkboardPresenceReport } from "../apps/runtime/src/services/workboard-presence.ts";
 
 describe("runtime page services", () => {
   afterEach(() => {
@@ -224,8 +252,116 @@ describe("runtime page services", () => {
     });
   });
 
+  it("passes custom egress keys into Fansly workboard presence refreshes", async () => {
+    const pageContext = {
+      platform: "fansly",
+      page: {
+        id: 7,
+        label: "lana",
+        platformAccountId: "acct-1",
+        metadata: {},
+      },
+      session: { authorization: "token" },
+      proxy: { url: "socks5://proxy.example" },
+      egressKey: "shared-proxy-pool",
+    };
+    let observedContext: Record<string, unknown> | null = null;
+    fanslyPageMocks.resolveAccessibleFanslyPage.mockResolvedValue({ id: 7 });
+    pageContextMocks.resolvePageContext.mockResolvedValue(pageContext);
+    repoMocks.listWorkboardPresence.mockResolvedValue({ total: 0, items: [] });
+    fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map());
+
+    await getWorkboardPresenceReport(
+      {
+        db: {
+          transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({}),
+        },
+        config: {
+          followerPageDelayMs: 0,
+        },
+        adapter: {
+          async getFollowersPage(context: Record<string, unknown>) {
+            observedContext = context;
+            return {
+              accounts: [],
+              items: [],
+              done: true,
+            };
+          },
+        },
+      } as never,
+      {} as never,
+      "lana",
+    );
+
+    expect(observedContext).toMatchObject({
+      egressKey: "shared-proxy-pool",
+      proxy: { url: "socks5://proxy.example" },
+    });
+  });
+
+  it("passes custom egress keys into Fansly page alias backfills", async () => {
+    const pageContext = {
+      platform: "fansly",
+      page: {
+        id: 7,
+        label: "lana",
+        platformAccountId: "acct-1",
+        metadata: {},
+      },
+      session: { authorization: "token" },
+      proxy: { url: "socks5://proxy.example" },
+      egressKey: "shared-proxy-pool",
+    };
+    let observedContext: Record<string, unknown> | null = null;
+    pageContextMocks.resolvePageContext.mockResolvedValue(pageContext);
+    repoMocks.listFanslyFanPageIdentityBackfillTargets.mockResolvedValue([{
+      platformAccountId: 7,
+      pageLabel: "lana",
+      platformUserId: "fan-1",
+    }]);
+    fanHydrationMocks.upsertHydratedFansForPageDetailed.mockResolvedValue({
+      reconciledAccountCount: 1,
+      noteCount: 0,
+      upsertedNoteCount: 0,
+      deactivatedNoteCount: 0,
+      aliasesSet: 0,
+      aliasesCleared: 0,
+    });
+
+    await backfillFanslyPageAliases(
+      {
+        db: {},
+        adapter: {
+          async getAccountsByIdsPage(context: Record<string, unknown>) {
+            observedContext = context;
+            return {
+              parsed: [{
+                id: "fan-1",
+                username: "fan_1",
+                displayName: "Fan 1",
+                createdAt: 1_770_000_000_000,
+              }],
+            };
+          },
+        },
+      } as never,
+      { pageLabels: ["lana"], chunkSize: 1 },
+    );
+
+    expect(observedContext).toMatchObject({
+      egressKey: "shared-proxy-pool",
+      proxy: { url: "socks5://proxy.example" },
+    });
+  });
+
   it("uses workboard-specific unsupported-page errors", async () => {
     authMocks.canAccessPage.mockReturnValue(true);
+    fanslyPageMocks.resolveAccessibleFanslyPage.mockRejectedValue(
+      Object.assign(new Error("Workboard is only supported for Fansly pages"), {
+        statusCode: 400,
+      }),
+    );
     repoMocks.findPageSummaryByLabel.mockResolvedValue({
       id: 8,
       label: "lana-of",

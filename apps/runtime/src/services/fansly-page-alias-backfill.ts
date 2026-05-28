@@ -71,6 +71,7 @@ export async function backfillFanslyPageAliases(
     const requestContext = {
       session: pageContext.session,
       proxy: pageContext.proxy,
+      egressKey: pageContext.egressKey,
     };
 
     const summary: FanslyPageAliasBackfillPageSummary = {
