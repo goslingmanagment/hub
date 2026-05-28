@@ -7,6 +7,8 @@ import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/
 
 const queryMocks = vi.hoisted(() => ({
   useAdminConnections: vi.fn(),
+  useAdminModels: vi.fn(),
+  useAdminPages: vi.fn(),
   useAdminSyncBlockPause: vi.fn(),
   useAdminSyncBlockReset: vi.fn(),
   useAdminSyncBlockResume: vi.fn(),
@@ -332,6 +334,8 @@ function renderWithRouter(element: ReturnType<typeof createElement>, initialEntr
 describe("dashboard sync layout", () => {
   beforeEach(() => {
     queryMocks.useAdminConnections.mockReset();
+    queryMocks.useAdminModels.mockReset();
+    queryMocks.useAdminPages.mockReset();
     queryMocks.useAdminSyncBlockPause.mockReset();
     queryMocks.useAdminSyncBlockReset.mockReset();
     queryMocks.useAdminSyncBlockResume.mockReset();
@@ -366,6 +370,14 @@ describe("dashboard sync layout", () => {
     });
     queryMocks.useAdminConnections.mockReturnValue({
       data: [buildConnection(), buildConnection({ requiresAction: true })],
+      isLoading: false,
+    });
+    queryMocks.useAdminModels.mockReturnValue({
+      data: [{ id: 1, slug: "lana", name: "Lana", pageCount: 1 }],
+      isLoading: false,
+    });
+    queryMocks.useAdminPages.mockReturnValue({
+      data: [],
       isLoading: false,
     });
     queryMocks.useAdminSyncRuns.mockReturnValue({
@@ -446,6 +458,51 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Update Credentials");
     expect(html).toContain("Credentials may need updating");
     expect(html).not.toContain("Sync All Pages");
+  });
+
+  it("shows credentials catalog load errors", () => {
+    queryMocks.useAdminConnections.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Connections API unavailable"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=credentials"]);
+
+    expect(html).toContain("Connections failed to load");
+    expect(html).toContain("Connections API unavailable");
+    expect(html).not.toContain("No connections configured");
+  });
+
+  it("shows models catalog load errors", () => {
+    queryMocks.useAdminModels.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Models API unavailable"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=models"]);
+
+    expect(html).toContain("Models failed to load");
+    expect(html).toContain("Models API unavailable");
+    expect(html).not.toContain("No models configured");
+  });
+
+  it("shows pages catalog load errors", () => {
+    queryMocks.useAdminPages.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Pages API unavailable"),
+    });
+
+    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=pages"]);
+
+    expect(html).toContain("Pages failed to load");
+    expect(html).toContain("Pages API unavailable");
+    expect(html).not.toContain("No pages configured");
   });
 
   it("supports settings tab deep links for the sync workspace", () => {

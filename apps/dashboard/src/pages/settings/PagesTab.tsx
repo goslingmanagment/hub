@@ -9,6 +9,7 @@ import {
 } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatRelativeTime } from "@/lib/format";
 import { toast } from "sonner";
 import { CreatePageModal } from "./CreatePageModal.js";
@@ -22,18 +23,63 @@ function formatPageMetric(metric: AssignedPage["subscriberCount"]) {
 }
 
 export function PagesTab() {
-  const { data: pages, isLoading: pagesLoading } = useAdminPages();
-  const { data: models } = useAdminModels();
-  const { data: connections } = useAdminConnections();
+  const {
+    data: pages,
+    isLoading: pagesLoading,
+    isError: pagesError,
+    error: pagesErrorValue,
+  } = useAdminPages();
+  const {
+    data: models,
+    isLoading: modelsLoading,
+    isError: modelsError,
+    error: modelsErrorValue,
+  } = useAdminModels();
+  const {
+    data: connections,
+    isLoading: connectionsLoading,
+    isError: connectionsError,
+    error: connectionsErrorValue,
+  } = useAdminConnections();
 
   const [showCreate, setShowCreate] = useState(false);
   const [editPage, setEditPage] = useState<AssignedPage | null>(null);
   const [deletePage, setDeletePage] = useState<AssignedPage | null>(null);
   const [credsConnection, setCredsConnection] = useState<CredentialsModalConnection | null>(null);
 
-  if (pagesLoading) {
+  if ((pagesLoading && !pages) || (modelsLoading && !models) || (connectionsLoading && !connections)) {
     return (
       <div className="py-12 text-center text-sm text-text-muted">Loading pages...</div>
+    );
+  }
+
+  if (pagesError && !pages) {
+    return (
+      <StatusPanel
+        title="Pages failed to load"
+        description={pagesErrorValue instanceof Error ? pagesErrorValue.message : "The pages catalog could not be fetched."}
+        tone="error"
+      />
+    );
+  }
+
+  if (modelsError && !models) {
+    return (
+      <StatusPanel
+        title="Models failed to load"
+        description={modelsErrorValue instanceof Error ? modelsErrorValue.message : "The models catalog could not be fetched."}
+        tone="error"
+      />
+    );
+  }
+
+  if (connectionsError && !connections) {
+    return (
+      <StatusPanel
+        title="Connections failed to load"
+        description={connectionsErrorValue instanceof Error ? connectionsErrorValue.message : "The connections catalog could not be fetched."}
+        tone="error"
+      />
     );
   }
 

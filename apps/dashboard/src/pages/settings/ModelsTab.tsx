@@ -2,19 +2,30 @@ import { useState } from "react";
 import type { ModelListItem } from "@agency_hub_core/contracts";
 import { useAdminModels, useAdminDeleteModel } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { toast } from "sonner";
 import { CreateModelModal } from "./CreateModelModal.js";
 import { EditModelModal } from "./EditModelModal.js";
 
 export function ModelsTab() {
-  const { data: models, isLoading } = useAdminModels();
+  const { data: models, isLoading, isError, error } = useAdminModels();
   const [showCreate, setShowCreate] = useState(false);
   const [editModel, setEditModel] = useState<ModelListItem | null>(null);
   const [deleteModel, setDeleteModel] = useState<ModelListItem | null>(null);
 
-  if (isLoading) {
+  if (isLoading && !models) {
     return (
       <div className="py-12 text-center text-sm text-text-muted">Loading models...</div>
+    );
+  }
+
+  if (isError && !models) {
+    return (
+      <StatusPanel
+        title="Models failed to load"
+        description={error instanceof Error ? error.message : "The models catalog could not be fetched."}
+        tone="error"
+      />
     );
   }
 

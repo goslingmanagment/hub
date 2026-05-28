@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
+import { StatusPanel } from "@/components/shared/StatusPanel";
 import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
 
@@ -16,12 +17,22 @@ function formatPageMetric(metric: {
 }
 
 export function CredentialsTab() {
-  const { data: connections, isLoading } = useAdminConnections();
+  const { data: connections, isLoading, isError, error } = useAdminConnections();
   const [selectedConnection, setSelectedConnection] = useState<CredentialsModalConnection | null>(null);
 
-  if (isLoading) {
+  if (isLoading && !connections) {
     return (
       <div className="py-12 text-center text-sm text-text-muted">Loading connections...</div>
+    );
+  }
+
+  if (isError && !connections) {
+    return (
+      <StatusPanel
+        title="Connections failed to load"
+        description={error instanceof Error ? error.message : "The connections catalog could not be fetched."}
+        tone="error"
+      />
     );
   }
 
