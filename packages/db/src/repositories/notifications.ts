@@ -13,8 +13,16 @@ type LockedNotificationIncidentRow = NotificationIncidentRow & {
   status: NotificationIncidentStatus;
 };
 
-function isUniqueViolation(error: unknown): error is { code: string } {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+function isUniqueViolation(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  if ("code" in error && error.code === "23505") {
+    return true;
+  }
+
+  return "cause" in error && isUniqueViolation(error.cause);
 }
 
 export async function getNotificationIncidentByKey(db: Database, incidentKey: string) {
