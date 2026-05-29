@@ -78,15 +78,23 @@ function decryptStoredCredentials(
   return decrypted;
 }
 
+// Match only specific authentication-failure signals. Bare "auth"/"token"
+// substrings are intentionally excluded so summaries mentioning "authority" or
+// "token bucket" don't get misclassified as expired credentials.
+const AUTH_ERROR_SIGNALS = [
+  "401",
+  "unauthorized",
+  "403",
+  "forbidden",
+  "invalid token",
+  "expired",
+  "authentication",
+] as const;
+
 function isAuthError(errorSummary: string | null): boolean {
   if (!errorSummary) return false;
   const lower = errorSummary.toLowerCase();
-  return (
-    lower.includes("401") ||
-    lower.includes("unauthorized") ||
-    lower.includes("auth") ||
-    lower.includes("token")
-  );
+  return AUTH_ERROR_SIGNALS.some((signal) => lower.includes(signal));
 }
 
 function classifyConnectionStatus(
