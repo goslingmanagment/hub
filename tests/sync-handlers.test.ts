@@ -1587,7 +1587,6 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     expect(onlyFansTransactionMocks.syncOnlyFansTransactions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       rescanStart: new Date("2026-03-01T00:00:00.000Z"),
     }));
-    expect(result.clearRequestPayload).toBe(true);
   });
 
   it("passes the active lease to Fansly transaction syncs for mid-run progress updates", async () => {
@@ -1722,7 +1721,6 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
 
     expect(result.satisfied).toBe(false);
     expect(result.yieldReason).toBe("request_budget");
-    expect(result.clearRequestPayload).toBe(false);
   });
 
   it("resumes dm_conversations from versioned checkpoint state regardless of desired revision", async () => {

@@ -188,7 +188,6 @@ function createPageRateLimitWaiter(
 export type StreamChunkResult = {
   satisfied: boolean;
   yieldReason: SyncChunkYieldReason | null;
-  clearRequestPayload?: boolean;
   stats?: Record<string, unknown>;
 };
 
@@ -1280,7 +1279,6 @@ export async function executeTransactionsChunk(
   return {
     satisfied: result.satisfied,
     yieldReason: result.yieldReason,
-    clearRequestPayload: result.satisfied && Boolean(transactionsStart),
     stats: result as Record<string, unknown>,
   } satisfies StreamChunkResult;
 }
@@ -2278,6 +2276,10 @@ async function executeOnlyFansDmConversationsChunk(
         messageBackfillComplete: existing?.messageBackfillComplete ?? false,
         lastMessageSyncAt: existing?.lastMessageSyncAt ?? null,
         isVisible: true,
+        // OnlyFans conversations are intentionally NOT generation-retired: the candidate
+        // set is a derived top-N recent-chat list, not an authoritative roster, so no
+        // invisible-by-generation sweep runs. The generation is still stamped only to
+        // satisfy the shared cursor-state/upsert contract used by the Fansly path.
         lastSeenGeneration: state.generation,
         metadata: {
           ...existing?.metadata,
@@ -3447,7 +3449,7 @@ export async function executeDmMessagesChunk(
           }
 
           normalizedMessages.push({
-            conversationId: conversation.id,
+            conversationId: currentConversation.id,
             platformAccountId: input.pageContext.page.id,
             platformMessageId: message.id,
             senderPlatformUserId: message.senderId ?? null,
