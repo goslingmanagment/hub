@@ -11,6 +11,7 @@ import {
   createRequestDispatcher,
   executeObservedRequest,
   formatObservedError,
+  redactSensitiveText,
   resolveRetryDelayMs,
   type FanslySessionBundle,
   type ProxyConfig,
@@ -233,7 +234,9 @@ export class FanslyAdapter {
         limit: params.limit ?? 100,
       },
       summarizeResponse: (parsed) => ({
-        total: parsed.stats.total,
+        // The page is filtered to active statuses, so report the active total to
+        // keep telemetry consistent with the returned `total` below.
+        total: parsed.stats.totalActive,
         totalActive: parsed.stats.totalActive,
         returnedItems: parsed.subscriptions.length,
         done: parsed.subscriptions.length < (params.limit ?? 100),
@@ -513,7 +516,10 @@ export class FanslyAdapter {
         };
       },
       onResponse: ({ response, text, envelope }, executionContext) => {
-        const envelopeMessage = envelope?.error?.message;
+        const envelopeMessage = envelope?.error?.message === undefined
+          ? undefined
+          : redactSensitiveText(envelope.error.message);
+        const responseSnippet = redactSensitiveText(text.slice(0, 400));
 
         if (response.status === 401 || response.status === 403) {
           return {
@@ -525,7 +531,7 @@ export class FanslyAdapter {
               envelopeMessage ?? `Fansly authorization failed (${response.status})`,
               response.status,
               envelope?.error?.code,
-              text.slice(0, 400),
+              responseSnippet,
             ),
           };
         }
@@ -553,7 +559,7 @@ export class FanslyAdapter {
               envelopeMessage ?? `Fansly request failed (${response.status})`,
               response.status,
               envelope?.error?.code,
-              text.slice(0, 400),
+              responseSnippet,
             ),
           };
         }
@@ -568,7 +574,7 @@ export class FanslyAdapter {
               envelopeMessage ?? "Fansly response envelope was unsuccessful",
               response.status,
               envelope?.error?.code,
-              text.slice(0, 400),
+              responseSnippet,
             ),
           };
         }
@@ -761,5 +767,8 @@ export class FanslyAdapter {
 }
 
 function retryDelayMs(attemptNumber: number) {
-  return 5000 * attemptNumber;
+  const delay = 5000 * attemptNumber;
+  // Jitter the transport-retry backoff so concurrent failures on a shared
+  // egress don't all reconnect on the same boundary (thundering herd).
+  return Math.round(delay * (0.5 + Math.random() * 0.5));
 }

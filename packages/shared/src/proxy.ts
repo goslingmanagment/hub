@@ -122,6 +122,45 @@ function isIpv4Literal(hostname: string) {
   });
 }
 
+// `socks5://` hosts are not canonicalized by `new URL`, so ambiguous numeric
+// forms (decimal/octal/hex integers like 2130706433, 0x7f000001, 0177.0.0.1,
+// 127.1) can resolve to loopback/private addresses while slipping past the
+// strict dotted-quad checks above. Treat any such non-canonical numeric host as
+// disallowed rather than trying to decode every legacy IPv4 representation.
+function isAmbiguousNumericHost(hostname: string) {
+  if (hostname.length === 0) {
+    return false;
+  }
+
+  // Hex integer forms (e.g. 0x7f000001) or any label using a 0x prefix.
+  if (/^0x[0-9a-f]+$/i.test(hostname)) {
+    return true;
+  }
+
+  const labels = hostname.split(".");
+  if (labels.some((label) => /^0x[0-9a-f]+$/i.test(label))) {
+    return true;
+  }
+
+  // Anything with a non-numeric label (ordinary DNS names) is not an ambiguous
+  // numeric encoding; let it fall through to the normal hostname handling.
+  const isAllNumericLabels = labels.every((label) => /^[0-9]+$/.test(label));
+  if (!isAllNumericLabels) {
+    return false;
+  }
+
+  // All-numeric hosts that are not a strict dotted-quad: bare integers
+  // (2130706433, 127) or short dotted forms (127.1).
+  if (labels.length !== 4) {
+    return true;
+  }
+
+  // Four numeric octets but with a leading-zero octet (0177.0.0.1,
+  // 017700000001) are octal-looking and decode differently than dotted-decimal,
+  // so reject them even though they superficially parse as a dotted-quad.
+  return labels.some((label) => label.length > 1 && label.startsWith("0"));
+}
+
 function isIpv6Literal(hostname: string) {
   return hostname.includes(":");
 }
@@ -245,6 +284,7 @@ export function isDisallowedProxyHostname(hostname: string) {
   return (
     normalizedHostname === "localhost" ||
     normalizedHostname.endsWith(".localhost") ||
+    isAmbiguousNumericHost(normalizedHostname) ||
     (isIpv4Literal(normalizedHostname) && isPrivateIpv4(normalizedHostname)) ||
     (isIpv6Literal(normalizedHostname) && isPrivateIpv6(normalizedHostname))
   );

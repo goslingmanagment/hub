@@ -14,6 +14,7 @@ const DISPATCHER_KEEP_ALIVE_TIMEOUT_MS = 10_000;
 const DISPATCHER_KEEP_ALIVE_MAX_TIMEOUT_MS = 60_000;
 const DISPATCHER_KEEP_ALIVE_TIMEOUT_THRESHOLD_MS = 250;
 const HTTP_RETRY_BASE_DELAY_MS = 5_000;
+const MAX_RETRY_DELAY_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 
 const TIMEOUT_ERROR_NAMES = new Set([
@@ -156,7 +157,7 @@ export function parseRetryAfterDelayMs(retryAfterHeader: string | null, now = Da
 
   const seconds = Number(retryAfterHeader);
   if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.ceil(seconds * 1000);
+    return Math.min(Math.ceil(seconds * 1000), MAX_RETRY_DELAY_MS);
   }
 
   const retryAt = Date.parse(retryAfterHeader);
@@ -164,11 +165,14 @@ export function parseRetryAfterDelayMs(retryAfterHeader: string | null, now = Da
     return null;
   }
 
-  return Math.max(0, retryAt - now);
+  return Math.min(Math.max(0, retryAt - now), MAX_RETRY_DELAY_MS);
 }
 
 export function exponentialRetryDelayMs(attemptNumber: number) {
-  return HTTP_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attemptNumber - 1));
+  const delay = HTTP_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attemptNumber - 1));
+  // Spread retries across the [50%, 100%] band so concurrent failures (e.g. a
+  // shared proxy returning 503) don't all retry on the same boundary.
+  return Math.round(delay * (0.5 + Math.random() * 0.5));
 }
 
 export function resolveRetryDelayMs(retryAfterHeader: string | null, attemptNumber: number, now = Date.now()) {

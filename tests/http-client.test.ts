@@ -9,6 +9,7 @@ import {
   buildProxyDispatcherCacheKey,
   buildProxyEgressKey,
   buildSyncPageExecuteGroupId,
+  isDisallowedProxyHostname,
 } from "../packages/shared/src/proxy.ts";
 import { listenOnLoopback } from "./helpers/network.ts";
 
@@ -317,14 +318,30 @@ describe("shared http client helpers", () => {
     expect(parseRetryAfterDelayMs("Fri, 13 Mar 2026 00:00:05 GMT", now)).toBe(5_000);
   });
 
-  it("falls back to exponential retry delays when retry-after is absent", async () => {
+  it("falls back to jittered exponential retry delays when retry-after is absent", async () => {
     const {
       exponentialRetryDelayMs,
       resolveRetryDelayMs,
     } = await loadHttpClientModule();
-    expect(exponentialRetryDelayMs(1)).toBe(5_000);
-    expect(exponentialRetryDelayMs(2)).toBe(10_000);
-    expect(resolveRetryDelayMs(null, 3)).toBe(20_000);
+    // Jitter keeps each delay within the [50%, 100%] band of the base backoff.
+    for (let i = 0; i < 50; i += 1) {
+      expect(exponentialRetryDelayMs(1)).toBeGreaterThanOrEqual(2_500);
+      expect(exponentialRetryDelayMs(1)).toBeLessThanOrEqual(5_000);
+      expect(exponentialRetryDelayMs(2)).toBeGreaterThanOrEqual(5_000);
+      expect(exponentialRetryDelayMs(2)).toBeLessThanOrEqual(10_000);
+      expect(resolveRetryDelayMs(null, 3)).toBeGreaterThanOrEqual(10_000);
+      expect(resolveRetryDelayMs(null, 3)).toBeLessThanOrEqual(20_000);
+    }
+  });
+
+  it("clamps an unbounded retry-after delay to the ceiling", async () => {
+    const { parseRetryAfterDelayMs, resolveRetryDelayMs } = await loadHttpClientModule();
+    const now = Date.parse("2026-03-13T00:00:00.000Z");
+
+    expect(parseRetryAfterDelayMs("86400", now)).toBe(60_000);
+    expect(parseRetryAfterDelayMs("Fri, 13 Mar 2026 12:00:00 GMT", now)).toBe(60_000);
+    // The clamp also caps the resolved delay regardless of attempt count.
+    expect(resolveRetryDelayMs("3600", 1, now)).toBe(60_000);
   });
 
   it("builds proxy cache keys without exposing raw credentials", () => {
@@ -356,6 +373,29 @@ describe("shared http client helpers", () => {
     expect(() => assertProxyTargetAllowed({ url: "socks5://[ff02::1]:1080" })).toThrow();
     expect(() => assertProxyTargetAllowed({ url: "socks5://[::0808:0808]:1080" })).not.toThrow();
     expect(() => assertProxyTargetAllowed({ url: "http://proxy.example:8080" })).not.toThrow();
+  });
+
+  it("rejects non-canonical IPv4 encodings that socks5 URLs do not canonicalize", () => {
+    // Integer/hex/octal/short-dotted forms all decode to loopback/private space
+    // even though `new URL` leaves the socks5 host uncanonicalized.
+    expect(isDisallowedProxyHostname("2130706433")).toBe(true);
+    expect(isDisallowedProxyHostname("0x7f000001")).toBe(true);
+    expect(isDisallowedProxyHostname("0177.0.0.1")).toBe(true);
+    expect(isDisallowedProxyHostname("127.1")).toBe(true);
+    expect(isDisallowedProxyHostname("017700000001")).toBe(true);
+
+    expect(() => assertProxyTargetAllowed({ url: "socks5://2130706433" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://0x7f000001" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://0177.0.0.1" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://127.1" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://017700000001" })).toThrow();
+
+    // Canonical dotted-decimal loopback/private hosts stay blocked, ordinary
+    // DNS hostnames stay allowed.
+    expect(isDisallowedProxyHostname("127.0.0.1")).toBe(true);
+    expect(isDisallowedProxyHostname("proxy.example.com")).toBe(false);
+    expect(() => assertProxyTargetAllowed({ url: "socks5://127.0.0.1:1080" })).toThrow();
+    expect(() => assertProxyTargetAllowed({ url: "socks5://proxy.example.com:1080" })).not.toThrow();
   });
 
   it("builds canonical egress keys and queue group ids", () => {

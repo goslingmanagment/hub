@@ -11,6 +11,7 @@ import {
   createRequestDispatcher,
   executeObservedRequest,
   formatObservedError,
+  redactSensitiveText,
   resolveRetryDelayMs,
   type ProxyConfig,
 } from "@agency_hub_core/shared";
@@ -442,7 +443,7 @@ export class OnlyFansAdapter {
             error: new OnlyMonsterApiError(
               `OnlyMonster authorization failed (${response.status})`,
               response.status,
-              text.slice(0, 400),
+              redactSensitiveText(text.slice(0, 400)),
             ),
           };
         }
@@ -469,7 +470,7 @@ export class OnlyFansAdapter {
             error: new OnlyMonsterApiError(
               `OnlyMonster request failed (${response.status})`,
               response.status,
-              text.slice(0, 400),
+              redactSensitiveText(text.slice(0, 400)),
             ),
           };
         }
@@ -494,7 +495,7 @@ export class OnlyFansAdapter {
             error: new OnlyMonsterApiError(
               "OnlyMonster response was not valid JSON",
               response.status,
-              text.slice(0, 400),
+              redactSensitiveText(text.slice(0, 400)),
             ),
           };
         }
@@ -625,5 +626,8 @@ export class OnlyFansAdapter {
 }
 
 function retryDelayMs(attemptNumber: number) {
-  return 5000 * attemptNumber;
+  const delay = 5000 * attemptNumber;
+  // Jitter the transport-retry backoff so concurrent failures on a shared
+  // egress don't all reconnect on the same boundary (thundering herd).
+  return Math.round(delay * (0.5 + Math.random() * 0.5));
 }
