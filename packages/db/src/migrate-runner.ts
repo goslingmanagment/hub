@@ -30,6 +30,27 @@ function assertUniqueMigrationPrefixes(files: string[]) {
   }
 }
 
+function assertContiguousAppliedPrefix(files: string[], applied: Set<string>) {
+  let firstUnapplied: string | undefined;
+
+  for (const file of files) {
+    if (!applied.has(file)) {
+      if (firstUnapplied === undefined) {
+        firstUnapplied = file;
+      }
+      continue;
+    }
+
+    if (firstUnapplied !== undefined) {
+      throw new Error(
+        `Out-of-order migration detected: "${firstUnapplied}" is not applied but the later "${file}" already is. `
+          + "Applied migrations must form a contiguous prefix of the sorted migration files; "
+          + "a lower-numbered migration was likely added after higher-numbered ones were applied.",
+      );
+    }
+  }
+}
+
 type MigrationDb = {
   query: (text: string, params?: unknown[]) => Promise<QueryResult>;
 };
@@ -87,6 +108,7 @@ export async function runMigrations(input?: {
       });
       assertUniqueMigrationPrefixes(files);
 
+      const appliedFiles = new Set<string>();
       for (const file of files) {
         const alreadyApplied = await db.query(
           "select 1 from schema_migrations where id = $1",
@@ -94,6 +116,13 @@ export async function runMigrations(input?: {
         );
 
         if (alreadyApplied.rowCount) {
+          appliedFiles.add(file);
+        }
+      }
+      assertContiguousAppliedPrefix(files, appliedFiles);
+
+      for (const file of files) {
+        if (appliedFiles.has(file)) {
           continue;
         }
 

@@ -45,7 +45,7 @@ export async function upsertPageTopSpenders(
       set: {
         correlationAccountId: sql`excluded.correlation_account_id`,
         accountId: sql`excluded.account_id`,
-        fanId: sql`excluded.fan_id`,
+        fanId: sql`coalesce(excluded.fan_id, ${pageTopSpenders.fanId})`,
         grossAmountMills: sql`excluded.gross_amount_mills`,
         creatorNetAmountMills: sql`excluded.creator_net_amount_mills`,
         sourceWindowStartedAt: sql`excluded.source_window_started_at`,

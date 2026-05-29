@@ -1089,7 +1089,7 @@ export async function listRankedSpenders(
     messageCoverageStatus: pageDmConversations.messageCoverageStatus,
     messageBackfillComplete: pageDmConversations.messageBackfillComplete,
     rn: sql<number>`row_number() over (
-      partition by ${pageDmConversations.platformAccountId}, ${pageDmConversations.fanId}
+      partition by ${pageDmConversations.fanId}
       order by ${pageDmConversations.lastMessageAt} desc nulls last,
                ${pageDmConversations.platformConversationId} desc
     )`.as("rn"),

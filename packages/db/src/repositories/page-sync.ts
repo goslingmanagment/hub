@@ -1081,6 +1081,9 @@ export async function scheduleDuePageSync(
                 updated_at = ${now}
             where page_id = ${row.pageId}
               and stream = ${row.stream}
+              and request_seq = ${row.requestSeq}
+              and applied_seq = ${row.appliedSeq}
+              and leased_seq is null
           `);
         }
         continue;
