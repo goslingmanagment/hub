@@ -72,6 +72,7 @@ function createRouteTestContext(input?: {
       telegramChatId: null,
       telegramEnabled: false,
       telegramReportHourUtc: 9,
+      isProduction: false,
     },
     logger: createLogger("silent"),
     pool: {} as AppContext["pool"],

@@ -63,6 +63,7 @@ describe("sync observability", () => {
           telegramChatId: null,
           telegramEnabled: false,
           telegramReportHourUtc: 9,
+          isProduction: false,
         },
         db: {} as never,
         logger: logger as never,
@@ -166,6 +167,7 @@ describe("sync observability", () => {
           telegramChatId: null,
           telegramEnabled: false,
           telegramReportHourUtc: 9,
+          isProduction: false,
         },
         db: {} as never,
         logger: {

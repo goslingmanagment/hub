@@ -41,6 +41,12 @@ export const SESSION_COOKIE_NAME = "agency_hub_core_session";
 const API_KEY_PREFIX = "agency_hub_core_";
 const API_KEY_DISPLAY_LENGTH = 10;
 
+// Fixed argon2id hash used to equalize timing on login failure paths so that a
+// missing/ineligible user is indistinguishable from a wrong password. The plaintext
+// is irrelevant; it is never expected to verify successfully.
+const DUMMY_PASSWORD_HASH =
+  "$argon2id$v=19$m=65536,t=3,p=4$uBvthN/XqL8U0tfIpEFZog$GEU0fF0w4vScnjMXlxqLdhsBF8L7Ixzhj8R3ISHudHA";
+
 interface AuditContext {
   source: string;
   actorUserId?: number | null;
@@ -494,6 +500,9 @@ export async function loginWithPassword(
   const user = await findUserByUsername(app.db, input.username);
 
   if (!user || !roleCanUseSession(user.role) || !user.passwordHash) {
+    // Run a dummy verification so this path takes comparable time to the
+    // wrong-password path below, avoiding a username-enumeration timing oracle.
+    await argon2.verify(DUMMY_PASSWORD_HASH, input.password).catch(() => false);
     await recordFailedLoginAuditBestEffort(app, {
       username: input.username,
     });

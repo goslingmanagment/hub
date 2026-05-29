@@ -93,6 +93,7 @@ describe("db write safety", () => {
         telegramChatId: null,
         telegramEnabled: false,
         telegramReportHourUtc: 9,
+        isProduction: false,
       },
       adapter: {
         async verifySession(contextInput: unknown) {
@@ -147,6 +148,7 @@ describe("db write safety", () => {
         telegramChatId: null,
         telegramEnabled: false,
         telegramReportHourUtc: 9,
+        isProduction: false,
       },
       onlyFansAdapter: {
         async listAccountsPage() {

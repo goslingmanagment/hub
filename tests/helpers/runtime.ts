@@ -42,6 +42,7 @@ export function createTestAppContext(
       logLevel: "silent",
       apiHost: "0.0.0.0",
       apiPort: 3000,
+      isProduction: false,
       trustProxy: overrides?.trustProxy ?? false,
       sessionTtlDays: overrides?.sessionTtlDays ?? 30,
       fanslyBaseUrl: "https://example.invalid",

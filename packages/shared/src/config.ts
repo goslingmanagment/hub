@@ -92,6 +92,7 @@ export interface AppConfig {
   logLevel: string;
   apiHost: string;
   apiPort: number;
+  isProduction: boolean;
   trustProxy: boolean;
   sessionTtlDays: number;
   fanslyBaseUrl: string;
@@ -184,6 +185,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     logLevel: parsed.LOG_LEVEL,
     apiHost: parsed.API_HOST,
     apiPort: parsed.API_PORT,
+    isProduction: env.NODE_ENV === "production",
     trustProxy: parsed.TRUST_PROXY,
     sessionTtlDays: parsed.SESSION_TTL_DAYS,
     fanslyBaseUrl: parsed.FANSLY_BASE_URL,

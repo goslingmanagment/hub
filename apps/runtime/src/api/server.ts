@@ -205,7 +205,7 @@ function applyCookie(reply: {
   reply.setCookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: "auto",
+    secure: appContext.config.isProduction ? true : "auto",
     path: "/",
     expires: new Date(Date.now() + appContext.config.sessionTtlDays * 24 * 60 * 60 * 1000),
   });
@@ -561,6 +561,15 @@ export async function buildApiServer(appContext: AppContext) {
       rateLimit: {
         max: 5,
         timeWindow: 60_000,
+        keyGenerator: (request) => {
+          const body = request.body;
+          const username =
+            typeof body === "object" && body !== null && "username" in body &&
+            typeof (body as { username?: unknown }).username === "string"
+              ? (body as { username: string }).username
+              : "";
+          return `${username.toLowerCase()}|${request.ip}`;
+        },
       },
     },
   }, async (request, reply) => {
