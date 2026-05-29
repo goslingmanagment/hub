@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   retireTransactionsMissingFromWindow: vi.fn(),
+  countActiveInWindowTransactionsByScanToken: vi.fn(),
   getCheckpoint: vi.fn(),
   getOldestPendingTransactionAt: vi.fn(),
   markTransactionsScanToken: vi.fn(),
@@ -216,6 +217,10 @@ describe("syncOnlyFansTransactions", () => {
     sharedMocks.retentionDate.mockReturnValue(new Date("2026-09-10T00:00:00.000Z"));
 
     dbMocks.retireTransactionsMissingFromWindow.mockResolvedValue(undefined);
+    dbMocks.countActiveInWindowTransactionsByScanToken.mockResolvedValue({
+      total: 0,
+      staleScanToken: 0,
+    });
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
     dbMocks.markTransactionsScanToken.mockResolvedValue(undefined);
     dbMocks.mergePageMetadata.mockResolvedValue(null);
@@ -746,6 +751,77 @@ describe("syncOnlyFansTransactions", () => {
       expect.anything(),
       1,
       new Date("2026-03-07T00:00:00.000Z"),
+    );
+  });
+
+  it("skips the scan_token retire and raises an anomaly when it would deactivate most of the active window", async () => {
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")]),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+    // Provider under-returned: 6 of 8 active in-window rows carry a stale scan token.
+    dbMocks.countActiveInWindowTransactionsByScanToken.mockResolvedValue({
+      total: 8,
+      staleScanToken: 6,
+    });
+    const telemetry = createTelemetry();
+
+    await runOnlyFansTransactionsSync({
+      adapter,
+      telemetry,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: {},
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(dbMocks.retireTransactionsMissingFromWindow).not.toHaveBeenCalled();
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "retire_guard_tripped",
+        severity: "error",
+        details: expect.objectContaining({
+          wouldRetire: 6,
+          activeInWindow: 8,
+        }),
+      }),
+    );
+    // Rollups still rebuild so the window stays projected even when cleanup is skipped.
+    expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalled();
+    expect(dbMocks.rebuildRevenueRollups).toHaveBeenCalled();
+  });
+
+  it("still applies the scan_token retire when only a small absolute number of rows would be deactivated", async () => {
+    const adapter = createAdapter({
+      transactionPages: [
+        makeCursorPage([makeTransaction("tx-1", "2026-03-10T00:00:00.000Z")]),
+      ],
+      chargebackPages: [makeCursorPage([])],
+    });
+    // Proportionally high (3/4) but below the absolute floor — a normal small window.
+    dbMocks.countActiveInWindowTransactionsByScanToken.mockResolvedValue({
+      total: 4,
+      staleScanToken: 3,
+    });
+
+    await runOnlyFansTransactionsSync({
+      adapter,
+      checkpoint: {
+        cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+        state: {},
+      },
+      budget: new SyncChunkBudget(10, 60_000),
+    });
+
+    expect(dbMocks.retireTransactionsMissingFromWindow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        cleanupMode: "scan_token",
+        scanToken: expect.any(String),
+      }),
     );
   });
 

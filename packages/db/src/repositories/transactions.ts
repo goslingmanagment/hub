@@ -379,6 +379,43 @@ export async function retireTransactionsMissingFromWindow(
 
 export const deleteTransactionsMissingFromWindow = retireTransactionsMissingFromWindow;
 
+/**
+ * Counts active in-window transactions, splitting the total from the subset
+ * that a `scan_token` retire would deactivate (rows whose scanToken does not
+ * match the current scan). Used as a defensive guard so a provider that
+ * under-returns a window cannot mass-deactivate otherwise-valid rows.
+ */
+export async function countActiveInWindowTransactionsByScanToken(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    from: Date;
+    to: Date;
+    scanToken: string;
+  },
+) {
+  const baseClauses = [
+    eq(transactions.platformAccountId, input.platformAccountId),
+    gte(transactions.occurredAt, input.from),
+    lt(transactions.occurredAt, input.to),
+    eq(transactions.isActive, true),
+  ];
+
+  const [row] = await db
+    .select({
+      total: sql<number>`count(*)::int`,
+      staleScanToken:
+        sql<number>`count(*) filter (where ${transactions.scanToken} is distinct from ${input.scanToken})::int`,
+    })
+    .from(transactions)
+    .where(and(...baseClauses));
+
+  return {
+    total: row?.total ?? 0,
+    staleScanToken: row?.staleScanToken ?? 0,
+  };
+}
+
 export async function getOldestPendingTransactionAt(
   db: Database,
   platformAccountId: number,

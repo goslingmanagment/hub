@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   assertOwnedPageSyncLease,
+  countActiveInWindowTransactionsByScanToken,
   getCheckpoint,
   getOldestPendingTransactionAt,
   markTransactionsScanToken,
@@ -52,6 +53,13 @@ const ONLYFANS_SYNTHETIC_BACKFILL_START = new Date("2016-01-01T00:00:00.000Z");
 const ONLYFANS_SAFE_CURSOR_PAGES = 4;
 const ONLYFANS_HISTORICAL_WINDOW_MS = 365 * DAY_MS;
 const ONLYFANS_EMPTY_WINDOW_LIMIT = 2;
+// Defensive guard for the scan_token retire: skip the destructive cleanup when it
+// would deactivate a suspiciously large share of the window's active rows, which
+// is the signature of the provider under-returning the window rather than rows
+// genuinely disappearing. Both thresholds must trip together so small windows are
+// unaffected. Skipping only risks recoverable staleness (the safe direction).
+const ONLYFANS_RETIRE_GUARD_MAX_FRACTION = 0.5;
+const ONLYFANS_RETIRE_GUARD_MIN_ABSOLUTE = 5;
 
 type OnlyFansTransactionSyncResult = {
   satisfied: boolean;
@@ -742,11 +750,14 @@ async function syncOnlyFansTransactionsIncremental(
   );
   let state: OnlyFansIncrementalResumeState;
   if (!existingState) {
-    const start = input.rescanStart ?? (
-      earliestRescanStart && earliestRescanStart < rescanCapStart
-        ? rescanCapStart
-        : (earliestRescanStart ?? rescanCapStart)
-    );
+    const start = input.rescanStart
+      // Never let a manual override widen the retire window earlier than the cap.
+      ? (input.rescanStart > rescanCapStart ? input.rescanStart : rescanCapStart)
+      : (
+        earliestRescanStart && earliestRescanStart < rescanCapStart
+          ? rescanCapStart
+          : (earliestRescanStart ?? rescanCapStart)
+      );
     const end = new Date();
 
     if (start >= end) {
@@ -1094,16 +1105,36 @@ async function syncOnlyFansTransactionsIncremental(
     throw error;
   }
 
+  // Defensive guard: unlike the Fansly path (which throws on a provider total
+  // mismatch before cleanup), the OnlyFans scan has no completeness signal, so a
+  // window the provider under-returns would flip valid in-window rows inactive
+  // purely because they carry a stale scanToken. Count what the retire would
+  // deactivate vs. the active in-window total and skip the destructive cleanup
+  // when the share is implausibly high. Skipping leaves recoverable staleness,
+  // which is safer than mass-deactivating live transactions.
+  const retireCounts = await countActiveInWindowTransactionsByScanToken(app.db, {
+    platformAccountId: input.platformAccountId,
+    from: start,
+    to: end,
+    scanToken: state.scanToken,
+  });
+  const retireGuardTripped =
+    retireCounts.staleScanToken > ONLYFANS_RETIRE_GUARD_MIN_ABSOLUTE &&
+    retireCounts.total > 0 &&
+    retireCounts.staleScanToken / retireCounts.total > ONLYFANS_RETIRE_GUARD_MAX_FRACTION;
+
   let checkpointAfter = null;
   await withOwnedPageSyncTransaction(app.db, async (tx) => {
-    cleanupApplied = true;
-    await retireTransactionsMissingFromWindow(tx, {
-      platformAccountId: input.platformAccountId,
-      from: start,
-      to: end,
-      cleanupMode: "scan_token",
-      scanToken: state.scanToken,
-    });
+    if (!retireGuardTripped) {
+      cleanupApplied = true;
+      await retireTransactionsMissingFromWindow(tx, {
+        platformAccountId: input.platformAccountId,
+        from: start,
+        to: end,
+        cleanupMode: "scan_token",
+        scanToken: state.scanToken,
+      });
+    }
     await rebuildSpenderProjections(tx, input.platformAccountId, start);
     await rebuildRevenueRollups(tx, input.platformAccountId, start);
 
@@ -1148,6 +1179,20 @@ async function syncOnlyFansTransactionsIncremental(
       from: start.toISOString(),
       to: end.toISOString(),
       scanToken: state.scanToken,
+    });
+  } else if (retireGuardTripped) {
+    await input.telemetry.addAnomaly({
+      code: "retire_guard_tripped",
+      severity: "error",
+      message:
+        "OnlyFans scan_token retire was skipped because it would deactivate an implausibly large share of the window's active transactions (likely a provider under-return)",
+      details: {
+        from: start.toISOString(),
+        to: end.toISOString(),
+        scanToken: state.scanToken,
+        wouldRetire: retireCounts.staleScanToken,
+        activeInWindow: retireCounts.total,
+      },
     });
   }
 
