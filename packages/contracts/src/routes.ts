@@ -451,7 +451,7 @@ export const pageConversationMessagesParamsSchema = pageParamsSchema.extend({
 });
 
 export const pageConversationMessagesQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).default(25),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
 });
 
 const pageMetricSchema = z.object({
@@ -1452,10 +1452,10 @@ export const aiUsageEventInputSchema = z.object({
   clientEventId: z.string().min(1).max(255),
   feature: aiUsageFeatureEnum,
   model: z.string().min(1).max(100),
-  inputTokens: z.number().int().nonnegative(),
-  outputTokens: z.number().int().nonnegative(),
-  cacheWriteTokens: z.number().int().nonnegative(),
-  cacheReadTokens: z.number().int().nonnegative(),
+  inputTokens: z.number().int().nonnegative().max(100_000_000),
+  outputTokens: z.number().int().nonnegative().max(100_000_000),
+  cacheWriteTokens: z.number().int().nonnegative().max(100_000_000),
+  cacheReadTokens: z.number().int().nonnegative().max(100_000_000),
   conversationId: z.string().min(1).max(255).nullable().optional(),
   durationMs: z.number().int().nonnegative().nullable().optional(),
   isCacheHit: z.boolean(),
