@@ -10,6 +10,7 @@ import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
 import {
   getBlockOrder,
   getBlockLabel,
+  getBlockDescription,
   formatBlockSummary,
   formatBlockProgressCaption,
   getBlockProgressFillClass,
@@ -33,6 +34,7 @@ function BlockDetailCard({
   pageLabel: string;
 }) {
   const label = getBlockLabel(block.block);
+  const description = getBlockDescription(block.block);
   const isNA = block.state === "not_available";
 
   if (isNA) {
@@ -79,6 +81,9 @@ function BlockDetailCard({
         <span className="text-sm font-semibold text-text-primary">{label}</span>
         <SyncBlockBadge block={block} />
       </div>
+
+      {/* What this block does */}
+      <p className="mt-0.5 text-xs text-text-muted">{description}</p>
 
       {/* Summary */}
       <p className={`mt-2 text-xs ${getBlockTone(block).text}`}>

@@ -89,6 +89,14 @@ const BLOCK_LABELS: Record<SyncBlockKey, string> = {
   messages_history: "Messages History",
 };
 
+const BLOCK_DESCRIPTIONS: Record<SyncBlockKey, string> = {
+  connection: "Confirms this page's account is still connected and authorized.",
+  financials: "Earnings transactions and the top-spenders leaderboard.",
+  audience: "Followers and subscribers for this page.",
+  messages_live: "Keeps the conversation list current \u2014 new threads and the latest message in each.",
+  messages_history: "Backfills and stores the full message contents of each conversation.",
+};
+
 const STREAM_LABELS: Record<string, string> = {
   light: "connection",
   fan_identities: "fan identities",
@@ -143,6 +151,10 @@ export function getBlockStateLabel(blockOrState: SyncBlockStatus | SyncBlockStat
 
 export function getBlockLabel(block: SyncBlockKey): string {
   return BLOCK_LABELS[block];
+}
+
+export function getBlockDescription(block: SyncBlockKey): string {
+  return BLOCK_DESCRIPTIONS[block];
 }
 
 export function getBlockOrder(): SyncBlockKey[] {
