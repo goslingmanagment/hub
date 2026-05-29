@@ -13,6 +13,10 @@ const ONLYFANS_INTERNAL_METADATA_KEYS = [
   ONLYFANS_TRANSACTION_BACKFILL_LOWER_BOUND_METADATA_KEY,
 ] as const;
 
+// Bound the account-lookup pagination so a misbehaving upstream cursor that
+// never terminates (or repeats) cannot spin forever.
+const ONLYFANS_ACCOUNT_LOOKUP_MAX_PAGES = 50;
+
 function pickOnlyFansInternalMetadata(metadata?: Record<string, unknown> | null) {
   if (!metadata) {
     return {};
@@ -91,6 +95,7 @@ export async function findOnlyFansAccountByUsername(
   const normalizedUsername = normalizeOnlyFansUsername(username);
   let cursor: string | null = null;
   let pageIndex = 0;
+  const seenCursors = new Set<string>();
 
   do {
     const response = await adapter.listAccountsPage(context, {
@@ -108,6 +113,21 @@ export async function findOnlyFansAccountByUsername(
 
     cursor = response.parsed.nextCursor ?? null;
     pageIndex += 1;
+
+    if (cursor !== null) {
+      if (seenCursors.has(cursor)) {
+        throw new Error(
+          `OnlyMonster account lookup for "${username}" aborted: pagination cursor repeated`,
+        );
+      }
+      seenCursors.add(cursor);
+    }
+
+    if (pageIndex >= ONLYFANS_ACCOUNT_LOOKUP_MAX_PAGES) {
+      throw new Error(
+        `OnlyMonster account lookup for "${username}" aborted after ${ONLYFANS_ACCOUNT_LOOKUP_MAX_PAGES} pages`,
+      );
+    }
   } while (cursor);
 
   throw new Error(`OnlyMonster account "${username}" was not found for this token`);
