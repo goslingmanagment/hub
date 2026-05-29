@@ -1213,6 +1213,121 @@ export const workboardUnsnoozeParamsSchema = pageParamsSchema.extend({
   fanId: z.coerce.number().int().positive(),
 });
 
+// --- Workboard v2 schemas ---
+
+const workboardV2TabEnum = z.enum(["subscribers", "spenders", "fresh_mass", "old_mass", "service"]);
+const workboardV2SecondaryStatusEnum = z.enum([
+  "recent_purchase",
+  "need_reply",
+  "due_now",
+  "later",
+  "dont_touch_today",
+]);
+
+export const workboardV2QuerySchema = z.object({
+  tab: workboardV2TabEnum,
+  status: z
+    .string()
+    .optional()
+    .transform((value) => (value ? value.split(",").map((s) => s.trim()).filter(Boolean) : undefined)),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export const workboardV2ItemSchema = z.object({
+  fanId: intId,
+  fan: z.object({
+    platformUserId: z.string().nullable(),
+    pageAlias: z.string().nullable(),
+    username: z.string().nullable(),
+    displayName: z.string().nullable(),
+  }),
+  tab: workboardV2TabEnum,
+  massSubstate: z.enum(["fresh", "gray", "active", "dead", "archived"]).nullable(),
+  value: z.object({
+    score: z.number(),
+    tier: z.enum(["whale", "vip", "payer", "new"]),
+    confidence: z.enum(["high", "low"]),
+  }),
+  urgency: z.object({
+    score: z.number(),
+    severity: z.enum(["critical", "high", "medium", "normal", "muted"]),
+  }),
+  rankScore: z.number(),
+  secondaryStatus: workboardV2SecondaryStatusEnum,
+  needsReply: z.boolean(),
+  needsHumanTriage: z.boolean(),
+  isPurchaseFollowup: z.boolean(),
+  whyNow: z.object({ code: z.string().nullable(), value: z.number().nullable() }),
+  reasonChips: z.array(z.string()),
+  quality: z.object({
+    qScore: z.number().nullable(),
+    qConfidence: z.enum(["high", "medium", "low"]),
+  }),
+  closingVerdict: z
+    .object({
+      layer: z.enum(["l1", "l2", "fresh", "unverified", "model_last", "unknown"]),
+      needsReply: z.boolean(),
+    })
+    .nullable(),
+  ltv: z.object({ creatorNetAmountMills: mills }),
+  subscription: z.object({
+    expiresAt: isoTimestamp.nullable(),
+    autoRenew: z.boolean().nullable(),
+  }),
+  conversation: z.object({
+    lastFanMessageAt: isoTimestamp.nullable(),
+    lastModelMessageAt: isoTimestamp.nullable(),
+    preview: z.string().nullable(),
+    coverageStatus: z.enum(["pending_backfill", "partial_window", "complete"]),
+  }),
+  serviceReason: z.string().nullable(),
+});
+
+export const workboardV2CountSchema = z.object({
+  tab: workboardV2TabEnum,
+  secondaryStatus: workboardV2SecondaryStatusEnum,
+  count: z.number().int(),
+});
+
+export const workboardV2OldMassBudgetSchema = z.object({
+  used: z.number().int(),
+  total: z.number().int(),
+  resetsAt: isoTimestamp,
+});
+
+export const workboardV2ResponseSchema = z.object({
+  tab: workboardV2TabEnum,
+  total: z.number().int(),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  items: z.array(workboardV2ItemSchema),
+  counts: z.array(workboardV2CountSchema),
+  oldMassBudget: workboardV2OldMassBudgetSchema.nullable(),
+  aiCoverage: z.object({
+    enabled: z.boolean(),
+    classified: z.number().int(),
+    closingsFound: z.number().int(),
+    callsToday: z.number().int(),
+  }),
+});
+
+export const workboardV2ContactBodySchema = z.object({
+  fanId: intId,
+  action: z.enum(["opened", "handled", "snoozed"]).default("handled"),
+  wasProductive: z.boolean().default(true),
+});
+
+export const workboardV2ContactResponseSchema = z.object({
+  ok: z.literal(true),
+  fanId: intId,
+});
+
+export const workboardV2RecomputeResponseSchema = z.object({
+  ok: z.literal(true),
+  evaluated: z.number().int(),
+});
+
 export const pageConversationMessageItemSchema = z.object({
   messageId: z.string(),
   senderRole: z.enum(["fan", "model", "system", "unknown"]),
@@ -2823,6 +2938,47 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  workboardV2: {
+    tags: ["workboard"],
+    summary: "Get a Workboard v2 tab queue (priority engine) for one Fansly page",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    querystring: workboardV2QuerySchema,
+    response: {
+      200: workboardV2ResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV2Contact: {
+    tags: ["workboard"],
+    summary: "Record a chatter touch (Готово) on a Workboard v2 fan",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    body: workboardV2ContactBodySchema,
+    response: {
+      200: workboardV2ContactResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV2Recompute: {
+    tags: ["workboard"],
+    summary: "Recompute the Workboard v2 queue for one Fansly page (on-demand)",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    response: {
+      200: workboardV2RecomputeResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   // --- Phase 4: Dashboard routes ---
   overview: {
     tags: ["dashboard"],
@@ -3633,3 +3789,8 @@ export type WorkboardPresenceResponse = z.infer<typeof workboardPresenceResponse
 export type WorkboardSnoozeBody = z.infer<typeof workboardSnoozeBodySchema>;
 export type WorkboardSnoozeResponse = z.infer<typeof workboardSnoozeResponseSchema>;
 export type WorkboardUnsnoozeParams = z.infer<typeof workboardUnsnoozeParamsSchema>;
+export type WorkboardV2Query = z.infer<typeof workboardV2QuerySchema>;
+export type WorkboardV2Item = z.infer<typeof workboardV2ItemSchema>;
+export type WorkboardV2Response = z.infer<typeof workboardV2ResponseSchema>;
+export type WorkboardV2ContactBody = z.infer<typeof workboardV2ContactBodySchema>;
+export type WorkboardV2RecomputeResponse = z.infer<typeof workboardV2RecomputeResponseSchema>;

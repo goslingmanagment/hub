@@ -20,6 +20,8 @@ const queueMocks = vi.hoisted(() => ({
   ensurePlannerSchedule: vi.fn(),
   ensureSyncQueues: vi.fn(),
   ensureTelegramDailyReportSchedule: vi.fn(),
+  ensureWorkboardQueues: vi.fn(),
+  ensureWorkboardRecomputeSchedule: vi.fn(),
 }));
 
 const plannerMocks = vi.hoisted(() => ({
@@ -39,9 +41,13 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,
   ensureSyncQueues: queueMocks.ensureSyncQueues,
+  ensureWorkboardQueues: queueMocks.ensureWorkboardQueues,
+  ensureWorkboardRecomputeSchedule: queueMocks.ensureWorkboardRecomputeSchedule,
   RAW_PAYLOAD_CLEANUP_QUEUE: "raw-payload-cleanup",
   SYNC_PLANNER_QUEUE: "sync-planner",
   TELEGRAM_DAILY_REPORT_QUEUE: "telegram.daily-report",
+  WORKBOARD_RECOMPUTE_QUEUE: "workboard.recompute",
+  WORKBOARD_CLASSIFY_QUEUE: "workboard.classify-closing",
 }));
 
 import { startWorkerServices } from "../apps/runtime/src/worker-services.ts";

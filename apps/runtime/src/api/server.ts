@@ -150,6 +150,11 @@ import {
   unsnoozeWorkboardFanReport,
 } from "../services/workboard.ts";
 import { getWorkboardPresenceReport } from "../services/workboard-presence.ts";
+import {
+  getWorkboardV2Report,
+  recordWorkboardContactV2,
+  triggerWorkboardV2Recompute,
+} from "../services/workboard-v2/report.ts";
 import { assertAllowedProxyTarget } from "../services/proxy-validation.ts";
 import {
   getPageConversationProfile,
@@ -922,6 +927,30 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     return unsnoozeWorkboardFanReport(appContext, principal, request.params.pageLabel, request.params.fanId);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/workboard/v2", {
+    schema: routeSchemas.workboardV2,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return getWorkboardV2Report(appContext, principal, request.params.pageLabel, request.query);
+  });
+
+  server.post("/api/v1/pages/:pageLabel/workboard/v2/contact", {
+    schema: routeSchemas.workboardV2Contact,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return recordWorkboardContactV2(appContext, principal, request.params.pageLabel, request.body);
+  });
+
+  server.post("/api/v1/pages/:pageLabel/workboard/v2/recompute", {
+    schema: routeSchemas.workboardV2Recompute,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return triggerWorkboardV2Recompute(appContext, principal, request.params.pageLabel);
   });
 
   server.get("/api/v1/fans/:platform/:platformUserId", {

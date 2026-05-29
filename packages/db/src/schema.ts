@@ -1422,3 +1422,201 @@ export const spenderDailyFacts = fanSpendDaily;
 export const spenderLifetimePage = fanSpendLifetime;
 export const spenderProjectionWatermarks = projectionWatermarks;
 export const pageTopSpenders = pageFanIdentities;
+
+// ───────────────────────────────────────────────────────────────────────────
+// Workboard v2 (priority engine). Additive and isolated: v1 (workboardSnoozes +
+// its read queries) is untouched. See docs/workboard-v2-priority-design.md.
+// ───────────────────────────────────────────────────────────────────────────
+
+export const workboardTabEnum = pgEnum("workboard_tab", [
+  "subscribers",
+  "spenders",
+  "fresh_mass",
+  "old_mass",
+  "service",
+]);
+
+export const workboardMassSubstateEnum = pgEnum("workboard_mass_substate", [
+  "fresh",
+  "gray",
+  "active",
+  "dead",
+  "archived",
+]);
+
+export const workboardSecondaryStatusEnum = pgEnum("workboard_secondary_status", [
+  "recent_purchase",
+  "need_reply",
+  "due_now",
+  "later",
+  "dont_touch_today",
+]);
+
+export const workboardFreeloaderStatusEnum = pgEnum("workboard_freeloader_status", [
+  "none",
+  "cooling",
+  "freeloader",
+  "ceiling",
+]);
+
+export const workboardContactActionEnum = pgEnum("workboard_contact_action", [
+  "opened",
+  "handled",
+  "snoozed",
+]);
+
+// Persisted FSM row: one per (page, fan). Recomputed nightly + event-patched.
+// Value and Urgency are stored SEPARATELY; rankScore is the per-tab sort key.
+export const workboardState = pgTable(
+  "workboard_state",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    tab: workboardTabEnum("tab").notNull(),
+    massSubstate: workboardMassSubstateEnum("mass_substate"),
+    valueScore: numeric("value_score", { precision: 5, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    urgencyScore: numeric("urgency_score", { precision: 5, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    rankScore: numeric("rank_score", { precision: 8, scale: 3, mode: "number" })
+      .default(0)
+      .notNull(),
+    secondaryStatus: workboardSecondaryStatusEnum("secondary_status")
+      .default("later")
+      .notNull(),
+    valueTier: text("value_tier").default("new").notNull(),
+    urgencySeverity: text("urgency_severity").default("normal").notNull(),
+    needsReply: boolean("needs_reply").default(false).notNull(),
+    needsHumanTriage: boolean("needs_human_triage").default(false).notNull(),
+    isPurchaseFollowup: boolean("is_purchase_followup").default(false).notNull(),
+    whyNowCode: text("why_now_code"),
+    whyNowValue: numeric("why_now_value", { precision: 10, scale: 2, mode: "number" }),
+    reasonChips: jsonb("reason_chips").$type<string[]>().default([]).notNull(),
+    followupDueAt: timestamp("followup_due_at", { withTimezone: true }),
+    // Stage 1+ conversation-quality / freeloader fields (nullable/defaulted for now).
+    qScore: numeric("q_score", { precision: 4, scale: 3, mode: "number" }),
+    qConfidence: text("q_confidence").default("low").notNull(),
+    valueConfidence: text("value_confidence").default("low").notNull(),
+    roleConfidence: numeric("role_confidence", { precision: 4, scale: 3, mode: "number" })
+      .default(1)
+      .notNull(),
+    bestCoverageSeen: dmMessageCoverageStatusEnum("best_coverage_seen"),
+    freeloaderStatus: workboardFreeloaderStatusEnum("freeloader_status")
+      .default("none")
+      .notNull(),
+    freeloaderEpisodes: jsonb("freeloader_episodes").$type<string[]>().default([]).notNull(),
+    lifetimeFreeEpisodes: integer("lifetime_free_episodes").default(0).notNull(),
+    reactivationAttemptedAt: timestamp("reactivation_attempted_at", { withTimezone: true }),
+    serviceReason: text("service_reason"),
+    lastEvalAt: timestamp("last_eval_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "workboard_state_pkey",
+      columns: [table.platformAccountId, table.fanId],
+    }),
+    tabRankIdx: index("workboard_state_tab_rank_idx").on(
+      table.platformAccountId,
+      table.tab,
+      table.rankScore.desc(),
+    ),
+    statusIdx: index("workboard_state_status_idx").on(
+      table.platformAccountId,
+      table.tab,
+      table.secondaryStatus,
+    ),
+    fanIdx: index("workboard_state_fan_idx").on(table.fanId, table.platformAccountId),
+  }),
+);
+
+// Dashboard-written touch log — the authoritative "we contacted this fan" signal
+// (the DM sync is lagged and stores only 25 msgs). Backs cadence floors, cooldowns,
+// cross-page anti-spam, and Fresh->Gray attempt counting.
+export const workboardContactLog = pgTable(
+  "workboard_contact_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    modelId: bigint("model_id", { mode: "number" })
+      .references(() => models.id, { onDelete: "cascade" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    businessDate: date("business_date").notNull(),
+    action: workboardContactActionEnum("action").notNull(),
+    wasProductive: boolean("was_productive").default(false).notNull(),
+    actedAt: timestamp("acted_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pageFanActedIdx: index("workboard_contact_log_page_fan_acted_idx").on(
+      table.platformAccountId,
+      table.fanId,
+      table.actedAt.desc(),
+    ),
+    crossPageIdx: index("workboard_contact_log_model_fan_date_idx").on(
+      table.modelId,
+      table.fanId,
+      table.businessDate,
+    ),
+    pageDateIdx: index("workboard_contact_log_page_date_idx").on(
+      table.platformAccountId,
+      table.businessDate,
+    ),
+  }),
+);
+
+// Permanent per-message verdict cache for the L2 (Haiku) closing classifier.
+// layer = 'l2' (classifier-confirmed) | 'over_cap' (fallback needs_reply, shown "unverified").
+export const wbClosingCache = pgTable(
+  "wb_closing_cache",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    platformMessageId: text("platform_message_id").notNull(),
+    contentHash: text("content_hash").notNull(),
+    needsReply: boolean("needs_reply").notNull(),
+    layer: text("layer").notNull(),
+    model: text("model"),
+    classifiedAt: timestamp("classified_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    uniq: unique("wb_closing_cache_message_uniq").on(table.platformAccountId, table.platformMessageId),
+    pageIdx: index("wb_closing_cache_page_idx").on(table.platformAccountId, table.classifiedAt),
+  }),
+);
+
+// Per-(page, day) AI usage + cost counter — the per-page daily cap lives here
+// (ai_usage_events is keyed to a human userId and has no platform_account_id).
+export const wbLlmUsageDaily = pgTable(
+  "wb_llm_usage_daily",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    businessDate: date("business_date").notNull(),
+    feature: text("feature").notNull(),
+    calls: integer("calls").default(0).notNull(),
+    inputTokens: integer("input_tokens").default(0).notNull(),
+    outputTokens: integer("output_tokens").default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "wb_llm_usage_daily_pkey",
+      columns: [table.platformAccountId, table.businessDate, table.feature],
+    }),
+  }),
+);

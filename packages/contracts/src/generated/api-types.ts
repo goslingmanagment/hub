@@ -3609,6 +3609,386 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pages/{pageLabel}/workboard/v2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a Workboard v2 tab queue (priority engine) for one Fansly page */
+        get: {
+            parameters: {
+                query: {
+                    tab: "subscribers" | "spenders" | "fresh_mass" | "old_mass" | "service";
+                    status?: string;
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            tab: "subscribers" | "spenders" | "fresh_mass" | "old_mass" | "service";
+                            total: number;
+                            limit: number;
+                            offset: number;
+                            items: {
+                                fanId: number;
+                                fan: {
+                                    platformUserId: string | null;
+                                    pageAlias: string | null;
+                                    username: string | null;
+                                    displayName: string | null;
+                                };
+                                /** @enum {string} */
+                                tab: "subscribers" | "spenders" | "fresh_mass" | "old_mass" | "service";
+                                massSubstate: ("fresh" | "gray" | "active" | "dead" | "archived") | null;
+                                value: {
+                                    score: number;
+                                    /** @enum {string} */
+                                    tier: "whale" | "vip" | "payer" | "new";
+                                    /** @enum {string} */
+                                    confidence: "high" | "low";
+                                };
+                                urgency: {
+                                    score: number;
+                                    /** @enum {string} */
+                                    severity: "critical" | "high" | "medium" | "normal" | "muted";
+                                };
+                                rankScore: number;
+                                /** @enum {string} */
+                                secondaryStatus: "recent_purchase" | "need_reply" | "due_now" | "later" | "dont_touch_today";
+                                needsReply: boolean;
+                                needsHumanTriage: boolean;
+                                isPurchaseFollowup: boolean;
+                                whyNow: {
+                                    code: string | null;
+                                    value: number | null;
+                                };
+                                reasonChips: string[];
+                                quality: {
+                                    qScore: number | null;
+                                    /** @enum {string} */
+                                    qConfidence: "high" | "medium" | "low";
+                                };
+                                closingVerdict: {
+                                    /** @enum {string} */
+                                    layer: "l1" | "l2" | "fresh" | "unverified" | "model_last" | "unknown";
+                                    needsReply: boolean;
+                                } | null;
+                                ltv: {
+                                    creatorNetAmountMills: number;
+                                };
+                                subscription: {
+                                    expiresAt: string | null;
+                                    autoRenew: boolean | null;
+                                };
+                                conversation: {
+                                    lastFanMessageAt: string | null;
+                                    lastModelMessageAt: string | null;
+                                    preview: string | null;
+                                    /** @enum {string} */
+                                    coverageStatus: "pending_backfill" | "partial_window" | "complete";
+                                };
+                                serviceReason: string | null;
+                            }[];
+                            counts: {
+                                /** @enum {string} */
+                                tab: "subscribers" | "spenders" | "fresh_mass" | "old_mass" | "service";
+                                /** @enum {string} */
+                                secondaryStatus: "recent_purchase" | "need_reply" | "due_now" | "later" | "dont_touch_today";
+                                count: number;
+                            }[];
+                            oldMassBudget: {
+                                used: number;
+                                total: number;
+                                resetsAt: string;
+                            } | null;
+                            aiCoverage: {
+                                enabled: boolean;
+                                classified: number;
+                                closingsFound: number;
+                                callsToday: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/workboard/v2/contact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record a chatter touch (Готово) on a Workboard v2 fan */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        fanId: number;
+                        /**
+                         * @default handled
+                         * @enum {string}
+                         */
+                        action?: "opened" | "handled" | "snoozed";
+                        /** @default true */
+                        wasProductive?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                            fanId: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/workboard/v2/recompute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recompute the Workboard v2 queue for one Fansly page (on-demand) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                            evaluated: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/fans/{platform}/{platformUserId}": {
         parameters: {
             query?: never;

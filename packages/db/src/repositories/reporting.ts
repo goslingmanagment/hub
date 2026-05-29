@@ -51,6 +51,7 @@ export async function findPageSummaryByLabel(db: Database, label: string) {
     id: pages.id,
     label: pages.label,
     platform: pages.platform,
+    modelId: pages.modelId,
     username: pages.username,
     displayName: pages.displayName,
     followerCount: pages.followerCount,

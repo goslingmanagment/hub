@@ -5,6 +5,8 @@
   "packageManager": "pnpm@10.30.3",
   "scripts": {
     "api": "node --import tsx/esm apps/runtime/src/api.ts",
+    "api:watch": "node --import tsx/esm --watch apps/runtime/src/api.ts",
+    "worker:watch": "node --import tsx/esm --watch apps/runtime/src/worker.ts",
     "build": "pnpm typecheck && pnpm --dir apps/dashboard build",
     "build:production": "pnpm typecheck && node scripts/build-production.mjs && pnpm --dir apps/dashboard build",
     "cli": "node --import tsx/esm apps/runtime/src/cli.ts",

@@ -82,6 +82,11 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
+  ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
+  WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
+  WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
+  WB_CLOSING_LLM_DAILY_CAP_MIN: z.coerce.number().int().positive().default(50),
+  WB_CLOSING_LLM_DAILY_CAP_MAX: z.coerce.number().int().positive().default(400),
 });
 
 export interface AppConfig {
@@ -120,6 +125,13 @@ export interface AppConfig {
   telegramChatId: string | null;
   telegramEnabled: boolean;
   telegramReportHourUtc: number;
+  // Optional so existing AppConfig literals (tests, codegen) need not enumerate them;
+  // loadConfig always populates them, so production behavior is exact.
+  anthropicApiKey?: string | null;
+  wbClosingLlmEnabled?: boolean;
+  wbClosingLlmModel?: string;
+  wbClosingLlmDailyCapMin?: number;
+  wbClosingLlmDailyCapMax?: number;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -213,6 +225,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     telegramChatId,
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
+    anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
+    // L2 only runs when explicitly enabled AND a key is present (safe by default).
+    wbClosingLlmEnabled: parsed.WB_CLOSING_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,
+    wbClosingLlmModel: parsed.WB_CLOSING_LLM_MODEL,
+    wbClosingLlmDailyCapMin: parsed.WB_CLOSING_LLM_DAILY_CAP_MIN,
+    wbClosingLlmDailyCapMax: parsed.WB_CLOSING_LLM_DAILY_CAP_MAX,
   };
 }
 
