@@ -121,7 +121,7 @@ export async function getWorkboardReport(
           code: row.touchpointCode,
           label: touchpointLabel(row.touchpointCode),
           isSoft: row.isSoftTouchpoint,
-          dueAt: new Date(row.touchpointDueAt).toISOString(),
+          dueAt: serializeTimestamp(row.touchpointDueAt)!,
         },
         overdueDays: row.overdueDays,
         conversation: {
@@ -135,7 +135,7 @@ export async function getWorkboardReport(
           messageSyncEligibility: row.messageSyncEligibility,
         },
         subscription: {
-          expiresAt: new Date(row.subscriptionExpiresAt).toISOString(),
+          expiresAt: serializeTimestamp(row.subscriptionExpiresAt)!,
           autoRenew: row.autoRenew,
           autoRenewOffDetectedAt: serializeTimestamp(row.autoRenewOffDetectedAt),
           tierName: row.subscriptionTierName,
@@ -163,7 +163,7 @@ export async function getWorkboardReport(
           displayName: row.displayName,
         },
         ltv: { creatorNetAmountMills: millsToNumber(row.creatorNetAmountMills) },
-        snoozedUntil: new Date(row.snoozedUntil).toISOString(),
+        snoozedUntil: serializeTimestamp(row.snoozedUntil)!,
       })),
     },
   };
