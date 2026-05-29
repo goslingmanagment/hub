@@ -81,6 +81,10 @@ export function FanProfilePage() {
     limit: PAGE_SIZE,
     offset: txOffset,
   });
+  const { data: timelineTxData } = usePageFanTransactions(pageLabel!, platformUserId!, {
+    limit: 10,
+    offset: 0,
+  });
   const createNote = useCreateFanNote(pageLabel!, platformUserId!);
 
   if (isLoading || !data) {
@@ -167,8 +171,9 @@ export function FanProfilePage() {
     ? daysRemaining(page.subscriptionExpiresAt)
     : null;
 
-  // Build timeline from transactions
-  const timelineEvents = txItems.slice(0, 10).map((tx) => ({
+  // Build timeline from its own independent query so paging the table below
+  // does not corrupt the timeline.
+  const timelineEvents = (timelineTxData?.items ?? []).map((tx) => ({
     id: tx.transactionId,
     date: tx.occurredAt,
     label: transactionTypeLabel(tx.canonicalType),
