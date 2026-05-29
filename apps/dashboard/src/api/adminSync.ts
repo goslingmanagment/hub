@@ -164,7 +164,6 @@ export function useAdminUpdateCredentials(pageLabel: string) {
       void qc.invalidateQueries({ queryKey: ["overview"] });
       void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
       void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
-      void qc.invalidateQueries({ queryKey: ["page", pageLabel] });
     },
   });
 }

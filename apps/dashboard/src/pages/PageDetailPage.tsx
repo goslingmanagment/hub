@@ -29,7 +29,6 @@ import {
   buildSettingsRoute,
 } from "@/lib/navigation";
 import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
-import { useSpenderPeriodStore } from "@/stores/spenderPeriodStore";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import {
   formatDate,
@@ -80,7 +79,6 @@ export function PageDetailPage() {
   const navigate = useNavigate();
   const { data: auth } = useAuthMe();
   const { period } = usePeriodStore();
-  const setSpenderPeriod = useSpenderPeriodStore((s) => s.setPeriod);
   const selectedPeriod = period;
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
   const audienceChartPeriod = getAudienceChartPeriod(selectedPeriod);
@@ -159,12 +157,8 @@ export function PageDetailPage() {
   }, [pageLabel, selectedPeriod]);
 
   useEffect(() => {
-    setSpenderPeriod(selectedPeriod);
-  }, [selectedPeriod, setSpenderPeriod]);
-
-  useEffect(() => {
     setTxOffset(0);
-  }, [txTypeFilter]);
+  }, [pageLabel, txTypeFilter]);
 
   useEffect(() => {
     if (!isFansly && activeTab === "followers") {

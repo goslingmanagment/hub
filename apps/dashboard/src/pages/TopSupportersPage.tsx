@@ -593,12 +593,12 @@ export function TopSupportersPage() {
   }, [spenders, spenderPeriod, batchByPlatformUserId, batchData]);
 
   if (isLoading || !spenders) {
-    return <TableSkeleton rows={8} columns={spenderPeriod === "lifetime" ? 8 : 9} />;
+    return <TableSkeleton rows={8} columns={spenderPeriod === "lifetime" ? 7 : 8} />;
   }
 
   const total = spenders.total;
   const isLifetime = spenderPeriod === "lifetime";
-  const columnCount = isLifetime ? 8 : 9;
+  const columnCount = isLifetime ? 7 : 8;
   const subtitle = describeRetentionSubtitle(retentionFilter);
 
   return (

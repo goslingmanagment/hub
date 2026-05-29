@@ -111,7 +111,7 @@ export function SpenderTrendPanel({
                 axisLine={false}
                 tickLine={false}
                 width={50}
-                tickFormatter={(v: number) => (v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${Math.round(v)}`)}
+                tickFormatter={(v: number) => formatUsdFromMills(v)}
               />
               <ChartTooltip
                 contentStyle={{

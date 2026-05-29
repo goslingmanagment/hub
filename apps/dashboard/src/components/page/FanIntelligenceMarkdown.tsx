@@ -28,9 +28,9 @@ export function FanIntelligenceMarkdown({ body }: FanIntelligenceMarkdownProps) 
           <FanIntelligenceMarkdownRenderer>{preamble}</FanIntelligenceMarkdownRenderer>
         </div>
       )}
-      {sections.map((section) => (
+      {sections.map((section, index) => (
         <AccordionSection
-          key={section.heading}
+          key={`${section.heading}-${index}`}
           heading={section.heading}
           content={section.content}
           defaultOpen={false}
