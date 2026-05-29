@@ -18,6 +18,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
 
 export const TOP_PAGE_LIMIT = 10;
+export const TOP_MODEL_LIMIT = 10;
 
 type WindowKey = "yesterday" | "days7" | "days30";
 
@@ -42,6 +43,7 @@ export interface DailyRevenueTelegramReport {
   generatedAt: string;
   agency: ReportRow;
   models: ReportRow[];
+  modelOverflow: (ReportRow & { modelCount: number }) | null;
   pages: (ReportRow & { modelLabel: string })[];
   overflow: (ReportRow & { pageCount: number }) | null;
   text: string;
@@ -222,6 +224,11 @@ function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramRepor
         lines.push(`  ${escapeHtml(page.label)} ${formatMetric(page.metrics.yesterday)}`);
       }
     }
+
+    if (report.modelOverflow) {
+      lines.push("");
+      lines.push(`<i>+${report.modelOverflow.modelCount} more models</i> ${formatMetric(report.modelOverflow.metrics.yesterday)}`);
+    }
   }
 
   if (report.overflow) {
@@ -250,6 +257,13 @@ export async function buildDailyRevenueTelegramReport(
   const pageRows = await listVisiblePages(app.db);
   const groupedPageIds = groupPageIdsByPlatform(pageRows);
 
+  // NOTE: The daily Telegram report uses uniform UTC calendar windows that
+  // exclude today (yesterday/7d/30d all end at todayStart). This intentionally
+  // differs from the dashboard's OnlyFans-specific windows in
+  // packages/shared/src/time.ts, which are one day wider and today-inclusive
+  // (ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS + a `to` of todayStart+1). This
+  // 7d/30d divergence between report and dashboard is known and unresolved; do
+  // not "fix" the math here without aligning both surfaces.
   const windows = {
     yesterday: {
       current: { from: yesterdayStart, to: todayStart },
@@ -298,9 +312,23 @@ export async function buildDailyRevenueTelegramReport(
     modelSlugToLabel.set(slug, model.name || slug);
   }
 
-  const models = Array.from(modelPageIds.entries())
-    .map(([modelSlug, model]) => createReportRow(model.name || modelSlug, model.pageIds, totalsByWindow))
+  const rankedModels = Array.from(modelPageIds.entries())
+    .map(([modelSlug, model]) => ({
+      pageIds: model.pageIds,
+      ...createReportRow(model.name || modelSlug, model.pageIds, totalsByWindow),
+    }))
     .sort(sortByYesterday);
+  const models = rankedModels
+    .slice(0, TOP_MODEL_LIMIT)
+    .map(({ pageIds: _pageIds, ...row }) => row);
+  const overflowModels = rankedModels.slice(TOP_MODEL_LIMIT);
+  const overflowModelPageIds = overflowModels.flatMap((model) => model.pageIds);
+  const modelOverflow = overflowModels.length > 0
+    ? {
+      ...createReportRow("overflow", overflowModelPageIds, totalsByWindow),
+      modelCount: overflowModels.length,
+    }
+    : null;
 
   const rankedPages = pageRows
     .map((page) => ({
@@ -325,6 +353,7 @@ export async function buildDailyRevenueTelegramReport(
     generatedAt: now.toISOString(),
     agency,
     models,
+    modelOverflow,
     pages: topPages,
     overflow,
   } satisfies Omit<DailyRevenueTelegramReport, "text" | "parseMode">;
