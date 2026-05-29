@@ -277,7 +277,7 @@ function serializeComparison(
     deltaCreatorNetAmountMills: millsToNumber(deltaCreatorNetAmountMills),
     deltaPct: previousMetrics.grossAmountMills === 0n
       ? null
-      : (Number(deltaGrossAmountMills) / Number(previousMetrics.grossAmountMills)) * 100,
+      : (Number(deltaGrossAmountMills) / Number(previousMetrics.grossAmountMills < 0n ? -previousMetrics.grossAmountMills : previousMetrics.grossAmountMills)) * 100,
   };
 }
 

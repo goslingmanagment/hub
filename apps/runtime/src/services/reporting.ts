@@ -230,7 +230,7 @@ function addComparison(
       deltaNetMills: millsToNumber(delta),
       deltaPct: previousNetEarnings === 0n
         ? null
-        : (Number(delta) / Number(previousNetEarnings)) * 100,
+        : (Number(delta) / Number(previousNetEarnings < 0n ? -previousNetEarnings : previousNetEarnings)) * 100,
     },
   };
 }
