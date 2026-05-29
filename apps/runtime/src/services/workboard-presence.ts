@@ -12,11 +12,18 @@ import {
 } from "./fansly-presence.ts";
 import { resolveFanslyPlatformAccountId } from "./fansly.ts";
 import { resolveAccessibleFanslyPage } from "./fansly-page.ts";
-import { resolvePageContext } from "./page-context.ts";
+import { resolvePageContext, type ResolvedFanslyPageContext } from "./page-context.ts";
 import { upsertHydratedFansForPage } from "./sync/fan-hydration.ts";
 
 const PRESENCE_REFRESH_TTL_MS = 60_000;
+// Hard cap on follower pages fetched per refresh. Guards against an adapter that
+// never reports `done`, which would otherwise loop (and increment offset)
+// forever. At 100 followers/page this covers 100k followers.
+const PRESENCE_REFRESH_MAX_PAGES = 1_000;
 const presenceRefreshByPageId = new Map<number, number>();
+// In-flight refreshes keyed by pageId so two near-simultaneous requests for the
+// same page coalesce onto a single pass instead of both entering the loop.
+const presenceRefreshInFlightByPageId = new Map<number, Promise<void>>();
 
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
@@ -54,27 +61,18 @@ function serializePresenceBucket(
   };
 }
 
-export async function getWorkboardPresenceReport(
+async function refreshPresenceForPage(
   app: AppContext,
-  principal: AuthPrincipal,
-  pageLabel: string,
-): Promise<WorkboardPresenceResponse> {
-  requireDashboardUser(principal);
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, "Workboard presence");
-  const pageContext = await resolvePageContext(app, pageLabel);
-  if (pageContext.platform !== "fansly") {
-    throw new Error("Expected Fansly page context");
-  }
-  const updatedAt = new Date();
-  const lastSeenAfter = updatedAt.getTime() - FANSLY_RECENTLY_ACTIVE_WINDOW_MS;
-  const platformAccountId = resolveFanslyPlatformAccountId(pageContext.page);
-  const lastRefreshAt = presenceRefreshByPageId.get(page.id) ?? 0;
-  const shouldRefresh = updatedAt.getTime() - lastRefreshAt >= PRESENCE_REFRESH_TTL_MS;
-
+  pageContext: ResolvedFanslyPageContext,
+  pageId: number,
+  platformAccountId: string,
+  updatedAt: Date,
+  lastSeenAfter: number,
+): Promise<void> {
   let offset = 0;
   const limit = 100;
 
-  while (shouldRefresh) {
+  for (let page = 0; page < PRESENCE_REFRESH_MAX_PAGES; page += 1) {
     const response = await app.adapter.getFollowersPage(
       {
         session: pageContext.session,
@@ -103,7 +101,7 @@ export async function getWorkboardPresenceReport(
 
     await app.db.transaction(async (dbTx) => {
       const fanMap = await upsertHydratedFansForPage(dbTx, {
-        platformAccountId: page.id,
+        platformAccountId: pageId,
         accounts: response.accounts,
         fallbackIds,
       });
@@ -114,7 +112,7 @@ export async function getWorkboardPresenceReport(
           const fanId = fanMap.get(signal.platformUserId);
           return fanId ? [{
             fanId,
-            platformAccountId: page.id,
+            platformAccountId: pageId,
             externalPresenceAt: signal.lastSeenAt,
             externalPresenceObservedAt: signal.observedAt,
             externalPresenceSource: signal.source,
@@ -124,14 +122,57 @@ export async function getWorkboardPresenceReport(
     });
 
     if (response.done) {
-      break;
+      return;
     }
 
     offset += limit;
   }
 
+  app.logger.warn(
+    { pageId, maxPages: PRESENCE_REFRESH_MAX_PAGES },
+    "Workboard presence refresh hit page cap before adapter reported done; truncating",
+  );
+}
+
+export async function getWorkboardPresenceReport(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+): Promise<WorkboardPresenceResponse> {
+  requireDashboardUser(principal);
+  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, "Workboard presence");
+  const pageContext = await resolvePageContext(app, pageLabel);
+  if (pageContext.platform !== "fansly") {
+    throw new Error("Expected Fansly page context");
+  }
+  const updatedAt = new Date();
+  const lastSeenAfter = updatedAt.getTime() - FANSLY_RECENTLY_ACTIVE_WINDOW_MS;
+  const platformAccountId = resolveFanslyPlatformAccountId(pageContext.page);
+  const lastRefreshAt = presenceRefreshByPageId.get(page.id) ?? 0;
+  const shouldRefresh = updatedAt.getTime() - lastRefreshAt >= PRESENCE_REFRESH_TTL_MS;
+
   if (shouldRefresh) {
-    presenceRefreshByPageId.set(page.id, updatedAt.getTime());
+    // Coalesce concurrent refreshes for the same page: if one is already in
+    // flight, await it instead of launching a second pagination pass.
+    let inFlight = presenceRefreshInFlightByPageId.get(page.id);
+    if (!inFlight) {
+      inFlight = refreshPresenceForPage(
+        app,
+        pageContext,
+        page.id,
+        platformAccountId,
+        updatedAt,
+        lastSeenAfter,
+      )
+        .then(() => {
+          presenceRefreshByPageId.set(page.id, updatedAt.getTime());
+        })
+        .finally(() => {
+          presenceRefreshInFlightByPageId.delete(page.id);
+        });
+      presenceRefreshInFlightByPageId.set(page.id, inFlight);
+    }
+    await inFlight;
   }
 
   const [activeNow, recentlyActive] = await Promise.all([
