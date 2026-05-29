@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate, useParams } from "react-router";
 import { OwnerRoute } from "./components/layout/OwnerRoute.js";
 import { ProtectedLayout } from "./components/layout/ProtectedLayout.js";
+import { ErrorBoundary } from "./components/shared/ErrorBoundary.js";
 import { resolveLegacyWorkboardRedirect } from "./lib/navigation.js";
 
 const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
@@ -34,38 +35,40 @@ function LegacyWorkboardRedirect() {
 
 export function App() {
   return (
-    <Suspense fallback={<LazyFallback />}>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route element={<ProtectedLayout />}>
-          <Route index element={<OverviewPage />} />
-          <Route path="pages/:pageLabel" element={<PageDetailPage />} />
-          <Route path="pages/:pageLabel/spender-autolists/:bucketKey" element={<SpenderAutoListPage />} />
-          <Route path="pages/:pageLabel/deleted-fans" element={<DeletedFansPage />} />
-          <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
-          <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />
-          <Route path="pages/:pageLabel/top-supporters" element={<TopSupportersPage />} />
-          <Route path="pages/:pageLabel/workboard" element={<WorkboardPage />} />
-          <Route path="pages/:pageLabel/crm" element={<LegacyWorkboardRedirect />} />
-          <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
-          <Route path="usage" element={<OwnerRoute><UsagePage /></OwnerRoute>} />
-          <Route path="notifications" element={<OwnerRoute><NotificationsPage /></OwnerRoute>} />
-          <Route
-            path="settings"
-            element={(
-              <OwnerRoute>
-                <SettingsPage />
-              </OwnerRoute>
-            )}
-          />
-          <Route path="dev/log" element={<OwnerRoute><LogPage /></OwnerRoute>} />
-          <Route path="dev/queue" element={<OwnerRoute><QueuePage /></OwnerRoute>} />
-          <Route path="dev/db-stats" element={<OwnerRoute><DbStatsPage /></OwnerRoute>} />
-          <Route path="dev/incidents" element={<OwnerRoute><IncidentsPage /></OwnerRoute>} />
-          <Route path="dev/sync-status" element={<OwnerRoute><SyncStatusPage /></OwnerRoute>} />
-        </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+    <ErrorBoundary>
+      <Suspense fallback={<LazyFallback />}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route element={<ProtectedLayout />}>
+            <Route index element={<OverviewPage />} />
+            <Route path="pages/:pageLabel" element={<PageDetailPage />} />
+            <Route path="pages/:pageLabel/spender-autolists/:bucketKey" element={<SpenderAutoListPage />} />
+            <Route path="pages/:pageLabel/deleted-fans" element={<DeletedFansPage />} />
+            <Route path="pages/:pageLabel/subscribers" element={<SubscribersPage />} />
+            <Route path="pages/:pageLabel/followers" element={<FollowersPage />} />
+            <Route path="pages/:pageLabel/top-supporters" element={<TopSupportersPage />} />
+            <Route path="pages/:pageLabel/workboard" element={<WorkboardPage />} />
+            <Route path="pages/:pageLabel/crm" element={<LegacyWorkboardRedirect />} />
+            <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
+            <Route path="usage" element={<OwnerRoute><UsagePage /></OwnerRoute>} />
+            <Route path="notifications" element={<OwnerRoute><NotificationsPage /></OwnerRoute>} />
+            <Route
+              path="settings"
+              element={(
+                <OwnerRoute>
+                  <SettingsPage />
+                </OwnerRoute>
+              )}
+            />
+            <Route path="dev/log" element={<OwnerRoute><LogPage /></OwnerRoute>} />
+            <Route path="dev/queue" element={<OwnerRoute><QueuePage /></OwnerRoute>} />
+            <Route path="dev/db-stats" element={<OwnerRoute><DbStatsPage /></OwnerRoute>} />
+            <Route path="dev/incidents" element={<OwnerRoute><IncidentsPage /></OwnerRoute>} />
+            <Route path="dev/sync-status" element={<OwnerRoute><SyncStatusPage /></OwnerRoute>} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
+    </ErrorBoundary>
   );
 }
