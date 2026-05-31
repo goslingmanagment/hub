@@ -9,10 +9,13 @@ import {
   finishClassifierRun,
   getActiveClassifierRun,
   getClosingSettings,
+  getLlmUsageDaily,
   insertClassifierRun,
-  insertClassifierRunRunning,
+  insertClassifierRunRunningIfIdle,
+  listWorkboardRecomputePageIds,
   listClassifierRuns,
   listWorkboardV2,
+  markReactivationAttemptedIfDead,
   pageDmMessages,
   pageDmThreads,
   pageFans,
@@ -22,7 +25,7 @@ import {
 import { dollarsToMills, toBusinessDate, UTC_TIME_ZONE } from "@agency_hub_core/shared";
 
 import { recomputeWorkboardPage } from "../apps/runtime/src/services/workboard-v2/recompute.ts";
-import { runClosingClassificationForPage } from "../apps/runtime/src/services/workboard-v2/classify-closing.ts";
+import { CLOSING_CLASSIFIER_FEATURE, runClosingClassificationForPage } from "../apps/runtime/src/services/workboard-v2/classify-closing.ts";
 import type { ClosingClassifier } from "../apps/runtime/src/services/workboard-v2/closing-classifier.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
@@ -218,6 +221,74 @@ describe("workboard v2 recompute + read (integration)", () => {
     expect(Number(row.q_score)).toBeGreaterThan(0.5); // balanced + fan-first + fast = warm
   });
 
+  it("keeps freeloader episodes idempotent when no new meaningful conversation happened", async () => {
+    const now = new Date("2026-05-29T12:00:00.000Z");
+    const { page } = await seedPage();
+    const fan = await insertFan("fan-free", "mira");
+    await harness.db.insert(pageFans).values({
+      fanId: fan,
+      platformAccountId: page.id,
+      isFollower: true,
+      followerSince: new Date(now.getTime() - 20 * DAY),
+    });
+    const [thread] = await harness.db
+      .insert(pageDmThreads)
+      .values({
+        platformAccountId: page.id,
+        fanId: fan,
+        platformConversationId: "conv-free",
+        lastMessageAt: new Date(now.getTime() - 3 * DAY),
+        lastMessageSenderRole: "fan",
+        lastFanMessageAt: new Date(now.getTime() - 3 * DAY),
+        lastModelMessageAt: new Date(now.getTime() - 3 * DAY - HOUR),
+        lastMessagePreview: "still around?",
+        storedMessageCount: 3,
+        messageCoverageStatus: "complete",
+        isVisible: true,
+      })
+      .returning({ id: pageDmThreads.id });
+    await harness.db.insert(pageDmMessages).values([
+      {
+        conversationId: thread!.id,
+        platformAccountId: page.id,
+        platformMessageId: "free-1",
+        senderRole: "fan",
+        createdAt: new Date(now.getTime() - 3 * DAY - 2 * HOUR),
+        content: "hey",
+      },
+      {
+        conversationId: thread!.id,
+        platformAccountId: page.id,
+        platformMessageId: "free-2",
+        senderRole: "model",
+        createdAt: new Date(now.getTime() - 3 * DAY - HOUR),
+        content: "hi babe",
+      },
+      {
+        conversationId: thread!.id,
+        platformAccountId: page.id,
+        platformMessageId: "free-3",
+        senderRole: "fan",
+        createdAt: new Date(now.getTime() - 3 * DAY),
+        content: "still around?",
+      },
+    ]);
+
+    await recomputeWorkboardPage(harness.db, { platformAccountId: page.id, now });
+    await recomputeWorkboardPage(harness.db, { platformAccountId: page.id, now: new Date(now.getTime() + DAY) });
+
+    const result = await harness.pool.query<{ episodes: string[]; lifetime: number }>(
+      `
+      select freeloader_episodes as episodes, lifetime_free_episodes::int as lifetime
+      from workboard_state
+      where platform_account_id = $1 and fan_id = $2
+    `,
+      [page.id, fan],
+    );
+    expect(result.rows[0]?.episodes).toHaveLength(1);
+    expect(result.rows[0]?.lifetime).toBe(1);
+  });
+
   it("L2 classifier cleans the >24h tail: L1 closings are skipped, verdicts gate needs_reply", async () => {
     const now = new Date();
     const { page } = await seedPage();
@@ -299,8 +370,85 @@ describe("workboard v2 recompute + read (integration)", () => {
     expect(onlyNeedReply.rows.every((r) => r.secondary_status === "need_reply")).toBe(true);
   });
 
+  it("reserves LLM cap calls atomically and defers the rest once the cap is spent", async () => {
+    const now = new Date("2026-05-29T12:00:00.000Z");
+    const { page } = await seedPage();
+
+    async function seedTail(handle: string, messageId: string, preview: string) {
+      const id = await insertFan(handle, handle);
+      await harness.db.insert(pageFans).values({
+        fanId: id,
+        platformAccountId: page.id,
+        isFollower: true,
+        followerSince: new Date(now.getTime() - 10 * DAY),
+      });
+      await harness.db.insert(pageDmThreads).values({
+        platformAccountId: page.id,
+        fanId: id,
+        platformConversationId: `conv-cap-${handle}`,
+        lastMessageId: messageId,
+        lastMessageAt: new Date(now.getTime() - 48 * HOUR),
+        lastMessageSenderRole: "fan",
+        lastFanMessageAt: new Date(now.getTime() - 48 * HOUR),
+        lastMessagePreview: preview,
+        storedMessageCount: 1,
+        messageCoverageStatus: "partial_window",
+        isVisible: true,
+      });
+    }
+
+    await seedTail("cap-a", "msg-cap-a", "are you around later?");
+    await seedTail("cap-b", "msg-cap-b", "can you show me something new?");
+
+    const classified: string[] = [];
+    const fakeClassifier: ClosingClassifier = {
+      model: "fake-haiku",
+      async classifyBatch(messages) {
+        classified.push(...messages.map((m) => m.id));
+        return {
+          verdicts: messages.map((m) => ({
+            id: m.id,
+            needsReply: true,
+            state: "question" as const,
+            reason: "asked a question",
+          })),
+          inputTokens: 7,
+          outputTokens: 11,
+        };
+      },
+    };
+
+    const first = await runClosingClassificationForPage(harness.db, fakeClassifier, {
+      platformAccountId: page.id,
+      now,
+      capMin: 0,
+      capMax: 1,
+      batchSize: 1,
+    });
+    expect(first).toMatchObject({ classified: 1, deferred: 1, calls: 1, inputTokens: 7, outputTokens: 11 });
+    expect(classified).toHaveLength(1);
+    expect(await getLlmUsageDaily(harness.db, page.id, toBusinessDate(now, UTC_TIME_ZONE), CLOSING_CLASSIFIER_FEATURE)).toEqual({
+      calls: 1,
+      inputTokens: 7,
+      outputTokens: 11,
+    });
+
+    const second = await runClosingClassificationForPage(harness.db, fakeClassifier, {
+      platformAccountId: page.id,
+      now,
+      capMin: 0,
+      capMax: 1,
+      batchSize: 1,
+    });
+    expect(second).toMatchObject({ classified: 0, deferred: 1, calls: 0, inputTokens: 0, outputTokens: 0 });
+    expect(classified).toHaveLength(1);
+  });
+
   it("persists per-page settings and appends to the classifier run log", async () => {
     const { page } = await seedPage();
+    const pageIds = await listWorkboardRecomputePageIds(harness.db);
+    expect(pageIds).toEqual([page.id]);
+    expect(typeof pageIds[0]).toBe("number");
 
     // No override yet.
     expect(await getClosingSettings(harness.db, page.id)).toBeNull();
@@ -359,11 +507,19 @@ describe("workboard v2 recompute + read (integration)", () => {
 
     expect(await getActiveClassifierRun(harness.db, page.id)).toBeNull();
 
-    const runId = await insertClassifierRunRunning(harness.db, {
+    const first = await insertClassifierRunRunningIfIdle(harness.db, {
       platformAccountId: page.id,
       trigger: "reclassify",
       model: "claude-haiku-4-5",
     });
+    const second = await insertClassifierRunRunningIfIdle(harness.db, {
+      platformAccountId: page.id,
+      trigger: "manual",
+      model: "claude-haiku-4-5",
+    });
+    const runId = first.id;
+    expect(first.alreadyRunning).toBe(false);
+    expect(second).toEqual({ id: runId, alreadyRunning: true });
     // The run is now "active" — a second click would join it instead of starting a new one.
     expect(await getActiveClassifierRun(harness.db, page.id)).toMatchObject({ id: runId });
     expect((await listClassifierRuns(harness.db, 5))[0]).toMatchObject({ status: "running" });
@@ -384,5 +540,46 @@ describe("workboard v2 recompute + read (integration)", () => {
       classified: 12,
       cleared: 30,
     });
+  });
+
+  it("marks a dead old-mass reactivation attempt once and leaves it stable", async () => {
+    const { page } = await seedPage();
+    const fan = await insertFan("fan-dead", "nora");
+    await harness.db.insert(pageFans).values({ fanId: fan, platformAccountId: page.id, isFollower: true });
+    await harness.pool.query(
+      `
+      insert into workboard_state (
+        platform_account_id, fan_id, tab, mass_substate,
+        value_score, urgency_score, rank_score, secondary_status
+      )
+      values (
+        $1, $2, 'old_mass'::workboard_tab, 'dead'::workboard_mass_substate,
+        0, 25, 25, 'due_now'::workboard_secondary_status
+      )
+    `,
+      [page.id, fan],
+    );
+
+    expect(await markReactivationAttemptedIfDead(harness.db, { platformAccountId: page.id, fanId: fan })).toBe(true);
+    const afterFirst = await harness.pool.query<{ attempted_at: Date | null }>(
+      `
+      select reactivation_attempted_at as attempted_at
+      from workboard_state
+      where platform_account_id = $1 and fan_id = $2
+    `,
+      [page.id, fan],
+    );
+    expect(afterFirst.rows[0]?.attempted_at).toBeInstanceOf(Date);
+
+    expect(await markReactivationAttemptedIfDead(harness.db, { platformAccountId: page.id, fanId: fan })).toBe(false);
+    const afterSecond = await harness.pool.query<{ attempted_at: Date | null }>(
+      `
+      select reactivation_attempted_at as attempted_at
+      from workboard_state
+      where platform_account_id = $1 and fan_id = $2
+    `,
+      [page.id, fan],
+    );
+    expect(afterSecond.rows[0]?.attempted_at?.toISOString()).toBe(afterFirst.rows[0]?.attempted_at?.toISOString());
   });
 });

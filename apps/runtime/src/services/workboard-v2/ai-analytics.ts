@@ -11,11 +11,10 @@ import {
   countUnansweredTails,
   failStaleClassifierRuns,
   finishClassifierRun,
-  getActiveClassifierRun,
   getClosingSettings,
   getClosingStateDistribution,
   getLlmUsageRange,
-  insertClassifierRunRunning,
+  insertClassifierRunRunningIfIdle,
   listClassifierRuns,
   listClosingClassificationCandidates,
   listRecentClosingVerdicts,
@@ -188,23 +187,21 @@ export async function runWorkboardV2AiClassify(
   if (!app.config.anthropicApiKey) {
     throw new BadRequestError("ANTHROPIC_API_KEY is not configured");
   }
-  // One in-flight run per page — a second click joins the existing one.
-  const active = await getActiveClassifierRun(app.db, page.id);
-  if (active) {
-    return { ok: true, runId: active.id, status: "running", alreadyRunning: true };
-  }
-
   const eff = resolveClosingSettings(app.config, toOverride(await getClosingSettings(app.db, page.id)));
-  const runId = await insertClassifierRunRunning(app.db, {
+  // One in-flight run per page — the DB transaction closes the SELECT→INSERT race.
+  const run = await insertClassifierRunRunningIfIdle(app.db, {
     platformAccountId: page.id,
     trigger: body.reclassify ? "reclassify" : "manual",
     model: eff.model,
   });
+  if (run.alreadyRunning) {
+    return { ok: true, runId: run.id, status: "running", alreadyRunning: true };
+  }
 
   // Detach: respond immediately; the run-log row tracks progress to completion.
-  void executeClassifyRun(app, page.id, runId, eff, body.reclassify);
+  void executeClassifyRun(app, page.id, run.id, eff, body.reclassify);
 
-  return { ok: true, runId, status: "running", alreadyRunning: false };
+  return { ok: true, runId: run.id, status: "running", alreadyRunning: false };
 }
 
 const RUN_LOG_LIMIT = 100;

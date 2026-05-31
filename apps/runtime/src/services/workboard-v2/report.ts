@@ -14,6 +14,7 @@ import {
   getLlmUsageDaily,
   getWorkboardV2Counts,
   listWorkboardV2,
+  markReactivationAttemptedIfDead,
   snoozeWorkboardFanV2,
   unsnoozeWorkboardFan,
 } from "@agency_hub_core/db";
@@ -224,6 +225,9 @@ export async function recordWorkboardContactV2(
     action: body.action,
     wasProductive: body.wasProductive,
   });
+  if (body.wasProductive) {
+    await markReactivationAttemptedIfDead(app.db, { platformAccountId: page.id, fanId: body.fanId });
+  }
   // Re-evaluate just this fan so the row leaves the active queue immediately.
   await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId: body.fanId });
 

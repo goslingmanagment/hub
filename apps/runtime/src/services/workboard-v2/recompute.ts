@@ -74,20 +74,27 @@ interface FreeloaderUpdate {
 function updateFreeloaderEpisodes(row: WorkboardSignalRow, now: Date, timeZone: string): FreeloaderUpdate {
   const prior = Array.isArray(row.freeloader_episodes) ? row.freeloader_episodes : [];
   const cutoff = now.getTime() - NINETY_DAYS_MS;
-  const pruned = prior.filter((iso) => {
-    const t = new Date(iso).getTime();
-    return Number.isFinite(t) && t >= cutoff;
-  });
+  const pruned = prior
+    .filter((iso) => {
+      const t = new Date(iso).getTime();
+      return Number.isFinite(t) && t >= cutoff;
+    })
+    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
 
-  const meaningfulNow = row.fan_msgs >= 2 && row.model_msgs >= 1;
-  const todayKey = toBusinessDate(now, timeZone);
+  const latestMeaningfulAt = toDate(row.latest_meaningful_message_at);
+  const meaningfulLatest = row.fan_msgs >= 2
+    && row.model_msgs >= 1
+    && latestMeaningfulAt != null
+    && latestMeaningfulAt.getTime() >= cutoff
+    && latestMeaningfulAt.getTime() <= now.getTime();
+  const latestKey = latestMeaningfulAt ? toBusinessDate(latestMeaningfulAt, timeZone) : null;
   const lastIso = pruned[pruned.length - 1];
   const lastKey = lastIso ? toBusinessDate(new Date(lastIso), timeZone) : null;
 
   const episodes = [...pruned];
   let appended = false;
-  if (meaningfulNow && lastKey !== todayKey) {
-    episodes.push(now.toISOString());
+  if (meaningfulLatest && latestKey !== lastKey) {
+    episodes.push(latestMeaningfulAt.toISOString());
     appended = true;
   }
 

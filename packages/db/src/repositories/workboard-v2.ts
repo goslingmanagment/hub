@@ -49,6 +49,7 @@ export type WorkboardSignalRow = {
   unknown_msgs: number;
   initiator_role: string | null;
   avg_gap_hours: number | null;
+  latest_meaningful_message_at: Date | null;
   prior_q_score: string | null;
   freeloader_episodes: string[] | null;
   lifetime_free_episodes: number;
@@ -138,6 +139,7 @@ export async function loadWorkboardSignalRows(
         count(*) filter (where sender_role = 'fan'::dm_sender_role) as fan_msgs,
         count(*) filter (where sender_role = 'unknown'::dm_sender_role) as unknown_msgs,
         (array_agg(sender_role::text order by created_at asc))[1] as initiator_role,
+        max(created_at) filter (where sender_role in ('fan'::dm_sender_role, 'model'::dm_sender_role)) as latest_meaningful_message_at,
         avg(gap_hours) as avg_gap_hours
       from (
         select
@@ -195,6 +197,7 @@ export async function loadWorkboardSignalRows(
       coalesce(cq.unknown_msgs, 0)::int as unknown_msgs,
       cq.initiator_role as initiator_role,
       cq.avg_gap_hours as avg_gap_hours,
+      cq.latest_meaningful_message_at as latest_meaningful_message_at,
       ws.q_score as prior_q_score,
       ws.freeloader_episodes as freeloader_episodes,
       coalesce(ws.lifetime_free_episodes, 0)::int as lifetime_free_episodes,
@@ -419,6 +422,24 @@ export async function appendWorkboardContact(db: Database, input: AppendContactI
   });
 }
 
+/** Mark the one-shot reactivation attempt once a dead old-mass fan is productively touched. */
+export async function markReactivationAttemptedIfDead(
+  db: Database,
+  input: { platformAccountId: number; fanId: number },
+): Promise<boolean> {
+  const result = await db.execute<{ fan_id: bigint }>(sql`
+    update workboard_state
+    set reactivation_attempted_at = now(), updated_at = now()
+    where platform_account_id = ${input.platformAccountId}
+      and fan_id = ${input.fanId}
+      and tab = 'old_mass'::workboard_tab
+      and mass_substate = 'dead'::workboard_mass_substate
+      and reactivation_attempted_at is null
+    returning fan_id
+  `);
+  return result.rows.length > 0;
+}
+
 /** Count today's productive touches on Old-mass fans (drives the residual cap meter). */
 export async function countOldMassContactsToday(
   db: Database,
@@ -474,7 +495,7 @@ export async function deleteLastWorkboardContact(
 /** Page ids eligible for the v2 recompute job (Fansly first, matching v1 scope). */
 export async function listWorkboardRecomputePageIds(db: Database): Promise<number[]> {
   const result = await db.execute<{ id: number }>(sql`
-    select id from pages where platform = 'fansly'::platform order by id
+    select id::int as id from pages where platform = 'fansly'::platform order by id
   `);
   return result.rows.map((row) => row.id);
 }
@@ -613,6 +634,39 @@ export async function incrementLlmUsageDaily(
     values (${input.platformAccountId}, ${input.businessDate}::date, ${input.feature}, ${input.calls}, ${input.inputTokens}, ${input.outputTokens}, now())
     on conflict (platform_account_id, business_date, feature) do update set
       calls = wb_llm_usage_daily.calls + excluded.calls,
+      input_tokens = wb_llm_usage_daily.input_tokens + excluded.input_tokens,
+      output_tokens = wb_llm_usage_daily.output_tokens + excluded.output_tokens,
+      updated_at = now()
+  `);
+}
+
+export async function reserveLlmUsageDailyCall(
+  db: Database,
+  input: { platformAccountId: number; businessDate: string; feature: string; cap: number },
+): Promise<boolean> {
+  if (input.cap <= 0) {
+    return false;
+  }
+  const result = await db.execute<{ calls: number }>(sql`
+    insert into wb_llm_usage_daily (platform_account_id, business_date, feature, calls, input_tokens, output_tokens, updated_at)
+    values (${input.platformAccountId}, ${input.businessDate}::date, ${input.feature}, 1, 0, 0, now())
+    on conflict (platform_account_id, business_date, feature) do update set
+      calls = wb_llm_usage_daily.calls + 1,
+      updated_at = now()
+    where wb_llm_usage_daily.calls < ${input.cap}
+    returning calls
+  `);
+  return result.rows.length > 0;
+}
+
+export async function addLlmUsageDailyTokens(
+  db: Database,
+  input: { platformAccountId: number; businessDate: string; feature: string; inputTokens: number; outputTokens: number },
+): Promise<void> {
+  await db.execute(sql`
+    insert into wb_llm_usage_daily (platform_account_id, business_date, feature, calls, input_tokens, output_tokens, updated_at)
+    values (${input.platformAccountId}, ${input.businessDate}::date, ${input.feature}, 0, ${input.inputTokens}, ${input.outputTokens}, now())
+    on conflict (platform_account_id, business_date, feature) do update set
       input_tokens = wb_llm_usage_daily.input_tokens + excluded.input_tokens,
       output_tokens = wb_llm_usage_daily.output_tokens + excluded.output_tokens,
       updated_at = now()
@@ -813,6 +867,37 @@ export async function insertClassifierRunRunning(
     .values({ platformAccountId: input.platformAccountId, trigger: input.trigger, model: input.model, status: "running" })
     .returning({ id: wbClassifierRuns.id });
   return row!.id;
+}
+
+const CLASSIFIER_RUN_LOCK_NAMESPACE = 9_002_001;
+
+/**
+ * Atomically starts a manual classifier run for a page. The advisory transaction
+ * lock closes the SELECT→INSERT race across API processes.
+ */
+export async function insertClassifierRunRunningIfIdle(
+  db: Database,
+  input: { platformAccountId: number; trigger: "manual" | "reclassify"; model: string | null },
+): Promise<{ id: number; alreadyRunning: boolean }> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${CLASSIFIER_RUN_LOCK_NAMESPACE}, ${input.platformAccountId})`);
+    const active = await tx.execute<{ id: number }>(sql`
+      select id::int as id from wb_classifier_runs
+      where platform_account_id = ${input.platformAccountId}
+        and status = 'running'
+        and created_at > now() - interval '15 minutes'
+      order by id desc limit 1
+    `);
+    const activeRow = active.rows[0];
+    if (activeRow) {
+      return { id: activeRow.id, alreadyRunning: true };
+    }
+    const [row] = await tx
+      .insert(wbClassifierRuns)
+      .values({ platformAccountId: input.platformAccountId, trigger: input.trigger, model: input.model, status: "running" })
+      .returning({ id: wbClassifierRuns.id });
+    return { id: row!.id, alreadyRunning: false };
+  });
 }
 
 /** Finalize a 'running' run row with its terminal counts/status. */

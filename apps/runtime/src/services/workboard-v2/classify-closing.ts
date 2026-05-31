@@ -4,13 +4,13 @@ import {
   type ClosingCacheUpsert,
   type ClosingCandidateRow,
   type Database,
+  addLlmUsageDailyTokens,
   countUnansweredTails,
-  getLlmUsageDaily,
-  incrementLlmUsageDaily,
   insertClassifierRun,
   listClosingClassificationCandidates,
   listClosingSettings,
   listWorkboardRecomputePageIds,
+  reserveLlmUsageDailyCall,
   upsertClosingCache,
 } from "@agency_hub_core/db";
 import { UTC_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
@@ -93,27 +93,36 @@ export async function runClosingClassificationForPage(
   // Adaptive daily cap on API CALLS, scaled to the page's unanswered-tail volume.
   const tailCount = await countUnansweredTails(db, opts.platformAccountId);
   const cap = Math.min(opts.capMax, Math.max(opts.capMin, Math.floor(0.5 * tailCount)));
-  const usage = await getLlmUsageDaily(db, opts.platformAccountId, businessDate, CLOSING_CLASSIFIER_FEATURE);
-  const remainingCalls = Math.max(0, cap - usage.calls);
-  const messageBudget = remainingCalls * batchSize;
-
-  const classifyList = toClassify.slice(0, messageBudget);
-  const deferred = toClassify.length - classifyList.length;
-
   let calls = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   const cacheRows: ClosingCacheUpsert[] = [];
 
-  for (const group of chunk(classifyList, batchSize)) {
+  for (const group of chunk(toClassify, batchSize)) {
+    const reserved = await reserveLlmUsageDailyCall(db, {
+      platformAccountId: opts.platformAccountId,
+      businessDate,
+      feature: CLOSING_CLASSIFIER_FEATURE,
+      cap,
+    });
+    if (!reserved) {
+      break;
+    }
+    calls += 1;
     const contexts = new Map(group.map((c) => [c.platform_message_id, toContext(c)]));
     try {
       const result = await classifier.classifyBatch(
         group.map((c) => ({ id: c.platform_message_id, context: contexts.get(c.platform_message_id)! })),
       );
-      calls += 1;
       inputTokens += result.inputTokens;
       outputTokens += result.outputTokens;
+      await addLlmUsageDailyTokens(db, {
+        platformAccountId: opts.platformAccountId,
+        businessDate,
+        feature: CLOSING_CLASSIFIER_FEATURE,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+      });
       const verdicts = new Map(result.verdicts.map((v) => [v.id, v]));
       for (const c of group) {
         const verdict = verdicts.get(c.platform_message_id);
@@ -135,18 +144,15 @@ export async function runClosingClassificationForPage(
   }
 
   await upsertClosingCache(db, cacheRows);
-  if (calls > 0) {
-    await incrementLlmUsageDaily(db, {
-      platformAccountId: opts.platformAccountId,
-      businessDate,
-      feature: CLOSING_CLASSIFIER_FEATURE,
-      calls,
-      inputTokens,
-      outputTokens,
-    });
-  }
 
-  return { platformAccountId: opts.platformAccountId, classified: cacheRows.length, deferred, calls, inputTokens, outputTokens };
+  return {
+    platformAccountId: opts.platformAccountId,
+    classified: cacheRows.length,
+    deferred: toClassify.length - cacheRows.length,
+    calls,
+    inputTokens,
+    outputTokens,
+  };
 }
 
 /**
