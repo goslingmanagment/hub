@@ -33709,13 +33709,19 @@
                         "type": "integer",
                         "minimum": -9007199254740991,
                         "maximum": 9007199254740991
+                      },
+                      "sortOrder": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
                       }
                     },
                     "required": [
                       "id",
                       "slug",
                       "name",
-                      "pageCount"
+                      "pageCount",
+                      "sortOrder"
                     ],
                     "additionalProperties": false
                   }
@@ -33961,6 +33967,11 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200
+                  },
+                  "sortOrder": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
                   }
                 }
               }

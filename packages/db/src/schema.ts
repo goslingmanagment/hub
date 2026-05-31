@@ -118,6 +118,7 @@ export const models = pgTable("models", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   slug: text("slug").notNull().unique(),
   name: text("name").notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

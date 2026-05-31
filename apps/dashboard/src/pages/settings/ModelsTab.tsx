@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import type { ModelListItem } from "@agency_hub_core/contracts";
-import { useAdminModels, useAdminDeleteModel } from "@/api/queries";
+import { useAdminModels, useAdminDeleteModel, useAdminReorderModels } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
@@ -10,6 +11,7 @@ import { EditModelModal } from "./EditModelModal.js";
 
 export function ModelsTab() {
   const { data: models, isLoading, isError, error } = useAdminModels();
+  const reorder = useAdminReorderModels();
   const [showCreate, setShowCreate] = useState(false);
   const [editModel, setEditModel] = useState<ModelListItem | null>(null);
   const [deleteModel, setDeleteModel] = useState<ModelListItem | null>(null);
@@ -31,6 +33,29 @@ export function ModelsTab() {
   }
 
   const items = models ?? [];
+
+  async function moveModel(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= items.length || reorder.isPending) {
+      return;
+    }
+    const current = items[index];
+    const neighbor = items[target];
+
+    if (typeof current.sortOrder !== "number" || typeof neighbor.sortOrder !== "number") {
+      toast.error("Model order is missing. Restart the API and refresh the page.");
+      return;
+    }
+
+    try {
+      await reorder.mutateAsync([
+        { slug: current.slug, sortOrder: neighbor.sortOrder },
+        { slug: neighbor.slug, sortOrder: current.sortOrder },
+      ]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to reorder models");
+    }
+  }
 
   return (
     <>
@@ -69,7 +94,7 @@ export function ModelsTab() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((model) => (
+                {items.map((model, index) => (
                   <tr key={model.id} className="border-t border-border">
                     <td className="px-4 py-3 text-sm font-medium text-text-primary">
                       {model.slug}
@@ -78,6 +103,26 @@ export function ModelsTab() {
                     <td className="px-4 py-3 text-sm text-text-secondary">{model.pageCount}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
+                        <div className="mr-1 flex flex-col">
+                          <button
+                            type="button"
+                            onClick={() => moveModel(index, -1)}
+                            disabled={index === 0 || reorder.isPending}
+                            aria-label={`Move ${model.name} up`}
+                            className="rounded p-0.5 text-text-muted transition-colors hover:bg-hover hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+                          >
+                            <ChevronUp size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moveModel(index, 1)}
+                            disabled={index === items.length - 1 || reorder.isPending}
+                            aria-label={`Move ${model.name} down`}
+                            className="rounded p-0.5 text-text-muted transition-colors hover:bg-hover hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+                          >
+                            <ChevronDown size={14} />
+                          </button>
+                        </div>
                         <button
                           type="button"
                           onClick={() => setEditModel(model)}

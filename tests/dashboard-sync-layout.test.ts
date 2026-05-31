@@ -9,6 +9,7 @@ const queryMocks = vi.hoisted(() => ({
   useAdminConnections: vi.fn(),
   useAdminModels: vi.fn(),
   useAdminPages: vi.fn(),
+  useAdminReorderModels: vi.fn(),
   useAdminSyncBlockPause: vi.fn(),
   useAdminSyncBlockReset: vi.fn(),
   useAdminSyncBlockResume: vi.fn(),
@@ -337,6 +338,7 @@ describe("dashboard sync layout", () => {
     queryMocks.useAdminConnections.mockReset();
     queryMocks.useAdminModels.mockReset();
     queryMocks.useAdminPages.mockReset();
+    queryMocks.useAdminReorderModels.mockReset();
     queryMocks.useAdminSyncBlockPause.mockReset();
     queryMocks.useAdminSyncBlockReset.mockReset();
     queryMocks.useAdminSyncBlockResume.mockReset();
@@ -375,9 +377,10 @@ describe("dashboard sync layout", () => {
       isLoading: false,
     });
     queryMocks.useAdminModels.mockReturnValue({
-      data: [{ id: 1, slug: "lana", name: "Lana", pageCount: 1 }],
+      data: [{ id: 1, slug: "lana", name: "Lana", pageCount: 1, sortOrder: 10 }],
       isLoading: false,
     });
+    queryMocks.useAdminReorderModels.mockReturnValue({ mutate: vi.fn(), isPending: false });
     queryMocks.useAdminPages.mockReturnValue({
       data: [],
       isLoading: false,
@@ -445,6 +448,7 @@ describe("dashboard sync layout", () => {
 
     expect(html).toContain("Workboard");
     expect(html).toContain("href=\"/pages/lana/workboard\"");
+    expect(html).toContain("href=\"/ai-analytics?page=lana\"");
     expect(html).not.toContain(">CRM<");
   });
 

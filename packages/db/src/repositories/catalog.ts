@@ -103,7 +103,13 @@ function hasErrorCode(error: unknown, code: string) {
 
 export async function createModel(db: Database, input: { slug: string; name: string }) {
   try {
-    const [created] = await db.insert(models).values(input).returning();
+    const [{ nextSortOrder }] = await db
+      .select({ nextSortOrder: sql<number>`coalesce(max(${models.sortOrder}), 0) + 10` })
+      .from(models);
+    const [created] = await db
+      .insert(models)
+      .values({ slug: input.slug, name: input.name, sortOrder: nextSortOrder })
+      .returning();
     return created;
   } catch (error) {
     if (hasErrorCode(error, "23505")) {
@@ -332,7 +338,7 @@ export async function listModelsWithPageCounts(db: Database) {
     from models m
     left join pages pa on pa.model_id = m.id
     group by m.id, m.slug, m.name
-    order by m.slug asc
+    order by m.sort_order asc, m.slug asc
   `);
 }
 
@@ -341,11 +347,12 @@ export async function listAdminModels(db: Database) {
     id: models.id,
     slug: models.slug,
     name: models.name,
+    sortOrder: models.sortOrder,
     pageCount: sql<number>`count(${pages.id})::int`,
   }).from(models)
     .leftJoin(pages, eq(pages.modelId, models.id))
-    .groupBy(models.id, models.slug, models.name)
-    .orderBy(models.slug);
+    .groupBy(models.id, models.slug, models.name, models.sortOrder)
+    .orderBy(models.sortOrder, models.slug);
 }
 
 export async function updateModelBySlug(
@@ -354,11 +361,13 @@ export async function updateModelBySlug(
   input: {
     slug?: string;
     name?: string;
+    sortOrder?: number;
   },
 ) {
   const patch: {
     slug?: string;
     name?: string;
+    sortOrder?: number;
   } = {};
 
   if (input.slug !== undefined) {
@@ -366,6 +375,9 @@ export async function updateModelBySlug(
   }
   if (input.name !== undefined) {
     patch.name = input.name;
+  }
+  if (input.sortOrder !== undefined) {
+    patch.sortOrder = input.sortOrder;
   }
 
   let updated;
@@ -449,7 +461,7 @@ export async function listAdminPages(
   }).from(pages)
     .innerJoin(models, eq(models.id, pages.modelId))
     .where(clauses.length > 0 ? and(...clauses) : undefined)
-    .orderBy(models.slug, pages.label);
+    .orderBy(models.sortOrder, models.slug, pages.label);
 }
 
 export async function updatePageByLabel(

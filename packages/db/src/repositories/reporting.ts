@@ -97,7 +97,7 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
     .leftJoin(pageCredentials, eq(pageCredentials.platformAccountId, pages.id))
     .leftJoin(egressEndpoints, eq(egressEndpoints.platformAccountId, pages.id))
     .where(clauses.length > 0 ? and(...clauses) : undefined)
-    .orderBy(models.slug, pages.label);
+    .orderBy(models.sortOrder, models.slug, pages.label);
 }
 
 export async function listVisibleModels(db: Database, pageIds?: number[]) {
@@ -119,7 +119,7 @@ export async function listVisibleModels(db: Database, pageIds?: number[]) {
     .innerJoin(pages, eq(pages.modelId, models.id))
     .where(clauses.length > 0 ? and(...clauses) : undefined)
     .groupBy(models.id, models.slug, models.name)
-    .orderBy(models.slug);
+    .orderBy(models.sortOrder, models.slug);
 }
 
 export async function findVisibleModel(db: Database, modelSlug: string, pageIds?: number[]) {

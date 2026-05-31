@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AdminCreatePageResponse,
+  AdminModelListItem,
   AdminUpdatePageResponse,
   AssignedPage,
   CreateModelBody,
@@ -30,7 +31,7 @@ function invalidateAdminCatalog(qc: QueryClient) {
 export function useAdminModels() {
   return useQuery({
     queryKey: ["admin", "models"],
-    queryFn: () => api.get<ModelListItem[]>("/api/v1/admin/models"),
+    queryFn: () => api.get<AdminModelListItem[]>("/api/v1/admin/models"),
   });
 }
 
@@ -50,6 +51,22 @@ export function useAdminUpdateModel(modelSlug: string) {
     meta: { suppressGlobalError: true },
     mutationFn: (body: UpdateModelBody) =>
       api.patch<CreateModelResponse>(`/api/v1/admin/models/${pathSegment(modelSlug)}`, body),
+    onSuccess: () => invalidateAdminCatalog(qc),
+  });
+}
+
+export function useAdminReorderModels() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (updates: { slug: string; sortOrder: number }[]) =>
+      Promise.all(
+        updates.map((update) =>
+          api.patch<CreateModelResponse>(`/api/v1/admin/models/${pathSegment(update.slug)}`, {
+            sortOrder: update.sortOrder,
+          }),
+        ),
+      ),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }

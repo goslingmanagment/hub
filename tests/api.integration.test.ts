@@ -5514,6 +5514,67 @@ describe("api integration", () => {
     });
   });
 
+  it("orders admin models by sort_order and lets the owner reorder them", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    // Created in reverse-alphabetical creation order to prove ordering is driven
+    // by sort_order (creation order), not the slug.
+    await createModel(testDb.db, { slug: "reorder-z", name: "Reorder Z" });
+    await createModel(testDb.db, { slug: "reorder-a", name: "Reorder A" });
+    const cookie = await loginOwnerCookie(server);
+
+    const before = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/models",
+      headers: { cookie },
+    });
+    expect(before.statusCode).toBe(200);
+    const beforeList = before.json() as Array<{ slug: string; sortOrder: number }>;
+    const z = beforeList.find((m) => m.slug === "reorder-z");
+    const a = beforeList.find((m) => m.slug === "reorder-a");
+    expect(z).toBeDefined();
+    expect(a).toBeDefined();
+    // New models receive an increasing sort_order, so the earlier-created sorts first.
+    expect(z!.sortOrder).toBeLessThan(a!.sortOrder);
+    expect(beforeList.findIndex((m) => m.slug === "reorder-z")).toBeLessThan(
+      beforeList.findIndex((m) => m.slug === "reorder-a"),
+    );
+
+    // Swap their positions through the admin update endpoint.
+    for (const update of [
+      { slug: "reorder-z", sortOrder: a!.sortOrder },
+      { slug: "reorder-a", sortOrder: z!.sortOrder },
+    ]) {
+      const res = await server.inject({
+        method: "PATCH",
+        url: `/api/v1/admin/models/${update.slug}`,
+        headers: { cookie },
+        payload: { sortOrder: update.sortOrder },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+
+    const after = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/models",
+      headers: { cookie },
+    });
+    const afterList = after.json() as Array<{ slug: string }>;
+    expect(afterList.findIndex((m) => m.slug === "reorder-a")).toBeLessThan(
+      afterList.findIndex((m) => m.slug === "reorder-z"),
+    );
+
+    for (const slug of ["reorder-a", "reorder-z"]) {
+      await server.inject({
+        method: "DELETE",
+        url: `/api/v1/admin/models/${slug}`,
+        headers: { cookie },
+      });
+    }
+  });
+
   it("lists, updates, and deletes pages through admin CRUD", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

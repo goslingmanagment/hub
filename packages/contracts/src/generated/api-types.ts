@@ -9873,6 +9873,7 @@ export interface paths {
                             slug: string;
                             name: string;
                             pageCount: number;
+                            sortOrder: number;
                         }[];
                     };
                 };
@@ -10087,6 +10088,7 @@ export interface paths {
                     "application/json": {
                         slug?: string;
                         name?: string;
+                        sortOrder?: number;
                     };
                 };
             };

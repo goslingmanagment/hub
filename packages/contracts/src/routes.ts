@@ -478,6 +478,10 @@ export const modelListItemSchema = z.object({
   pageCount: z.number().int(),
 });
 
+export const adminModelListItemSchema = modelListItemSchema.extend({
+  sortOrder: z.number().int(),
+});
+
 const revenueSummarySchema = z.object({
   revenueMills: mills,
   adjustmentMills: mills,
@@ -2516,9 +2520,14 @@ export const createModelBodySchema = z.object({
 export const updateModelBodySchema = z.object({
   slug: z.string().min(1).max(100).optional(),
   name: z.string().min(1).max(200).optional(),
-}).refine((value) => value.slug !== undefined || value.name !== undefined, {
-  message: "At least one field is required",
-});
+  sortOrder: z.number().int().min(0).optional(),
+}).refine(
+  (value) =>
+    value.slug !== undefined || value.name !== undefined || value.sortOrder !== undefined,
+  {
+    message: "At least one field is required",
+  },
+);
 
 export const createModelResponseSchema = z.object({
   id: intId,
@@ -3604,7 +3613,7 @@ export const routeSchemas = {
     summary: "List all models for admin management",
     security: cookieOnlySecurity,
     response: {
-      200: z.array(modelListItemSchema),
+      200: z.array(adminModelListItemSchema),
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
@@ -3898,6 +3907,7 @@ export type FollowerListQuery = z.infer<typeof followerListQuerySchema>;
 export type FollowerListResponse = z.infer<typeof followerListResponseSchema>;
 export type LoginBody = z.infer<typeof loginBodySchema>;
 export type ModelListItem = z.infer<typeof modelListItemSchema>;
+export type AdminModelListItem = z.infer<typeof adminModelListItemSchema>;
 export type ModelParams = z.infer<typeof modelParamsSchema>;
 export type ModelRevenueResponse = z.infer<typeof modelRevenueResponseSchema>;
 export type OverviewGrowthResponse = z.infer<typeof overviewGrowthResponseSchema>;
