@@ -153,8 +153,17 @@ import { getWorkboardPresenceReport } from "../services/workboard-presence.ts";
 import {
   getWorkboardV2Report,
   recordWorkboardContactV2,
+  snoozeWorkboardV2,
   triggerWorkboardV2Recompute,
+  undoWorkboardContactV2,
+  unsnoozeWorkboardV2,
 } from "../services/workboard-v2/report.ts";
+import {
+  getWorkboardV2AiReport,
+  listWorkboardV2AiRuns,
+  runWorkboardV2AiClassify,
+  updateWorkboardV2AiSettings,
+} from "../services/workboard-v2/ai-analytics.ts";
 import { assertAllowedProxyTarget } from "../services/proxy-validation.ts";
 import {
   getPageConversationProfile,
@@ -951,6 +960,62 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     return triggerWorkboardV2Recompute(appContext, principal, request.params.pageLabel);
+  });
+
+  server.post("/api/v1/pages/:pageLabel/workboard/v2/snooze", {
+    schema: routeSchemas.workboardV2Snooze,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return snoozeWorkboardV2(appContext, principal, request.params.pageLabel, request.body);
+  });
+
+  server.delete("/api/v1/pages/:pageLabel/workboard/v2/snooze/:fanId", {
+    schema: routeSchemas.workboardV2Unsnooze,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return unsnoozeWorkboardV2(appContext, principal, request.params.pageLabel, request.params.fanId);
+  });
+
+  server.delete("/api/v1/pages/:pageLabel/workboard/v2/contact/:fanId", {
+    schema: routeSchemas.workboardV2UndoContact,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return undoWorkboardContactV2(appContext, principal, request.params.pageLabel, request.params.fanId);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/workboard/v2/ai", {
+    schema: routeSchemas.workboardV2Ai,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return getWorkboardV2AiReport(appContext, principal, request.params.pageLabel);
+  });
+
+  server.put("/api/v1/pages/:pageLabel/workboard/v2/ai/settings", {
+    schema: routeSchemas.workboardV2AiSettings,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return updateWorkboardV2AiSettings(appContext, principal, request.params.pageLabel, request.body);
+  });
+
+  server.post("/api/v1/pages/:pageLabel/workboard/v2/ai/classify", {
+    schema: routeSchemas.workboardV2AiClassify,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return runWorkboardV2AiClassify(appContext, principal, request.params.pageLabel, request.body);
+  });
+
+  server.get("/api/v1/workboard/ai/runs", {
+    schema: routeSchemas.workboardV2AiRuns,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return listWorkboardV2AiRuns(appContext);
   });
 
   server.get("/api/v1/fans/:platform/:platformUserId", {

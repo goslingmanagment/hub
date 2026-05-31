@@ -9,8 +9,10 @@ async function main() {
   const pool = createPool(url);
   try {
     const { rows } = await pool.query(
-      `select left(coalesce(t.last_message_preview, ''), 60) as tail_message,
+      `select left(coalesce(t.last_message_preview, ''), 50) as tail_message,
+              c.state,
               c.needs_reply,
+              left(coalesce(c.reason, ''), 32) as reason,
               c.layer
        from wb_closing_cache c
        join pages p on p.id = c.platform_account_id and p.label = $1
@@ -22,16 +24,18 @@ async function main() {
     );
     console.table(rows.map((r) => ({
       "tail message": r.tail_message,
+      state: r.state ?? "—",
       "needs reply?": r.needs_reply,
+      reason: r.reason,
       layer: r.layer,
     })));
     const totals = await pool.query(
-      `select c.needs_reply, count(*)::int as n
+      `select coalesce(c.state, '(unset)') as state, count(*)::int as n
        from wb_closing_cache c join pages p on p.id = c.platform_account_id and p.label = $1
-       group by c.needs_reply order by c.needs_reply`,
+       group by c.state order by n desc`,
       [label],
     );
-    console.log("totals by needs_reply:", totals.rows);
+    console.log("totals by state:", totals.rows);
   } finally {
     await pool.end();
   }

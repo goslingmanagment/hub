@@ -3,6 +3,10 @@ import type {
   WorkboardPresenceResponse,
   WorkboardResponse,
   WorkboardSnoozeResponse,
+  WorkboardV2AiClassifyResponse,
+  WorkboardV2AiReport,
+  WorkboardV2AiRunsResponse,
+  WorkboardV2AiSettingsBody,
   WorkboardV2Response,
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
@@ -109,5 +113,89 @@ export function useWorkboardV2Recompute(pageLabel: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
+  });
+}
+
+export function useWorkboardV2Snooze(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { fanId: number; days: number }) =>
+      api.post<{ ok: true; fanId: number; snoozedUntil: string | null }>(
+        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/snooze`,
+        body,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    },
+  });
+}
+
+export function useWorkboardV2Unsnooze(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (fanId: number) =>
+      api.del<{ ok: true; fanId: number }>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/snooze/${fanId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    },
+  });
+}
+
+export function useWorkboardV2UndoContact(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (fanId: number) =>
+      api.del<{ ok: true; fanId: number }>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/contact/${fanId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    },
+  });
+}
+
+// ── Workboard v2 AI analytics (L2 closing classifier) ────────────────────────
+
+export function useWorkboardV2Ai(pageLabel: string, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ["workboard-v2-ai", pageLabel],
+    queryFn: () =>
+      api.get<WorkboardV2AiReport>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/ai`),
+    enabled: options.enabled ?? true,
+  });
+}
+
+export function useWorkboardV2AiSettings(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: WorkboardV2AiSettingsBody) =>
+      api.put<WorkboardV2AiReport>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/ai/settings`, body),
+    onSuccess: (data) => {
+      qc.setQueryData(["workboard-v2-ai", pageLabel], data);
+      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    },
+  });
+}
+
+export function useWorkboardV2AiClassify(pageLabel: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { reclassify?: boolean }) =>
+      api.post<WorkboardV2AiClassifyResponse>(
+        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/ai/classify`,
+        body,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workboard-v2-ai", pageLabel] });
+      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+      qc.invalidateQueries({ queryKey: ["workboard-v2-ai-runs"] });
+    },
+  });
+}
+
+export function useWorkboardV2AiRuns(options: { enabled?: boolean; refetchInterval?: number } = {}) {
+  return useQuery({
+    queryKey: ["workboard-v2-ai-runs"],
+    queryFn: () => api.get<WorkboardV2AiRunsResponse>(`/api/v1/workboard/ai/runs`),
+    enabled: options.enabled ?? true,
+    refetchInterval: options.refetchInterval,
   });
 }

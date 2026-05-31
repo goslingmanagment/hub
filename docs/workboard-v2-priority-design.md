@@ -200,25 +200,36 @@ needs_reply = (lastMessageSenderRole = 'fan') AND NOT isClosing(tail)
 ```
 
 **Layer 1 — hard, multilingual, exact-match (always, synchronous, free).** Applied to every fan-last thread in the nightly TS/SQL pass. Lowercase-trimmed full-string match (not "contains"), allowing a short combination and punctuation/emoji suffix:
-- EN: `ok, okay, k, kk, thanks, thx, ty, tysm, gn, gm, bye, cya, np, yw, lol, lmao, cool, nice`
-- RU: `спасибо, спс, пока, ок, окей, ладно, давай, хорошо, споки, доброй ночи, ага`
+- EN: `ok, okay, k, kk, thanks, thx, ty, tysm, gn, gm, bye, cya, np, yw, lol, lmao, cool, nice, alright`
+- RU: `спасибо, спс, пока, ок, окей, ладно, хорошо, споки, доброй ночи, ага, угу, понял, ясно`
 - Lone-emoji rule: content stripped of whitespace is 1–3 emoji and no letters → closing (`🙂 😘 ❤️ 👍 😍 🥰 😻 …`).
 Match → `needs_reply=false`. Catches the obvious majority cheaply and deterministically.
 
-**Layer 2 — Haiku 4.5 classifier, async, surgical.** Runs **only on the tail of threads unanswered > 24 h** that L1 did not decide. (Fresh <24h messages default to `needs_reply=true` so the chatter gets a chance to answer on time; most threads are either answered within a day or caught by L1 — so L2's volume is small.)
-- **Model:** `claude-haiku-4-5` (the task is binary; Opus/Sonnet add nothing here).
-- **Batches API** (−50%, 24 h SLA — which is exactly our "stuck for a day" window), nightly pg-boss job `workboard:classify-closing`.
-- **Bulk:** 10–20 messages per request, JSON array `[{message_id, needs_reply}]`, to amortize the short prompt. No prompt caching (the system prompt is too small to benefit).
-- **Permanent per-message cache** keyed by `(platformMessageId, contentHash)` — classify once, ever.
-- **Output:** `needs_reply: true|false`, persisted; feeds the next eval.
+> **Bare affirmatives are deliberately NOT in L1** (`yes, yeah, yep, yup, sure, да, давай`). Context-blind they read as acks, but after a sales prompt ("прислать видео?") they are a **conversion**. L1 cannot see the prior line, so it must not suppress them — the context-aware L2 judges them (→ `buy_signal`) instead. Only high-precision acks that almost never answer a sales question (`ok, ладно, ага`) stay in L1.
 
-**Cost-and-cap mechanics (own tables — see §10 and the red-team fix below):**
-- **Adaptive daily cap** per page: `cap = clamp(0.5 * dailyUnansweredTailCount, 50, 400)` — scales with how busy the page actually is, instead of a flat number that behaves worst on the busiest pages.
+**Layer 2 — Haiku 4.5 classifier, async, surgical, _context-aware + semantic_.** Runs **only on the tail of threads unanswered > 24 h** that L1 did not decide. (Fresh <24h messages default to `needs_reply=true` so the chatter gets a chance to answer on time; most threads are either answered within a day or caught by L1 — so L2's volume is small.)
+- **Reads the conversation, not the tail in isolation.** Each candidate is sent as the last ≤10 messages with roles (`fan`/`creator`), so "yes" after "want me to send it?" resolves correctly.
+- **Semantic output**, not just a boolean: `state ∈ {buy_signal, question, complaint, smalltalk, cold, closing}` + `needs_reply` + a short `reason`. This feeds **both** the closing detector **and** the Urgency axis (§4) — a fresh-read `buy_signal` (90) sits just under a purchase and above the SLA cap; `complaint` (85) is high; a `cold` tail that still "needs a reply" is damped (×0.5 SLA) so age alone can't float it.
+- **Model:** `claude-haiku-4-5` (per-page overridable).
+- **Bulk:** ~15 conversations per request, JSON array `[{id, state, needs_reply, reason}]`, sync Messages API; nightly pg-boss job `workboard:classify-closing`.
+- **Permanent per-message cache** keyed by `(platformMessageId, contentHash)` where `contentHash = hash(context+tail)` — a stale >24h tail's context doesn't change, so the verdict is reused; `state` + `reason` are persisted and surfaced in the "Детектор ответа" panel.
+
+**Cost-and-cap mechanics (own tables):**
+- **Adaptive daily cap** per page: `cap = clamp(0.5 * dailyUnansweredTailCount, capMin, capMax)`.
 - **L2 spend priority:** Subscribers → Spenders → Fresh → Old, so the highest-value tails are classified first.
-- **Over budget ≠ API error:** *over budget* → keep the prior cached verdict, defer to tomorrow's batch (do **not** flip to `needs_reply`). *API error/5xx* → retry with backoff. Only a **genuinely-unclassified tail at cap** defaults to `needs_reply=true` (false positive is safer than a missed reply) — but such rows are tagged **`unverified`**, ranked **below** classifier-confirmed `Need reply`, and shown with a "не проверено (лимит)" chip (§12.4).
-- **Dead/archived fans are not classified** (they don't enter `Need reply` anyway).
+- **Over budget ≠ API error:** *over budget* → defer to the next run (do **not** flip to `needs_reply`). *API error* → stop, leave uncached, retry next run. Only a **genuinely-unclassified tail at cap** defaults to `needs_reply=true` — tagged **`unverified`**, ranked **below** classifier-confirmed `Need reply`, shown with a "не проверено" chip (§12.4).
+- **Dead/archived/service fans are not classified.**
 
-**Expected cost:** with the 24 h gate + Batches API + permanent cache, on the order of **$0.20–0.50 per page per month**.
+**Expected cost:** Haiku 4.5 = **$1/M input, $5/M output**. Even context-aware (~$0.0004/classified message) and with the permanent cache, on the order of **$1–3 per page per month** — cost is not the binding constraint; the daily call cap (latency to clear the backlog) is.
+
+### 6.1 Per-page runtime settings + AI dashboard
+
+The classifier is managed and monitored from a dedicated owner page (`/ai-analytics`), not buried in config:
+- **`wb_closing_settings`** (per-page override; `null` column = inherit env): `enabled`, `daily_cap_max`, `model`. Resolved as `override ?? env`, gated by the presence of `ANTHROPIC_API_KEY`. The nightly job skips disabled pages and uses each page's effective cap + model.
+- **Dashboard** (`GET /pages/:label/workboard/v2/ai`, owner-only mutations): effective settings + override editor, today/30d usage + estimated cost, coverage (tails / classified / pending / closings), **state distribution** ("what's happening in chats"), recent verdicts, and **"Classify now" / "Reclassify all"** actions (the latter clears the page cache server-side — the explicit-consent path to re-run the whole backlog with the new semantic prompt).
+- **`wb_classifier_runs`** — append-only run log (one row per page per run; `trigger ∈ {cron, manual, reclassify}` + counts + tokens + cost). Surfaced as a live, filterable **run logger** at the bottom of the AI page (`GET /workboard/ai/runs`).
+
+A compact read-only indicator stays on the Workboard v2 page and links to the dashboard.
 
 ---
 

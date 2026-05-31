@@ -95,6 +95,16 @@ describe("L1 closing detector", () => {
     expect(isClosingMessage("")).toBe(false);
     expect(isClosingMessage("   ")).toBe(false);
   });
+
+  it("does NOT suppress bare affirmatives — after a sales prompt they are a conversion (L2 judges them in context)", () => {
+    for (const affirm of ["yes", "yeah", "yep", "yup", "sure", "да", "давай"]) {
+      expect(isClosingMessage(affirm)).toBe(false);
+    }
+    // Pure acks that almost never answer a sales question stay closings (keep L1 useful).
+    for (const ack of ["ok", "ладно", "ага", "thanks"]) {
+      expect(isClosingMessage(ack)).toBe(true);
+    }
+  });
 });
 
 describe("value axis", () => {
@@ -319,5 +329,43 @@ describe("L2 closing classifier → needs_reply", () => {
     const e = evaluateFan(tail({ lastFanMessageAt: hoursAgo(48), l2NeedsReply: false }));
     expect(e.needsReply).toBe(false);
     expect(e.reasonChips).not.toContain("replies_waiting");
+  });
+
+  it("a buy_signal tail outranks a plain stale need-reply and reads as critical", () => {
+    const buy = evaluateFan(tail({ lastFanMessageAt: hoursAgo(48), l2NeedsReply: true, l2State: "buy_signal" }));
+    const plain = evaluateFan(tail({ lastFanMessageAt: hoursAgo(48), l2NeedsReply: true, l2State: null }));
+    expect(buy.whyNowCode).toBe("buy_signal");
+    expect(buy.urgencyScore).toBeGreaterThan(plain.urgencyScore);
+    expect(buy.urgencySeverity).toBe("critical");
+    expect(buy.reasonChips).toContain("buy_signal");
+  });
+
+  it("a complaint tail is high-severity and surfaces its chip", () => {
+    const e = evaluateFan(tail({ lastFanMessageAt: hoursAgo(48), l2NeedsReply: true, l2State: "complaint" }));
+    expect(e.whyNowCode).toBe("complaint");
+    expect(e.urgencySeverity).toBe("high");
+    expect(e.reasonChips).toContain("complaint");
+  });
+
+  it("a cold tail that still 'needs a reply' is damped below an equally-aged neutral one", () => {
+    const cold = evaluateFan(tail({ lastFanMessageAt: hoursAgo(48), l2NeedsReply: true, l2State: "cold" }));
+    const neutral = evaluateFan(tail({ lastFanMessageAt: hoursAgo(48), l2NeedsReply: true, l2State: null }));
+    expect(cold.needsReply).toBe(true);
+    expect(cold.urgencyScore).toBeLessThan(neutral.urgencyScore);
+  });
+
+  it("a productive touch (Готово) at/after the fan's last message clears needs-reply (live board)", () => {
+    const base = {
+      hasEverFanMessaged: true,
+      followerSince: daysAgo(3),
+      lastMessageSenderRole: "fan" as const,
+      tailContent: "when are you free?",
+      lastFanMessageAt: hoursAgo(48),
+    };
+    expect(evaluateFan(makeSignals(base)).needsReply).toBe(true);
+    // chatter pressed Готово 1h ago (after the fan's 48h-old message) → handled
+    const handled = evaluateFan(makeSignals({ ...base, lastProductiveContactAt: hoursAgo(1) }));
+    expect(handled.needsReply).toBe(false);
+    expect(handled.reasonChips).not.toContain("replies_waiting");
   });
 });

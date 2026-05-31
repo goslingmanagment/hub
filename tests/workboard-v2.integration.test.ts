@@ -6,11 +6,15 @@ import {
   createModel,
   fanSpendLifetime,
   fans,
+  getClosingSettings,
+  insertClassifierRun,
+  listClassifierRuns,
   listWorkboardV2,
   pageDmMessages,
   pageDmThreads,
   pageFans,
   pageSubscriptions,
+  upsertClosingSettings,
 } from "@agency_hub_core/db";
 import { dollarsToMills, toBusinessDate, UTC_TIME_ZONE } from "@agency_hub_core/shared";
 
@@ -244,7 +248,17 @@ describe("workboard v2 recompute + read (integration)", () => {
       async classifyBatch(messages) {
         for (const m of messages) classified.push(m.id);
         return {
-          verdicts: messages.map((m) => ({ id: m.id, needsReply: m.content.includes("free") })),
+          verdicts: messages.map((m) => {
+            // The classifier now sees the conversation context (last entry = the fan tail).
+            const text = m.context.map((c) => c.text).join(" ");
+            const needsReply = text.includes("free");
+            return {
+              id: m.id,
+              needsReply,
+              state: needsReply ? ("question" as const) : ("closing" as const),
+              reason: needsReply ? "asked a question" : "just a warm goodbye",
+            };
+          }),
           inputTokens: 1,
           outputTokens: 1,
         };
@@ -269,5 +283,60 @@ describe("workboard v2 recompute + read (integration)", () => {
     expect(byId.get(fanQuestion)?.needs_reply).toBe(true); // classifier said needs reply
     expect(byId.get(fanWarmClose)?.needs_reply).toBe(false); // classifier said closing
     expect(byId.get(fanThanks)?.needs_reply).toBe(false); // L1 closing
+  });
+
+  it("persists per-page settings and appends to the classifier run log", async () => {
+    const { page } = await seedPage();
+
+    // No override yet.
+    expect(await getClosingSettings(harness.db, page.id)).toBeNull();
+
+    await upsertClosingSettings(harness.db, {
+      platformAccountId: page.id,
+      enabled: false,
+      dailyCapMax: 120,
+      model: "claude-sonnet-4-5",
+    });
+    let settings = await getClosingSettings(harness.db, page.id);
+    expect(settings).toMatchObject({ enabled: false, daily_cap_max: 120, model: "claude-sonnet-4-5" });
+
+    // Upsert replaces (idempotent on the page PK).
+    await upsertClosingSettings(harness.db, {
+      platformAccountId: page.id,
+      enabled: null,
+      dailyCapMax: null,
+      model: null,
+    });
+    settings = await getClosingSettings(harness.db, page.id);
+    expect(settings).toMatchObject({ enabled: null, daily_cap_max: null, model: null });
+
+    // Run log appends newest-first with the page label resolved.
+    await insertClassifierRun(harness.db, {
+      platformAccountId: page.id,
+      trigger: "manual",
+      model: "claude-haiku-4-5",
+      classified: 7,
+      calls: 1,
+      inputTokens: 650,
+      outputTokens: 300,
+      deferred: 0,
+      cleared: 0,
+    });
+    await insertClassifierRun(harness.db, {
+      platformAccountId: page.id,
+      trigger: "reclassify",
+      model: "claude-haiku-4-5",
+      classified: 14,
+      calls: 1,
+      inputTokens: 1300,
+      outputTokens: 600,
+      deferred: 2,
+      cleared: 116,
+    });
+
+    const runs = await listClassifierRuns(harness.db, 10);
+    expect(runs).toHaveLength(2);
+    expect(runs[0]).toMatchObject({ trigger: "reclassify", page_label: "lora-main", cleared: 116, deferred: 2 });
+    expect(runs[1]).toMatchObject({ trigger: "manual", classified: 7 });
   });
 });

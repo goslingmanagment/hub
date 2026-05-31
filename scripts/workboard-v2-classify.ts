@@ -21,8 +21,21 @@ async function main() {
   // 1) Direct probe — proves the key + model + parsing work (surfaces a clear error otherwise).
   console.log(`Probing classifier (model=${model})…`);
   const probe = await classifier.classifyBatch([
-    { id: "a", content: "thanks babe, goodnight 😘" },
-    { id: "b", content: "wait what are you doing later tonight??" },
+    {
+      id: "a",
+      context: [
+        { role: "creator", text: "had so much fun chatting tonight 💕" },
+        { role: "fan", text: "thanks babe, goodnight 😘" },
+      ],
+    },
+    {
+      id: "b",
+      // Context-aware: "yes" alone is ambiguous, but after a paid offer it's a buy_signal.
+      context: [
+        { role: "creator", text: "want me to send you that custom video? it's $30" },
+        { role: "fan", text: "yes!! send it" },
+      ],
+    },
   ]);
   console.log("  probe verdicts:", probe.verdicts, `(tokens in/out: ${probe.inputTokens}/${probe.outputTokens})`);
 

@@ -16,17 +16,24 @@ const CLOSING_PHRASES: ReadonlySet<string> = new Set([
   "bye", "goodbye", "cya", "see ya", "ttyl", "later",
   "lol", "lmao", "haha", "haha", "hehe", "hahaha",
   "cool", "nice", "great", "awesome", "sweet", "perfect",
-  "yup", "yep", "yeah", "yes", "sure", "alright", "aight",
+  "alright", "aight",
   "gotcha", "got it", "ok thanks", "okay thanks", "ok ty", "k thanks",
   // Russian
   "спасибо", "спс", "пасиб", "пасибо", "благодарю",
   "пока", "покеда", "до встречи",
   "ок", "окей", "оке", "окок",
-  "ладно", "давай", "хорошо", "хор",
+  "ладно", "хорошо", "хор",
   "споки", "спокойной ночи", "доброй ночи",
-  "ага", "угу", "да",
+  "ага", "угу",
   "понятно", "понял", "поняла", "ясно", "ясненько",
 ]);
+
+// Deliberately NOT closings: bare affirmatives ("yes", "yeah", "yep", "yup",
+// "sure", "да", "давай"). Context-blind, they read as acks — but after a sales
+// prompt ("want me to send it?") they are a CONVERSION. L1 can't see the prior
+// line, so it must not suppress them; the context-aware L2 classifier judges them
+// (→ buy_signal) instead. Pure acks that almost never answer a sales question
+// ("ok", "ладно", "ага") stay here to keep the free/instant filter useful.
 
 const MAX_EMOJI_ONLY_GLYPHS = 6;
 const MAX_COMBO_TOKENS = 3;

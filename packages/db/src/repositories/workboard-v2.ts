@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { wbClosingCache, workboardContactLog, workboardState } from "../schema.ts";
+import { wbClassifierRuns, wbClosingCache, wbClosingSettings, workboardContactLog, workboardState } from "../schema.ts";
 
 // Workboard v2 data access. Pure SQL in/out — the scoring engine (apps/runtime)
 // maps these rows to FanSignals and back. See docs/workboard-v2-priority-design.md.
@@ -54,12 +54,14 @@ export type WorkboardSignalRow = {
   lifetime_free_episodes: number;
   l2_needs_reply: boolean | null;
   l2_layer: string | null;
+  l2_state: string | null;
 }
 
 export interface LoadSignalParams {
   platformAccountId: number;
   fromDate30: string; // 'YYYY-MM-DD' (UTC business date)
   fromDate90: string;
+  fanId?: number; // when set, scope every aggregate to one fan (fast single-fan recompute)
 }
 
 /**
@@ -70,7 +72,13 @@ export async function loadWorkboardSignalRows(
   db: Database,
   params: LoadSignalParams,
 ): Promise<WorkboardSignalRow[]> {
-  const { platformAccountId, fromDate30, fromDate90 } = params;
+  const { platformAccountId, fromDate30, fromDate90, fanId } = params;
+  const fanScope = fanId != null ? sql`and fan_id = ${fanId}` : sql``;
+  const pfFanScope = fanId != null ? sql`and pf.fan_id = ${fanId}` : sql``;
+  const flagsScope = fanId != null ? sql`where fan_id = ${fanId}` : sql``;
+  const cqFanScope = fanId != null
+    ? sql`and conversation_id in (select id from page_dm_threads where platform_account_id = ${platformAccountId} and fan_id = ${fanId})`
+    : sql``;
   const result = await db.execute<WorkboardSignalRow>(sql`
     with spend_window as (
       select
@@ -83,6 +91,7 @@ export async function loadWorkboardSignalRows(
         and transaction_state = 'posted'::transaction_state
         and canonical_type in ${REVENUE_TYPES_SQL}
         and business_date >= ${fromDate90}::date
+        ${fanScope}
       group by fan_id
     ),
     last_purchase as (
@@ -93,6 +102,7 @@ export async function loadWorkboardSignalRows(
         and transaction_state = 'posted'::transaction_state
         and canonical_type in ${REVENUE_TYPES_SQL}
         and creator_net_amount_mills > 0
+        ${fanScope}
       order by fan_id, occurred_at desc
     ),
     refund_recent as (
@@ -101,12 +111,14 @@ export async function loadWorkboardSignalRows(
       where platform_account_id = ${platformAccountId}
         and canonical_type in ('refund','chargeback')
         and occurred_at >= now() - interval '14 days'
+        ${fanScope}
       order by fan_id, occurred_at desc
     ),
     current_sub as (
       select distinct on (fan_id) fan_id, price_mills
       from page_subscriptions
       where platform_account_id = ${platformAccountId} and is_current = true
+        ${fanScope}
       order by fan_id, ends_at desc nulls last, id desc
     ),
     primary_thread as (
@@ -116,6 +128,7 @@ export async function loadWorkboardSignalRows(
         stored_message_count, message_coverage_status::text as message_coverage_status
       from page_dm_threads
       where platform_account_id = ${platformAccountId} and is_visible = true and fan_id is not null
+        ${fanScope}
       order by fan_id, last_message_at desc nulls last, id desc
     ),
     cq as (
@@ -132,16 +145,18 @@ export async function loadWorkboardSignalRows(
           extract(epoch from (created_at - lag(created_at) over (partition by conversation_id order by created_at))) / 3600.0 as gap_hours
         from page_dm_messages
         where platform_account_id = ${platformAccountId}
+          ${cqFanScope}
       ) m
       group by conversation_id
     ),
     flags as (
-      select fan_id, array_agg(flag::text) as flags from fan_flags group by fan_id
+      select fan_id, array_agg(flag::text) as flags from fan_flags ${flagsScope} group by fan_id
     ),
     last_touch as (
       select fan_id, max(acted_at) filter (where was_productive) as last_productive_at
       from workboard_contact_log
       where platform_account_id = ${platformAccountId}
+        ${fanScope}
       group by fan_id
     )
     select
@@ -184,7 +199,8 @@ export async function loadWorkboardSignalRows(
       ws.freeloader_episodes as freeloader_episodes,
       coalesce(ws.lifetime_free_episodes, 0)::int as lifetime_free_episodes,
       cc.needs_reply as l2_needs_reply,
-      cc.layer as l2_layer
+      cc.layer as l2_layer,
+      cc.state as l2_state
     from page_fans pf
     left join fan_spend_lifetime sl on sl.platform_account_id = pf.platform_account_id and sl.fan_id = pf.fan_id
     left join spend_window sw on sw.fan_id = pf.fan_id
@@ -199,6 +215,7 @@ export async function loadWorkboardSignalRows(
     left join workboard_snoozes sn on sn.platform_account_id = pf.platform_account_id and sn.fan_id = pf.fan_id
     left join workboard_state ws on ws.platform_account_id = pf.platform_account_id and ws.fan_id = pf.fan_id
     where pf.platform_account_id = ${platformAccountId}
+      ${pfFanScope}
   `);
   return result.rows;
 }
@@ -275,12 +292,15 @@ export type WorkboardV2Row = {
   ltv_mills: bigint;
   subscription_expires_at: Date | null;
   auto_renew: boolean | null;
+  external_presence_at: Date | null;
   last_fan_message_at: Date | null;
   last_model_message_at: Date | null;
   last_message_preview: string | null;
   last_message_sender_role: string | null;
   message_coverage_status: string;
   l2_needs_reply: boolean | null;
+  l2_state: string | null;
+  l2_reason: string | null;
 }
 
 export interface ListWorkboardV2Params {
@@ -335,12 +355,15 @@ export async function listWorkboardV2(
       coalesce(sl.creator_net_amount_mills, 0)::bigint as ltv_mills,
       pf.subscription_expires_at as subscription_expires_at,
       pf.auto_renew as auto_renew,
+      pf.external_presence_at as external_presence_at,
       pt.last_fan_message_at as last_fan_message_at,
       pt.last_model_message_at as last_model_message_at,
       pt.last_message_preview as last_message_preview,
       pt.last_message_sender_role as last_message_sender_role,
       coalesce(pt.message_coverage_status, 'pending_backfill') as message_coverage_status,
-      cc.needs_reply as l2_needs_reply
+      cc.needs_reply as l2_needs_reply,
+      cc.state as l2_state,
+      cc.reason as l2_reason
     from workboard_state ws
     join fans f on f.id = ws.fan_id
     left join page_fans pf on pf.platform_account_id = ws.platform_account_id and pf.fan_id = ws.fan_id
@@ -415,6 +438,39 @@ export async function countOldMassContactsToday(
   return result.rows[0]?.used ?? 0;
 }
 
+/** Snooze a fan for an arbitrary number of days (v2; shares the workboard_snoozes table). */
+export async function snoozeWorkboardFanV2(
+  db: Database,
+  input: { platformAccountId: number; fanId: number; days: number },
+): Promise<{ snoozedUntil: Date } | null> {
+  const result = await db.execute<{ snoozed_until: Date }>(sql`
+    insert into workboard_snoozes (platform_account_id, fan_id, snoozed_until)
+    values (${input.platformAccountId}, ${input.fanId}, now() + (${input.days} || ' days')::interval)
+    on conflict (platform_account_id, fan_id)
+    do update set snoozed_until = excluded.snoozed_until, created_at = now()
+    returning snoozed_until
+  `);
+  const row = result.rows[0];
+  return row ? { snoozedUntil: new Date(row.snoozed_until) } : null;
+}
+
+/** Delete the most recent touch-log entry for a fan (undo of Готово). */
+export async function deleteLastWorkboardContact(
+  db: Database,
+  platformAccountId: number,
+  fanId: number,
+): Promise<void> {
+  await db.execute(sql`
+    delete from workboard_contact_log
+    where id = (
+      select id from workboard_contact_log
+      where platform_account_id = ${platformAccountId} and fan_id = ${fanId}
+      order by acted_at desc
+      limit 1
+    )
+  `);
+}
+
 /** Page ids eligible for the v2 recompute job (Fansly first, matching v1 scope). */
 export async function listWorkboardRecomputePageIds(db: Database): Promise<number[]> {
   const result = await db.execute<{ id: number }>(sql`
@@ -425,18 +481,25 @@ export async function listWorkboardRecomputePageIds(db: Database): Promise<numbe
 
 // ── L2 closing classifier ───────────────────────────────────────────────────
 
+export type ClosingContextMsg = { role: string | null; text: string | null };
 export type ClosingCandidateRow = {
   fan_id: bigint;
   platform_message_id: string;
   content: string;
   tab: string | null;
+  /** Recent conversation window (oldest→newest, last entry is the fan tail). */
+  context: ClosingContextMsg[] | null;
 };
+
+const CLOSING_CONTEXT_WINDOW = 12;
 
 /**
  * Tails to classify: fan wrote last, unanswered > 24h, not a dead/archived/service
  * fan, and not already in the cache (cache miss = new message id). Ordered by tab
  * priority so the budget is spent on the highest-value tabs first. L1 closings are
- * filtered in TS by the caller (cheap, deterministic) before any API call.
+ * filtered in TS by the caller (cheap, deterministic) before any API call. Each row
+ * carries the last few messages (with roles) so the classifier reads the tail in
+ * conversation context, not in isolation.
  */
 export async function listClosingClassificationCandidates(
   db: Database,
@@ -447,11 +510,22 @@ export async function listClosingClassificationCandidates(
       t.fan_id as fan_id,
       t.last_message_id as platform_message_id,
       coalesce(m.content, t.last_message_preview, '') as content,
-      ws.tab::text as tab
+      ws.tab::text as tab,
+      ctx.ctx as context
     from page_dm_threads t
     left join page_dm_messages m on m.conversation_id = t.id and m.platform_message_id = t.last_message_id
     left join workboard_state ws on ws.platform_account_id = t.platform_account_id and ws.fan_id = t.fan_id
     left join wb_closing_cache cc on cc.platform_account_id = t.platform_account_id and cc.platform_message_id = t.last_message_id
+    left join lateral (
+      select json_agg(json_build_object('role', x.sender_role, 'text', x.content) order by x.created_at asc) as ctx
+      from (
+        select sender_role::text as sender_role, content, created_at
+        from page_dm_messages
+        where conversation_id = t.id
+        order by created_at desc
+        limit ${CLOSING_CONTEXT_WINDOW}
+      ) x
+    ) ctx on true
     where t.platform_account_id = ${platformAccountId}
       and t.is_visible = true
       and t.fan_id is not null
@@ -542,6 +616,8 @@ export interface ClosingCacheUpsert {
   needsReply: boolean;
   layer: "l2" | "over_cap";
   model: string | null;
+  state: string | null;
+  reason: string | null;
 }
 
 export async function upsertClosingCache(db: Database, rows: ClosingCacheUpsert[]): Promise<void> {
@@ -558,6 +634,8 @@ export async function upsertClosingCache(db: Database, rows: ClosingCacheUpsert[
         needsReply: r.needsReply,
         layer: r.layer,
         model: r.model,
+        state: r.state,
+        reason: r.reason,
       })),
     )
     .onConflictDoUpdate({
@@ -567,7 +645,207 @@ export async function upsertClosingCache(db: Database, rows: ClosingCacheUpsert[
         needsReply: sql`excluded.needs_reply`,
         layer: sql`excluded.layer`,
         model: sql`excluded.model`,
+        state: sql`excluded.state`,
+        reason: sql`excluded.reason`,
         classifiedAt: sql`now()`,
       },
     });
+}
+
+/** Delete every cached verdict for a page (forces a fresh re-classification run). */
+export async function clearClosingCacheForPage(db: Database, platformAccountId: number): Promise<number> {
+  const result = await db.execute<{ id: bigint }>(sql`
+    delete from wb_closing_cache where platform_account_id = ${platformAccountId} returning id
+  `);
+  return result.rows.length;
+}
+
+// ── L2 classifier per-page settings (null = inherit env) ──────────────────────
+
+export type ClosingSettingsRow = {
+  platform_account_id: number;
+  enabled: boolean | null;
+  daily_cap_max: number | null;
+  model: string | null;
+};
+
+export async function getClosingSettings(
+  db: Database,
+  platformAccountId: number,
+): Promise<ClosingSettingsRow | null> {
+  const result = await db.execute<ClosingSettingsRow>(sql`
+    select platform_account_id::int as platform_account_id, enabled, daily_cap_max, model
+    from wb_closing_settings where platform_account_id = ${platformAccountId}
+  `);
+  return result.rows[0] ?? null;
+}
+
+/** All per-page overrides (the all-pages classify job resolves these against env). */
+export async function listClosingSettings(db: Database): Promise<ClosingSettingsRow[]> {
+  const result = await db.execute<ClosingSettingsRow>(sql`
+    select platform_account_id::int as platform_account_id, enabled, daily_cap_max, model
+    from wb_closing_settings
+  `);
+  return result.rows;
+}
+
+export async function upsertClosingSettings(
+  db: Database,
+  input: { platformAccountId: number; enabled: boolean | null; dailyCapMax: number | null; model: string | null },
+): Promise<void> {
+  await db
+    .insert(wbClosingSettings)
+    .values({
+      platformAccountId: input.platformAccountId,
+      enabled: input.enabled,
+      dailyCapMax: input.dailyCapMax,
+      model: input.model,
+    })
+    .onConflictDoUpdate({
+      target: [wbClosingSettings.platformAccountId],
+      set: {
+        enabled: sql`excluded.enabled`,
+        dailyCapMax: sql`excluded.daily_cap_max`,
+        model: sql`excluded.model`,
+        updatedAt: sql`now()`,
+      },
+    });
+}
+
+// ── L2 analytics (for the AI panel) ───────────────────────────────────────────
+
+/** Verdict counts grouped by semantic state (null state shown as '(unset)'). */
+export async function getClosingStateDistribution(
+  db: Database,
+  platformAccountId: number,
+): Promise<Array<{ state: string; count: number }>> {
+  const result = await db.execute<{ state: string; count: number }>(sql`
+    select coalesce(state, '(unset)') as state, count(*)::int as count
+    from wb_closing_cache where platform_account_id = ${platformAccountId}
+    group by state order by count desc
+  `);
+  return result.rows;
+}
+
+export type RecentClosingVerdictRow = {
+  platform_message_id: string;
+  tail: string;
+  state: string | null;
+  needs_reply: boolean;
+  reason: string | null;
+  model: string | null;
+  classified_at: Date;
+};
+
+export async function listRecentClosingVerdicts(
+  db: Database,
+  platformAccountId: number,
+  limit: number,
+): Promise<RecentClosingVerdictRow[]> {
+  const result = await db.execute<RecentClosingVerdictRow>(sql`
+    select
+      c.platform_message_id as platform_message_id,
+      left(coalesce(t.last_message_preview, ''), 140) as tail,
+      c.state as state,
+      c.needs_reply as needs_reply,
+      c.reason as reason,
+      c.model as model,
+      c.classified_at as classified_at
+    from wb_closing_cache c
+    left join page_dm_threads t
+      on t.platform_account_id = c.platform_account_id and t.last_message_id = c.platform_message_id
+    where c.platform_account_id = ${platformAccountId}
+    order by c.classified_at desc
+    limit ${limit}
+  `);
+  return result.rows;
+}
+
+// ── L2 classifier run log (the dashboard's activity logger) ───────────────────
+
+export interface ClassifierRunInsert {
+  platformAccountId: number;
+  trigger: "cron" | "manual" | "reclassify";
+  model: string | null;
+  classified: number;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  deferred: number;
+  cleared: number;
+  status?: string;
+  error?: string | null;
+}
+
+export async function insertClassifierRun(db: Database, input: ClassifierRunInsert): Promise<void> {
+  await db.insert(wbClassifierRuns).values({
+    platformAccountId: input.platformAccountId,
+    trigger: input.trigger,
+    model: input.model,
+    classified: input.classified,
+    calls: input.calls,
+    inputTokens: input.inputTokens,
+    outputTokens: input.outputTokens,
+    deferred: input.deferred,
+    cleared: input.cleared,
+    status: input.status ?? "ok",
+    error: input.error ?? null,
+  });
+}
+
+export type ClassifierRunRow = {
+  id: number;
+  page_label: string | null;
+  trigger: string;
+  model: string | null;
+  classified: number;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  deferred: number;
+  cleared: number;
+  status: string;
+  error: string | null;
+  created_at: Date;
+};
+
+/** Most recent classifier runs across all pages (newest first), with the page label. */
+export async function listClassifierRuns(db: Database, limit: number): Promise<ClassifierRunRow[]> {
+  const result = await db.execute<ClassifierRunRow>(sql`
+    select
+      r.id::int as id,
+      p.label as page_label,
+      r.trigger as trigger,
+      r.model as model,
+      r.classified as classified,
+      r.calls as calls,
+      r.input_tokens as input_tokens,
+      r.output_tokens as output_tokens,
+      r.deferred as deferred,
+      r.cleared as cleared,
+      r.status as status,
+      r.error as error,
+      r.created_at as created_at
+    from wb_classifier_runs r
+    left join pages p on p.id = r.platform_account_id
+    order by r.created_at desc, r.id desc
+    limit ${limit}
+  `);
+  return result.rows;
+}
+
+/** Daily LLM usage rows for a feature since a business date (powers the cost trend). */
+export async function getLlmUsageRange(
+  db: Database,
+  platformAccountId: number,
+  feature: string,
+  fromBusinessDate: string,
+): Promise<Array<{ business_date: string; calls: number; input_tokens: number; output_tokens: number }>> {
+  const result = await db.execute<{ business_date: string; calls: number; input_tokens: number; output_tokens: number }>(sql`
+    select business_date::text as business_date, calls, input_tokens, output_tokens
+    from wb_llm_usage_daily
+    where platform_account_id = ${platformAccountId} and feature = ${feature} and business_date >= ${fromBusinessDate}::date
+    order by business_date asc
+  `);
+  return result.rows;
 }

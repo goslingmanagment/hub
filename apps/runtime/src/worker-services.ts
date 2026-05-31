@@ -29,7 +29,6 @@ import {
 } from "./services/sync-queue.ts";
 import { recomputeAllWorkboardPages } from "./services/workboard-v2/recompute.ts";
 import { runClosingClassificationAllPages } from "./services/workboard-v2/classify-closing.ts";
-import { maybeCreateClosingClassifier } from "./services/workboard-v2/closing-classifier.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
@@ -141,16 +140,12 @@ export async function startWorkerServices(
   });
 
   await boss.work(WORKBOARD_CLASSIFY_QUEUE, { batchSize: 1 }, async () => {
-    const classifier = maybeCreateClosingClassifier(app.config);
-    if (!classifier) {
-      app.logger.info("Workboard v2 closing classifier disabled (WB_CLOSING_LLM_ENABLED/ANTHROPIC_API_KEY)");
+    if (!app.config.anthropicApiKey) {
+      app.logger.info("Workboard v2 closing classifier disabled (no ANTHROPIC_API_KEY)");
       return;
     }
-    const result = await runClosingClassificationAllPages(app.db, classifier, {
-      now: new Date(),
-      capMin: app.config.wbClosingLlmDailyCapMin ?? 50,
-      capMax: app.config.wbClosingLlmDailyCapMax ?? 400,
-    });
+    // Per-page settings (enabled / cap / model) are resolved inside, over env defaults.
+    const result = await runClosingClassificationAllPages(app.db, { config: app.config, now: new Date() });
     app.logger.info(result, "Workboard v2 closing classification complete");
   });
 

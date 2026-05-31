@@ -1590,11 +1590,53 @@ export const wbClosingCache = pgTable(
     needsReply: boolean("needs_reply").notNull(),
     layer: text("layer").notNull(),
     model: text("model"),
+    // L2 semantic read (Haiku): conversation state + short rationale for the tail.
+    state: text("state"),
+    reason: text("reason"),
     classifiedAt: timestamp("classified_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     uniq: unique("wb_closing_cache_message_uniq").on(table.platformAccountId, table.platformMessageId),
     pageIdx: index("wb_closing_cache_page_idx").on(table.platformAccountId, table.classifiedAt),
+  }),
+);
+
+// Per-page runtime overrides for the L2 closing classifier (null column = inherit env).
+// Owner-editable from the Workboard v2 AI panel: toggle, daily call cap, model.
+export const wbClosingSettings = pgTable("wb_closing_settings", {
+  platformAccountId: bigint("platform_account_id", { mode: "number" })
+    .primaryKey()
+    .references(() => pages.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled"),
+  dailyCapMax: integer("daily_cap_max"),
+  model: text("model"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Append-only activity log of classifier runs (one row per page per run). Powers the
+// AI dashboard's run logger; trigger = 'cron' | 'manual' | 'reclassify'.
+export const wbClassifierRuns = pgTable(
+  "wb_classifier_runs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    trigger: text("trigger").notNull(),
+    model: text("model"),
+    classified: integer("classified").default(0).notNull(),
+    calls: integer("calls").default(0).notNull(),
+    inputTokens: integer("input_tokens").default(0).notNull(),
+    outputTokens: integer("output_tokens").default(0).notNull(),
+    deferred: integer("deferred").default(0).notNull(),
+    cleared: integer("cleared").default(0).notNull(),
+    status: text("status").default("ok").notNull(),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    createdIdx: index("wb_classifier_runs_created_idx").on(table.createdAt.desc()),
+    pageIdx: index("wb_classifier_runs_page_idx").on(table.platformAccountId, table.createdAt.desc()),
   }),
 );
 

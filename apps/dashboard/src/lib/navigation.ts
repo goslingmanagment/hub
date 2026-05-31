@@ -39,6 +39,10 @@ export function buildWorkboardRoute(pageLabel: string) {
   return buildPageSectionRoute(pageLabel, "workboard");
 }
 
+export function buildWorkboardV2Route(pageLabel: string) {
+  return `${buildWorkboardRoute(pageLabel)}/v2`;
+}
+
 export function resolveLegacyWorkboardRedirect(pageLabel: string | undefined) {
   return pageLabel ? buildWorkboardRoute(pageLabel) : "/";
 }

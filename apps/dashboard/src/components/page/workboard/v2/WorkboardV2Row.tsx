@@ -1,5 +1,6 @@
+import { useState } from "react";
 import type { WorkboardV2Item } from "@agency_hub_core/contracts";
-import { Check } from "lucide-react";
+import { Check, MoonStar } from "lucide-react";
 
 import { formatMills } from "@/lib/format";
 
@@ -70,6 +71,9 @@ function ExpandedPanel({ item }: { item: WorkboardV2Item }) {
         ) : (
           <div className="text-text-muted">—</div>
         )}
+        {item.closingVerdict?.reason && (
+          <div className="mt-0.5 italic text-text-muted">ИИ: {item.closingVerdict.reason}</div>
+        )}
         {item.conversation.preview && (
           <div className="mt-0.5 truncate text-text-muted">«{item.conversation.preview}»</div>
         )}
@@ -85,19 +89,27 @@ function ExpandedPanel({ item }: { item: WorkboardV2Item }) {
 export function WorkboardV2Row({
   item,
   expanded,
+  focused,
+  snoozeDays,
   onToggle,
   onHandled,
+  onSnooze,
   isHandling,
 }: {
   item: WorkboardV2Item;
   expanded: boolean;
+  focused: boolean;
+  snoozeDays: number[];
   onToggle: (fanId: number) => void;
   onHandled: (fanId: number) => void;
+  onSnooze: (fanId: number, days: number) => void;
   isHandling: boolean;
 }) {
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const rail = urgencyRailClass(item.urgency.severity as UrgencySeverity);
   const valueChip = valueTierTone(item.value.tier as ValueTier);
   const purchaseWash = item.isPurchaseFollowup ? "bg-accent/[0.04]" : "";
+  const focusRing = focused ? "bg-active-bg ring-1 ring-inset ring-accent/40" : "";
 
   const chips = item.reasonChips
     .map((code) => ({ code, tone: reasonTone(code) }))
@@ -106,7 +118,7 @@ export function WorkboardV2Row({
   const overflow = chips.length - shownChips.length;
 
   return (
-    <div className={`border-l-[3px] ${rail} border-b border-border ${purchaseWash}`}>
+    <div data-fan-id={item.fanId} className={`border-l-[3px] ${rail} border-b border-border ${purchaseWash} ${focusRing}`}>
       <div className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-hover/50">
         <QuadrantGlyph
           value={item.value.score}
@@ -118,6 +130,11 @@ export function WorkboardV2Row({
         <button type="button" onClick={() => onToggle(item.fanId)} className="min-w-0 flex-1 text-left">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="max-w-[180px] truncate text-[13px] font-medium text-text-primary">{fanName(item)}</span>
+            {item.online && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-green">
+                <span className="h-1.5 w-1.5 rounded-full bg-green" />онлайн
+              </span>
+            )}
             {valueChip && <Chip label={valueChip.label} icon={valueChip.icon} className={valueChip.className} />}
             {shownChips.map(({ code, tone }) => (
               <Chip key={code} label={tone.label} icon={tone.icon} className={tone.className} />
@@ -144,6 +161,37 @@ export function WorkboardV2Row({
           <Check size={13} />
           Готово
         </button>
+
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setSnoozeOpen((open) => !open)}
+            className="inline-flex items-center gap-0.5 rounded-button border border-border px-1.5 py-1 text-[11px] text-text-secondary transition-colors hover:bg-hover"
+            aria-label="Отложить"
+          >
+            <MoonStar size={13} />▾
+          </button>
+          {snoozeOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setSnoozeOpen(false)} />
+              <div className="absolute right-0 z-20 mt-1 overflow-hidden rounded-md border border-border bg-card shadow-lg">
+                {snoozeDays.map((d, i) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => {
+                      setSnoozeOpen(false);
+                      onSnooze(item.fanId, d);
+                    }}
+                    className={`block w-full whitespace-nowrap px-3 py-1.5 text-left text-[12px] hover:bg-hover ${i === 0 ? "font-semibold text-text-primary" : "text-text-secondary"}`}
+                  >
+                    Отложить {d}д
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
       {expanded && <ExpandedPanel item={item} />}
     </div>

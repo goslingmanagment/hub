@@ -1,10 +1,12 @@
 import {
   AlarmClock,
+  AlertTriangle,
   Archive,
   BadgeDollarSign,
   CalendarClock,
   Clock,
   Crown,
+  Flame,
   HandCoins,
   HelpCircle,
   type LucideIcon,
@@ -91,6 +93,9 @@ export const REASON_TONES: Record<string, ChipTone> = {
   cold_start: { label: "Мало данных", icon: HelpCircle, className: "bg-border text-text-muted" },
   cross_page_block: { label: "Другая стр.", icon: ShieldAlert, className: "bg-text-muted/15 text-text-muted" },
   unverified: { label: "Не проверено", icon: HelpCircle, className: "bg-text-muted/10 text-text-muted" },
+  // L2-intent (Haiku read the tail in context).
+  buy_signal: { label: "Готов купить", icon: Flame, className: "bg-accent/15 text-accent" },
+  complaint: { label: "Жалоба", icon: AlertTriangle, className: "bg-warning/15 text-warning-dark" },
 };
 
 export function reasonTone(code: string): ChipTone | null {
@@ -169,9 +174,31 @@ export function qualityLabel(q: number | null): { label: string; className: stri
   return { label: "Натянутый (форсим)", className: "text-warning-dark" };
 }
 
+/** Conversation state (Haiku's read) → short label + tone. */
+export function conversationStateLabel(
+  state: string | null | undefined,
+): { label: string; className: string } | null {
+  switch (state) {
+    case "buy_signal":
+      return { label: "готов купить — закрывай сделку", className: "text-accent" };
+    case "question":
+      return { label: "задал вопрос — ответь", className: "text-accent" };
+    case "complaint":
+      return { label: "жалоба/проблема — разберись", className: "text-warning-dark" };
+    case "smalltalk":
+      return { label: "просто болтает — можно ответить", className: "text-text-secondary" };
+    case "cold":
+      return { label: "охладел — без напора", className: "text-text-muted" };
+    case "closing":
+      return { label: "закрывающее — ответ не нужен", className: "text-text-muted" };
+    default:
+      return null;
+  }
+}
+
 /** Closing-detector verdict on the tail message → human label (transparency panel). */
 export function closingVerdictLabel(
-  verdict: { layer: string; needsReply: boolean } | null | undefined,
+  verdict: { layer: string; needsReply: boolean; state?: string | null } | null | undefined,
 ): { label: string; className: string } | null {
   if (!verdict) {
     return null;
@@ -179,10 +206,15 @@ export function closingVerdictLabel(
   switch (verdict.layer) {
     case "l1":
       return { label: "Список закрывающих — ответ не нужен", className: "text-text-muted" };
-    case "l2":
+    case "l2": {
+      const s = conversationStateLabel(verdict.state);
+      if (s) {
+        return { label: `ИИ Haiku: ${s.label}`, className: s.className };
+      }
       return verdict.needsReply
         ? { label: "ИИ Haiku: нужен ответ", className: "text-accent" }
         : { label: "ИИ Haiku: закрывающее — ответ не нужен", className: "text-text-muted" };
+    }
     case "fresh":
       return { label: "Свежее (<24ч) — ждём ответа", className: "text-accent" };
     case "unverified":
@@ -201,6 +233,12 @@ export function whyNowLabel(code: string | null, value: number | null): string {
   switch (code) {
     case "purchase":
       return value != null && value < 2 ? "Только что купил(а) — поблагодари и допродай" : "Недавняя покупка — допродай";
+    case "buy_signal":
+      return "Готов купить — закрывай сделку";
+    case "complaint":
+      return "Жалоба/проблема — разберись";
+    case "question":
+      return "Задал вопрос — ответь";
     case "expiry": {
       const d = value ?? 0;
       if (d <= 0) return "Истекает сегодня — спаси подписку";

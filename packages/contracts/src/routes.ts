@@ -1268,8 +1268,13 @@ export const workboardV2ItemSchema = z.object({
     .object({
       layer: z.enum(["l1", "l2", "fresh", "unverified", "model_last", "unknown"]),
       needsReply: z.boolean(),
+      state: z
+        .enum(["question", "buy_signal", "smalltalk", "closing", "cold", "complaint"])
+        .nullable(),
+      reason: z.string().nullable(),
     })
     .nullable(),
+  online: z.boolean(),
   ltv: z.object({ creatorNetAmountMills: mills }),
   subscription: z.object({
     expiresAt: isoTimestamp.nullable(),
@@ -1326,6 +1331,131 @@ export const workboardV2ContactResponseSchema = z.object({
 export const workboardV2RecomputeResponseSchema = z.object({
   ok: z.literal(true),
   evaluated: z.number().int(),
+});
+
+export const workboardV2SnoozeBodySchema = z.object({
+  fanId: intId,
+  days: z.number().int().min(1).max(120),
+});
+
+export const workboardV2SnoozeResponseSchema = z.object({
+  ok: z.literal(true),
+  fanId: intId,
+  snoozedUntil: isoTimestamp.nullable(),
+});
+
+export const workboardV2FanParamsSchema = pageParamsSchema.extend({
+  fanId: z.coerce.number().int().positive(),
+});
+
+export const workboardV2OkResponseSchema = z.object({
+  ok: z.literal(true),
+  fanId: intId,
+});
+
+// ── Workboard v2 AI analytics (L2 closing classifier) panel ───────────────────
+
+const workboardV2ConversationStateEnum = z.enum([
+  "question",
+  "buy_signal",
+  "smalltalk",
+  "closing",
+  "cold",
+  "complaint",
+]);
+
+const aiSettingsSourceSchema = z.enum(["override", "env"]);
+
+export const workboardV2AiSettingsSchema = z.object({
+  enabled: z.boolean(),
+  hasApiKey: z.boolean(),
+  model: z.string(),
+  dailyCapMin: z.number().int(),
+  dailyCapMax: z.number().int(),
+  envEnabled: z.boolean(),
+  source: z.object({
+    enabled: aiSettingsSourceSchema,
+    dailyCapMax: aiSettingsSourceSchema,
+    model: aiSettingsSourceSchema,
+  }),
+  override: z.object({
+    enabled: z.boolean().nullable(),
+    dailyCapMax: z.number().int().nullable(),
+    model: z.string().nullable(),
+  }),
+});
+
+const aiUsageBucketSchema = z.object({
+  calls: z.number().int(),
+  inputTokens: z.number().int(),
+  outputTokens: z.number().int(),
+  costUsd: z.number(),
+});
+
+export const workboardV2AiReportSchema = z.object({
+  settings: workboardV2AiSettingsSchema,
+  usage: z.object({
+    today: aiUsageBucketSchema,
+    last30d: aiUsageBucketSchema,
+    daily: z.array(aiUsageBucketSchema.extend({ date: z.string() })),
+  }),
+  coverage: z.object({
+    tails: z.number().int(),
+    classified: z.number().int(),
+    closings: z.number().int(),
+    pending: z.number().int(),
+  }),
+  states: z.array(z.object({ state: z.string(), count: z.number().int() })),
+  recent: z.array(
+    z.object({
+      messageId: z.string(),
+      tail: z.string(),
+      state: workboardV2ConversationStateEnum.nullable(),
+      needsReply: z.boolean(),
+      reason: z.string().nullable(),
+      model: z.string().nullable(),
+      classifiedAt: isoTimestamp,
+    }),
+  ),
+});
+
+export const workboardV2AiSettingsBodySchema = z.object({
+  enabled: z.boolean().nullable(),
+  dailyCapMax: z.number().int().min(1).max(5000).nullable(),
+  model: z.string().trim().min(1).max(120).nullable(),
+});
+
+export const workboardV2AiClassifyBodySchema = z.object({
+  reclassify: z.boolean().default(false),
+});
+
+export const workboardV2AiClassifyResponseSchema = z.object({
+  ok: z.literal(true),
+  classified: z.number().int(),
+  calls: z.number().int(),
+  deferred: z.number().int(),
+  cleared: z.number().int(),
+});
+
+export const workboardV2AiRunSchema = z.object({
+  id: z.number().int(),
+  pageLabel: z.string().nullable(),
+  trigger: z.enum(["cron", "manual", "reclassify"]),
+  model: z.string().nullable(),
+  classified: z.number().int(),
+  calls: z.number().int(),
+  inputTokens: z.number().int(),
+  outputTokens: z.number().int(),
+  deferred: z.number().int(),
+  cleared: z.number().int(),
+  costUsd: z.number(),
+  status: z.string(),
+  error: z.string().nullable(),
+  createdAt: isoTimestamp,
+});
+
+export const workboardV2AiRunsResponseSchema = z.object({
+  runs: z.array(workboardV2AiRunSchema),
 });
 
 export const pageConversationMessageItemSchema = z.object({
@@ -2979,6 +3109,97 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  workboardV2Snooze: {
+    tags: ["workboard"],
+    summary: "Snooze a fan on Workboard v2 (moves to Service; re-evaluates instantly)",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    body: workboardV2SnoozeBodySchema,
+    response: {
+      200: workboardV2SnoozeResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV2Unsnooze: {
+    tags: ["workboard"],
+    summary: "Unsnooze a fan on Workboard v2 (re-evaluates instantly)",
+    security: cookieOnlySecurity,
+    params: workboardV2FanParamsSchema,
+    response: {
+      200: workboardV2OkResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV2UndoContact: {
+    tags: ["workboard"],
+    summary: "Undo the last Готово touch for a fan (re-evaluates instantly)",
+    security: cookieOnlySecurity,
+    params: workboardV2FanParamsSchema,
+    response: {
+      200: workboardV2OkResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV2Ai: {
+    tags: ["workboard"],
+    summary: "AI (L2 closing classifier) analytics + settings for a page",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    response: {
+      200: workboardV2AiReportSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV2AiSettings: {
+    tags: ["workboard"],
+    summary: "Update per-page AI classifier settings (owner only)",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    body: workboardV2AiSettingsBodySchema,
+    response: {
+      200: workboardV2AiReportSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV2AiClassify: {
+    tags: ["workboard"],
+    summary: "Run (or re-run) the AI classifier for a page now (owner only)",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    body: workboardV2AiClassifyBodySchema,
+    response: {
+      200: workboardV2AiClassifyResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV2AiRuns: {
+    tags: ["workboard"],
+    summary: "Global AI classifier run log (owner only)",
+    security: cookieOnlySecurity,
+    response: {
+      200: workboardV2AiRunsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   // --- Phase 4: Dashboard routes ---
   overview: {
     tags: ["dashboard"],
@@ -3794,3 +4015,11 @@ export type WorkboardV2Item = z.infer<typeof workboardV2ItemSchema>;
 export type WorkboardV2Response = z.infer<typeof workboardV2ResponseSchema>;
 export type WorkboardV2ContactBody = z.infer<typeof workboardV2ContactBodySchema>;
 export type WorkboardV2RecomputeResponse = z.infer<typeof workboardV2RecomputeResponseSchema>;
+export type WorkboardV2SnoozeBody = z.infer<typeof workboardV2SnoozeBodySchema>;
+export type WorkboardV2AiReport = z.infer<typeof workboardV2AiReportSchema>;
+export type WorkboardV2AiSettings = z.infer<typeof workboardV2AiSettingsSchema>;
+export type WorkboardV2AiSettingsBody = z.infer<typeof workboardV2AiSettingsBodySchema>;
+export type WorkboardV2AiClassifyBody = z.infer<typeof workboardV2AiClassifyBodySchema>;
+export type WorkboardV2AiClassifyResponse = z.infer<typeof workboardV2AiClassifyResponseSchema>;
+export type WorkboardV2AiRun = z.infer<typeof workboardV2AiRunSchema>;
+export type WorkboardV2AiRunsResponse = z.infer<typeof workboardV2AiRunsResponseSchema>;

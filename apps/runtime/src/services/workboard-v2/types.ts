@@ -31,6 +31,19 @@ export type RatioHealth = "balanced" | "model_skew" | "fan_heavy" | "unknown";
 export type LatencyBand = "fast" | "warm" | "cooling" | "cold" | "unknown";
 
 /**
+ * L2 (Haiku) semantic read of the fan's tail in conversation context — what the
+ * fan is actually doing, not just "needs a reply?". Drives both the closing
+ * detector (needs_reply) AND the urgency axis (a buy signal outranks a stale ack).
+ */
+export type ConversationState =
+  | "question" // fan asked something / wants info
+  | "buy_signal" // interested / ready to buy / said yes to an offer
+  | "smalltalk" // chatting, mild engagement, no clear ask
+  | "closing" // ack / thanks / goodbye — conversation done
+  | "cold" // disengaged / dismissive / "not interested" / "stop"
+  | "complaint"; // problem / upset / refund / something broke
+
+/**
  * Normalized per-(page, fan) signals the engine scores. Produced by the
  * repository layer; the engine itself is pure (no DB / no clock besides `now`),
  * so every formula and hard case is unit-testable.
@@ -84,6 +97,8 @@ export interface FanSignals {
   priorQScore: number | null;
   // L2 closing-classifier verdict for the tail message (null = not yet classified).
   l2NeedsReply: boolean | null;
+  // L2 semantic read of the conversation (null = not classified / disabled).
+  l2State?: ConversationState | null;
 
   // ── Touch log (authoritative "we contacted them") ──────────────────────────────
   lastProductiveContactAt: Date | null;
@@ -116,7 +131,17 @@ export interface ConversationQuality {
 }
 
 export interface UrgencyDriver {
-  code: "purchase" | "expiry" | "sla" | "cadence" | "presence" | "reactivation";
+  code:
+    | "purchase"
+    | "expiry"
+    | "sla"
+    | "cadence"
+    | "presence"
+    | "reactivation"
+    // L2-intent drivers (the fan's tail, read in context by Haiku).
+    | "buy_signal"
+    | "complaint"
+    | "question";
   value: number;
   /** The salient number for the human "why now" string (days / hours), if any. */
   whyValue: number | null;

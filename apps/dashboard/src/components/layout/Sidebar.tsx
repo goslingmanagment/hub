@@ -1,10 +1,10 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Bell, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Code2, ChevronDown, UserX } from "lucide-react";
+import { BarChart3, Bell, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Code2, ChevronDown, UserX, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
-import { buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, decodeRouteSegment } from "@/lib/navigation";
+import { buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, buildWorkboardV2Route, decodeRouteSegment } from "@/lib/navigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
@@ -132,6 +132,7 @@ export function Sidebar({ user }: SidebarProps) {
                       </NavLink>
                       {page.platform === "fansly" && (
                         <NavLink
+                          end
                           to={buildWorkboardRoute(page.label)}
                           className={({ isActive }) =>
                             `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
@@ -140,6 +141,19 @@ export function Sidebar({ user }: SidebarProps) {
                           }
                         >
                           <MessageSquare size={12} /> Workboard
+                        </NavLink>
+                      )}
+                      {page.platform === "fansly" && (
+                        <NavLink
+                          end
+                          to={buildWorkboardV2Route(page.label)}
+                          className={({ isActive }) =>
+                            `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
+                              isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
+                            }`
+                          }
+                        >
+                          <MessageSquare size={12} /> Workboard v2
                         </NavLink>
                       )}
                     </div>
@@ -197,6 +211,17 @@ export function Sidebar({ user }: SidebarProps) {
           >
             <BarChart3 size={16} />
             Usage
+          </NavLink>
+          <NavLink
+            to="/ai-analytics"
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
+              }`
+            }
+          >
+            <Sparkles size={16} />
+            ИИ-аналитика
           </NavLink>
           <NavLink
             to="/notifications"

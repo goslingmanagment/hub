@@ -9,20 +9,29 @@ import {
   appendWorkboardContact,
   countClosingCache,
   countOldMassContactsToday,
+  deleteLastWorkboardContact,
+  getClosingSettings,
   getLlmUsageDaily,
   getWorkboardV2Counts,
   listWorkboardV2,
+  snoozeWorkboardFanV2,
+  unsnoozeWorkboardFan,
 } from "@agency_hub_core/db";
 import { UTC_TIME_ZONE, millsToNumber, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { AuthPrincipal } from "../auth.ts";
 import { resolveAccessibleFanslyPage } from "../fansly-page.ts";
+import { resolveClosingSettings } from "./ai-settings.ts";
 import { isClosingMessage } from "./closing.ts";
-import { recomputeWorkboardPage } from "./recompute.ts";
+import { recomputeWorkboardFan, recomputeWorkboardPage } from "./recompute.ts";
+
+const PRESENCE_ONLINE_MINUTES = 6;
 
 type ClosingLayer = "l1" | "l2" | "fresh" | "unverified" | "model_last" | "unknown";
-type ClosingVerdict = { layer: ClosingLayer; needsReply: boolean } | null;
+type ClosingVerdict =
+  | { layer: ClosingLayer; needsReply: boolean; state: string | null; reason: string | null }
+  | null;
 
 /** The closing-detector verdict on the tail message, for the transparency panel. */
 function closingVerdict(row: WorkboardV2Row): ClosingVerdict {
@@ -31,24 +40,24 @@ function closingVerdict(row: WorkboardV2Row): ClosingVerdict {
     return null; // no conversation yet → nothing to show
   }
   if (role === "model") {
-    return { layer: "model_last", needsReply: false }; // we replied last — fan's turn
+    return { layer: "model_last", needsReply: false, state: null, reason: null }; // we replied last — fan's turn
   }
   if (role !== "fan") {
-    return { layer: "unknown", needsReply: false }; // system / unresolved role
+    return { layer: "unknown", needsReply: false, state: null, reason: null }; // system / unresolved role
   }
   if (isClosingMessage(row.last_message_preview)) {
-    return { layer: "l1", needsReply: false };
+    return { layer: "l1", needsReply: false, state: "closing", reason: null };
   }
   const ageHours = row.last_fan_message_at
     ? (Date.now() - new Date(row.last_fan_message_at).getTime()) / 3_600_000
     : null;
   if (ageHours == null || ageHours < 24) {
-    return { layer: "fresh", needsReply: true };
+    return { layer: "fresh", needsReply: true, state: null, reason: null };
   }
   if (row.l2_needs_reply != null) {
-    return { layer: "l2", needsReply: row.l2_needs_reply };
+    return { layer: "l2", needsReply: row.l2_needs_reply, state: row.l2_state, reason: row.l2_reason };
   }
-  return { layer: "unverified", needsReply: true };
+  return { layer: "unverified", needsReply: true, state: null, reason: null };
 }
 
 const FEATURE_LABEL = "Workboard v2";
@@ -95,6 +104,8 @@ function mapItem(row: WorkboardV2Row): WorkboardV2Item {
       qConfidence: row.q_confidence,
     },
     closingVerdict: closingVerdict(row),
+    online: row.external_presence_at != null
+      && Date.now() - new Date(row.external_presence_at).getTime() <= PRESENCE_ONLINE_MINUTES * 60_000,
     ltv: { creatorNetAmountMills: millsToNumber(row.ltv_mills) },
     subscription: {
       expiresAt: serializeTimestamp(row.subscription_expires_at),
@@ -154,12 +165,18 @@ const CLOSING_FEATURE = "closing-classifier";
 
 async function computeAiCoverage(app: AppContext, platformAccountId: number) {
   const businessDate = toBusinessDate(new Date(), UTC_TIME_ZONE);
-  const [cache, usage] = await Promise.all([
+  const [cache, usage, override] = await Promise.all([
     countClosingCache(app.db, platformAccountId),
     getLlmUsageDaily(app.db, platformAccountId, businessDate, CLOSING_FEATURE),
+    getClosingSettings(app.db, platformAccountId),
   ]);
+  // Effective (per-page override over env), so the badge matches the AI panel.
+  const enabled = resolveClosingSettings(
+    app.config,
+    override ? { enabled: override.enabled, dailyCapMax: override.daily_cap_max, model: override.model } : null,
+  ).enabled;
   return {
-    enabled: app.config.wbClosingLlmEnabled ?? false,
+    enabled,
     classified: cache.total,
     closingsFound: cache.closings,
     callsToday: usage.calls,
@@ -207,8 +224,46 @@ export async function recordWorkboardContactV2(
     action: body.action,
     wasProductive: body.wasProductive,
   });
+  // Re-evaluate just this fan so the row leaves the active queue immediately.
+  await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId: body.fanId });
 
   return { ok: true, fanId: body.fanId };
+}
+
+export async function snoozeWorkboardV2(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  body: { fanId: number; days: number },
+): Promise<{ ok: true; fanId: number; snoozedUntil: string | null }> {
+  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const result = await snoozeWorkboardFanV2(app.db, { platformAccountId: page.id, fanId: body.fanId, days: body.days });
+  await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId: body.fanId });
+  return { ok: true, fanId: body.fanId, snoozedUntil: result ? result.snoozedUntil.toISOString() : null };
+}
+
+export async function unsnoozeWorkboardV2(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  fanId: number,
+): Promise<{ ok: true; fanId: number }> {
+  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  await unsnoozeWorkboardFan(app.db, { platformAccountId: page.id, fanId });
+  await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId });
+  return { ok: true, fanId };
+}
+
+export async function undoWorkboardContactV2(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  fanId: number,
+): Promise<{ ok: true; fanId: number }> {
+  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  await deleteLastWorkboardContact(app.db, page.id, fanId);
+  await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId });
+  return { ok: true, fanId };
 }
 
 export async function triggerWorkboardV2Recompute(

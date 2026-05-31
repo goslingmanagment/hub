@@ -60,6 +60,12 @@ export const WB = {
     },
     presence: { freshMinutes: 30, recentMinutes: 120, freshBoost: 35, recentBoost: 20, observedMaxMinutes: 30 },
     reactivation: { boost: 25, windowDays: 7 },
+    // L2-intent (Haiku read the fan's tail in conversation context). buy_signal sits
+    // just under a fresh purchase (95) and above the SLA cap (80), so "yes, send it!"
+    // tops the queue; complaint is high; a plain question is a moderate lift over bare
+    // SLA. A cold tail that still "needs a reply" is damped so age alone can't float it
+    // above a warm one.
+    intent: { buySignal: 90, complaint: 85, question: 55, coldSlaFactor: 0.5 },
     bonusCap: 8,
     bonusFactor: 0.25,
   },
@@ -282,7 +288,31 @@ function slaDriver(signals: FanSignals, needsReply: boolean, unverified: boolean
   if (unverified) {
     value *= WB.urgency.sla.unverifiedFactor;
   }
+  // A fan who has gone cold (L2 read) shouldn't out-age a warm one on the SLA clock alone.
+  if (signals.l2State === "cold") {
+    value *= WB.urgency.intent.coldSlaFactor;
+  }
   return { code: "sla", value, whyValue: Math.round(h) };
+}
+
+/**
+ * L2-intent driver — what the fan is actually doing (Haiku read the tail in context).
+ * Only the fan's own unanswered tail carries intent; smalltalk/closing/cold add no lift.
+ */
+function intentDriver(signals: FanSignals, needsReply: boolean): UrgencyDriver | null {
+  if (!needsReply || signals.lastMessageSenderRole !== "fan" || !signals.l2State) {
+    return null;
+  }
+  switch (signals.l2State) {
+    case "buy_signal":
+      return { code: "buy_signal", value: WB.urgency.intent.buySignal, whyValue: null };
+    case "complaint":
+      return { code: "complaint", value: WB.urgency.intent.complaint, whyValue: null };
+    case "question":
+      return { code: "question", value: WB.urgency.intent.question, whyValue: null };
+    default:
+      return null;
+  }
 }
 
 function targetCadenceDays(signals: FanSignals, tab: WorkboardTab): number {
@@ -626,6 +656,12 @@ function deriveSeverity(winner: UrgencyDriver | null, status: SecondaryStatus): 
       const h = winner.whyValue ?? 0;
       return h > 72 ? "critical" : h >= 24 ? "high" : "medium";
     }
+    case "buy_signal":
+      return "critical"; // hot — close the sale now
+    case "complaint":
+      return "high";
+    case "question":
+      return "medium";
     case "cadence":
       return "medium";
     default:
@@ -645,6 +681,9 @@ function buildReasonChips(signals: FanSignals, ctx: {
 }): string[] {
   const chips: string[] = [];
   if (ctx.isPurchaseFollowup) chips.push("recent_purchase");
+  // L2-intent chips (high visibility — placed before the softer reasons).
+  if (ctx.needsReply && signals.l2State === "buy_signal") chips.push("buy_signal");
+  if (ctx.needsReply && signals.l2State === "complaint") chips.push("complaint");
   if (signals.isSubscriber && signals.autoRenew === false) chips.push("renew_off");
   if (signals.isSubscriber && signals.subscriptionExpiresAt) {
     const d = dayDiff(signals.subscriptionExpiresAt, signals.now, tz(signals));
@@ -691,14 +730,21 @@ export function evaluateFan(signals: FanSignals): WorkboardEvaluation {
   let needsReply = false;
   let replyUnverified = false;
   if (signals.lastMessageSenderRole === "fan" && !isClosingMessage(signals.tailContent)) {
-    const tailAgeHours = signals.lastFanMessageAt ? hoursSince(signals.now, signals.lastFanMessageAt) : null;
-    if (tailAgeHours == null || tailAgeHours < 24) {
-      needsReply = true; // fresh — give the chatter a chance to answer on time
-    } else if (signals.l2NeedsReply != null) {
-      needsReply = signals.l2NeedsReply; // classifier-confirmed verdict
-    } else {
-      needsReply = true; // > 24h, not yet classified → safe default, shown unverified
-      replyUnverified = true;
+    // "Handled": a productive touch (Готово) at/after the fan's last message clears the
+    // reply obligation immediately — even before the DM sync catches the model's reply.
+    const handled = signals.lastProductiveContactAt != null
+      && signals.lastFanMessageAt != null
+      && signals.lastProductiveContactAt.getTime() >= signals.lastFanMessageAt.getTime();
+    if (!handled) {
+      const tailAgeHours = signals.lastFanMessageAt ? hoursSince(signals.now, signals.lastFanMessageAt) : null;
+      if (tailAgeHours == null || tailAgeHours < 24) {
+        needsReply = true; // fresh — give the chatter a chance to answer on time
+      } else if (signals.l2NeedsReply != null) {
+        needsReply = signals.l2NeedsReply; // classifier-confirmed verdict
+      } else {
+        needsReply = true; // > 24h, not yet classified → safe default, shown unverified
+        replyUnverified = true;
+      }
     }
   }
   const needsHumanTriage = signals.lastMessageSenderRole === "unknown"
@@ -717,10 +763,11 @@ export function evaluateFan(signals: FanSignals): WorkboardEvaluation {
     const purchase = purchaseDriver(signals);
     const expiry = expiryDriver(signals);
     const sla = slaDriver(signals, needsReply, replyUnverified);
+    const intent = intentDriver(signals, needsReply);
     const cadence = withinCooldown ? null : cadenceDriver(signals, tab, quality.qEff, freeloader.frequencyMultiplier);
     const presence = presenceDriver(signals);
     const reactivation = reactivationDriver(signals, tab);
-    for (const d of [purchase, expiry, sla, cadence, presence, reactivation]) {
+    for (const d of [purchase, expiry, sla, intent, cadence, presence, reactivation]) {
       if (d) drivers.push(d);
     }
   }

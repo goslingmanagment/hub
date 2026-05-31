@@ -16,6 +16,7 @@ import {
 
 import { evaluateFan } from "./engine.ts";
 import type {
+  ConversationState,
   CoverageStatus,
   DmSenderRole,
   FanFlag,
@@ -30,6 +31,7 @@ const ROLES = new Set<string>(["fan", "model", "system", "unknown"]);
 const COVERAGE = new Set<string>(["pending_backfill", "partial_window", "complete"]);
 const SUBSTATES = new Set<string>(["fresh", "gray", "active", "dead", "archived"]);
 const FREELOADER = new Set<string>(["none", "cooling", "freeloader", "ceiling"]);
+const CONVERSATION_STATES = new Set<string>(["question", "buy_signal", "smalltalk", "closing", "cold", "complaint"]);
 const TXN_TYPES = new Set<string>(transactionTypes);
 const UPSERT_CHUNK = 500;
 const REFUND_COOLDOWN_MS = 14 * 86_400_000;
@@ -154,6 +156,7 @@ function mapRowToSignals(
     avgReplyGapHours: row.avg_gap_hours,
     priorQScore: row.prior_q_score == null ? null : Number(row.prior_q_score),
     l2NeedsReply: row.l2_needs_reply,
+    l2State: (row.l2_state && CONVERSATION_STATES.has(row.l2_state) ? row.l2_state : null) as ConversationState | null,
     freeloaderConv90: freeloader.conv90,
     lifetimeFreeEpisodes: freeloader.lifetime,
     convertedRecently: freeloader.converted,
@@ -235,6 +238,30 @@ export async function recomputeWorkboardPage(
   }
 
   return { platformAccountId: input.platformAccountId, evaluated: records.length };
+}
+
+/** Re-evaluate and persist a single fan (instant board update after Готово / snooze / purchase). */
+export async function recomputeWorkboardFan(
+  db: Database,
+  input: { platformAccountId: number; fanId: number; now?: Date },
+): Promise<{ evaluated: number }> {
+  const now = input.now ?? new Date();
+  const timeZone = UTC_TIME_ZONE;
+  const fromDate30 = toBusinessDate(addUtcDays(now, -30), timeZone);
+  const fromDate90 = toBusinessDate(addUtcDays(now, -90), timeZone);
+
+  const rows = await loadWorkboardSignalRows(db, {
+    platformAccountId: input.platformAccountId,
+    fromDate30,
+    fromDate90,
+    fanId: input.fanId,
+  });
+  const records = rows.map((row) => {
+    const freeloader = updateFreeloaderEpisodes(row, now, timeZone);
+    return toRecord(input.platformAccountId, Number(row.fan_id), evaluateFan(mapRowToSignals(row, now, timeZone, freeloader)), freeloader);
+  });
+  await upsertWorkboardStates(db, records);
+  return { evaluated: records.length };
 }
 
 /** Recompute every eligible page (the scheduled job entry point). */
