@@ -15,6 +15,11 @@ const STATE_META: Record<string, { label: string; bar: string; dot: string }> = 
   smalltalk: { label: "Болтовня", bar: "bg-text-secondary", dot: "bg-text-secondary" },
   cold: { label: "Остыл", bar: "bg-text-muted", dot: "bg-text-muted" },
   closing: { label: "Закрытие", bar: "bg-border", dot: "bg-text-muted/50" },
+  model_last: { label: "Модель ответила", bar: "bg-green", dot: "bg-green" },
+  unknown_sender: { label: "Неясный автор", bar: "bg-warning-dark", dot: "bg-warning-dark" },
+  no_visible_dialog: { label: "Нет видимого диалога", bar: "bg-border", dot: "bg-border" },
+  missing_message_id: { label: "Нет id сообщения", bar: "bg-border", dot: "bg-border" },
+  pending_ai: { label: "Ждёт ИИ", bar: "bg-warning", dot: "bg-warning" },
   "(unset)": { label: "Без состояния (старое)", bar: "bg-border", dot: "bg-border" },
 };
 
@@ -264,10 +269,18 @@ export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: str
       <div>
         <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">Покрытие</div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Stat label="Хвостов >24ч" value={fmtNum(report.coverage.tails)} />
-          <Stat label="Проверено ИИ" value={fmtNum(report.coverage.classified)} />
-          <Stat label="В очереди" value={fmtNum(report.coverage.pending)} hint="ждут проверки" />
-          <Stat label="Закрытий найдено" value={fmtNum(report.coverage.closings)} />
+          <Stat label="Спендеров" value={fmtNum(report.coverage.spenders)} />
+          <Stat
+            label="Диагностировано"
+            value={fmtNum(report.coverage.spenderDiagnosed)}
+            hint={`${fmtNum(report.coverage.spenderPending)} ждут ИИ`}
+          />
+          <Stat
+            label="Fan-last ИИ"
+            value={fmtNum(report.coverage.spenderL2Classified)}
+            hint={`${fmtNum(report.coverage.spenderFanLast)} хвостов`}
+          />
+          <Stat label="Без видимого диалога" value={fmtNum(report.coverage.spenderNoVisibleDialog)} />
         </div>
       </div>
 

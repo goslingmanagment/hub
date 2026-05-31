@@ -12,9 +12,9 @@ import {
   failStaleClassifierRuns,
   finishClassifierRun,
   getClosingSettings,
-  getClosingStateDistribution,
   getLlmUsageRange,
   insertClassifierRunRunningIfIdle,
+  listSpenderDiagnosisRows,
   listClassifierRuns,
   listClosingClassificationCandidates,
   listRecentClosingVerdicts,
@@ -31,6 +31,7 @@ import { CLOSING_CLASSIFIER_FEATURE, runClosingClassificationForPage } from "./c
 import { isClosingMessage } from "./closing.ts";
 import { createAnthropicClosingClassifier } from "./closing-classifier.ts";
 import { recomputeWorkboardPage } from "./recompute.ts";
+import { summarizeSpenderDiagnostics } from "./spender-diagnostics.ts";
 
 const FEATURE_LABEL = "Workboard v2 AI";
 const USAGE_DAYS = 30;
@@ -56,18 +57,19 @@ export async function getWorkboardV2AiReport(
   const today = toBusinessDate(now, UTC_TIME_ZONE);
   const fromDate = toBusinessDate(addUtcDays(now, -USAGE_DAYS), UTC_TIME_ZONE);
 
-  const [override, usageRows, cache, tails, candidates, states, recent] = await Promise.all([
+  const [override, usageRows, cache, tails, candidates, spenderRows, recent] = await Promise.all([
     getClosingSettings(app.db, page.id),
     getLlmUsageRange(app.db, page.id, CLOSING_CLASSIFIER_FEATURE, fromDate),
     countClosingCache(app.db, page.id),
     countUnansweredTails(app.db, page.id),
     // includeContext:false — we only need the tail content to count L1-undecided pending.
     listClosingClassificationCandidates(app.db, page.id, { includeContext: false }),
-    getClosingStateDistribution(app.db, page.id),
+    listSpenderDiagnosisRows(app.db, page.id),
     listRecentClosingVerdicts(app.db, page.id, RECENT_LIMIT),
   ]);
 
   const eff = resolveClosingSettings(app.config, toOverride(override));
+  const spenderDiagnostics = summarizeSpenderDiagnostics(spenderRows);
 
   const daily = usageRows.map((r) => ({
     date: r.business_date,
@@ -110,8 +112,22 @@ export async function getWorkboardV2AiReport(
       },
     },
     usage: { today: today_, last30d, daily },
-    coverage: { tails, classified: cache.total, closings: cache.closings, pending },
-    states: states.map((s) => ({ state: s.state, count: s.count })),
+    coverage: {
+      tails,
+      classified: cache.total,
+      closings: cache.closings,
+      pending,
+      spenders: spenderDiagnostics.spenders,
+      spenderDiagnosed: spenderDiagnostics.diagnosed,
+      spenderPending: spenderDiagnostics.pending,
+      spenderL2Classified: spenderDiagnostics.l2Classified,
+      spenderClosings: spenderDiagnostics.closings,
+      spenderNoVisibleDialog: spenderDiagnostics.noVisibleDialog,
+      spenderModelLast: spenderDiagnostics.modelLast,
+      spenderFanLast: spenderDiagnostics.fanLast,
+      spenderUnknownLast: spenderDiagnostics.unknownLast,
+    },
+    states: spenderDiagnostics.states,
     recent: recent.map((r) => ({
       messageId: r.platform_message_id,
       tail: r.tail,

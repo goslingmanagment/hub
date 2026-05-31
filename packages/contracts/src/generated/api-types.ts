@@ -3725,6 +3725,9 @@ export interface paths {
                                 classified: number;
                                 closingsFound: number;
                                 callsToday: number;
+                                spenderTotal: number;
+                                spenderDiagnosed: number;
+                                spenderPending: number;
                             };
                         };
                     };
@@ -4357,6 +4360,15 @@ export interface paths {
                                 classified: number;
                                 closings: number;
                                 pending: number;
+                                spenders: number;
+                                spenderDiagnosed: number;
+                                spenderPending: number;
+                                spenderL2Classified: number;
+                                spenderClosings: number;
+                                spenderNoVisibleDialog: number;
+                                spenderModelLast: number;
+                                spenderFanLast: number;
+                                spenderUnknownLast: number;
                             };
                             states: {
                                 state: string;
@@ -4518,6 +4530,15 @@ export interface paths {
                                 classified: number;
                                 closings: number;
                                 pending: number;
+                                spenders: number;
+                                spenderDiagnosed: number;
+                                spenderPending: number;
+                                spenderL2Classified: number;
+                                spenderClosings: number;
+                                spenderNoVisibleDialog: number;
+                                spenderModelLast: number;
+                                spenderFanLast: number;
+                                spenderUnknownLast: number;
                             };
                             states: {
                                 state: string;

@@ -13,6 +13,7 @@ import {
   getClosingSettings,
   getLlmUsageDaily,
   getWorkboardV2Counts,
+  listSpenderDiagnosisRows,
   listWorkboardV2,
   markReactivationAttemptedIfDead,
   snoozeWorkboardFanV2,
@@ -26,6 +27,7 @@ import { resolveAccessibleFanslyPage } from "../fansly-page.ts";
 import { resolveClosingSettings } from "./ai-settings.ts";
 import { isClosingMessage } from "./closing.ts";
 import { recomputeWorkboardFan, recomputeWorkboardPage } from "./recompute.ts";
+import { summarizeSpenderDiagnostics } from "./spender-diagnostics.ts";
 
 const PRESENCE_ONLINE_MINUTES = 6;
 
@@ -166,11 +168,13 @@ const CLOSING_FEATURE = "closing-classifier";
 
 async function computeAiCoverage(app: AppContext, platformAccountId: number) {
   const businessDate = toBusinessDate(new Date(), UTC_TIME_ZONE);
-  const [cache, usage, override] = await Promise.all([
+  const [cache, usage, override, spenderRows] = await Promise.all([
     countClosingCache(app.db, platformAccountId),
     getLlmUsageDaily(app.db, platformAccountId, businessDate, CLOSING_FEATURE),
     getClosingSettings(app.db, platformAccountId),
+    listSpenderDiagnosisRows(app.db, platformAccountId),
   ]);
+  const spenderDiagnostics = summarizeSpenderDiagnostics(spenderRows);
   // Effective (per-page override over env), so the badge matches the AI panel.
   const enabled = resolveClosingSettings(
     app.config,
@@ -181,6 +185,9 @@ async function computeAiCoverage(app: AppContext, platformAccountId: number) {
     classified: cache.total,
     closingsFound: cache.closings,
     callsToday: usage.calls,
+    spenderTotal: spenderDiagnostics.spenders,
+    spenderDiagnosed: spenderDiagnostics.diagnosed,
+    spenderPending: spenderDiagnostics.pending,
   };
 }
 

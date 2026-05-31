@@ -1,4 +1,4 @@
-// Verify + run the L2 closing classifier for one page (small cap for a safe first run).
+// Verify + run the L2 closing classifier for one page.
 //   (envs from .env)  node --import tsx/esm scripts/workboard-v2-classify.ts <pageLabel> [capMax]
 import { createDb, createPool, findPageSummaryByLabel } from "@agency_hub_core/db";
 
@@ -49,7 +49,7 @@ async function main() {
       return;
     }
 
-    console.log(`Classifying >24h tails for "${label}" (capMax=${capMax})…`);
+    console.log(`Classifying eligible fan-last tails for "${label}" (capMax=${capMax})…`);
     const result = await runClosingClassificationForPage(db, classifier, {
       platformAccountId: page.id,
       capMin: 1,

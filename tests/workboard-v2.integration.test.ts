@@ -12,6 +12,7 @@ import {
   getLlmUsageDaily,
   insertClassifierRun,
   insertClassifierRunRunningIfIdle,
+  listSpenderDiagnosisRows,
   listWorkboardRecomputePageIds,
   listClassifierRuns,
   listWorkboardV2,
@@ -27,6 +28,7 @@ import { dollarsToMills, toBusinessDate, UTC_TIME_ZONE } from "@agency_hub_core/
 import { recomputeWorkboardPage } from "../apps/runtime/src/services/workboard-v2/recompute.ts";
 import { CLOSING_CLASSIFIER_FEATURE, runClosingClassificationForPage } from "../apps/runtime/src/services/workboard-v2/classify-closing.ts";
 import type { ClosingClassifier } from "../apps/runtime/src/services/workboard-v2/closing-classifier.ts";
+import { summarizeSpenderDiagnostics } from "../apps/runtime/src/services/workboard-v2/spender-diagnostics.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
 const DAY = 86_400_000;
@@ -156,6 +158,76 @@ describe("workboard v2 recompute + read (integration)", () => {
       action: "handled",
       wasProductive: true,
     });
+  });
+
+  it("excludes deleted fans from Workboard v2 and prunes stale derived rows", async () => {
+    const now = new Date();
+    const { page } = await seedPage();
+
+    const activeFan = await insertFan("active-spender", "active");
+    const [deletedRow] = await harness.db
+      .insert(fans)
+      .values({
+        platform: "fansly",
+        platformUserId: "deleted-spender",
+        username: "deleted",
+        displayName: "deleted",
+        deletedDetectedAt: now,
+        deletedLastDetectedAt: now,
+      })
+      .returning({ id: fans.id });
+    const deletedFan = deletedRow!.id;
+
+    await harness.db.insert(pageFans).values([
+      { fanId: activeFan, platformAccountId: page.id, isFollower: true },
+      { fanId: deletedFan, platformAccountId: page.id, isFollower: true },
+    ]);
+    await harness.db.insert(fanSpendLifetime).values([
+      {
+        platformAccountId: page.id,
+        fanId: activeFan,
+        creatorNetAmountMills: dollarsToMills(150),
+        lastTransactionAt: new Date(now.getTime() - DAY),
+      },
+      {
+        platformAccountId: page.id,
+        fanId: deletedFan,
+        creatorNetAmountMills: dollarsToMills(200),
+        lastTransactionAt: new Date(now.getTime() - DAY),
+      },
+    ]);
+
+    await harness.pool.query(
+      `
+      insert into workboard_state (
+        platform_account_id, fan_id, tab,
+        value_score, urgency_score, rank_score, secondary_status
+      )
+      values (
+        $1, $2, 'spenders'::workboard_tab,
+        10, 10, 10, 'due_now'::workboard_secondary_status
+      )
+      `,
+      [page.id, deletedFan],
+    );
+
+    const result = await recomputeWorkboardPage(harness.db, { platformAccountId: page.id, now });
+    expect(result.evaluated).toBe(1);
+
+    const spenders = await listWorkboardV2(harness.db, {
+      platformAccountId: page.id,
+      tab: "spenders",
+      limit: 50,
+      offset: 0,
+    });
+    expect(spenders.total).toBe(1);
+    expect(Number(spenders.rows[0]!.fan_id)).toBe(activeFan);
+
+    const stale = await harness.pool.query<{ count: string }>(
+      "select count(*) from workboard_state where platform_account_id = $1 and fan_id = $2",
+      [page.id, deletedFan],
+    );
+    expect(Number(stale.rows[0]?.count ?? 0)).toBe(0);
   });
 
   it("computes a positive conversation-quality score from real messages (Stage 1 cq aggregation)", async () => {
@@ -368,6 +440,106 @@ describe("workboard v2 recompute + read (integration)", () => {
     });
     expect(onlyNeedReply.rows.length).toBeGreaterThan(0);
     expect(onlyNeedReply.rows.every((r) => r.secondary_status === "need_reply")).toBe(true);
+  });
+
+  it("classifies fresh spender fan-last tails for spender diagnostics", async () => {
+    const now = new Date();
+    const { page } = await seedPage();
+
+    async function seedVisibleFan(
+      handle: string,
+      input: { paid: boolean; lastRole: "fan" | "model"; messageId: string; preview: string },
+    ) {
+      const id = await insertFan(`fan-${handle}`, handle);
+      await harness.db.insert(pageFans).values({
+        fanId: id,
+        platformAccountId: page.id,
+        isFollower: true,
+        followerSince: new Date(now.getTime() - 40 * DAY),
+      });
+      if (input.paid) {
+        await harness.db.insert(fanSpendLifetime).values({
+          platformAccountId: page.id,
+          fanId: id,
+          creatorNetAmountMills: dollarsToMills(100),
+          lastTransactionAt: new Date(now.getTime() - 5 * DAY),
+        });
+      }
+      await harness.db.insert(pageDmThreads).values({
+        platformAccountId: page.id,
+        fanId: id,
+        platformConversationId: `conv-${handle}`,
+        lastMessageId: input.messageId,
+        lastMessageAt: new Date(now.getTime() - 2 * HOUR),
+        lastMessageSenderRole: input.lastRole,
+        lastFanMessageAt: new Date(now.getTime() - 2 * HOUR),
+        lastModelMessageAt: input.lastRole === "model" ? new Date(now.getTime() - 2 * HOUR) : new Date(now.getTime() - 3 * HOUR),
+        lastMessagePreview: input.preview,
+        storedMessageCount: 2,
+        messageCoverageStatus: "complete",
+        isVisible: true,
+      });
+      return id;
+    }
+
+    await seedVisibleFan("spender-fresh", {
+      paid: true,
+      lastRole: "fan",
+      messageId: "msg-spender-fresh",
+      preview: "yes send it",
+    });
+    await seedVisibleFan("spender-model", {
+      paid: true,
+      lastRole: "model",
+      messageId: "msg-spender-model",
+      preview: "sent babe",
+    });
+    await seedVisibleFan("free-fresh", {
+      paid: false,
+      lastRole: "fan",
+      messageId: "msg-free-fresh",
+      preview: "yes send it",
+    });
+
+    await recomputeWorkboardPage(harness.db, { platformAccountId: page.id, now });
+
+    const before = summarizeSpenderDiagnostics(await listSpenderDiagnosisRows(harness.db, page.id));
+    expect(before).toMatchObject({ spenders: 2, diagnosed: 1, pending: 1, modelLast: 1, fanLast: 1 });
+
+    const classified: string[] = [];
+    const fakeClassifier: ClosingClassifier = {
+      model: "fake-haiku",
+      async classifyBatch(messages) {
+        classified.push(...messages.map((m) => m.id));
+        return {
+          verdicts: messages.map((m) => ({
+            id: m.id,
+            needsReply: true,
+            state: "buy_signal" as const,
+            reason: "wants to buy",
+          })),
+          inputTokens: 5,
+          outputTokens: 7,
+        };
+      },
+    };
+
+    const result = await runClosingClassificationForPage(harness.db, fakeClassifier, {
+      platformAccountId: page.id,
+      now,
+      capMin: 50,
+      capMax: 400,
+    });
+
+    expect(classified).toEqual(["msg-spender-fresh"]);
+    expect(result.classified).toBe(1);
+
+    const after = summarizeSpenderDiagnostics(await listSpenderDiagnosisRows(harness.db, page.id));
+    expect(after).toMatchObject({ spenders: 2, diagnosed: 2, pending: 0, l2Classified: 1, modelLast: 1, fanLast: 1 });
+    expect(after.states).toEqual([
+      { state: "buy_signal", count: 1 },
+      { state: "model_last", count: 1 },
+    ]);
   });
 
   it("reserves LLM cap calls atomically and defers the rest once the cap is spent", async () => {

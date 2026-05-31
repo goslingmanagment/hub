@@ -2,6 +2,7 @@ import {
   type Database,
   type WorkboardSignalRow,
   type WorkboardStateRecord,
+  deleteIneligibleWorkboardStates,
   listWorkboardRecomputePageIds,
   loadWorkboardSignalRows,
   upsertWorkboardStates,
@@ -243,6 +244,7 @@ export async function recomputeWorkboardPage(
   for (let i = 0; i < records.length; i += UPSERT_CHUNK) {
     await upsertWorkboardStates(db, records.slice(i, i + UPSERT_CHUNK));
   }
+  await deleteIneligibleWorkboardStates(db, { platformAccountId: input.platformAccountId });
 
   return { platformAccountId: input.platformAccountId, evaluated: records.length };
 }
@@ -268,6 +270,10 @@ export async function recomputeWorkboardFan(
     return toRecord(input.platformAccountId, Number(row.fan_id), evaluateFan(mapRowToSignals(row, now, timeZone, freeloader)), freeloader);
   });
   await upsertWorkboardStates(db, records);
+  await deleteIneligibleWorkboardStates(db, {
+    platformAccountId: input.platformAccountId,
+    fanId: input.fanId,
+  });
   return { evaluated: records.length };
 }
 

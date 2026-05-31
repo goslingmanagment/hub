@@ -11980,13 +11980,31 @@
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "spenderTotal": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderDiagnosed": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderPending": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
                         "enabled",
                         "classified",
                         "closingsFound",
-                        "callsToday"
+                        "callsToday",
+                        "spenderTotal",
+                        "spenderDiagnosed",
+                        "spenderPending"
                       ],
                       "additionalProperties": false
                     }
@@ -13338,13 +13356,67 @@
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "spenders": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderDiagnosed": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderPending": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderL2Classified": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderClosings": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderNoVisibleDialog": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderModelLast": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderFanLast": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderUnknownLast": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
                         "tails",
                         "classified",
                         "closings",
-                        "pending"
+                        "pending",
+                        "spenders",
+                        "spenderDiagnosed",
+                        "spenderPending",
+                        "spenderL2Classified",
+                        "spenderClosings",
+                        "spenderNoVisibleDialog",
+                        "spenderModelLast",
+                        "spenderFanLast",
+                        "spenderUnknownLast"
                       ],
                       "additionalProperties": false
                     },
@@ -13893,13 +13965,67 @@
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "spenders": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderDiagnosed": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderPending": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderL2Classified": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderClosings": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderNoVisibleDialog": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderModelLast": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderFanLast": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "spenderUnknownLast": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
                         "tails",
                         "classified",
                         "closings",
-                        "pending"
+                        "pending",
+                        "spenders",
+                        "spenderDiagnosed",
+                        "spenderPending",
+                        "spenderL2Classified",
+                        "spenderClosings",
+                        "spenderNoVisibleDialog",
+                        "spenderModelLast",
+                        "spenderFanLast",
+                        "spenderUnknownLast"
                       ],
                       "additionalProperties": false
                     },

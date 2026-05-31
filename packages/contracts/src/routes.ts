@@ -1318,6 +1318,9 @@ export const workboardV2ResponseSchema = z.object({
     classified: z.number().int(),
     closingsFound: z.number().int(),
     callsToday: z.number().int(),
+    spenderTotal: z.number().int(),
+    spenderDiagnosed: z.number().int(),
+    spenderPending: z.number().int(),
   }),
 });
 
@@ -1408,6 +1411,15 @@ export const workboardV2AiReportSchema = z.object({
     classified: z.number().int(),
     closings: z.number().int(),
     pending: z.number().int(),
+    spenders: z.number().int(),
+    spenderDiagnosed: z.number().int(),
+    spenderPending: z.number().int(),
+    spenderL2Classified: z.number().int(),
+    spenderClosings: z.number().int(),
+    spenderNoVisibleDialog: z.number().int(),
+    spenderModelLast: z.number().int(),
+    spenderFanLast: z.number().int(),
+    spenderUnknownLast: z.number().int(),
   }),
   states: z.array(z.object({ state: z.string(), count: z.number().int() })),
   recent: z.array(

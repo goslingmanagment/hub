@@ -66,7 +66,7 @@ export interface LoadSignalParams {
 }
 
 /**
- * One row per fan with a relationship to the page (page_fans is the candidate set).
+ * One row per active fan with a relationship to the page (page_fans is the candidate set).
  * All sub-aggregates are LEFT-joined so a fan with no spend/DM/sub still appears.
  */
 export async function loadWorkboardSignalRows(
@@ -205,6 +205,7 @@ export async function loadWorkboardSignalRows(
       cc.layer as l2_layer,
       cc.state as l2_state
     from page_fans pf
+    join fans f on f.id = pf.fan_id and f.deleted_detected_at is null
     left join fan_spend_lifetime sl on sl.platform_account_id = pf.platform_account_id and sl.fan_id = pf.fan_id
     left join spend_window sw on sw.fan_id = pf.fan_id
     left join current_sub cs on cs.fan_id = pf.fan_id
@@ -224,6 +225,29 @@ export async function loadWorkboardSignalRows(
 }
 
 export type WorkboardStateRecord = typeof workboardState.$inferInsert;
+
+/** Remove derived rows that should no longer appear on the board. */
+export async function deleteIneligibleWorkboardStates(
+  db: Database,
+  input: { platformAccountId: number; fanId?: number },
+): Promise<number> {
+  const fanFilter = input.fanId != null ? sql`and ws.fan_id = ${input.fanId}` : sql``;
+  const result = await db.execute<{ fan_id: bigint }>(sql`
+    delete from workboard_state ws
+    where ws.platform_account_id = ${input.platformAccountId}
+      ${fanFilter}
+      and not exists (
+        select 1
+        from page_fans pf
+        join fans f on f.id = pf.fan_id
+        where pf.platform_account_id = ws.platform_account_id
+          and pf.fan_id = ws.fan_id
+          and f.deleted_detected_at is null
+      )
+    returning ws.fan_id
+  `);
+  return result.rows.length;
+}
 
 /** Batch upsert computed states (chunk callers to ~500 rows). */
 export async function upsertWorkboardStates(
@@ -326,6 +350,7 @@ export async function listWorkboardV2(
   const totalResult = await db.execute<{ total: number }>(sql`
     select count(*)::int as total
     from workboard_state ws
+    join fans f on f.id = ws.fan_id and f.deleted_detected_at is null
     where ws.platform_account_id = ${platformAccountId} and ws.tab = ${tab}::workboard_tab ${statusFilter}
   `);
 
@@ -368,7 +393,7 @@ export async function listWorkboardV2(
       cc.state as l2_state,
       cc.reason as l2_reason
     from workboard_state ws
-    join fans f on f.id = ws.fan_id
+    join fans f on f.id = ws.fan_id and f.deleted_detected_at is null
     left join page_fans pf on pf.platform_account_id = ws.platform_account_id and pf.fan_id = ws.fan_id
     left join fan_spend_lifetime sl on sl.platform_account_id = ws.platform_account_id and sl.fan_id = ws.fan_id
     left join lateral (
@@ -396,6 +421,7 @@ export async function getWorkboardV2Counts(
   const result = await db.execute<{ tab: string; secondary_status: string; count: number }>(sql`
     select ws.tab::text as tab, ws.secondary_status::text as secondary_status, count(*)::int as count
     from workboard_state ws
+    join fans f on f.id = ws.fan_id and f.deleted_detected_at is null
     where ws.platform_account_id = ${platformAccountId}
     group by ws.tab, ws.secondary_status
   `);
@@ -521,6 +547,10 @@ const CLOSING_CONTEXT_WINDOW = 12;
  * filtered in TS by the caller (cheap, deterministic) before any API call. Each row
  * carries the last few messages (with roles) so the classifier reads the tail in
  * conversation context, not in isolation.
+ *
+ * Spenders are the exception to the 24h gate: every fan-last spender tail is
+ * eligible so the spender diagnostics can cover the whole spender tab. Model-last
+ * / no-dialog spenders are diagnosed deterministically outside the LLM path.
  */
 export async function listClosingClassificationCandidates(
   db: Database,
@@ -553,6 +583,7 @@ export async function listClosingClassificationCandidates(
       ws.tab::text as tab,
       ${ctxSelect} as context
     from page_dm_threads t
+    join fans f on f.id = t.fan_id and f.deleted_detected_at is null
     left join page_dm_messages m on m.conversation_id = t.id and m.platform_message_id = t.last_message_id
     left join workboard_state ws on ws.platform_account_id = t.platform_account_id and ws.fan_id = t.fan_id
     left join wb_closing_cache cc on cc.platform_account_id = t.platform_account_id and cc.platform_message_id = t.last_message_id
@@ -562,7 +593,10 @@ export async function listClosingClassificationCandidates(
       and t.fan_id is not null
       and t.last_message_id is not null
       and t.last_message_sender_role = 'fan'::dm_sender_role
-      and t.last_fan_message_at < now() - interval '24 hours'
+      and (
+        ws.tab = 'spenders'::workboard_tab
+        or t.last_fan_message_at < now() - interval '24 hours'
+      )
       and cc.id is null
       and (ws.tab is null or ws.tab <> 'service'::workboard_tab)
       and (ws.mass_substate is null or ws.mass_substate not in ('dead'::workboard_mass_substate, 'archived'::workboard_mass_substate))
@@ -579,6 +613,55 @@ export async function listClosingClassificationCandidates(
   return result.rows;
 }
 
+export type SpenderDiagnosisRow = {
+  fan_id: bigint;
+  platform_message_id: string | null;
+  last_message_sender_role: string | null;
+  last_fan_message_at: Date | null;
+  last_message_preview: string | null;
+  l2_needs_reply: boolean | null;
+  l2_state: string | null;
+};
+
+/** One row per active Workboard-v2 spender, with the latest visible DM diagnosis inputs. */
+export async function listSpenderDiagnosisRows(
+  db: Database,
+  platformAccountId: number,
+): Promise<SpenderDiagnosisRow[]> {
+  const result = await db.execute<SpenderDiagnosisRow>(sql`
+    select
+      ws.fan_id as fan_id,
+      pt.last_message_id as platform_message_id,
+      pt.last_message_sender_role as last_message_sender_role,
+      pt.last_fan_message_at as last_fan_message_at,
+      pt.last_message_preview as last_message_preview,
+      cc.needs_reply as l2_needs_reply,
+      cc.state as l2_state
+    from workboard_state ws
+    join fans f on f.id = ws.fan_id and f.deleted_detected_at is null
+    left join lateral (
+      select
+        last_message_id,
+        last_message_sender_role::text as last_message_sender_role,
+        last_fan_message_at,
+        last_message_preview
+      from page_dm_threads
+      where platform_account_id = ws.platform_account_id
+        and fan_id = ws.fan_id
+        and is_visible = true
+      order by last_message_at desc nulls last, id desc
+      limit 1
+    ) pt on true
+    left join wb_closing_cache cc
+      on cc.platform_account_id = ws.platform_account_id
+      and cc.platform_message_id = pt.last_message_id
+    where ws.platform_account_id = ${platformAccountId}
+      and ws.tab = 'spenders'::workboard_tab
+    order by ws.rank_score desc, ws.fan_id asc
+  `);
+  return result.rows;
+}
+
 /** Cached L2 verdict totals for a page — total classified + how many were closings. */
 export async function countClosingCache(
   db: Database,
@@ -587,7 +670,11 @@ export async function countClosingCache(
   const result = await db.execute<{ total: number; closings: number }>(sql`
     select count(*)::int as total,
            count(*) filter (where needs_reply = false)::int as closings
-    from wb_closing_cache where platform_account_id = ${platformAccountId}
+    from wb_closing_cache c
+    join page_dm_threads t
+      on t.platform_account_id = c.platform_account_id and t.last_message_id = c.platform_message_id
+    join fans f on f.id = t.fan_id and f.deleted_detected_at is null
+    where c.platform_account_id = ${platformAccountId}
   `);
   return { total: result.rows[0]?.total ?? 0, closings: result.rows[0]?.closings ?? 0 };
 }
@@ -597,6 +684,7 @@ export async function countUnansweredTails(db: Database, platformAccountId: numb
   const result = await db.execute<{ n: number }>(sql`
     select count(*)::int as n
     from page_dm_threads t
+    join fans f on f.id = t.fan_id and f.deleted_detected_at is null
     where t.platform_account_id = ${platformAccountId}
       and t.is_visible = true
       and t.fan_id is not null
@@ -785,7 +873,11 @@ export async function getClosingStateDistribution(
 ): Promise<Array<{ state: string; count: number }>> {
   const result = await db.execute<{ state: string; count: number }>(sql`
     select coalesce(state, '(unset)') as state, count(*)::int as count
-    from wb_closing_cache where platform_account_id = ${platformAccountId}
+    from wb_closing_cache c
+    join page_dm_threads t
+      on t.platform_account_id = c.platform_account_id and t.last_message_id = c.platform_message_id
+    join fans f on f.id = t.fan_id and f.deleted_detected_at is null
+    where c.platform_account_id = ${platformAccountId}
     group by state order by count desc
   `);
   return result.rows;
@@ -816,8 +908,9 @@ export async function listRecentClosingVerdicts(
       c.model as model,
       c.classified_at as classified_at
     from wb_closing_cache c
-    left join page_dm_threads t
+    join page_dm_threads t
       on t.platform_account_id = c.platform_account_id and t.last_message_id = c.platform_message_id
+    join fans f on f.id = t.fan_id and f.deleted_detected_at is null
     where c.platform_account_id = ${platformAccountId}
     order by c.classified_at desc
     limit ${limit}

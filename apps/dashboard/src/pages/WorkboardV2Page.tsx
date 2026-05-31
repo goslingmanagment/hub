@@ -180,8 +180,18 @@ export function WorkboardV2Page() {
           <span className="font-semibold text-text-primary">ИИ-детектор ответа</span>
           {data.aiCoverage.enabled ? (
             <span className="text-text-secondary">
-              проверено <b className="tabular-nums text-text-primary">{data.aiCoverage.classified}</b> · закрытий{" "}
-              <b className="tabular-nums text-text-primary">{data.aiCoverage.closingsFound}</b> · вызовов сегодня{" "}
+              спендеров{" "}
+              <b className="tabular-nums text-text-primary">
+                {data.aiCoverage.spenderDiagnosed}/{data.aiCoverage.spenderTotal}
+              </b>
+              {data.aiCoverage.spenderPending > 0 && (
+                <>
+                  {" "}
+                  · ждут ИИ <b className="tabular-nums text-text-primary">{data.aiCoverage.spenderPending}</b>
+                </>
+              )}
+              {" "}
+              · вызовов сегодня{" "}
               <b className="tabular-nums text-text-primary">{data.aiCoverage.callsToday}</b>
             </span>
           ) : (
