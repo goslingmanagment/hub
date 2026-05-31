@@ -27,15 +27,22 @@ function stateMeta(state: string) {
   return STATE_META[state] ?? { label: state, bar: "bg-border", dot: "bg-border" };
 }
 
-export function fmtUsd(v: number): string {
-  if (v === 0) return "$0";
-  if (v < 0.01) return `$${v.toFixed(4)}`;
-  if (v < 1) return `$${v.toFixed(3)}`;
-  return `$${v.toFixed(2)}`;
+function finiteNumber(v: number | null | undefined): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-export function fmtNum(n: number): string {
-  return n.toLocaleString("ru-RU");
+export function fmtUsd(v: number | null | undefined): string {
+  const amount = finiteNumber(v);
+  if (amount == null) return "—";
+  if (amount === 0) return "$0";
+  if (amount < 0.01) return `$${amount.toFixed(4)}`;
+  if (amount < 1) return `$${amount.toFixed(3)}`;
+  return `$${amount.toFixed(2)}`;
+}
+
+export function fmtNum(n: number | null | undefined): string {
+  const amount = finiteNumber(n);
+  return amount == null ? "—" : amount.toLocaleString("ru-RU");
 }
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -49,23 +56,24 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 }
 
 function StateDistribution({ states }: { states: AiReport["states"] }) {
-  const total = states.reduce((a, s) => a + s.count, 0);
+  const total = states.reduce((a, s) => a + (finiteNumber(s.count) ?? 0), 0);
   if (total === 0) {
     return <div className="text-[12px] text-text-muted">Пока нет классифицированных диалогов.</div>;
   }
-  const max = Math.max(...states.map((s) => s.count), 1);
+  const max = Math.max(...states.map((s) => finiteNumber(s.count) ?? 0), 1);
   return (
     <div className="space-y-1.5">
       {states.map((s) => {
         const m = stateMeta(s.state);
+        const count = finiteNumber(s.count) ?? 0;
         return (
           <div key={s.state} className="flex items-center gap-2 text-[12px]">
             <span className="w-[150px] shrink-0 truncate text-text-secondary">{m.label}</span>
             <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-hover">
-              <div className={`h-full rounded-full ${m.bar}`} style={{ width: `${Math.round((s.count / max) * 100)}%` }} />
+              <div className={`h-full rounded-full ${m.bar}`} style={{ width: `${Math.round((count / max) * 100)}%` }} />
             </div>
-            <span className="w-12 shrink-0 text-right font-semibold tabular-nums text-text-primary">{fmtNum(s.count)}</span>
-            <span className="w-10 shrink-0 text-right tabular-nums text-text-muted">{Math.round((s.count / total) * 100)}%</span>
+            <span className="w-12 shrink-0 text-right font-semibold tabular-nums text-text-primary">{fmtNum(count)}</span>
+            <span className="w-10 shrink-0 text-right tabular-nums text-text-muted">{Math.round((count / total) * 100)}%</span>
           </div>
         );
       })}
