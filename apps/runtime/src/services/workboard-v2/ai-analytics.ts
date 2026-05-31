@@ -9,6 +9,7 @@ import {
   clearClosingCacheForPage,
   countClosingCache,
   countUnansweredTails,
+  failStaleClassifierRuns,
   finishClassifierRun,
   getActiveClassifierRun,
   getClosingSettings,
@@ -26,7 +27,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { AuthPrincipal } from "../auth.ts";
 import { BadRequestError } from "../errors.ts";
 import { resolveAccessibleFanslyPage } from "../fansly-page.ts";
-import { type ClosingSettingsOverride, estimateCostUsd, resolveClosingSettings } from "./ai-settings.ts";
+import { type ClosingSettingsOverride, DEFAULT_MODEL, estimateCostUsd, resolveClosingSettings } from "./ai-settings.ts";
 import { CLOSING_CLASSIFIER_FEATURE, runClosingClassificationForPage } from "./classify-closing.ts";
 import { isClosingMessage } from "./closing.ts";
 import { createAnthropicClosingClassifier } from "./closing-classifier.ts";
@@ -61,7 +62,8 @@ export async function getWorkboardV2AiReport(
     getLlmUsageRange(app.db, page.id, CLOSING_CLASSIFIER_FEATURE, fromDate),
     countClosingCache(app.db, page.id),
     countUnansweredTails(app.db, page.id),
-    listClosingClassificationCandidates(app.db, page.id),
+    // includeContext:false — we only need the tail content to count L1-undecided pending.
+    listClosingClassificationCandidates(app.db, page.id, { includeContext: false }),
     getClosingStateDistribution(app.db, page.id),
     listRecentClosingVerdicts(app.db, page.id, RECENT_LIMIT),
   ]);
@@ -207,8 +209,13 @@ export async function runWorkboardV2AiClassify(
 
 const RUN_LOG_LIMIT = 100;
 
+const STALE_RUN_MINUTES = 20;
+
 /** Global classifier run log (owner-only; cross-page activity stream). */
 export async function listWorkboardV2AiRuns(app: AppContext): Promise<WorkboardV2AiRunsResponse> {
+  // Reconcile orphaned 'running' rows (detached work lost to a process restart) so the
+  // log never shows a perpetual "выполняется…".
+  await failStaleClassifierRuns(app.db, STALE_RUN_MINUTES);
   const runs = await listClassifierRuns(app.db, RUN_LOG_LIMIT);
   return {
     runs: runs.map((r) => ({
@@ -222,7 +229,7 @@ export async function listWorkboardV2AiRuns(app: AppContext): Promise<WorkboardV
       outputTokens: r.output_tokens,
       deferred: r.deferred,
       cleared: r.cleared,
-      costUsd: estimateCostUsd(r.model ?? "claude-haiku-4-5", r.input_tokens, r.output_tokens),
+      costUsd: estimateCostUsd(r.model ?? DEFAULT_MODEL, r.input_tokens, r.output_tokens),
       status: r.status,
       error: r.error,
       createdAt: iso(r.created_at),

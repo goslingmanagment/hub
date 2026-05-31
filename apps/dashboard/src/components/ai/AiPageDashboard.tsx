@@ -256,6 +256,9 @@ export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: str
           />
           <Stat label="Стоимость 30д" value={fmtUsd(report.usage.last30d.costUsd)} hint={`${fmtNum(report.usage.last30d.calls)} вызовов`} />
         </div>
+        <div className="mt-1 text-[10px] text-text-muted">
+          * стоимость — оценка по текущей цене модели ({report.settings.model}); скидки batch/кэша не учтены
+        </div>
       </div>
 
       <div>

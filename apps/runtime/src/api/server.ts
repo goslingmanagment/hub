@@ -990,7 +990,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.workboardV2Ai,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
+    requireOwner(principal); // settings/cost/verdicts are owner-only; the board's coverage banner uses a separate read
     return getWorkboardV2AiReport(appContext, principal, request.params.pageLabel);
   });
 

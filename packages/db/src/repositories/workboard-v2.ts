@@ -317,7 +317,7 @@ export async function listWorkboardV2(
 ): Promise<{ total: number; rows: WorkboardV2Row[] }> {
   const { platformAccountId, tab, statuses, limit, offset } = params;
   const statusFilter = statuses && statuses.length > 0
-    ? sql`and ws.secondary_status = any(${sql.raw(`array[${statuses.map((s) => `'${s.replace(/'/g, "")}'`).join(",")}]`)}::workboard_secondary_status[])`
+    ? sql`and ws.secondary_status = any(array[${sql.join(statuses.map((s) => sql`${s}`), sql`, `)}]::workboard_secondary_status[])`
     : sql``;
 
   const totalResult = await db.execute<{ total: number }>(sql`
@@ -504,28 +504,38 @@ const CLOSING_CONTEXT_WINDOW = 12;
 export async function listClosingClassificationCandidates(
   db: Database,
   platformAccountId: number,
+  opts: { includeContext?: boolean } = {},
 ): Promise<ClosingCandidateRow[]> {
+  // The context lateral (per-thread json_agg over 12 messages) is only needed by the
+  // classify path. Callers that just need the tail content (e.g. counting "pending")
+  // pass includeContext:false to skip it entirely.
+  const includeContext = opts.includeContext ?? true;
+  const ctxSelect = includeContext ? sql`ctx.ctx` : sql`null::json`;
+  const ctxJoin = includeContext
+    ? sql`
+      left join lateral (
+        select json_agg(json_build_object('role', x.sender_role, 'text', x.content) order by x.created_at asc, x.id asc) as ctx
+        from (
+          select id, sender_role::text as sender_role, content, created_at
+          from page_dm_messages
+          where conversation_id = t.id
+          order by created_at desc, id desc
+          limit ${CLOSING_CONTEXT_WINDOW}
+        ) x
+      ) ctx on true`
+    : sql``;
   const result = await db.execute<ClosingCandidateRow>(sql`
     select
       t.fan_id as fan_id,
       t.last_message_id as platform_message_id,
       coalesce(m.content, t.last_message_preview, '') as content,
       ws.tab::text as tab,
-      ctx.ctx as context
+      ${ctxSelect} as context
     from page_dm_threads t
     left join page_dm_messages m on m.conversation_id = t.id and m.platform_message_id = t.last_message_id
     left join workboard_state ws on ws.platform_account_id = t.platform_account_id and ws.fan_id = t.fan_id
     left join wb_closing_cache cc on cc.platform_account_id = t.platform_account_id and cc.platform_message_id = t.last_message_id
-    left join lateral (
-      select json_agg(json_build_object('role', x.sender_role, 'text', x.content) order by x.created_at asc) as ctx
-      from (
-        select sender_role::text as sender_role, content, created_at
-        from page_dm_messages
-        where conversation_id = t.id
-        order by created_at desc
-        limit ${CLOSING_CONTEXT_WINDOW}
-      ) x
-    ) ctx on true
+    ${ctxJoin}
     where t.platform_account_id = ${platformAccountId}
       and t.is_visible = true
       and t.fan_id is not null
@@ -831,6 +841,19 @@ export async function finishClassifierRun(
       cleared = ${input.cleared ?? 0},
       error = ${input.error ?? null}
     where id = ${id}
+  `);
+}
+
+/**
+ * Reconcile orphaned runs: a manual run executes detached in the API process, so a
+ * process restart can leave a row stuck in 'running'. Mark long-stuck rows as errored
+ * so the dashboard never shows a perpetual "выполняется…". Called on run-log reads.
+ */
+export async function failStaleClassifierRuns(db: Database, olderThanMinutes: number): Promise<void> {
+  await db.execute(sql`
+    update wb_classifier_runs
+    set status = 'error', error = coalesce(error, 'прервано (перезапуск процесса)')
+    where status = 'running' and created_at < now() - (${olderThanMinutes} || ' minutes')::interval
   `);
 }
 

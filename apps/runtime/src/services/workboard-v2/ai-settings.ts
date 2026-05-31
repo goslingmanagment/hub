@@ -27,7 +27,7 @@ export interface EffectiveClosingSettings {
   source: { enabled: "override" | "env"; dailyCapMax: "override" | "env"; model: "override" | "env" };
 }
 
-const DEFAULT_MODEL = "claude-haiku-4-5";
+export const DEFAULT_MODEL = "claude-haiku-4-5";
 const DEFAULT_CAP_MIN = 50;
 const DEFAULT_CAP_MAX = 400;
 

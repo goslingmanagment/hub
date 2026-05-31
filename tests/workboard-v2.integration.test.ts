@@ -286,6 +286,17 @@ describe("workboard v2 recompute + read (integration)", () => {
     expect(byId.get(fanQuestion)?.needs_reply).toBe(true); // classifier said needs reply
     expect(byId.get(fanWarmClose)?.needs_reply).toBe(false); // classifier said closing
     expect(byId.get(fanThanks)?.needs_reply).toBe(false); // L1 closing
+
+    // Parameterized secondary_status filter returns a correct subset (no raw interpolation).
+    const onlyNeedReply = await listWorkboardV2(harness.db, {
+      platformAccountId: page.id,
+      tab: "fresh_mass",
+      statuses: ["need_reply"],
+      limit: 50,
+      offset: 0,
+    });
+    expect(onlyNeedReply.rows.length).toBeGreaterThan(0);
+    expect(onlyNeedReply.rows.every((r) => r.secondary_status === "need_reply")).toBe(true);
   });
 
   it("persists per-page settings and appends to the classifier run log", async () => {
