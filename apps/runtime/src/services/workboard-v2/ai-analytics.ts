@@ -9,10 +9,12 @@ import {
   clearClosingCacheForPage,
   countClosingCache,
   countUnansweredTails,
+  finishClassifierRun,
+  getActiveClassifierRun,
   getClosingSettings,
   getClosingStateDistribution,
   getLlmUsageRange,
-  insertClassifierRun,
+  insertClassifierRunRunning,
   listClassifierRuns,
   listClosingClassificationCandidates,
   listRecentClosingVerdicts,
@@ -137,6 +139,43 @@ export async function updateWorkboardV2AiSettings(
   return getWorkboardV2AiReport(app, principal, pageLabel);
 }
 
+/**
+ * The heavy part of a manual run — clears (if reclassify), classifies, recomputes,
+ * then finalizes the run-log row. Runs detached from the HTTP request so the UI gets
+ * an instant "running" row and polls for completion (the row is the status tracker).
+ */
+async function executeClassifyRun(
+  app: AppContext,
+  platformAccountId: number,
+  runId: number,
+  eff: { capMin: number; capMax: number; model: string },
+  reclassify: boolean,
+): Promise<void> {
+  try {
+    const cleared = reclassify ? await clearClosingCacheForPage(app.db, platformAccountId) : 0;
+    const classifier = createAnthropicClosingClassifier({ apiKey: app.config.anthropicApiKey!, model: eff.model });
+    const result = await runClosingClassificationForPage(app.db, classifier, {
+      platformAccountId,
+      capMin: eff.capMin,
+      capMax: eff.capMax,
+    });
+    await recomputeWorkboardPage(app.db, { platformAccountId });
+    await finishClassifierRun(app.db, runId, {
+      status: "ok",
+      classified: result.classified,
+      calls: result.calls,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      deferred: result.deferred,
+      cleared,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    app.logger.error({ err, platformAccountId, runId }, "Workboard v2 manual classify run failed");
+    await finishClassifierRun(app.db, runId, { status: "error", error: message.slice(0, 500) }).catch(() => undefined);
+  }
+}
+
 export async function runWorkboardV2AiClassify(
   app: AppContext,
   principal: AuthPrincipal,
@@ -147,32 +186,23 @@ export async function runWorkboardV2AiClassify(
   if (!app.config.anthropicApiKey) {
     throw new BadRequestError("ANTHROPIC_API_KEY is not configured");
   }
+  // One in-flight run per page — a second click joins the existing one.
+  const active = await getActiveClassifierRun(app.db, page.id);
+  if (active) {
+    return { ok: true, runId: active.id, status: "running", alreadyRunning: true };
+  }
+
   const eff = resolveClosingSettings(app.config, toOverride(await getClosingSettings(app.db, page.id)));
-
-  const cleared = body.reclassify ? await clearClosingCacheForPage(app.db, page.id) : 0;
-  const classifier = createAnthropicClosingClassifier({ apiKey: app.config.anthropicApiKey, model: eff.model });
-  const result = await runClosingClassificationForPage(app.db, classifier, {
-    platformAccountId: page.id,
-    capMin: eff.capMin,
-    capMax: eff.capMax,
-  });
-  // Apply the fresh verdicts to the board immediately.
-  await recomputeWorkboardPage(app.db, { platformAccountId: page.id });
-
-  // Log the run (always, even 0 calls, so the operator sees the click landed).
-  await insertClassifierRun(app.db, {
+  const runId = await insertClassifierRunRunning(app.db, {
     platformAccountId: page.id,
     trigger: body.reclassify ? "reclassify" : "manual",
     model: eff.model,
-    classified: result.classified,
-    calls: result.calls,
-    inputTokens: result.inputTokens,
-    outputTokens: result.outputTokens,
-    deferred: result.deferred,
-    cleared,
   });
 
-  return { ok: true, classified: result.classified, calls: result.calls, deferred: result.deferred, cleared };
+  // Detach: respond immediately; the run-log row tracks progress to completion.
+  void executeClassifyRun(app, page.id, runId, eff, body.reclassify);
+
+  return { ok: true, runId, status: "running", alreadyRunning: false };
 }
 
 const RUN_LOG_LIMIT = 100;

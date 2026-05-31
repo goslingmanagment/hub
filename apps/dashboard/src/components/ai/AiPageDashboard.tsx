@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { Play, RefreshCcw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Loader2, Play, RefreshCcw } from "lucide-react";
 import { toast } from "sonner";
 
 import { useWorkboardV2Ai, useWorkboardV2AiClassify, useWorkboardV2AiSettings } from "@/api/workboard";
@@ -196,9 +197,21 @@ function SettingsForm({ report, pageLabel }: { report: AiReport; pageLabel: stri
   );
 }
 
-export function AiPageDashboard({ pageLabel }: { pageLabel: string }) {
-  const { data: report, isLoading } = useWorkboardV2Ai(pageLabel);
+export function AiPageDashboard({ pageLabel, running = false }: { pageLabel: string; running?: boolean }) {
+  // While a run is in flight, poll the report so coverage / states / verdicts fill in live.
+  const { data: report, isLoading } = useWorkboardV2Ai(pageLabel, { refetchInterval: running ? 3000 : false });
   const classify = useWorkboardV2AiClassify(pageLabel);
+  const qc = useQueryClient();
+
+  // When a run finishes (running: true → false), force one final refresh of the report + board.
+  const prevRunning = useRef(running);
+  useEffect(() => {
+    if (prevRunning.current && !running) {
+      qc.invalidateQueries({ queryKey: ["workboard-v2-ai", pageLabel] });
+      qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
+    }
+    prevRunning.current = running;
+  }, [running, pageLabel, qc]);
 
   const runClassify = (reclassify: boolean) => {
     if (
@@ -212,14 +225,16 @@ export function AiPageDashboard({ pageLabel }: { pageLabel: string }) {
       {
         onSuccess: (r) =>
           toast.success(
-            reclassify
-              ? `Переклассификация: очищено ${r.cleared}, новых ${r.classified} (${r.calls} вызовов)`
-              : `Классифицировано ${r.classified} (${r.calls} вызовов, отложено ${r.deferred})`,
+            r.alreadyRunning
+              ? "Запуск уже выполняется — смотрите журнал внизу"
+              : "Запущено в фоне — прогресс в журнале запусков ниже",
           ),
         onError: () => toast.error("Не удалось запустить классификацию"),
       },
     );
   };
+
+  const busy = running || classify.isPending;
 
   if (isLoading || !report) {
     return <div className="rounded-card border border-border bg-card py-10 text-center text-[12px] text-text-muted">Загрузка…</div>;
@@ -263,25 +278,31 @@ export function AiPageDashboard({ pageLabel }: { pageLabel: string }) {
         <RecentVerdicts recent={report.recent} />
       </div>
 
-      <div className="flex flex-wrap gap-2 border-t border-border pt-3">
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
         <button
           type="button"
           onClick={() => runClassify(false)}
-          disabled={classify.isPending || !report.settings.hasApiKey}
+          disabled={busy || !report.settings.hasApiKey}
           className="inline-flex items-center gap-1.5 rounded-button border border-border bg-card px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-hover disabled:opacity-50"
         >
-          <Play size={13} className={classify.isPending ? "animate-pulse" : ""} />
+          <Play size={13} />
           Классифицировать сейчас
         </button>
         <button
           type="button"
           onClick={() => runClassify(true)}
-          disabled={classify.isPending || !report.settings.hasApiKey}
+          disabled={busy || !report.settings.hasApiKey}
           className="inline-flex items-center gap-1.5 rounded-button border border-border bg-card px-3 py-1.5 text-[12px] font-semibold text-warning-dark transition-colors hover:bg-hover disabled:opacity-50"
         >
-          <RefreshCcw size={13} className={classify.isPending ? "animate-spin" : ""} />
+          <RefreshCcw size={13} />
           Переклассифицировать всё
         </button>
+        {running && (
+          <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-accent">
+            <Loader2 size={13} className="animate-spin" />
+            выполняется…
+          </span>
+        )}
       </div>
     </div>
   );

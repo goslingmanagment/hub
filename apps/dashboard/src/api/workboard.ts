@@ -154,12 +154,16 @@ export function useWorkboardV2UndoContact(pageLabel: string) {
 
 // ── Workboard v2 AI analytics (L2 closing classifier) ────────────────────────
 
-export function useWorkboardV2Ai(pageLabel: string, options: { enabled?: boolean } = {}) {
+export function useWorkboardV2Ai(
+  pageLabel: string,
+  options: { enabled?: boolean; refetchInterval?: number | false } = {},
+) {
   return useQuery({
     queryKey: ["workboard-v2-ai", pageLabel],
     queryFn: () =>
       api.get<WorkboardV2AiReport>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/ai`),
     enabled: options.enabled ?? true,
+    refetchInterval: options.refetchInterval,
   });
 }
 
@@ -191,11 +195,18 @@ export function useWorkboardV2AiClassify(pageLabel: string) {
   });
 }
 
-export function useWorkboardV2AiRuns(options: { enabled?: boolean; refetchInterval?: number } = {}) {
+export function useWorkboardV2AiRuns(
+  options: {
+    enabled?: boolean;
+    // number | false, or a fn of the latest data (so callers can poll fast while a run is live).
+    refetchInterval?: number | false | ((data: WorkboardV2AiRunsResponse | undefined) => number | false);
+  } = {},
+) {
+  const ri = options.refetchInterval;
   return useQuery({
     queryKey: ["workboard-v2-ai-runs"],
     queryFn: () => api.get<WorkboardV2AiRunsResponse>(`/api/v1/workboard/ai/runs`),
     enabled: options.enabled ?? true,
-    refetchInterval: options.refetchInterval,
+    refetchInterval: typeof ri === "function" ? (query) => ri(query.state.data) : ri,
   });
 }

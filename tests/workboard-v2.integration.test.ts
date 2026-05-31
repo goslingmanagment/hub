@@ -6,8 +6,11 @@ import {
   createModel,
   fanSpendLifetime,
   fans,
+  finishClassifierRun,
+  getActiveClassifierRun,
   getClosingSettings,
   insertClassifierRun,
+  insertClassifierRunRunning,
   listClassifierRuns,
   listWorkboardV2,
   pageDmMessages,
@@ -338,5 +341,37 @@ describe("workboard v2 recompute + read (integration)", () => {
     expect(runs).toHaveLength(2);
     expect(runs[0]).toMatchObject({ trigger: "reclassify", page_label: "lora-main", cleared: 116, deferred: 2 });
     expect(runs[1]).toMatchObject({ trigger: "manual", classified: 7 });
+  });
+
+  it("tracks the async run lifecycle: running → active guard → finished", async () => {
+    const { page } = await seedPage();
+
+    expect(await getActiveClassifierRun(harness.db, page.id)).toBeNull();
+
+    const runId = await insertClassifierRunRunning(harness.db, {
+      platformAccountId: page.id,
+      trigger: "reclassify",
+      model: "claude-haiku-4-5",
+    });
+    // The run is now "active" — a second click would join it instead of starting a new one.
+    expect(await getActiveClassifierRun(harness.db, page.id)).toMatchObject({ id: runId });
+    expect((await listClassifierRuns(harness.db, 5))[0]).toMatchObject({ status: "running" });
+
+    await finishClassifierRun(harness.db, runId, {
+      status: "ok",
+      classified: 12,
+      calls: 1,
+      inputTokens: 900,
+      outputTokens: 400,
+      deferred: 0,
+      cleared: 30,
+    });
+    // No longer active; the row is finalized with its counts.
+    expect(await getActiveClassifierRun(harness.db, page.id)).toBeNull();
+    expect((await listClassifierRuns(harness.db, 5))[0]).toMatchObject({
+      status: "ok",
+      classified: 12,
+      cleared: 30,
+    });
   });
 });

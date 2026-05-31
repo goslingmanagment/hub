@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Sparkles } from "lucide-react";
 
+import { useWorkboardV2AiRuns } from "@/api/workboard";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext.js";
 import { AiPageDashboard } from "@/components/ai/AiPageDashboard";
 import { AiRunLog } from "@/components/ai/AiRunLog";
@@ -11,6 +12,13 @@ export function AiAnalyticsPage() {
   const [selected, setSelected] = useState<string>(() => fanslyPages[0]?.label ?? "");
 
   const activeLabel = fanslyPages.some((p) => p.label === selected) ? selected : fanslyPages[0]?.label ?? "";
+
+  // Poll fast while any run is live (instant feedback), idle-poll otherwise.
+  const runsQuery = useWorkboardV2AiRuns({
+    refetchInterval: (data) => (data?.runs.some((r) => r.status === "running") ? 2500 : 15000),
+  });
+  const runs = runsQuery.data?.runs ?? [];
+  const runningForActive = runs.some((r) => r.pageLabel === activeLabel && r.status === "running");
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6">
@@ -44,8 +52,13 @@ export function AiAnalyticsPage() {
 
       {activeLabel ? (
         <div className="space-y-4">
-          <AiPageDashboard key={activeLabel} pageLabel={activeLabel} />
-          <AiRunLog />
+          <AiPageDashboard key={activeLabel} pageLabel={activeLabel} running={runningForActive} />
+          <AiRunLog
+            runs={runs}
+            isLoading={runsQuery.isLoading}
+            isFetching={runsQuery.isFetching}
+            onRefresh={() => void runsQuery.refetch()}
+          />
         </div>
       ) : (
         <div className="rounded-card border border-border bg-card px-4 py-12 text-center text-[13px] text-text-muted">

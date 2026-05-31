@@ -1431,10 +1431,11 @@ export const workboardV2AiClassifyBodySchema = z.object({
 
 export const workboardV2AiClassifyResponseSchema = z.object({
   ok: z.literal(true),
-  classified: z.number().int(),
-  calls: z.number().int(),
-  deferred: z.number().int(),
-  cleared: z.number().int(),
+  // The run is async: it returns immediately with a 'running' run-log row id; the
+  // dashboard polls the run log for completion. alreadyRunning = a run was in flight.
+  runId: z.number().int(),
+  status: z.string(),
+  alreadyRunning: z.boolean(),
 });
 
 export const workboardV2AiRunSchema = z.object({

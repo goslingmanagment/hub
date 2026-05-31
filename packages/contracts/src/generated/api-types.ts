@@ -4633,10 +4633,9 @@ export interface paths {
                         "application/json": {
                             /** @enum {boolean} */
                             ok: true;
-                            classified: number;
-                            calls: number;
-                            deferred: number;
-                            cleared: number;
+                            runId: number;
+                            status: string;
+                            alreadyRunning: boolean;
                         };
                     };
                 };

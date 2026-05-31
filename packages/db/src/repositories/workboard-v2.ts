@@ -793,6 +793,62 @@ export async function insertClassifierRun(db: Database, input: ClassifierRunInse
   });
 }
 
+/** Insert a run row in the 'running' state (for async manual runs); returns its id. */
+export async function insertClassifierRunRunning(
+  db: Database,
+  input: { platformAccountId: number; trigger: "manual" | "reclassify"; model: string | null },
+): Promise<number> {
+  const [row] = await db
+    .insert(wbClassifierRuns)
+    .values({ platformAccountId: input.platformAccountId, trigger: input.trigger, model: input.model, status: "running" })
+    .returning({ id: wbClassifierRuns.id });
+  return row!.id;
+}
+
+/** Finalize a 'running' run row with its terminal counts/status. */
+export async function finishClassifierRun(
+  db: Database,
+  id: number,
+  input: {
+    status: "ok" | "error";
+    classified?: number;
+    calls?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    deferred?: number;
+    cleared?: number;
+    error?: string | null;
+  },
+): Promise<void> {
+  await db.execute(sql`
+    update wb_classifier_runs set
+      status = ${input.status},
+      classified = ${input.classified ?? 0},
+      calls = ${input.calls ?? 0},
+      input_tokens = ${input.inputTokens ?? 0},
+      output_tokens = ${input.outputTokens ?? 0},
+      deferred = ${input.deferred ?? 0},
+      cleared = ${input.cleared ?? 0},
+      error = ${input.error ?? null}
+    where id = ${id}
+  `);
+}
+
+/** An in-flight manual run for a page (status running, started < 15 min ago), if any. */
+export async function getActiveClassifierRun(
+  db: Database,
+  platformAccountId: number,
+): Promise<{ id: number } | null> {
+  const result = await db.execute<{ id: number }>(sql`
+    select id::int as id from wb_classifier_runs
+    where platform_account_id = ${platformAccountId}
+      and status = 'running'
+      and created_at > now() - interval '15 minutes'
+    order by id desc limit 1
+  `);
+  return result.rows[0] ?? null;
+}
+
 export type ClassifierRunRow = {
   id: number;
   page_label: string | null;

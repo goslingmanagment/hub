@@ -14176,33 +14176,23 @@
                         true
                       ]
                     },
-                    "classified": {
+                    "runId": {
                       "type": "integer",
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
                     },
-                    "calls": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
+                    "status": {
+                      "type": "string"
                     },
-                    "deferred": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "cleared": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
+                    "alreadyRunning": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "ok",
-                    "classified",
-                    "calls",
-                    "deferred",
-                    "cleared"
+                    "runId",
+                    "status",
+                    "alreadyRunning"
                   ],
                   "additionalProperties": false
                 }
