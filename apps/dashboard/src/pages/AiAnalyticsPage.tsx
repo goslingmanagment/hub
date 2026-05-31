@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { useSearchParams } from "react-router";
 import { Sparkles } from "lucide-react";
 
 import { useWorkboardV2AiRuns } from "@/api/workboard";
@@ -8,10 +9,19 @@ import { AiRunLog } from "@/components/ai/AiRunLog";
 
 export function AiAnalyticsPage() {
   const { pages } = useDashboardShell();
+  const [searchParams, setSearchParams] = useSearchParams();
   const fanslyPages = useMemo(() => pages.filter((p) => p.platform === "fansly"), [pages]);
-  const [selected, setSelected] = useState<string>(() => fanslyPages[0]?.label ?? "");
+  const requestedPage = searchParams.get("page") ?? "";
 
-  const activeLabel = fanslyPages.some((p) => p.label === selected) ? selected : fanslyPages[0]?.label ?? "";
+  const activeLabel = fanslyPages.some((p) => p.label === requestedPage)
+    ? requestedPage
+    : fanslyPages[0]?.label ?? "";
+
+  function handlePageChange(pageLabel: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set("page", pageLabel);
+    setSearchParams(next);
+  }
 
   // Poll fast while any run is live (instant feedback), idle-poll otherwise.
   const runsQuery = useWorkboardV2AiRuns({
@@ -37,7 +47,7 @@ export function AiAnalyticsPage() {
             Страница
             <select
               value={activeLabel}
-              onChange={(e) => setSelected(e.target.value)}
+              onChange={(e) => handlePageChange(e.target.value)}
               className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] font-medium text-text-primary"
             >
               {fanslyPages.map((p) => (

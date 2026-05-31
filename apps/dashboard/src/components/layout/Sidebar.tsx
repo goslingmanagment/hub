@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
-import { buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, buildWorkboardV2Route, decodeRouteSegment } from "@/lib/navigation";
+import { buildAiAnalyticsRoute, buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, buildWorkboardV2Route, decodeRouteSegment } from "@/lib/navigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
@@ -40,6 +40,20 @@ export function Sidebar({ user }: SidebarProps) {
     const parts = location.pathname.split("/").filter(Boolean);
     return parts[0] === "pages" && parts[1] ? decodeRouteSegment(parts[1]) : null;
   })();
+  const currentAiPageLabel = location.pathname === "/ai-analytics"
+    ? new URLSearchParams(location.search).get("page")
+    : null;
+  const activeFanslyPageLabel = pages.some(
+    (page) => page.platform === "fansly" && page.label === activePageLabel,
+  )
+    ? activePageLabel
+    : null;
+  const currentFanslyAiPageLabel = pages.some(
+    (page) => page.platform === "fansly" && page.label === currentAiPageLabel,
+  )
+    ? currentAiPageLabel
+    : null;
+  const aiAnalyticsRoute = buildAiAnalyticsRoute(activeFanslyPageLabel ?? currentFanslyAiPageLabel);
 
   return (
     <nav className="w-[248px] bg-card border-r border-border flex flex-col fixed top-0 bottom-0 z-20">
@@ -213,7 +227,7 @@ export function Sidebar({ user }: SidebarProps) {
             Usage
           </NavLink>
           <NavLink
-            to="/ai-analytics"
+            to={aiAnalyticsRoute}
             className={({ isActive }) =>
               `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"

@@ -22,6 +22,7 @@ import {
   TAB_LABELS,
   type SecondaryStatus,
 } from "@/components/page/workboard/v2/tone";
+import { buildAiAnalyticsRoute } from "@/lib/navigation";
 
 const TABS: WorkboardV2Tab[] = ["subscribers", "spenders", "fresh_mass", "old_mass", "service"];
 
@@ -172,7 +173,7 @@ export function WorkboardV2Page() {
 
       {data?.aiCoverage && (
         <Link
-          to="/ai-analytics"
+          to={buildAiAnalyticsRoute(pageLabel)}
           className="mb-3 flex flex-wrap items-center gap-2 rounded-card border border-border bg-card px-3 py-2 text-[12px] transition-colors hover:bg-hover/50"
         >
           <Sparkles size={14} className={data.aiCoverage.enabled ? "text-accent" : "text-text-muted"} />

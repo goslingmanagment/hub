@@ -43,6 +43,14 @@ export function buildWorkboardV2Route(pageLabel: string) {
   return `${buildWorkboardRoute(pageLabel)}/v2`;
 }
 
+export function buildAiAnalyticsRoute(pageLabel?: string | null) {
+  if (!pageLabel) {
+    return "/ai-analytics";
+  }
+  const query = new URLSearchParams({ page: pageLabel }).toString();
+  return `/ai-analytics?${query}`;
+}
+
 export function resolveLegacyWorkboardRedirect(pageLabel: string | undefined) {
   return pageLabel ? buildWorkboardRoute(pageLabel) : "/";
 }
