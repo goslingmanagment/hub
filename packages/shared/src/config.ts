@@ -5,6 +5,8 @@ import { assertProxyTargetAllowed, normalizeProxyConfig } from "./proxy.ts";
 import { parseProxyString } from "./proxy-string.ts";
 import type { ProxyConfig } from "./types.ts";
 
+const MIN_FANSLY_DM_DELAY_MS = 5000;
+
 const optionalTrimmedStringSchema = z.preprocess((value) => {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -144,6 +146,10 @@ function hasConfiguredValue(value: string | undefined) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function enforceFanslyDmDelayFloor(delayMs: number) {
+  return Math.max(delayMs, MIN_FANSLY_DM_DELAY_MS);
+}
+
 export function resolveFanslyDefaultDelayEnvSource(env: NodeJS.ProcessEnv = process.env) {
   if (hasConfiguredValue(env.FANSLY_DEFAULT_DELAY_MS)) {
     return "FANSLY_DEFAULT_DELAY_MS" as const;
@@ -217,8 +223,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
     fanslyDefaultDelayMs,
     followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,
-    fanslyDmConversationsDelayMs: parsed.FANSLY_DM_CONVERSATIONS_DELAY_MS,
-    fanslyDmMessagesDelayMs: parsed.FANSLY_DM_MESSAGES_DELAY_MS,
+    fanslyDmConversationsDelayMs: enforceFanslyDmDelayFloor(parsed.FANSLY_DM_CONVERSATIONS_DELAY_MS),
+    fanslyDmMessagesDelayMs: enforceFanslyDmDelayFloor(parsed.FANSLY_DM_MESSAGES_DELAY_MS),
     fanslyDmDeepBackfillEnabled: parsed.FANSLY_DM_DEEP_BACKFILL_ENABLED,
     fanslyDmDeepBackfillMaxRequestsPerRun: parsed.FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN,
     onlyFansDefaultDelayMs: parsed.ONLYFANS_DEFAULT_DELAY_MS,

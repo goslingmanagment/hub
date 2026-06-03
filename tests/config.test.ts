@@ -80,6 +80,17 @@ describe("config", () => {
     expect(config.fanslyDmMessagesDelayMs).toBe(8300);
   });
 
+  it("enforces a safe Fansly DM delay floor", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      FANSLY_DM_CONVERSATIONS_DELAY_MS: "2000",
+      FANSLY_DM_MESSAGES_DELAY_MS: "3000",
+    });
+
+    expect(config.fanslyDmConversationsDelayMs).toBe(5000);
+    expect(config.fanslyDmMessagesDelayMs).toBe(5000);
+  });
+
   it("accepts an explicit Fansly default delay override", () => {
     const config = loadConfig({
       ...baseEnv,

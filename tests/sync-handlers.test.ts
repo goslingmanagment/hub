@@ -2642,6 +2642,122 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     }));
   });
 
+  it("keeps the unresolvable exclusion marker when aggregation has a stale partner account", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async () => ({
+      total: 1,
+      items: [{
+        groupId: "group-stale-aggregation",
+        partnerAccountId: "fan-stale-aggregation",
+        partnerUsername: "fan_stale_aggregation",
+        flags: 0,
+        unreadCount: 2,
+        subscriptionTierId: null,
+        lastMessageId: "msg-80",
+        lastUnreadMessageId: "msg-80",
+      }],
+      accounts: [{
+        id: "fan-stale-aggregation",
+        username: "fan_stale_aggregation",
+        displayName: "Fan Stale Aggregation",
+        createdAt: 1_770_000_000_000,
+      }],
+      groups: [{
+        id: "group-stale-aggregation",
+        users: [
+          { groupId: "group-stale-aggregation", userId: "acct-dm", type: 1, permissionFlags: 0 },
+          { groupId: "group-stale-aggregation", userId: "fan-stale-aggregation", type: 1, permissionFlags: 0 },
+        ],
+        lastMessage: {
+          id: "msg-80",
+          type: 1,
+          dataVersion: 1,
+          content: "stale aggregation account",
+          groupId: "group-stale-aggregation",
+          senderId: "fan-stale-aggregation",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_770_000_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 0,
+        },
+      }],
+      offset: 0,
+      done: true,
+      raw: {
+        data: [],
+        aggregationData: {
+          total: 1,
+          accounts: [],
+          groups: [],
+        },
+      },
+    }));
+    const getAccountsByIdsPage = vi.fn(async () => ({
+      parsed: [],
+      raw: {},
+    }));
+    const db = {};
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+        getAccountsByIdsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([buildDmConversation({
+      id: 780,
+      platformConversationId: "group-stale-aggregation",
+      partnerPlatformUserId: "fan-stale-aggregation",
+      partnerUsername: "fan_stale_aggregation",
+      partnerDisplayName: "Fan Stale Aggregation",
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+      },
+    })]);
+    dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-stale-aggregation" }]);
+
+    const result = await executeDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 1,
+      },
+      syncRunId: 9052,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(2),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(getAccountsByIdsPage).toHaveBeenCalledWith(expect.anything(), ["fan-stale-aggregation"]);
+    expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith(db, expect.objectContaining({
+      platformConversationId: "group-stale-aggregation",
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+      },
+    }));
+  });
+
   it("yields dm_messages when the chunk budget is exhausted mid-conversation", async () => {
     const telemetry = createTelemetry();
     const getMessagesPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {

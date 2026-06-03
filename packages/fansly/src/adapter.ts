@@ -520,6 +520,12 @@ export class FanslyAdapter {
           ? undefined
           : redactSensitiveText(envelope.error.message);
         const responseSnippet = redactSensitiveText(text.slice(0, 400));
+        const failureResponseMetadata = {
+          bodyLength: text.length,
+          errorCode: envelope?.error?.code ?? null,
+          errorMessage: envelopeMessage ?? null,
+          responseSnippet: responseSnippet.length > 0 ? responseSnippet : null,
+        };
 
         if (response.status === 401 || response.status === 403) {
           return {
@@ -527,6 +533,7 @@ export class FanslyAdapter {
             failureKind: "http",
             httpStatus: response.status,
             errorMessage: envelopeMessage ?? `Fansly authorization failed (${response.status})`,
+            responseMetadata: failureResponseMetadata,
             error: new FanslyApiError(
               envelopeMessage ?? `Fansly authorization failed (${response.status})`,
               response.status,
@@ -545,6 +552,7 @@ export class FanslyAdapter {
               response.headers.get("retry-after"),
               executionContext.attemptNumber,
             ),
+            responseMetadata: failureResponseMetadata,
             errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
           };
         }
@@ -555,6 +563,7 @@ export class FanslyAdapter {
             failureKind: "http",
             httpStatus: response.status,
             errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
+            responseMetadata: failureResponseMetadata,
             error: new FanslyApiError(
               envelopeMessage ?? `Fansly request failed (${response.status})`,
               response.status,
@@ -570,6 +579,7 @@ export class FanslyAdapter {
             failureKind: "provider",
             httpStatus: response.status,
             errorMessage: envelopeMessage ?? "Fansly response envelope was unsuccessful",
+            responseMetadata: failureResponseMetadata,
             error: new FanslyApiError(
               envelopeMessage ?? "Fansly response envelope was unsuccessful",
               response.status,

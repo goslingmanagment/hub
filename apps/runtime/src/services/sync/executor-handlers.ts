@@ -2656,12 +2656,9 @@ export async function executeDmConversationsChunk(
         existingExcludedReason ===
           FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP
       ) {
-        let shouldClearUnresolvableExclusion = Boolean(
-          partnerPlatformUserId && accountsById.has(partnerPlatformUserId),
-        );
+        let shouldClearUnresolvableExclusion = false;
 
         if (
-          !shouldClearUnresolvableExclusion &&
           partnerPlatformUserId &&
           input.budget.hasRequestCapacity() &&
           input.budget.hasWallClockCapacity()
@@ -3464,9 +3461,17 @@ export async function executeDmMessagesChunk(
           await input.telemetry.addNote(
             "Excluded DM conversation after repeated 5xx because partner account is unresolvable",
             {
+              conversationId: currentConversation.id,
               groupId: currentConversation.platformConversationId,
               partnerPlatformUserId: currentConversation.partnerPlatformUserId,
+              partnerUsername: currentConversation.partnerUsername,
+              currentMode,
               failureStreak,
+              storedMessageCount: currentConversation.storedMessageCount,
+              messageCoverageStatus: currentConversation.messageCoverageStatus,
+              lastMessageId: currentConversation.lastMessageId,
+              newestStoredMessageId: currentConversation.newestStoredMessageId,
+              accountResolution: resolution,
               exclusionReason:
                 FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
             },
