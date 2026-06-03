@@ -33,6 +33,7 @@ import {
   type DmSenderRole,
   type MessageCoverageStatus,
   type PageSyncLease,
+  type SyncStream,
   type UpsertFanPageInput,
   type UpsertPageFollowInput,
   type UpsertPageSubscriptionInput,
@@ -100,6 +101,11 @@ import {
 } from "./cursor-state.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
+  isOnlyFansDmPollingEnabled,
+  isOnlyFansDmPollingStream,
+  ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
+} from "./onlyfans-dm-polling.ts";
+import {
   dmRetentionDate,
   normalizeDmTipAmountCents,
   normalizeFanslyTimestamp,
@@ -123,6 +129,18 @@ const ONLYMONSTER_DM_MESSAGE_SYNC_EXCLUDED_REASON_CHAT_NOT_FOUND = "onlymonster_
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_WEEK_MS = 7 * TOP_SPENDERS_WINDOW_DAY_MS;
+
+function shouldSkipOnlyFansDmPolling(
+  app: AppContext,
+  input: {
+    pageContext: ResolvedPageContext;
+    stream: SyncStream;
+  },
+) {
+  return input.pageContext.platform === "onlyfans" &&
+    isOnlyFansDmPollingStream(input.stream) &&
+    !isOnlyFansDmPollingEnabled(app.config);
+}
 
 function resolveDmConversationCoverageStatus(input: {
   currentMode: "backfill" | "incremental";
@@ -3608,6 +3626,23 @@ export async function executeStreamChunk(
     budget: SyncChunkBudget;
   },
 ) {
+  if (shouldSkipOnlyFansDmPolling(app, {
+    pageContext: input.pageContext,
+    stream: input.streamState.stream,
+  })) {
+    await input.telemetry.addNote(ONLYFANS_DM_POLLING_DISABLED_MESSAGE, {
+      stream: input.streamState.stream,
+      pageId: input.pageContext.page.id,
+    });
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: {
+        disabledByConfig: true,
+      },
+    } satisfies StreamChunkResult;
+  }
+
   switch (input.streamState.stream) {
     case "light":
       return executeLightChunk(app, input);

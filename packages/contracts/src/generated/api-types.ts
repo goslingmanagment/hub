@@ -3705,6 +3705,7 @@ export interface paths {
                                     preview: string | null;
                                     /** @enum {string} */
                                     coverageStatus: "pending_backfill" | "partial_window" | "complete";
+                                    platformConversationId: string | null;
                                 };
                                 serviceReason: string | null;
                             }[];
@@ -3729,6 +3730,168 @@ export interface paths {
                                 spenderDiagnosed: number;
                                 spenderPending: number;
                             };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/workboard/v2/lists": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workboard v2 spender lists (lifetime gross-spend bands) for one Fansly page */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            bands: {
+                                key: string;
+                                label: string;
+                                count: number;
+                                items: {
+                                    fanId: number;
+                                    fan: {
+                                        platformUserId: string | null;
+                                        pageAlias: string | null;
+                                        username: string | null;
+                                        displayName: string | null;
+                                    };
+                                    /** @enum {string} */
+                                    tab: "subscribers" | "spenders" | "fresh_mass" | "old_mass" | "service";
+                                    massSubstate: ("fresh" | "gray" | "active" | "dead" | "archived") | null;
+                                    value: {
+                                        score: number;
+                                        /** @enum {string} */
+                                        tier: "whale" | "vip" | "payer" | "new";
+                                        /** @enum {string} */
+                                        confidence: "high" | "low";
+                                    };
+                                    urgency: {
+                                        score: number;
+                                        /** @enum {string} */
+                                        severity: "critical" | "high" | "medium" | "normal" | "muted";
+                                    };
+                                    rankScore: number;
+                                    /** @enum {string} */
+                                    secondaryStatus: "recent_purchase" | "need_reply" | "due_now" | "later" | "dont_touch_today";
+                                    needsReply: boolean;
+                                    needsHumanTriage: boolean;
+                                    isPurchaseFollowup: boolean;
+                                    whyNow: {
+                                        code: string | null;
+                                        value: number | null;
+                                    };
+                                    reasonChips: string[];
+                                    quality: {
+                                        qScore: number | null;
+                                        /** @enum {string} */
+                                        qConfidence: "high" | "medium" | "low";
+                                    };
+                                    closingVerdict: {
+                                        /** @enum {string} */
+                                        layer: "l1" | "l2" | "fresh" | "unverified" | "model_last" | "unknown";
+                                        needsReply: boolean;
+                                        state: ("question" | "buy_signal" | "smalltalk" | "closing" | "cold" | "complaint") | null;
+                                        reason: string | null;
+                                    } | null;
+                                    online: boolean;
+                                    ltv: {
+                                        creatorNetAmountMills: number;
+                                    };
+                                    subscription: {
+                                        expiresAt: string | null;
+                                        autoRenew: boolean | null;
+                                    };
+                                    conversation: {
+                                        lastFanMessageAt: string | null;
+                                        lastModelMessageAt: string | null;
+                                        preview: string | null;
+                                        /** @enum {string} */
+                                        coverageStatus: "pending_backfill" | "partial_window" | "complete";
+                                        platformConversationId: string | null;
+                                    };
+                                    serviceReason: string | null;
+                                }[];
+                            }[];
+                            total: number;
+                            truncated: boolean;
                         };
                     };
                 };

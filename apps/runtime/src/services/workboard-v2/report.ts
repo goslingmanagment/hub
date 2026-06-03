@@ -1,6 +1,7 @@
 import type {
   WorkboardV2ContactBody,
   WorkboardV2Item,
+  WorkboardV2ListsResponse,
   WorkboardV2Query,
   WorkboardV2Response,
 } from "@agency_hub_core/contracts";
@@ -14,12 +15,13 @@ import {
   getLlmUsageDaily,
   getWorkboardV2Counts,
   listSpenderDiagnosisRows,
+  listWorkboardSpenderBands,
   listWorkboardV2,
   markReactivationAttemptedIfDead,
   snoozeWorkboardFanV2,
   unsnoozeWorkboardFan,
 } from "@agency_hub_core/db";
-import { UTC_TIME_ZONE, millsToNumber, toBusinessDate } from "@agency_hub_core/shared";
+import { SPENDER_AUTO_LIST_BUCKETS, UTC_TIME_ZONE, millsToNumber, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { AuthPrincipal } from "../auth.ts";
@@ -119,6 +121,7 @@ function mapItem(row: WorkboardV2Row): WorkboardV2Item {
       lastModelMessageAt: serializeTimestamp(row.last_model_message_at),
       preview: row.last_message_preview,
       coverageStatus: row.message_coverage_status,
+      platformConversationId: row.platform_conversation_id ?? null,
     },
     serviceReason: row.service_reason,
   } as WorkboardV2Item;
@@ -162,6 +165,51 @@ export async function getWorkboardV2Report(
     oldMassBudget,
     aiCoverage,
   } as WorkboardV2Response;
+}
+
+// Member rows returned per band. Counts stay exact; only the rendered roster is
+// capped (the largest Fansly spender band is in the low hundreds).
+const LISTS_ITEM_CAP = 500;
+
+/**
+ * Workboard v2 "lists" mode — the page's spender roster bucketed into the lifetime
+ * gross-spend bands (the same `[FB] $X-$Y Spenders` bands as the spender auto-lists).
+ * Read-only; the priority FSM is not used here.
+ */
+export async function getWorkboardV2Lists(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+): Promise<WorkboardV2ListsResponse> {
+  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+
+  const { counts, rows } = await listWorkboardSpenderBands(app.db, {
+    platformAccountId: page.id,
+    buckets: SPENDER_AUTO_LIST_BUCKETS,
+    itemCap: LISTS_ITEM_CAP,
+  });
+
+  const countByBand = new Map(counts.map((c) => [c.band, c.count]));
+  const itemsByBand = new Map<string, WorkboardV2Item[]>();
+  for (const row of rows) {
+    const list = itemsByBand.get(row.band);
+    if (list) {
+      list.push(mapItem(row));
+    } else {
+      itemsByBand.set(row.band, [mapItem(row)]);
+    }
+  }
+
+  const bands = SPENDER_AUTO_LIST_BUCKETS.map((bucket) => ({
+    key: bucket.key,
+    label: bucket.label,
+    count: countByBand.get(bucket.key) ?? 0,
+    items: itemsByBand.get(bucket.key) ?? [],
+  }));
+  const total = bands.reduce((sum, band) => sum + band.count, 0);
+  const truncated = bands.some((band) => band.items.length < band.count);
+
+  return { bands, total, truncated } as WorkboardV2ListsResponse;
 }
 
 const CLOSING_FEATURE = "closing-classifier";

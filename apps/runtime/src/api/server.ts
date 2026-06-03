@@ -151,6 +151,7 @@ import {
 } from "../services/workboard.ts";
 import { getWorkboardPresenceReport } from "../services/workboard-presence.ts";
 import {
+  getWorkboardV2Lists,
   getWorkboardV2Report,
   recordWorkboardContactV2,
   snoozeWorkboardV2,
@@ -944,6 +945,14 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     return getWorkboardV2Report(appContext, principal, request.params.pageLabel, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/workboard/v2/lists", {
+    schema: routeSchemas.workboardV2Lists,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return getWorkboardV2Lists(appContext, principal, request.params.pageLabel);
   });
 
   server.post("/api/v1/pages/:pageLabel/workboard/v2/contact", {

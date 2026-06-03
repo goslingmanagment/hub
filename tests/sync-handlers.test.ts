@@ -94,6 +94,7 @@ vi.mock("../apps/runtime/src/services/sync/transactions.ts", () => transactionMo
 import {
   executeDmConversationsChunk,
   executeDmMessagesChunk,
+  executeStreamChunk,
   executeFollowersChunk,
   executeFollowersReconcileChunk,
   executeSubscribersChunk,
@@ -315,6 +316,49 @@ describe("sync executor handlers", () => {
 
       return new Map(fans.map((fan: { id: number; platformUserId: string }) => [fan.platformUserId, fan.id] as const));
     });
+  });
+
+  it("skips OnlyFans DM stream chunks when polling is disabled", async () => {
+    const telemetry = createTelemetry();
+    const result = await executeStreamChunk({
+      db: {},
+      config: {
+        onlyFansDmPollingEnabled: false,
+      },
+    } as never, {
+      pageContext: {
+        platform: "onlyfans",
+        page: {
+          id: 55,
+          label: "onlyfans-page",
+          platformAccountId: "of-55",
+          metadata: {},
+        },
+        auth: { token: "secret" },
+        proxy: null,
+      },
+      streamState: {
+        stream: "dm_messages",
+      },
+      syncRunId: 910,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result).toEqual({
+      satisfied: true,
+      yieldReason: null,
+      stats: {
+        disabledByConfig: true,
+      },
+    });
+    expect(telemetry.addNote).toHaveBeenCalledWith(
+      "OnlyFans DM polling is disabled by ONLYFANS_DM_POLLING_ENABLED=false",
+      {
+        stream: "dm_messages",
+        pageId: 55,
+      },
+    );
   });
 
   it("syncs Fansly top spenders in steady state using the trailing 7 day window", async () => {

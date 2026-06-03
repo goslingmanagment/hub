@@ -1,13 +1,18 @@
-import { useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { WorkboardV2Item } from "@agency_hub_core/contracts";
-import { Check, MoonStar } from "lucide-react";
+import { Check, MessageSquare, MoonStar } from "lucide-react";
 
+import { usePageConversationPreview } from "@/api/queries";
 import { formatMills } from "@/lib/format";
 
 import { QuadrantGlyph } from "./QuadrantGlyph";
 import {
   closingVerdictLabel,
   coverageTone,
+  lastContactLabel,
+  ruAgo,
+  ruAgoCompact,
   qualityLabel,
   reasonTone,
   urgencyRailClass,
@@ -42,64 +47,200 @@ function CoverageDots({ filled }: { filled: number }) {
   );
 }
 
-function ExpandedPanel({ item }: { item: WorkboardV2Item }) {
+// When the full message history isn't synced into the workboard, still surface the
+// timing that matters — when the fan last wrote and when we last replied — plus the
+// last known message snippet from the thread.
+function ConversationFallback({ item }: { item: WorkboardV2Item }) {
+  const fan = item.conversation.lastFanMessageAt;
+  const model = item.conversation.lastModelMessageAt;
+  const preview = item.conversation.preview;
+  if (!fan && !model && !preview) {
+    return <div className="text-text-muted">Нет переписки с этим фаном.</div>;
+  }
+  const fanLast = (fan ? new Date(fan).getTime() : 0) >= (model ? new Date(model).getTime() : 0);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap gap-x-5 gap-y-0.5 text-text-secondary">
+        <span>
+          Фан писал: <b className={fan ? "text-text-primary" : "text-text-muted"}>{fan ? ruAgo(fan) : "—"}</b>
+        </span>
+        <span>
+          Вы писали: <b className={model ? "text-text-primary" : "text-text-muted"}>{model ? ruAgo(model) : "—"}</b>
+        </span>
+      </div>
+      {preview && (
+        <div className="text-text-muted">
+          Последнее ({fanLast ? "фан" : "вы"}): «{preview}»
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConversationPreview({ pageLabel, item }: { pageLabel: string; item: WorkboardV2Item }) {
+  const convId = item.conversation.platformConversationId;
+  const { data, isLoading } = usePageConversationPreview(pageLabel, convId, { limit: 10 });
+  const messages = [...(data?.messages ?? [])].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+  if (convId && isLoading && !data) {
+    return <div className="text-text-muted">Загрузка переписки…</div>;
+  }
+  // No synced messages (or no conversation id) → fall back to the thread's denormalized timing.
+  if (messages.length === 0) {
+    return <ConversationFallback item={item} />;
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      {messages.map((m) => {
+        const mine = m.senderRole === "model";
+        return (
+          <div key={m.platformMessageId} className={`flex flex-col ${mine ? "items-end" : "items-start"}`}>
+            <div
+              className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-1.5 ${
+                mine ? "rounded-br-sm bg-accent text-white" : "rounded-bl-sm bg-hover text-text-primary"
+              }`}
+            >
+              {m.content ? m.content : <span className="italic opacity-70">[вложение]</span>}
+            </div>
+            <span className="mt-0.5 text-[10px] text-text-muted">
+              {mine ? "Вы" : "Фан"} · {ruAgoCompact(m.createdAt)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Hover to reveal a floating card (portaled, so the list's overflow-hidden doesn't
+// clip it). A short close grace lets the cursor cross the gap into the card to read/scroll.
+function ChatHoverCard({ trigger, children }: { trigger: ReactNode; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const closeTimer = useRef<number | undefined>(undefined);
+
+  const show = () => {
+    if (closeTimer.current !== undefined) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = undefined;
+    }
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) {
+      const width = 560;
+      setCoords({ x: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)), y: rect.bottom + 4 });
+    }
+    setOpen(true);
+  };
+  const scheduleHide = () => {
+    closeTimer.current = window.setTimeout(() => setOpen(false), 160);
+  };
+
+  return (
+    <>
+      <span ref={triggerRef} onMouseEnter={show} onMouseLeave={scheduleHide} className="inline-flex">
+        {trigger}
+      </span>
+      {open &&
+        createPortal(
+          <div
+            className="fixed z-[100]"
+            style={{ left: coords.x, top: coords.y }}
+            onMouseEnter={show}
+            onMouseLeave={scheduleHide}
+          >
+            <div className="max-h-[420px] w-[560px] max-w-[92vw] overflow-y-auto rounded-card border border-border bg-card p-3 text-[12px] shadow-xl">
+              {children}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+function ExpandedPanel({ item, pageLabel, showConversation }: { item: WorkboardV2Item; pageLabel: string; showConversation: boolean }) {
   const ql = qualityLabel(item.quality.qScore);
   const cov = coverageTone(item.conversation.coverageStatus);
   const verdict = closingVerdictLabel(item.closingVerdict);
   return (
-    <div className="grid grid-cols-1 gap-3 border-b border-border bg-hover-alt/40 px-4 py-3 text-[12px] sm:grid-cols-3">
-      <div>
-        <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">Почему сейчас</div>
-        <div className="text-text-primary">{whyNowLabel(item.whyNow.code, item.whyNow.value)}</div>
-        {item.serviceReason && <div className="mt-0.5 text-text-muted">Сервис: {item.serviceReason}</div>}
-      </div>
-      <div>
-        <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">Диалог</div>
-        <div className={ql.className}>
-          {ql.label}
-          {item.quality.qScore != null && ` · Q ${item.quality.qScore.toFixed(2)}`}
+    <div className="border-b border-border bg-hover-alt/40">
+      <div className="grid grid-cols-1 gap-3 px-4 py-3 text-[12px] sm:grid-cols-3">
+        <div>
+          <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">Почему сейчас</div>
+          <div className="text-text-primary">{whyNowLabel(item.whyNow.code, item.whyNow.value)}</div>
+          {item.serviceReason && <div className="mt-0.5 text-text-muted">Сервис: {item.serviceReason}</div>}
         </div>
-        <div className={`mt-1 inline-flex items-center gap-1.5 ${cov.className}`}>
-          <CoverageDots filled={cov.filled} />
-          <span className="text-text-muted">{cov.label}</span>
+        <div>
+          <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">Диалог</div>
+          <div className={ql.className}>
+            {ql.label}
+            {item.quality.qScore != null && ` · Q ${item.quality.qScore.toFixed(2)}`}
+          </div>
+          <div className={`mt-1 inline-flex items-center gap-1.5 ${cov.className}`}>
+            <CoverageDots filled={cov.filled} />
+            <span className="text-text-muted">{cov.label}</span>
+          </div>
+        </div>
+        <div>
+          <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">Детектор ответа</div>
+          {verdict ? (
+            <div className={verdict.className}>{verdict.label}</div>
+          ) : (
+            <div className="text-text-muted">—</div>
+          )}
+          {item.closingVerdict?.reason && (
+            <div className="mt-0.5 italic text-text-muted">ИИ: {item.closingVerdict.reason}</div>
+          )}
+          {item.conversation.preview && (
+            <div className="mt-0.5 truncate text-text-muted">«{item.conversation.preview}»</div>
+          )}
+          <div className="mt-0.5 text-text-secondary">
+            LTV {formatMills(item.ltv.creatorNetAmountMills)}
+            {item.subscription.autoRenew === false && " · автопродление выкл"}
+          </div>
         </div>
       </div>
-      <div>
-        <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">Детектор ответа</div>
-        {verdict ? (
-          <div className={verdict.className}>{verdict.label}</div>
-        ) : (
-          <div className="text-text-muted">—</div>
-        )}
-        {item.closingVerdict?.reason && (
-          <div className="mt-0.5 italic text-text-muted">ИИ: {item.closingVerdict.reason}</div>
-        )}
-        {item.conversation.preview && (
-          <div className="mt-0.5 truncate text-text-muted">«{item.conversation.preview}»</div>
-        )}
-        <div className="mt-0.5 text-text-secondary">
-          LTV {formatMills(item.ltv.creatorNetAmountMills)}
-          {item.subscription.autoRenew === false && " · автопродление выкл"}
+      {showConversation && (
+        <div className="border-t border-border px-4 py-2 text-[12px]">
+          <ChatHoverCard
+            trigger={
+              <span className="inline-flex cursor-default items-center gap-1.5 rounded-button border border-border bg-card px-2.5 py-1 text-[11px] font-semibold text-text-secondary transition-colors hover:bg-hover hover:text-text-primary">
+                <MessageSquare size={12} />
+                Переписка
+              </span>
+            }
+          >
+            <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">Последние сообщения</div>
+            <ConversationPreview pageLabel={pageLabel} item={item} />
+          </ChatHoverCard>
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
 export function WorkboardV2Row({
   item,
+  pageLabel,
   expanded,
   focused,
   snoozeDays,
+  secondaryVariant = "whyNow",
+  showConversation = false,
   onToggle,
   onHandled,
   onSnooze,
   isHandling,
 }: {
   item: WorkboardV2Item;
+  pageLabel: string;
   expanded: boolean;
   focused: boolean;
   snoozeDays: number[];
+  secondaryVariant?: "whyNow" | "lastContact";
+  showConversation?: boolean;
   onToggle: (fanId: number) => void;
   onHandled: (fanId: number) => void;
   onSnooze: (fanId: number, days: number) => void;
@@ -144,7 +285,9 @@ export function WorkboardV2Row({
             )}
           </div>
           <div className="mt-0.5 truncate text-[12px] text-text-secondary">
-            {whyNowLabel(item.whyNow.code, item.whyNow.value)}
+            {secondaryVariant === "lastContact"
+              ? lastContactLabel(item.conversation)
+              : whyNowLabel(item.whyNow.code, item.whyNow.value)}
           </div>
         </button>
 
@@ -193,7 +336,7 @@ export function WorkboardV2Row({
           )}
         </div>
       </div>
-      {expanded && <ExpandedPanel item={item} />}
+      {expanded && <ExpandedPanel item={item} pageLabel={pageLabel} showConversation={showConversation} />}
     </div>
   );
 }

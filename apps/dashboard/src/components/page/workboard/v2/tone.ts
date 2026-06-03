@@ -228,6 +228,49 @@ export function closingVerdictLabel(
   }
 }
 
+export function ruAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "только что";
+  if (mins < 60) return `${mins} мин назад`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} ч назад`;
+  return `${Math.floor(hours / 24)} дн назад`;
+}
+
+/** Compact "ago" for dense transcripts: сейчас / 5м / 5ч / 2д. */
+export function ruAgoCompact(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "сейчас";
+  if (mins < 60) return `${mins}м`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}ч`;
+  return `${Math.floor(hours / 24)}д`;
+}
+
+/**
+ * "Last contact" line for the lists view — fan-first, so the chatter sees when the
+ * fan last wrote (the thing that matters for re-engagement) alongside when we replied.
+ */
+export function lastContactLabel(conv: {
+  lastFanMessageAt: string | null;
+  lastModelMessageAt: string | null;
+}): string {
+  const fan = conv.lastFanMessageAt;
+  const model = conv.lastModelMessageAt;
+  if (!fan && !model) {
+    return "Нет переписки";
+  }
+  if (!fan) {
+    return `Фан не писал · вы ${ruAgoCompact(model!)}`;
+  }
+  if (!model) {
+    return `Фан ${ruAgoCompact(fan)}`;
+  }
+  return `Фан ${ruAgoCompact(fan)} · вы ${ruAgoCompact(model)}`;
+}
+
 /** Human "why now" line built from the engine's winning driver. */
 export function whyNowLabel(code: string | null, value: number | null): string {
   switch (code) {

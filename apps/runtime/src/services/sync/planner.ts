@@ -9,6 +9,7 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
+import { pauseDisabledOnlyFansDmPollingForAllPages } from "./onlyfans-dm-polling.ts";
 
 const INACTIVE_SYNC_RUN_THRESHOLD_MS = 90 * 1000;
 const INACTIVE_SYNC_RUN_ERROR_SUMMARY = "Sync run auto-closed after inactivity";
@@ -34,6 +35,12 @@ export async function runSyncPlannerCycle(
   }
 
   await ensurePageSyncStates(app.db, { now });
+  const pausedOnlyFansDmPages = await pauseDisabledOnlyFansDmPollingForAllPages(app, now);
+  if (pausedOnlyFansDmPages > 0) {
+    app.logger.warn({
+      pausedOnlyFansDmPages,
+    }, "Paused OnlyFans DM polling because ONLYFANS_DM_POLLING_ENABLED is false");
+  }
   await scheduleDuePageSync(app.db, { now });
 
   const runnablePages = await listRunnablePageSync(app.db, now);

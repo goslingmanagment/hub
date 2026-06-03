@@ -186,7 +186,7 @@ export async function getPageConversationMessagesReport(
   const conversation = await getPageConversationMessages(app.db, {
     platformAccountId: page.id,
     platformConversationId: params.conversationId,
-    limit: query.limit,
+    limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
   });
 
   if (!conversation) {

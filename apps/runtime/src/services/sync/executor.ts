@@ -34,6 +34,7 @@ import { SYNC_PAGE_EXECUTE_QUEUE, sendSyncPageWakeup, type SyncPageExecutePayloa
 import { normalizeSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
+import { pauseDisabledOnlyFansDmPollingForPage } from "./onlyfans-dm-polling.ts";
 import { SyncRunTelemetry } from "./observability.ts";
 import { persistFailedSyncPayload } from "./shared.ts";
 
@@ -319,6 +320,7 @@ export async function executeNextSyncPageChunk(
   platformAccountId: number,
 ): Promise<SyncPageChunkResult> {
   await ensurePageSyncStates(app.db, { pageId: platformAccountId });
+  await pauseDisabledOnlyFansDmPollingForPage(app, platformAccountId);
 
   const taskLease = await acquirePageSyncLease(app.db, {
     pageId: platformAccountId,

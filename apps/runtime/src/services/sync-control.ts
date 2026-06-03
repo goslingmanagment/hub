@@ -15,11 +15,18 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../bootstrap.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
+import {
+  filterOnlyFansDmPollingStreams,
+  ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
+  pauseDisabledOnlyFansDmPollingForPage,
+} from "./sync/onlyfans-dm-polling.ts";
 
 export interface RequestedSyncRequest {
   stream: SyncStream;
   requestedSeq: number;
 }
+
+export const filterStreamsForSyncConfig = filterOnlyFansDmPollingStreams;
 
 export function resolveStreamsForScope(
   platform: "fansly" | "onlyfans",
@@ -77,13 +84,29 @@ export async function requestPageSync(
     throw new Error(`Page not found for label "${input.pageLabel}"`);
   }
 
-  const streams = resolveStreamsForScope(storedPage.page.platform, input.scope);
+  const requestedStreams = resolveStreamsForScope(storedPage.page.platform, input.scope);
+  const streams = filterStreamsForSyncConfig(storedPage.page.platform, requestedStreams, app.config);
   const now = new Date();
   await ensurePageSyncStates(app.db, {
     pageId: storedPage.page.id,
     onboarding: input.reason === "onboarding",
     now,
   });
+  if (storedPage.page.platform === "onlyfans") {
+    await pauseDisabledOnlyFansDmPollingForPage(app, storedPage.page.id, now);
+  }
+
+  if (streams.length === 0) {
+    app.logger.warn({
+      pageLabel: input.pageLabel,
+      platform: storedPage.page.platform,
+      scope: input.scope,
+      requestedStreams,
+    }, "Sync request skipped because all requested streams are disabled");
+    throw new Error(
+      `${ONLYFANS_DM_POLLING_DISABLED_MESSAGE}; configure OnlyMonster chat.message webhooks or enable ONLYFANS_DM_POLLING_ENABLED=true to poll messages.`,
+    );
+  }
 
   const requestPayloadByStream = input.onlyFansTransactionsStart
     ? {

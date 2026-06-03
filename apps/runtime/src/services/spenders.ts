@@ -47,6 +47,7 @@ import {
   resolveBusinessTimeZone,
   resolveSpenderBusinessDateRangeForPlatform,
   resolveSpenderComparisonPeriodBoundsForPlatform,
+  SPENDER_AUTO_LIST_BUCKETS,
   toBusinessDate,
   type Platform,
   type SpenderPeriod,
@@ -56,45 +57,6 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
-
-const SPENDER_AUTO_LIST_BUCKETS = [
-  {
-    key: "0-25",
-    label: "[FB] $0-$25 Spenders",
-    minAmountMills: 10n,
-    maxAmountMillsExclusive: 25_000n,
-  },
-  {
-    key: "25-50",
-    label: "[FB] $25-$50 Spenders",
-    minAmountMills: 25_000n,
-    maxAmountMillsExclusive: 50_000n,
-  },
-  {
-    key: "50-150",
-    label: "[FB] $50-$150 Spenders",
-    minAmountMills: 50_000n,
-    maxAmountMillsExclusive: 150_000n,
-  },
-  {
-    key: "150-350",
-    label: "[FB] $150-$350 Spenders",
-    minAmountMills: 150_000n,
-    maxAmountMillsExclusive: 350_000n,
-  },
-  {
-    key: "350-600",
-    label: "[FB] $350-$600 Spenders",
-    minAmountMills: 350_000n,
-    maxAmountMillsExclusive: 600_000n,
-  },
-  {
-    key: "600-plus",
-    label: "[FB] $600+ Spenders",
-    minAmountMills: 600_000n,
-    maxAmountMillsExclusive: null,
-  },
-] as const;
 
 type ScopeFields = {
   scope: "page" | "model" | "agency";

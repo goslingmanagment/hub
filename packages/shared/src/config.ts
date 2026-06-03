@@ -63,6 +63,7 @@ const envSchema = z.object({
   ONLYFANS_PUBLIC_PROFILE_PROXY_URL: optionalTrimmedStringSchema,
   ONLYFANS_PUBLIC_PROFILE_MAX_PER_RUN: z.coerce.number().int().positive().default(5),
   ONLYFANS_PUBLIC_PROFILE_DELAY_MS: z.coerce.number().int().positive().default(30_000),
+  ONLYFANS_DM_POLLING_ENABLED: booleanSchema.default(false),
   SYNC_HTTP_TRACE_FILE: optionalTrimmedStringSchema,
   FANSLY_DEFAULT_DELAY_MS: optionalPositiveIntSchema,
   FANSLY_GLOBAL_DELAY_MS: optionalPositiveIntSchema,
@@ -107,6 +108,7 @@ export interface AppConfig {
   onlyFansPublicProfileProxy?: ProxyConfig | null;
   onlyFansPublicProfileMaxPerRun?: number;
   onlyFansPublicProfileDelayMs?: number;
+  onlyFansDmPollingEnabled?: boolean;
   syncHttpTraceFile: string | null;
   fanslyDefaultDelayMs: number;
   followerPageDelayMs: number;
@@ -207,6 +209,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     onlyFansPublicProfileProxy,
     onlyFansPublicProfileMaxPerRun: parsed.ONLYFANS_PUBLIC_PROFILE_MAX_PER_RUN,
     onlyFansPublicProfileDelayMs: parsed.ONLYFANS_PUBLIC_PROFILE_DELAY_MS,
+    onlyFansDmPollingEnabled: parsed.ONLYFANS_DM_POLLING_ENABLED,
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
     fanslyDefaultDelayMs,
     followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,

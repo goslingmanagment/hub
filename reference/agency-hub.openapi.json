@@ -9101,7 +9101,7 @@
               "default": 25,
               "type": "integer",
               "minimum": 1,
-              "maximum": 100
+              "maximum": 9007199254740991
             },
             "in": "query",
             "name": "limit",
@@ -11844,13 +11844,24 @@
                                   "partial_window",
                                   "complete"
                                 ]
+                              },
+                              "platformConversationId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
                               "lastFanMessageAt",
                               "lastModelMessageAt",
                               "preview",
-                              "coverageStatus"
+                              "coverageStatus",
+                              "platformConversationId"
                             ],
                             "additionalProperties": false
                           },
@@ -12018,6 +12029,633 @@
                     "counts",
                     "oldMassBudget",
                     "aiCoverage"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{pageLabel}/workboard/v2/lists": {
+      "get": {
+        "summary": "Get Workboard v2 spender lists (lifetime gross-spend bands) for one Fansly page",
+        "tags": [
+          "workboard"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "bands": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "fanId": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "fan": {
+                                  "type": "object",
+                                  "properties": {
+                                    "platformUserId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "pageAlias": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "username": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "displayName": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "platformUserId",
+                                    "pageAlias",
+                                    "username",
+                                    "displayName"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "tab": {
+                                  "type": "string",
+                                  "enum": [
+                                    "subscribers",
+                                    "spenders",
+                                    "fresh_mass",
+                                    "old_mass",
+                                    "service"
+                                  ]
+                                },
+                                "massSubstate": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "fresh",
+                                        "gray",
+                                        "active",
+                                        "dead",
+                                        "archived"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "value": {
+                                  "type": "object",
+                                  "properties": {
+                                    "score": {
+                                      "type": "number"
+                                    },
+                                    "tier": {
+                                      "type": "string",
+                                      "enum": [
+                                        "whale",
+                                        "vip",
+                                        "payer",
+                                        "new"
+                                      ]
+                                    },
+                                    "confidence": {
+                                      "type": "string",
+                                      "enum": [
+                                        "high",
+                                        "low"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "score",
+                                    "tier",
+                                    "confidence"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "urgency": {
+                                  "type": "object",
+                                  "properties": {
+                                    "score": {
+                                      "type": "number"
+                                    },
+                                    "severity": {
+                                      "type": "string",
+                                      "enum": [
+                                        "critical",
+                                        "high",
+                                        "medium",
+                                        "normal",
+                                        "muted"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "score",
+                                    "severity"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "rankScore": {
+                                  "type": "number"
+                                },
+                                "secondaryStatus": {
+                                  "type": "string",
+                                  "enum": [
+                                    "recent_purchase",
+                                    "need_reply",
+                                    "due_now",
+                                    "later",
+                                    "dont_touch_today"
+                                  ]
+                                },
+                                "needsReply": {
+                                  "type": "boolean"
+                                },
+                                "needsHumanTriage": {
+                                  "type": "boolean"
+                                },
+                                "isPurchaseFollowup": {
+                                  "type": "boolean"
+                                },
+                                "whyNow": {
+                                  "type": "object",
+                                  "properties": {
+                                    "code": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "code",
+                                    "value"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "reasonChips": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "quality": {
+                                  "type": "object",
+                                  "properties": {
+                                    "qScore": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "qConfidence": {
+                                      "type": "string",
+                                      "enum": [
+                                        "high",
+                                        "medium",
+                                        "low"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "qScore",
+                                    "qConfidence"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "closingVerdict": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "layer": {
+                                          "type": "string",
+                                          "enum": [
+                                            "l1",
+                                            "l2",
+                                            "fresh",
+                                            "unverified",
+                                            "model_last",
+                                            "unknown"
+                                          ]
+                                        },
+                                        "needsReply": {
+                                          "type": "boolean"
+                                        },
+                                        "state": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "enum": [
+                                                "question",
+                                                "buy_signal",
+                                                "smalltalk",
+                                                "closing",
+                                                "cold",
+                                                "complaint"
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "reason": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "layer",
+                                        "needsReply",
+                                        "state",
+                                        "reason"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "online": {
+                                  "type": "boolean"
+                                },
+                                "ltv": {
+                                  "type": "object",
+                                  "properties": {
+                                    "creatorNetAmountMills": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "creatorNetAmountMills"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "subscription": {
+                                  "type": "object",
+                                  "properties": {
+                                    "expiresAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "autoRenew": {
+                                      "anyOf": [
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "expiresAt",
+                                    "autoRenew"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "conversation": {
+                                  "type": "object",
+                                  "properties": {
+                                    "lastFanMessageAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "lastModelMessageAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "preview": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "coverageStatus": {
+                                      "type": "string",
+                                      "enum": [
+                                        "pending_backfill",
+                                        "partial_window",
+                                        "complete"
+                                      ]
+                                    },
+                                    "platformConversationId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "lastFanMessageAt",
+                                    "lastModelMessageAt",
+                                    "preview",
+                                    "coverageStatus",
+                                    "platformConversationId"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "serviceReason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "fanId",
+                                "fan",
+                                "tab",
+                                "massSubstate",
+                                "value",
+                                "urgency",
+                                "rankScore",
+                                "secondaryStatus",
+                                "needsReply",
+                                "needsHumanTriage",
+                                "isPurchaseFollowup",
+                                "whyNow",
+                                "reasonChips",
+                                "quality",
+                                "closingVerdict",
+                                "online",
+                                "ltv",
+                                "subscription",
+                                "conversation",
+                                "serviceReason"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "label",
+                          "count",
+                          "items"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "bands",
+                    "total",
+                    "truncated"
                   ],
                   "additionalProperties": false
                 }

@@ -7,6 +7,7 @@ import type {
   WorkboardV2AiReport,
   WorkboardV2AiRunsResponse,
   WorkboardV2AiSettingsBody,
+  WorkboardV2ListsResponse,
   WorkboardV2Response,
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
@@ -84,6 +85,23 @@ export function useWorkboardV2(
     queryFn: () =>
       api.get<WorkboardV2Response>(
         `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2?${query.toString()}`,
+      ),
+    enabled: options.enabled ?? true,
+  });
+}
+
+// Spender lists (gross-spend bands) — optional view over the v2 board. Keyed under
+// the same ["workboard-v2", pageLabel] prefix so the existing contact/snooze
+// mutations invalidate it too (React Query matches keys by prefix).
+export function useWorkboardV2Lists(
+  pageLabel: string,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["workboard-v2", pageLabel, "lists"],
+    queryFn: () =>
+      api.get<WorkboardV2ListsResponse>(
+        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/lists`,
       ),
     enabled: options.enabled ?? true,
   });

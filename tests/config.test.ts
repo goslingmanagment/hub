@@ -45,9 +45,19 @@ describe("config", () => {
     expect(config.onlyFansPublicProfileProxy).toBeNull();
     expect(config.onlyFansPublicProfileMaxPerRun).toBe(5);
     expect(config.onlyFansPublicProfileDelayMs).toBe(30_000);
+    expect(config.onlyFansDmPollingEnabled).toBe(false);
     expect(config.syncSharedRateLimitEnabled).toBe(true);
     expect(config.syncPageExecutorConcurrency).toBe(4);
     expect(config.trustProxy).toBe(false);
+  });
+
+  it("accepts an explicit OnlyFans DM polling override", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      ONLYFANS_DM_POLLING_ENABLED: "true",
+    });
+
+    expect(config.onlyFansDmPollingEnabled).toBe(true);
   });
 
   it("accepts an explicit trust proxy override", () => {

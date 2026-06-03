@@ -451,7 +451,7 @@ export const pageConversationMessagesParamsSchema = pageParamsSchema.extend({
 });
 
 export const pageConversationMessagesQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(25),
+  limit: z.coerce.number().int().min(1).default(25),
 });
 
 const pageMetricSchema = z.object({
@@ -1289,6 +1289,7 @@ export const workboardV2ItemSchema = z.object({
     lastModelMessageAt: isoTimestamp.nullable(),
     preview: z.string().nullable(),
     coverageStatus: z.enum(["pending_backfill", "partial_window", "complete"]),
+    platformConversationId: z.string().nullable(),
   }),
   serviceReason: z.string().nullable(),
 });
@@ -1322,6 +1323,19 @@ export const workboardV2ResponseSchema = z.object({
     spenderDiagnosed: z.number().int(),
     spenderPending: z.number().int(),
   }),
+});
+
+export const workboardV2ListsBandSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  count: z.number().int(),
+  items: z.array(workboardV2ItemSchema),
+});
+
+export const workboardV2ListsResponseSchema = z.object({
+  bands: z.array(workboardV2ListsBandSchema),
+  total: z.number().int(),
+  truncated: z.boolean(),
 });
 
 export const workboardV2ContactBodySchema = z.object({
@@ -3104,6 +3118,19 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  workboardV2Lists: {
+    tags: ["workboard"],
+    summary: "Get Workboard v2 spender lists (lifetime gross-spend bands) for one Fansly page",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    response: {
+      200: workboardV2ListsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   workboardV2Contact: {
     tags: ["workboard"],
     summary: "Record a chatter touch (Готово) on a Workboard v2 fan",
@@ -4036,6 +4063,7 @@ export type WorkboardUnsnoozeParams = z.infer<typeof workboardUnsnoozeParamsSche
 export type WorkboardV2Query = z.infer<typeof workboardV2QuerySchema>;
 export type WorkboardV2Item = z.infer<typeof workboardV2ItemSchema>;
 export type WorkboardV2Response = z.infer<typeof workboardV2ResponseSchema>;
+export type WorkboardV2ListsResponse = z.infer<typeof workboardV2ListsResponseSchema>;
 export type WorkboardV2ContactBody = z.infer<typeof workboardV2ContactBodySchema>;
 export type WorkboardV2RecomputeResponse = z.infer<typeof workboardV2RecomputeResponseSchema>;
 export type WorkboardV2SnoozeBody = z.infer<typeof workboardV2SnoozeBodySchema>;

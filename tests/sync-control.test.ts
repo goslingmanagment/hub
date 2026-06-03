@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveStreamsForScope } from "../apps/runtime/src/services/sync-control.ts";
+import {
+  filterStreamsForSyncConfig,
+  resolveStreamsForScope,
+} from "../apps/runtime/src/services/sync-control.ts";
 
 describe("resolveStreamsForScope", () => {
   it("treats follower reconcile as part of Fansly data sync", () => {
@@ -25,6 +28,39 @@ describe("resolveStreamsForScope", () => {
       "fan_identities",
     ]);
     expect(resolveStreamsForScope("onlyfans", "messages")).toEqual([
+      "dm_conversations",
+      "dm_messages",
+    ]);
+  });
+
+  it("filters OnlyFans DM polling streams unless explicitly enabled", () => {
+    expect(
+      filterStreamsForSyncConfig("onlyfans", resolveStreamsForScope("onlyfans", "all"), {
+        onlyFansDmPollingEnabled: false,
+      }),
+    ).toEqual([
+      "light",
+      "transactions",
+      "fan_identities",
+    ]);
+    expect(
+      filterStreamsForSyncConfig("onlyfans", resolveStreamsForScope("onlyfans", "messages"), {
+        onlyFansDmPollingEnabled: false,
+      }),
+    ).toEqual([]);
+    expect(
+      filterStreamsForSyncConfig("onlyfans", resolveStreamsForScope("onlyfans", "messages"), {
+        onlyFansDmPollingEnabled: true,
+      }),
+    ).toEqual([
+      "dm_conversations",
+      "dm_messages",
+    ]);
+    expect(
+      filterStreamsForSyncConfig("fansly", resolveStreamsForScope("fansly", "messages"), {
+        onlyFansDmPollingEnabled: false,
+      }),
+    ).toEqual([
       "dm_conversations",
       "dm_messages",
     ]);

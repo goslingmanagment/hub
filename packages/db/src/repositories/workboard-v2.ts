@@ -325,6 +325,7 @@ export type WorkboardV2Row = {
   last_message_preview: string | null;
   last_message_sender_role: string | null;
   message_coverage_status: string;
+  platform_conversation_id: string | null;
   l2_needs_reply: boolean | null;
   l2_state: string | null;
   l2_reason: string | null;
@@ -389,6 +390,7 @@ export async function listWorkboardV2(
       pt.last_message_preview as last_message_preview,
       pt.last_message_sender_role as last_message_sender_role,
       coalesce(pt.message_coverage_status, 'pending_backfill') as message_coverage_status,
+      pt.platform_conversation_id as platform_conversation_id,
       cc.needs_reply as l2_needs_reply,
       cc.state as l2_state,
       cc.reason as l2_reason
@@ -397,7 +399,7 @@ export async function listWorkboardV2(
     left join page_fans pf on pf.platform_account_id = ws.platform_account_id and pf.fan_id = ws.fan_id
     left join fan_spend_lifetime sl on sl.platform_account_id = ws.platform_account_id and sl.fan_id = ws.fan_id
     left join lateral (
-      select last_fan_message_at, last_model_message_at, last_message_preview, last_message_id,
+      select platform_conversation_id, last_fan_message_at, last_model_message_at, last_message_preview, last_message_id,
         last_message_sender_role::text as last_message_sender_role, message_coverage_status::text as message_coverage_status
       from page_dm_threads
       where platform_account_id = ws.platform_account_id and fan_id = ws.fan_id and is_visible = true
@@ -426,6 +428,124 @@ export async function getWorkboardV2Counts(
     group by ws.tab, ws.secondary_status
   `);
   return result.rows;
+}
+
+// ── Workboard v2 spender lists (lifetime gross-spend bands) ───────────────────
+
+/** A lifetime gross-spend band; mills, [minAmountMills, maxAmountMillsExclusive). */
+export interface WorkboardSpenderBandInput {
+  key: string;
+  minAmountMills: bigint;
+  maxAmountMillsExclusive: bigint | null;
+}
+
+export type WorkboardSpenderBandRow = WorkboardV2Row & { gross_mills: bigint; band: string };
+
+export interface ListWorkboardSpenderBandsParams {
+  platformAccountId: number;
+  buckets: readonly WorkboardSpenderBandInput[];
+  /** Max member rows returned per band (counts stay exact). */
+  itemCap: number;
+}
+
+/**
+ * The page's spender roster (every evaluated fan whose lifetime GROSS spend clears
+ * the lowest band) bucketed into the gross-spend bands. Returns exact per-band
+ * counts plus up to `itemCap` member rows per band (highest spenders first). The
+ * member rows carry the same columns as `listWorkboardV2`, so the service maps them
+ * with the shared `mapItem`. Drives the Workboard v2 "lists" mode; mirrors the
+ * Fansly "[FB] $X-$Y Spenders" lists (which segment by gross, not creator-net).
+ */
+export async function listWorkboardSpenderBands(
+  db: Database,
+  params: ListWorkboardSpenderBandsParams,
+): Promise<{ counts: Array<{ band: string; count: number }>; rows: WorkboardSpenderBandRow[] }> {
+  const { platformAccountId, buckets, itemCap } = params;
+  const minFloor = buckets.reduce((min, b) => (b.minAmountMills < min ? b.minAmountMills : min), buckets[0]!.minAmountMills);
+  const grossSql = sql`coalesce(sl.gross_amount_mills, 0)`;
+  const bandCase = sql`case ${sql.join(
+    buckets.map((b) =>
+      b.maxAmountMillsExclusive === null
+        ? sql`when ${grossSql} >= ${b.minAmountMills} then ${b.key}`
+        : sql`when ${grossSql} >= ${b.minAmountMills} and ${grossSql} < ${b.maxAmountMillsExclusive} then ${b.key}`,
+    ),
+    sql` `,
+  )} end`;
+
+  const countsResult = await db.execute<{ band: string; count: number }>(sql`
+    select ${bandCase} as band, count(*)::int as count
+    from workboard_state ws
+    join fans f on f.id = ws.fan_id and f.deleted_detected_at is null
+    left join fan_spend_lifetime sl on sl.platform_account_id = ws.platform_account_id and sl.fan_id = ws.fan_id
+    where ws.platform_account_id = ${platformAccountId} and ${grossSql} >= ${minFloor}
+    group by band
+  `);
+
+  const rowsResult = await db.execute<WorkboardSpenderBandRow>(sql`
+    select * from (
+      select inner_q.*, row_number() over (partition by inner_q.band order by inner_q.gross_mills desc, inner_q.fan_id asc) as rn
+      from (
+        select
+          ws.fan_id as fan_id,
+          f.platform_user_id as platform_user_id,
+          pf.page_alias as page_alias,
+          f.username as username,
+          f.display_name as display_name,
+          ws.tab::text as tab,
+          ws.mass_substate::text as mass_substate,
+          ws.value_score as value_score,
+          ws.urgency_score as urgency_score,
+          ws.rank_score as rank_score,
+          ws.secondary_status::text as secondary_status,
+          ws.value_tier as value_tier,
+          ws.urgency_severity as urgency_severity,
+          ws.needs_reply as needs_reply,
+          ws.needs_human_triage as needs_human_triage,
+          ws.is_purchase_followup as is_purchase_followup,
+          ws.why_now_code as why_now_code,
+          ws.why_now_value as why_now_value,
+          ws.reason_chips as reason_chips,
+          ws.followup_due_at as followup_due_at,
+          ws.value_confidence as value_confidence,
+          ws.q_score as q_score,
+          ws.q_confidence as q_confidence,
+          ws.service_reason as service_reason,
+          coalesce(sl.creator_net_amount_mills, 0)::bigint as ltv_mills,
+          coalesce(sl.gross_amount_mills, 0)::bigint as gross_mills,
+          ${bandCase} as band,
+          pf.subscription_expires_at as subscription_expires_at,
+          pf.auto_renew as auto_renew,
+          pf.external_presence_at as external_presence_at,
+          pt.last_fan_message_at as last_fan_message_at,
+          pt.last_model_message_at as last_model_message_at,
+          pt.last_message_preview as last_message_preview,
+          pt.last_message_sender_role as last_message_sender_role,
+          coalesce(pt.message_coverage_status, 'pending_backfill') as message_coverage_status,
+          pt.platform_conversation_id as platform_conversation_id,
+          cc.needs_reply as l2_needs_reply,
+          cc.state as l2_state,
+          cc.reason as l2_reason
+        from workboard_state ws
+        join fans f on f.id = ws.fan_id and f.deleted_detected_at is null
+        left join page_fans pf on pf.platform_account_id = ws.platform_account_id and pf.fan_id = ws.fan_id
+        left join fan_spend_lifetime sl on sl.platform_account_id = ws.platform_account_id and sl.fan_id = ws.fan_id
+        left join lateral (
+          select platform_conversation_id, last_fan_message_at, last_model_message_at, last_message_preview, last_message_id,
+            last_message_sender_role::text as last_message_sender_role, message_coverage_status::text as message_coverage_status
+          from page_dm_threads
+          where platform_account_id = ws.platform_account_id and fan_id = ws.fan_id and is_visible = true
+          order by last_message_at desc nulls last, id desc
+          limit 1
+        ) pt on true
+        left join wb_closing_cache cc on cc.platform_account_id = ws.platform_account_id and cc.platform_message_id = pt.last_message_id
+        where ws.platform_account_id = ${platformAccountId} and ${grossSql} >= ${minFloor}
+      ) inner_q
+    ) z
+    where z.rn <= ${itemCap}
+    order by z.gross_mills desc, z.fan_id asc
+  `);
+
+  return { counts: countsResult.rows, rows: rowsResult.rows };
 }
 
 export interface AppendContactInput {

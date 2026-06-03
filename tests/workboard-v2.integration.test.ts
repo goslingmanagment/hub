@@ -15,6 +15,7 @@ import {
   listSpenderDiagnosisRows,
   listWorkboardRecomputePageIds,
   listClassifierRuns,
+  listWorkboardSpenderBands,
   listWorkboardV2,
   markReactivationAttemptedIfDead,
   pageDmMessages,
@@ -23,7 +24,7 @@ import {
   pageSubscriptions,
   upsertClosingSettings,
 } from "@agency_hub_core/db";
-import { dollarsToMills, toBusinessDate, UTC_TIME_ZONE } from "@agency_hub_core/shared";
+import { dollarsToMills, SPENDER_AUTO_LIST_BUCKETS, toBusinessDate, UTC_TIME_ZONE } from "@agency_hub_core/shared";
 
 import { recomputeWorkboardPage } from "../apps/runtime/src/services/workboard-v2/recompute.ts";
 import { CLOSING_CLASSIFIER_FEATURE, runClosingClassificationForPage } from "../apps/runtime/src/services/workboard-v2/classify-closing.ts";
@@ -712,6 +713,77 @@ describe("workboard v2 recompute + read (integration)", () => {
       classified: 12,
       cleared: 30,
     });
+  });
+
+  it("buckets the spender roster into gross-spend bands (lists mode), incl. subscribers, excl. non-spenders", async () => {
+    const now = new Date();
+    const { page } = await seedPage();
+
+    async function seedSpender(handle: string, grossDollars: number, opts: { subscriber?: boolean } = {}): Promise<number> {
+      const id = await insertFan(`fan-${handle}`, handle);
+      await harness.db.insert(pageFans).values({
+        fanId: id,
+        platformAccountId: page.id,
+        isFollower: true,
+        followerSince: new Date(now.getTime() - 60 * DAY),
+        ...(opts.subscriber
+          ? { isSubscriber: true, subscriptionExpiresAt: new Date(now.getTime() + 10 * DAY), autoRenew: true }
+          : {}),
+      });
+      await harness.db.insert(fanSpendLifetime).values({
+        platformAccountId: page.id,
+        fanId: id,
+        grossAmountMills: dollarsToMills(grossDollars),
+        creatorNetAmountMills: dollarsToMills(grossDollars * 0.8),
+        lastTransactionAt: new Date(now.getTime() - 5 * DAY),
+      });
+      return id;
+    }
+
+    const whale = await seedSpender("whale", 700); // 600-plus
+    const mid = await seedSpender("mid", 200); // 150-350
+    const subscriber = await seedSpender("sub", 80, { subscriber: true }); // 50-150 (still listed)
+    const boundary = await seedSpender("boundary", 25); // upper-exclusive: $25 → 25-50, not 0-25
+    const low = await seedSpender("low", 10); // 0-25
+
+    // A follower who never paid — no lifetime spend row → excluded from the lists.
+    const freeloader = await insertFan("fan-free", "free");
+    await harness.db.insert(pageFans).values({
+      fanId: freeloader,
+      platformAccountId: page.id,
+      isFollower: true,
+      followerSince: new Date(now.getTime() - 60 * DAY),
+    });
+
+    const result = await recomputeWorkboardPage(harness.db, { platformAccountId: page.id, now });
+    expect(result.evaluated).toBe(6);
+
+    const { counts, rows } = await listWorkboardSpenderBands(harness.db, {
+      platformAccountId: page.id,
+      buckets: SPENDER_AUTO_LIST_BUCKETS,
+      itemCap: 500,
+    });
+
+    const countByBand = new Map(counts.map((c) => [c.band, c.count]));
+    expect(countByBand.get("0-25")).toBe(1);
+    expect(countByBand.get("25-50")).toBe(1);
+    expect(countByBand.get("50-150")).toBe(1);
+    expect(countByBand.get("150-350")).toBe(1);
+    expect(countByBand.get("350-600") ?? 0).toBe(0);
+    expect(countByBand.get("600-plus")).toBe(1);
+
+    const bandByFan = new Map(rows.map((r) => [Number(r.fan_id), r.band]));
+    expect(bandByFan.get(whale)).toBe("600-plus");
+    expect(bandByFan.get(mid)).toBe("150-350");
+    expect(bandByFan.get(subscriber)).toBe("50-150");
+    expect(bandByFan.get(boundary)).toBe("25-50");
+    expect(bandByFan.get(low)).toBe("0-25");
+    expect(bandByFan.has(freeloader)).toBe(false);
+
+    // The subscriber sits on the Subscribers tab but is still listed — bands span all tabs.
+    const subRow = rows.find((r) => Number(r.fan_id) === subscriber)!;
+    expect(subRow.tab).toBe("subscribers");
+    expect(Number(subRow.gross_mills)).toBe(Number(dollarsToMills(80)));
   });
 
   it("marks a dead old-mass reactivation attempt once and leaves it stable", async () => {
