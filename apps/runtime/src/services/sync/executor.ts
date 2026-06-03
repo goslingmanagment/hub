@@ -292,7 +292,7 @@ function resolveCurrentPhase(stats: Record<string, unknown> | undefined) {
 
 function resolveCurrentWorkClass(taskLease: PageSyncLease, stats: Record<string, unknown> | undefined): SyncWorkClass {
   const currentMode = stats?.currentMode;
-  if (currentMode === "backfill") {
+  if (currentMode === "backfill" || currentMode === "deep_backfill") {
     return "history";
   }
   if (currentMode === "incremental") {

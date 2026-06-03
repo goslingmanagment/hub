@@ -1,13 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  PAGE_DM_MESSAGE_HISTORY_LIMIT,
+  PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
+  PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT,
   createFanslyPage,
   createModel,
   finalizePageDmConversationMessageSync,
   getPageDmSyncCoverage,
   getPageConversationPreview,
   getPageConversationMessages,
+  selectNextPageDmMessageDeepBackfillCandidate,
   selectNextPageDmMessageSyncCandidate,
   upsertFans,
   upsertPageDmConversation,
@@ -473,7 +475,174 @@ describe("page DM repository integration", () => {
     expect(freshness.pendingMessageBackfillCount).toBe(1);
   });
 
-  it(`prunes message history to ${PAGE_DM_MESSAGE_HISTORY_LIMIT} and returns preview rows oldest-to-newest`, async (context) => {
+  it("selects deep backfill candidates from partial windows and prioritizes spenders", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createTestPage(testDb, "page-dm-deep-backfill");
+    const [spenderFan, regularFan, pendingFan, freshFan] = await upsertFans(testDb.db, [
+      {
+        platform: "fansly",
+        platformUserId: "fan-deep-spender",
+        username: "fan_deep_spender",
+        displayName: "Fan Deep Spender",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-deep-regular",
+        username: "fan_deep_regular",
+        displayName: "Fan Deep Regular",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-deep-pending",
+        username: "fan_deep_pending",
+        displayName: "Fan Deep Pending",
+      },
+      {
+        platform: "fansly",
+        platformUserId: "fan-deep-fresh",
+        username: "fan_deep_fresh",
+        displayName: "Fan Deep Fresh",
+      },
+    ]);
+    await testDb.pool.query(
+      `
+        insert into fan_spend_lifetime (
+          platform_account_id,
+          fan_id,
+          gross_amount_mills,
+          creator_net_amount_mills,
+          last_transaction_at,
+          updated_at
+        )
+        values ($1, $2, 100000, 80000, $3, now())
+      `,
+      [page.id, spenderFan.id, new Date("2026-03-01T00:00:00.000Z")],
+    );
+
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: spenderFan.id,
+      platformConversationId: "deep-spender",
+      partnerPlatformUserId: "fan-deep-spender",
+      partnerUsername: "fan_deep_spender",
+      partnerDisplayName: "Fan Deep Spender",
+      conversationFlags: 0,
+      unreadCount: 0,
+      subscriptionTierId: null,
+      lastMessageId: "msg-500",
+      lastUnreadMessageId: null,
+      lastMessageAt: new Date("2026-03-18T08:00:00.000Z"),
+      lastMessageSenderId: "fan-deep-spender",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "spender",
+      storedMessageCount: 25,
+      newestStoredMessageId: "msg-500",
+      oldestStoredMessageId: "msg-476",
+      messageCoverageStatus: "partial_window",
+      messageBackfillComplete: false,
+      lastMessageSyncAt: new Date("2026-03-18T08:05:00.000Z"),
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: regularFan.id,
+      platformConversationId: "deep-regular",
+      partnerPlatformUserId: "fan-deep-regular",
+      partnerUsername: "fan_deep_regular",
+      partnerDisplayName: "Fan Deep Regular",
+      conversationFlags: 0,
+      unreadCount: 0,
+      subscriptionTierId: null,
+      lastMessageId: "msg-300",
+      lastUnreadMessageId: null,
+      lastMessageAt: new Date("2026-03-18T08:00:00.000Z"),
+      lastMessageSenderId: "fan-deep-regular",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "regular",
+      storedMessageCount: 25,
+      newestStoredMessageId: "msg-300",
+      oldestStoredMessageId: "msg-276",
+      messageCoverageStatus: "partial_window",
+      messageBackfillComplete: false,
+      lastMessageSyncAt: new Date("2026-03-18T08:05:00.000Z"),
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: pendingFan.id,
+      platformConversationId: "normal-pending",
+      partnerPlatformUserId: "fan-deep-pending",
+      partnerUsername: "fan_deep_pending",
+      partnerDisplayName: "Fan Deep Pending",
+      conversationFlags: 0,
+      unreadCount: 50,
+      subscriptionTierId: null,
+      lastMessageId: null,
+      lastUnreadMessageId: null,
+      lastMessageAt: null,
+      lastMessageSenderId: null,
+      lastMessageSenderRole: "unknown",
+      lastMessagePreview: null,
+      storedMessageCount: 0,
+      newestStoredMessageId: null,
+      oldestStoredMessageId: null,
+      messageCoverageStatus: "pending_backfill",
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+    await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: freshFan.id,
+      platformConversationId: "normal-fresh",
+      partnerPlatformUserId: "fan-deep-fresh",
+      partnerUsername: "fan_deep_fresh",
+      partnerDisplayName: "Fan Deep Fresh",
+      conversationFlags: 0,
+      unreadCount: 100,
+      subscriptionTierId: null,
+      lastMessageId: "msg-901",
+      lastUnreadMessageId: "msg-901",
+      lastMessageAt: new Date("2026-03-18T09:00:00.000Z"),
+      lastMessageSenderId: "fan-deep-fresh",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "fresh",
+      storedMessageCount: 25,
+      newestStoredMessageId: "msg-900",
+      oldestStoredMessageId: "msg-876",
+      messageCoverageStatus: "partial_window",
+      messageBackfillComplete: false,
+      lastMessageSyncAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    const normalCandidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
+      platformAccountId: page.id,
+      now: new Date("2026-03-18T10:00:00.000Z"),
+    });
+    const deepCandidate = await selectNextPageDmMessageDeepBackfillCandidate(testDb.db, {
+      platformAccountId: page.id,
+    });
+
+    expect(normalCandidate?.platformConversationId).toBe("normal-fresh");
+    expect(deepCandidate?.platformConversationId).toBe("deep-spender");
+    expect(deepCandidate?.retentionLimit).toBe(PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT);
+    expect(deepCandidate?.isSpender).toBe(true);
+  });
+
+  it(`prunes regular message history to ${PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT} and returns preview rows oldest-to-newest`, async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -497,20 +666,20 @@ describe("page DM repository integration", () => {
       conversationFlags: 0,
       unreadCount: 1,
       subscriptionTierId: null,
-      lastMessageId: "msg-080",
-      lastUnreadMessageId: "msg-080",
-      lastMessageAt: new Date("2026-03-17T13:20:00.000Z"),
+      lastMessageId: "msg-130",
+      lastUnreadMessageId: "msg-130",
+      lastMessageAt: new Date("2026-03-17T14:10:00.000Z"),
       lastMessageSenderId: "fan-preview",
       lastMessageSenderRole: "fan",
-      lastMessagePreview: "message 80",
-      lastFanMessageAt: new Date("2026-03-17T13:20:00.000Z"),
+      lastMessagePreview: "message 130",
+      lastFanMessageAt: new Date("2026-03-17T14:10:00.000Z"),
       lastModelMessageAt: null,
       isVisible: true,
       lastSeenGeneration: 1,
       metadata: {},
     });
 
-    await upsertPageDmMessages(testDb.db, Array.from({ length: 80 }, (_value, index) => {
+    await upsertPageDmMessages(testDb.db, Array.from({ length: 130 }, (_value, index) => {
       const sequence = index + 1;
       const messageId = `msg-${String(sequence).padStart(3, "0")}`;
       return {
@@ -521,7 +690,7 @@ describe("page DM repository integration", () => {
         senderRole: sequence % 2 === 0 ? "fan" : "model",
         createdAt: new Date(Date.UTC(2026, 2, 17, 12, sequence, 0, 0)),
         content: `message ${sequence}`,
-        totalTipAmountCents: sequence === 80 ? 500 : 0,
+        totalTipAmountCents: sequence === 130 ? 500 : 0,
         inReplyToMessageId: null,
         inReplyToRootMessageId: null,
       };
@@ -552,37 +721,131 @@ describe("page DM repository integration", () => {
       limit: 10,
     });
 
-    expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_MESSAGE_HISTORY_LIMIT);
+    expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT);
     expect(preview).not.toBeNull();
     expect(newestFirst).not.toBeNull();
-    expect(preview?.conversation.storedMessageCount).toBe(PAGE_DM_MESSAGE_HISTORY_LIMIT);
+    expect(preview?.conversation.storedMessageCount).toBe(PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT);
     expect(preview?.conversation.messageBackfillComplete).toBe(true);
     expect(preview?.messages.map((message) => message.platformMessageId)).toEqual([
-      "msg-071",
-      "msg-072",
-      "msg-073",
-      "msg-074",
-      "msg-075",
-      "msg-076",
-      "msg-077",
-      "msg-078",
-      "msg-079",
-      "msg-080",
+      "msg-121",
+      "msg-122",
+      "msg-123",
+      "msg-124",
+      "msg-125",
+      "msg-126",
+      "msg-127",
+      "msg-128",
+      "msg-129",
+      "msg-130",
     ]);
-    expect(preview?.messages[0]?.content).toBe("message 71");
+    expect(preview?.messages[0]?.content).toBe("message 121");
     expect(preview?.messages[9]?.totalTipAmountCents).toBe(500);
     expect(newestFirst?.messages.map((message) => message.messageId)).toEqual([
-      "msg-080",
-      "msg-079",
-      "msg-078",
-      "msg-077",
-      "msg-076",
-      "msg-075",
-      "msg-074",
-      "msg-073",
-      "msg-072",
-      "msg-071",
+      "msg-130",
+      "msg-129",
+      "msg-128",
+      "msg-127",
+      "msg-126",
+      "msg-125",
+      "msg-124",
+      "msg-123",
+      "msg-122",
+      "msg-121",
     ]);
     expect(newestFirst?.messages[0]?.tipAmountCents).toBe(500);
+  });
+
+  it(`prunes spender message history to ${PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT}`, async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createTestPage(testDb, "page-dm-spender-retention");
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-spender-retention",
+      username: "fan_spender_retention",
+      displayName: "Fan Spender Retention",
+    }]);
+    await testDb.pool.query(
+      `
+        insert into fan_spend_lifetime (
+          platform_account_id,
+          fan_id,
+          gross_amount_mills,
+          creator_net_amount_mills,
+          last_transaction_at,
+          updated_at
+        )
+        values ($1, $2, 100000, 80000, $3, now())
+      `,
+      [page.id, fan.id, new Date("2026-03-01T00:00:00.000Z")],
+    );
+
+    const conversation = await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformConversationId: "spender-retention-conversation",
+      partnerPlatformUserId: "fan-spender-retention",
+      partnerUsername: "fan_spender_retention",
+      partnerDisplayName: "Fan Spender Retention",
+      conversationFlags: 0,
+      unreadCount: 0,
+      subscriptionTierId: null,
+      lastMessageId: "msg-530",
+      lastUnreadMessageId: null,
+      lastMessageAt: new Date("2026-03-18T08:50:00.000Z"),
+      lastMessageSenderId: "fan-spender-retention",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "message 530",
+      lastFanMessageAt: new Date("2026-03-18T08:50:00.000Z"),
+      lastModelMessageAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    await upsertPageDmMessages(testDb.db, Array.from({ length: 530 }, (_value, index) => {
+      const sequence = index + 1;
+      const messageId = `msg-${String(sequence).padStart(3, "0")}`;
+      return {
+        conversationId: conversation.id,
+        platformAccountId: page.id,
+        platformMessageId: messageId,
+        senderPlatformUserId: sequence % 2 === 0 ? "fan-spender-retention" : "acct-spender-retention",
+        senderRole: sequence % 2 === 0 ? "fan" : "model",
+        createdAt: new Date(Date.UTC(2026, 2, 18, 8, sequence, 0, 0)),
+        content: `message ${sequence}`,
+        totalTipAmountCents: 0,
+        inReplyToMessageId: null,
+        inReplyToRootMessageId: null,
+      };
+    }));
+
+    await finalizePageDmConversationMessageSync(testDb.db, {
+      conversationId: conversation.id,
+      messageCoverageStatus: "partial_window",
+      lastMessageSyncAt: new Date("2026-03-18T09:00:00.000Z"),
+    });
+
+    const storedMessages = await testDb.pool.query<{
+      count: string;
+      oldest: string | null;
+      newest: string | null;
+    }>(
+      `
+        select count(*)::text as count,
+               min(platform_message_id) as oldest,
+               max(platform_message_id) as newest
+        from page_dm_messages
+        where conversation_id = $1
+      `,
+      [conversation.id],
+    );
+
+    expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT);
+    expect(storedMessages.rows[0]?.oldest).toBe("msg-031");
+    expect(storedMessages.rows[0]?.newest).toBe("msg-530");
   });
 });

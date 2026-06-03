@@ -14,7 +14,12 @@ import {
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | string | bigint | null | undefined;
 
-export const PAGE_DM_MESSAGE_HISTORY_LIMIT = 25;
+export const PAGE_DM_PREVIEW_LIMIT = 25;
+export const PAGE_DM_LIVE_BACKFILL_CAP = 25;
+export const PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT = 100;
+export const PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT = 500;
+export const PAGE_DM_MAX_MESSAGE_RETENTION_LIMIT = PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT;
+export const PAGE_DM_MESSAGE_HISTORY_LIMIT = PAGE_DM_PREVIEW_LIMIT;
 
 export type MessageCoverageStatus = "pending_backfill" | "partial_window" | "complete";
 export type MessageSyncEligibility = "eligible" | "excluded" | "unresolved_identity";
@@ -393,9 +398,10 @@ export async function prunePageDmMessagesToLimit(
     limit?: number;
   },
 ) {
+  const requestedLimit = input.limit ?? PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT;
   const limit = Math.min(
-    input.limit ?? PAGE_DM_MESSAGE_HISTORY_LIMIT,
-    PAGE_DM_MESSAGE_HISTORY_LIMIT,
+    Math.max(0, requestedLimit),
+    PAGE_DM_MAX_MESSAGE_RETENTION_LIMIT,
   );
   const result = await db.execute<{ deletedCount: number }>(sql`
     with ranked as (
@@ -420,6 +426,30 @@ export async function prunePageDmMessagesToLimit(
   `);
 
   return result.rows[0]?.deletedCount ?? 0;
+}
+
+export async function getPageDmMessageRetentionLimit(
+  db: Database,
+  conversationId: number,
+) {
+  const result = await db.execute<{ retentionLimit: NumericValue }>(sql`
+    select case
+             when coalesce(slp.creator_net_amount_mills, 0)::bigint > 0
+               then ${PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT}
+             else ${PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT}
+           end::int as "retentionLimit"
+    from page_dm_threads c
+    left join fan_spend_lifetime slp
+      on slp.platform_account_id = c.platform_account_id
+     and slp.fan_id = c.fan_id
+    where c.id = ${conversationId}
+    limit 1
+  `);
+
+  return normalizeNumber(
+    result.rows[0]?.retentionLimit ?? PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
+    "retentionLimit",
+  );
 }
 
 export interface PageDmMessageWindowSummary {
@@ -483,9 +513,10 @@ export async function finalizePageDmConversationMessageSync(
   const lastMessageSyncAt = input.lastMessageSyncAt ?? new Date();
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
+    const retentionLimit = await getPageDmMessageRetentionLimit(database, input.conversationId);
     const deletedCount = await prunePageDmMessagesToLimit(database, {
       conversationId: input.conversationId,
-      limit: PAGE_DM_MESSAGE_HISTORY_LIMIT,
+      limit: retentionLimit,
     });
     const summary = await getPageDmMessageWindowSummary(database, input.conversationId);
 
@@ -572,6 +603,11 @@ export interface PageDmMessageSyncCandidate {
   messageCoverageStatus: MessageCoverageStatus;
   messageBackfillComplete: boolean;
   lastMessageSyncAt: Date | null;
+}
+
+export interface PageDmMessageDeepBackfillCandidate extends PageDmMessageSyncCandidate {
+  retentionLimit: number;
+  isSpender: boolean;
 }
 
 export async function selectNextPageDmMessageSyncCandidate(
@@ -673,6 +709,117 @@ export async function selectNextPageDmMessageSyncCandidate(
     ),
     lastMessageSyncAt: parseTimestamp(row.lastMessageSyncAt),
   } satisfies PageDmMessageSyncCandidate;
+}
+
+export async function selectNextPageDmMessageDeepBackfillCandidate(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    now?: Date;
+  },
+) {
+  const result = await db.execute<{
+    id: NumericValue;
+    platformConversationId: string;
+    fanId: NumericValue;
+    partnerPlatformUserId: string | null;
+    unreadCount: NumericValue;
+    lastMessageAt: TimestampValue;
+    lastMessageId: string | null;
+    newestStoredMessageId: string | null;
+    storedMessageCount: NumericValue;
+    messageCoverageStatus: MessageCoverageStatus;
+    messageBackfillComplete: boolean;
+    lastMessageSyncAt: TimestampValue;
+    retentionLimit: NumericValue;
+    isSpender: boolean;
+  }>(sql`
+    with candidates as (
+      select c.id,
+             c.platform_conversation_id,
+             c.fan_id,
+             c.partner_platform_user_id,
+             c.unread_count,
+             c.last_message_at,
+             c.last_message_id,
+             c.newest_stored_message_id,
+             c.stored_message_count,
+             c.message_coverage_status,
+             c.message_backfill_complete,
+             c.last_message_sync_at,
+             coalesce(slp.creator_net_amount_mills, 0)::bigint as creator_net_amount_mills,
+             case
+               when coalesce(slp.creator_net_amount_mills, 0)::bigint > 0
+                 then ${PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT}
+               else ${PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT}
+             end::int as retention_limit
+      from page_dm_threads c
+      left join fan_spend_lifetime slp
+        on slp.platform_account_id = c.platform_account_id
+       and slp.fan_id = c.fan_id
+      where c.platform_account_id = ${input.platformAccountId}
+        and c.is_visible = true
+        and c.fan_id is not null
+        and ${dmMessageSyncEligibleSql("c")}
+        and c.message_coverage_status = 'partial_window'::dm_message_coverage_status
+        and c.stored_message_count > 0
+        and not (
+          c.last_message_id is distinct from c.newest_stored_message_id
+          and (
+            c.last_message_sync_at is null
+            or (c.last_message_at is not null and c.last_message_sync_at < c.last_message_at)
+          )
+        )
+    )
+    select id as "id",
+           platform_conversation_id as "platformConversationId",
+           fan_id as "fanId",
+           partner_platform_user_id as "partnerPlatformUserId",
+           unread_count as "unreadCount",
+           last_message_at as "lastMessageAt",
+           last_message_id as "lastMessageId",
+           newest_stored_message_id as "newestStoredMessageId",
+           stored_message_count as "storedMessageCount",
+           message_coverage_status as "messageCoverageStatus",
+           message_backfill_complete as "messageBackfillComplete",
+           last_message_sync_at as "lastMessageSyncAt",
+           retention_limit as "retentionLimit",
+           (creator_net_amount_mills > 0)::boolean as "isSpender"
+    from candidates
+    where stored_message_count < retention_limit
+    order by
+      case when creator_net_amount_mills > 0 then 0 else 1 end asc,
+      creator_net_amount_mills desc,
+      stored_message_count asc,
+      last_message_sync_at asc nulls first,
+      last_message_at desc nulls last,
+      id asc
+    limit 1
+  `);
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: normalizeNumber(row.id, "id"),
+    platformConversationId: row.platformConversationId,
+    fanId: normalizeNumber(row.fanId, "fanId"),
+    partnerPlatformUserId: row.partnerPlatformUserId,
+    unreadCount: normalizeNumber(row.unreadCount, "unreadCount"),
+    lastMessageAt: parseTimestamp(row.lastMessageAt),
+    lastMessageId: row.lastMessageId,
+    newestStoredMessageId: row.newestStoredMessageId,
+    storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
+    messageCoverageStatus: normalizeMessageCoverageStatus(row.messageCoverageStatus),
+    messageBackfillComplete: isMessageBackfillComplete(
+      normalizeMessageCoverageStatus(row.messageCoverageStatus),
+    ),
+    lastMessageSyncAt: parseTimestamp(row.lastMessageSyncAt),
+    retentionLimit: normalizeNumber(row.retentionLimit, "retentionLimit"),
+    isSpender: row.isSpender,
+  } satisfies PageDmMessageDeepBackfillCandidate;
 }
 
 export interface PageDmSyncCoverage {
@@ -886,8 +1033,8 @@ export async function getPageConversationPreview(
   },
 ) {
   const limit = Math.min(
-    input.limit ?? PAGE_DM_MESSAGE_HISTORY_LIMIT,
-    PAGE_DM_MESSAGE_HISTORY_LIMIT,
+    input.limit ?? PAGE_DM_PREVIEW_LIMIT,
+    PAGE_DM_PREVIEW_LIMIT,
   );
   const conversation = await findVisiblePageDmConversationByPlatformConversationId(db, {
     platformAccountId: input.platformAccountId,

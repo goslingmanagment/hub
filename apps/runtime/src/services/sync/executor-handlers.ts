@@ -11,10 +11,11 @@ import {
   getCurrentSubscribers,
   listPageDmConversationsByPlatformConversationIds,
   markPageDmConversationsInvisibleByGeneration,
-  PAGE_DM_MESSAGE_HISTORY_LIMIT,
+  PAGE_DM_LIVE_BACKFILL_CAP,
   requestPageSync,
   rebuildFollowerRollups,
   rebuildSubscriberRollups,
+  selectNextPageDmMessageDeepBackfillCandidate,
   selectNextPageDmMessageSyncCandidate,
   updatePageSyncTimestampCache,
   upsertPageTopSpenders,
@@ -143,7 +144,7 @@ function shouldSkipOnlyFansDmPolling(
 }
 
 function resolveDmConversationCoverageStatus(input: {
-  currentMode: "backfill" | "incremental";
+  currentMode: "backfill" | "deep_backfill" | "incremental";
   existingStatus: MessageCoverageStatus;
   overlapFound: boolean;
   providerHistoryExhausted: boolean;
@@ -155,6 +156,10 @@ function resolveDmConversationCoverageStatus(input: {
 
   if (input.providerHistoryExhausted || input.overlapFound) {
     return "complete";
+  }
+
+  if (input.currentMode === "deep_backfill") {
+    return "partial_window";
   }
 
   if (input.hitWindowCap) {
@@ -3099,7 +3104,7 @@ async function executeOnlyFansDmMessagesChunk(
         });
         const hitWindowCap =
           currentMode === "backfill" &&
-          (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_MESSAGE_HISTORY_LIMIT;
+          (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_LIVE_BACKFILL_CAP;
         const shouldComplete = currentMode === "incremental"
           ? overlapFound || providerHistoryExhausted
           : overlapFound || providerHistoryExhausted || hitWindowCap;
@@ -3267,6 +3272,11 @@ export async function executeDmMessagesChunk(
   let completedConversations = 0;
   let overlapHits = 0;
   let exhaustedEligibleConversations = false;
+  const deepBackfillMaxRequests = app.config.fanslyDmDeepBackfillEnabled === true
+    ? Math.max(0, app.config.fanslyDmDeepBackfillMaxRequestsPerRun ?? 1)
+    : 0;
+  let deepBackfillRequests = 0;
+  let deepBackfillPaused = false;
 
   const emitDmMessagesChunkSummary = async () => {
     if (emittedDmMessagesChunkSummary) {
@@ -3303,43 +3313,62 @@ export async function executeDmMessagesChunk(
         const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
           platformAccountId: input.pageContext.page.id,
         });
-        if (!candidate) {
+        let currentMode: "backfill" | "deep_backfill" | "incremental";
+        if (candidate) {
+          conversation = await getPageDmConversationById(app.db, candidate.id);
+          if (!conversation) {
+            exhaustedEligibleConversations = true;
+            break;
+          }
+
+          currentMode = conversation.storedMessageCount === 0
+            ? "backfill"
+            : conversation.lastMessageId !== conversation.newestStoredMessageId
+              ? "incremental"
+              : conversation.messageCoverageStatus === "pending_backfill"
+                ? "backfill"
+                : "incremental";
+        } else if (deepBackfillRequests < deepBackfillMaxRequests) {
+          const deepBackfillCandidate = await selectNextPageDmMessageDeepBackfillCandidate(app.db, {
+            platformAccountId: input.pageContext.page.id,
+          });
+          if (!deepBackfillCandidate) {
+            exhaustedEligibleConversations = true;
+            break;
+          }
+
+          conversation = await getPageDmConversationById(app.db, deepBackfillCandidate.id);
+          if (!conversation) {
+            exhaustedEligibleConversations = true;
+            break;
+          }
+
+          currentMode = "deep_backfill";
+        } else {
           exhaustedEligibleConversations = true;
           break;
         }
-
-        conversation = await getPageDmConversationById(app.db, candidate.id);
-        if (!conversation) {
-          exhaustedEligibleConversations = true;
-          break;
-        }
-
-        const currentMode = conversation.storedMessageCount === 0
-          ? "backfill"
-          : conversation.lastMessageId !== conversation.newestStoredMessageId
-            ? "incremental"
-            : conversation.messageCoverageStatus === "pending_backfill"
-              ? "backfill"
-              : "incremental";
 
         state = {
           ...emptyDmMessagesCursorState(),
           currentConversationId: conversation.id,
           currentPlatformConversationId: conversation.platformConversationId,
-          currentBeforeMessageId: currentMode === "backfill"
+          currentBeforeMessageId: currentMode === "backfill" || currentMode === "deep_backfill"
             ? conversation.oldestStoredMessageId
             : null,
           currentMode,
         };
-        const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          stream: "dm_messages",
-          state,
-        });
-        await input.telemetry.recordCheckpointAdvanced(
-          "dm_messages",
-          summarizeCheckpoint(progressCheckpoint),
-        );
+        if (currentMode !== "deep_backfill") {
+          const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "dm_messages",
+            state,
+          });
+          await input.telemetry.recordCheckpointAdvanced(
+            "dm_messages",
+            summarizeCheckpoint(progressCheckpoint),
+          );
+        }
       }
 
       if (!conversation || !state.currentMode) {
@@ -3496,14 +3525,19 @@ export async function executeDmMessagesChunk(
         const providerHistoryExhausted = page.done || !oldestMessageId;
         const hitWindowCap =
           currentMode === "backfill" &&
-          (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_MESSAGE_HISTORY_LIMIT;
-        const shouldComplete = currentMode === "incremental"
+          (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_LIVE_BACKFILL_CAP;
+        const shouldComplete = currentMode === "deep_backfill"
+          ? true
+          : currentMode === "incremental"
           ? overlapFound || providerHistoryExhausted
           : overlapFound || providerHistoryExhausted || hitWindowCap;
 
         if (shouldComplete) {
           if (overlapFound) {
             overlapHits += 1;
+          }
+          if (currentMode === "deep_backfill") {
+            deepBackfillRequests += 1;
           }
           const messageCoverageStatus = resolveDmConversationCoverageStatus({
             currentMode,
@@ -3535,6 +3569,13 @@ export async function executeDmMessagesChunk(
             "dm_messages",
             summarizeCheckpoint(finalized.progressCheckpoint),
           );
+          if (
+            currentMode === "deep_backfill" &&
+            deepBackfillRequests >= deepBackfillMaxRequests
+          ) {
+            deepBackfillPaused = true;
+            break conversationLoop;
+          }
           break;
         }
 
@@ -3563,7 +3604,7 @@ export async function executeDmMessagesChunk(
 
     const dmMessagesChunk = await emitDmMessagesChunkSummary();
 
-    if (!exhaustedEligibleConversations) {
+    if (!exhaustedEligibleConversations && !deepBackfillPaused) {
       return {
         satisfied: false,
         yieldReason: input.budget.resolveYieldReason(),
@@ -3574,6 +3615,7 @@ export async function executeDmMessagesChunk(
           processedMessages,
           completedConversations,
           overlapHits,
+          deepBackfillRequests,
           dmMessagesChunk,
         },
       } satisfies StreamChunkResult;
@@ -3600,6 +3642,8 @@ export async function executeDmMessagesChunk(
         processedMessages,
         completedConversations,
         overlapHits,
+        deepBackfillRequests,
+        deepBackfillPaused,
         dmMessagesChunk,
       },
     } satisfies StreamChunkResult;

@@ -22,6 +22,7 @@ const dbMocks = vi.hoisted(() => ({
   rebuildFollowerRollups: vi.fn(),
   rebuildSubscriberRollups: vi.fn(),
   requestPageSync: vi.fn(),
+  selectNextPageDmMessageDeepBackfillCandidate: vi.fn(),
   selectNextPageDmMessageSyncCandidate: vi.fn(),
   updatePageSyncTimestampCache: vi.fn(),
   upsertCheckpoint: vi.fn(),
@@ -216,6 +217,7 @@ describe("sync executor handlers", () => {
     dbMocks.rebuildFollowerRollups.mockResolvedValue(undefined);
     dbMocks.rebuildSubscriberRollups.mockResolvedValue(undefined);
     dbMocks.updatePageSyncTimestampCache.mockResolvedValue(undefined);
+    dbMocks.selectNextPageDmMessageDeepBackfillCandidate.mockResolvedValue(null);
     dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValue(null);
     dbMocks.upsertFanPages.mockResolvedValue(undefined);
     dbMocks.upsertPageDmConversation.mockResolvedValue(undefined);
@@ -2774,6 +2776,130 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
         rateLimit429s: 0,
         averageGapMs: 0,
       },
+    });
+  });
+
+  it("runs one live-first deep backfill page when normal dm_messages work is exhausted", async () => {
+    const telemetry = createTelemetry();
+    const getMessagesPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {
+      await recordStartedRequest(context.requestObserver, "messages");
+      return {
+        items: [{
+          id: "msg-24",
+          type: 1,
+          dataVersion: 1,
+          content: "older spender context",
+          groupId: "group-1",
+          senderId: "fan-1",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_769_999_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 0,
+        }],
+        groupId: "group-1",
+        before: "msg-25",
+        done: false,
+        raw: {
+          messages: [],
+        },
+      };
+    });
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: true,
+        fanslyDmDeepBackfillEnabled: true,
+        fanslyDmDeepBackfillMaxRequestsPerRun: 1,
+      },
+      adapter: {
+        getMessagesPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValue(null);
+    dbMocks.selectNextPageDmMessageDeepBackfillCandidate.mockResolvedValueOnce({
+      ...buildDmMessageSyncCandidate({
+        storedMessageCount: 25,
+        newestStoredMessageId: "msg-80",
+        retentionLimit: 500,
+        isSpender: true,
+      }),
+    });
+    dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation({
+      storedMessageCount: 25,
+      newestStoredMessageId: "msg-80",
+      oldestStoredMessageId: "msg-25",
+      messageCoverageStatus: "partial_window",
+    }));
+    dbMocks.finalizePageDmConversationMessageSync.mockResolvedValue({
+      conversation: {
+        id: 777,
+      },
+      deletedCount: 0,
+      summary: {
+        storedMessageCount: 26,
+        newestStoredMessageId: "msg-80",
+        oldestStoredMessageId: "msg-24",
+        lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+        lastModelMessageAt: null,
+      },
+    });
+
+    const result = await executeDmMessagesChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 1,
+      },
+      syncRunId: 904,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(5),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(dbMocks.selectNextPageDmMessageSyncCandidate.mock.invocationCallOrder[0]).toBeLessThan(
+      dbMocks.selectNextPageDmMessageDeepBackfillCandidate.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(getMessagesPage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      groupId: "group-1",
+      before: "msg-25",
+      limit: 25,
+    }));
+    expect(dbMocks.finalizePageDmConversationMessageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      conversationId: 777,
+      messageCoverageStatus: "partial_window",
+    }));
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith({}, expect.objectContaining({
+      platformAccountId: 55,
+      stream: "dm_messages",
+      lastSuccessfulRunId: 904,
+      state: {
+        version: 1,
+        currentConversationId: null,
+        currentPlatformConversationId: null,
+        currentBeforeMessageId: null,
+        currentMode: null,
+      },
+    }));
+    expect(result.stats).toMatchObject({
+      currentMode: null,
+      deepBackfillRequests: 1,
+      deepBackfillPaused: true,
     });
   });
 

@@ -864,7 +864,7 @@ export const pageDmThreads = pgTable(
     ),
     storedMessageCountCheck: check(
       "page_dm_threads_stored_message_count_check",
-      sql`${table.storedMessageCount} between 0 and 25`,
+      sql`${table.storedMessageCount} between 0 and 500`,
     ),
   }),
 );

@@ -43,7 +43,7 @@ type DmMessagesCursorState = {
   currentConversationId: number | null;
   currentPlatformConversationId: string | null;
   currentBeforeMessageId: string | null;
-  currentMode: "backfill" | "incremental" | null;
+  currentMode: "backfill" | "deep_backfill" | "incremental" | null;
 };
 
 type TopSpendersCursorWindow = {
@@ -266,7 +266,9 @@ export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorStat
     : asNumber(state.currentConversationId);
   const currentPlatformConversationId = asNullableString(state.currentPlatformConversationId);
   const currentBeforeMessageId = asNullableString(state.currentBeforeMessageId);
-  const currentMode = state.currentMode === "backfill" || state.currentMode === "incremental"
+  const currentMode = state.currentMode === "backfill" ||
+    state.currentMode === "deep_backfill" ||
+    state.currentMode === "incremental"
     ? state.currentMode
     : state.currentMode === null || state.currentMode === undefined
       ? null
