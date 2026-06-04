@@ -75,6 +75,8 @@ const envSchema = z.object({
   FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_DEEP_BACKFILL_ENABLED: booleanSchema.default(false),
   FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(0).default(1),
+  FANSLY_DM_DEEP_BACKFILL_CONTINUATION_DELAY_MS: z.coerce.number().int().min(0).default(0),
+  FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS: z.coerce.number().int().min(0).default(0),
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
   SYNC_SHARED_RATE_LIMIT_ENABLED: booleanSchema.default(true),
   SYNC_PAGE_EXECUTOR_CONCURRENCY: z.coerce.number().int().positive().default(4),
@@ -120,6 +122,8 @@ export interface AppConfig {
   fanslyDmMessagesDelayMs: number;
   fanslyDmDeepBackfillEnabled?: boolean;
   fanslyDmDeepBackfillMaxRequestsPerRun?: number;
+  fanslyDmDeepBackfillContinuationDelayMs?: number;
+  fanslyDmDeepBackfillContinuationJitterMs?: number;
   onlyFansDefaultDelayMs: number;
   syncSharedRateLimitEnabled: boolean;
   syncPageExecutorConcurrency: number;
@@ -227,6 +231,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     fanslyDmMessagesDelayMs: enforceFanslyDmDelayFloor(parsed.FANSLY_DM_MESSAGES_DELAY_MS),
     fanslyDmDeepBackfillEnabled: parsed.FANSLY_DM_DEEP_BACKFILL_ENABLED,
     fanslyDmDeepBackfillMaxRequestsPerRun: parsed.FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN,
+    fanslyDmDeepBackfillContinuationDelayMs: parsed.FANSLY_DM_DEEP_BACKFILL_CONTINUATION_DELAY_MS,
+    fanslyDmDeepBackfillContinuationJitterMs: parsed.FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS,
     onlyFansDefaultDelayMs: parsed.ONLYFANS_DEFAULT_DELAY_MS,
     syncSharedRateLimitEnabled: parsed.SYNC_SHARED_RATE_LIMIT_ENABLED,
     syncPageExecutorConcurrency: parsed.SYNC_PAGE_EXECUTOR_CONCURRENCY,

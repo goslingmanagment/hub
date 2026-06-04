@@ -11,6 +11,7 @@ import {
   listRunnablePageSync,
   PageSyncLeaseLostError,
   retryPageSync,
+  resolvePageSyncPriority,
   runWithPageSyncExecutionContext,
   startSyncRun,
   type PageSyncLease,
@@ -51,6 +52,7 @@ export interface SyncPageChunkResult {
   runId: number | null;
   needsContinuation: boolean;
   continuationPriority: number | null;
+  continuationRetryAt?: Date | null;
 }
 
 type PageExecuteBoss = Pick<PgBoss, "complete" | "fail" | "fetch" | "send" | "touch">;
@@ -86,6 +88,7 @@ function buildContinuationResult(
   runId: number | null,
   kind: SyncPageChunkResult["kind"],
   continuationPriority: number | null,
+  continuationRetryAt: Date | null = null,
 ): SyncPageChunkResult {
   return {
     kind,
@@ -94,6 +97,7 @@ function buildContinuationResult(
     runId,
     needsContinuation: continuationPriority !== null,
     continuationPriority,
+    continuationRetryAt,
   };
 }
 
@@ -437,6 +441,7 @@ export async function executeNextSyncPageChunk(
       phase,
       workClass,
       progress,
+      retryAt: result.continuationRetryAt ?? null,
     });
     if (!yielded) {
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
@@ -458,8 +463,18 @@ export async function executeNextSyncPageChunk(
       recoveredAt,
       stream: taskLease.stream,
     });
-    const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
-    return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "yielded", continuationPriority);
+    const continuationRetryAt = result.continuationRetryAt ?? null;
+    const continuationPriority = continuationRetryAt
+      ? resolvePageSyncPriority(taskLease.stream, normalizeRunSource(taskLease.requestSource))
+      : await resolveContinuationPriority(app, platformAccountId);
+    return buildContinuationResult(
+      platformAccountId,
+      taskLease.stream,
+      run.id,
+      "yielded",
+      continuationPriority,
+      continuationRetryAt,
+    );
   } catch (error) {
     if (error instanceof PageSyncLeaseLostError) {
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
@@ -636,15 +651,20 @@ export async function processSyncPageExecuteJob(
 
     const wakeupTarget = await resolveSyncPageWakeupTarget(app, result.platformAccountId);
     if (wakeupTarget) {
+      const delayedContinuation = result.continuationRetryAt !== null && result.continuationRetryAt !== undefined;
       const wakeupId = await sendSyncPageWakeup(boss, {
         platformAccountId: result.platformAccountId,
         priority: result.continuationPriority,
         provider: wakeupTarget.provider,
         egressKey: wakeupTarget.egressKey,
-        dedupe: false,
+        dedupe: delayedContinuation ? true : false,
+        singletonKey: delayedContinuation
+          ? `${result.platformAccountId}:dm-messages-deep-continuation`
+          : undefined,
+        startAfter: result.continuationRetryAt ?? null,
       });
 
-      if (wakeupId !== null && wakeupId !== undefined) {
+      if ((wakeupId !== null && wakeupId !== undefined) || delayedContinuation) {
         break;
       }
     }

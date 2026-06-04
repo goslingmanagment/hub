@@ -1067,7 +1067,7 @@ export async function scheduleDuePageSync(
         continue;
       }
 
-      if (row.status === "retrying" && row.retryAt && row.retryAt.getTime() > now.getTime()) {
+      if (row.retryAt && row.retryAt.getTime() > now.getTime()) {
         continue;
       }
 
@@ -1440,10 +1440,12 @@ export async function yieldPageSync(
     phase?: string | null;
     workClass?: SyncWorkClass | null;
     progress?: Record<string, unknown>;
+    retryAt?: Date | null;
     now?: Date;
   },
 ) {
   const now = input.now ?? new Date();
+  const retryAt = input.retryAt ?? null;
   const result = await db.execute(sql`
     update ${pageSyncStates}
     set status = 'pending',
@@ -1457,7 +1459,7 @@ export async function yieldPageSync(
         last_error_code = null,
         last_error_summary = null,
         retry_kind = null,
-        retry_at = null,
+        retry_at = ${retryAt},
         lease_owner = null,
         lease_token = null,
         lease_heartbeat_at = null,

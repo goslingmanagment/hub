@@ -230,6 +230,120 @@ describe("sync executor", () => {
     expect(boss.send.mock.invocationCallOrder[0]).toBeLessThan(boss.complete.mock.invocationCallOrder[0]);
   });
 
+  it("passes handler continuation retry time into yielded page sync state", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    const retryAt = new Date("2026-03-14T12:00:11.000Z");
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: null,
+      continuationRetryAt: retryAt,
+      stats: { deepBackfillRequests: 1 },
+    });
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      requestSeq: 3,
+      leaseToken: "lease-1",
+      retryAt,
+    }));
+  });
+
+  it("queues delayed continuation wakeup for paced deep backfill", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    const boss = {
+      complete: vi.fn(async () => {}),
+      send: vi.fn(async () => "job-next"),
+    } as unknown as {
+      complete: ReturnType<typeof vi.fn>;
+      send: ReturnType<typeof vi.fn>;
+    };
+    const retryAt = new Date("2026-03-14T12:00:11.000Z");
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: null,
+      continuationRetryAt: retryAt,
+      stats: { deepBackfillRequests: 1 },
+    });
+
+    const result = await processSyncPageExecuteJob(app, boss as never, {
+      job: {
+        id: "job-1",
+        data: { platformAccountId: 55 },
+        groupId: "fansly:direct",
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "yielded",
+      needsContinuation: true,
+      continuationPriority: 75,
+      continuationRetryAt: retryAt,
+    });
+    expect(boss.send).toHaveBeenCalledWith(
+      "sync.page.execute",
+      { platformAccountId: 55 },
+      expect.objectContaining({
+        singletonKey: "55:dm-messages-deep-continuation",
+        priority: 75,
+        startAfter: retryAt,
+        group: {
+          id: "fansly:shared-proxy-pool",
+        },
+      }),
+    );
+    expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
+  });
+
+  it("does not drain locally when paced deep continuation is already queued", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    const boss = {
+      complete: vi.fn(async () => {}),
+      send: vi.fn(async () => null),
+    } as unknown as {
+      complete: ReturnType<typeof vi.fn>;
+      send: ReturnType<typeof vi.fn>;
+    };
+    const retryAt = new Date("2026-03-14T12:00:11.000Z");
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: null,
+      continuationRetryAt: retryAt,
+      stats: { deepBackfillRequests: 1 },
+    });
+
+    await processSyncPageExecuteJob(app, boss as never, {
+      job: {
+        id: "job-1",
+        data: { platformAccountId: 55 },
+        groupId: "fansly:direct",
+      },
+    });
+
+    expect(boss.send).toHaveBeenCalledTimes(1);
+    expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(1);
+    expect(dbMocks.acquirePageSyncLease).toHaveBeenCalledTimes(1);
+    expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
+  });
+
   it("does not complete the current job when the continuation wakeup fails", async () => {
     const app = {
       db: {},

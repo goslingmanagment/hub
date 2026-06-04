@@ -208,9 +208,38 @@ function createPageRateLimitWaiter(
   });
 }
 
+function resolveFanslyDmDeepBackfillContinuationDelayMs(
+  config: Pick<
+    AppContext["config"],
+    "fanslyDmDeepBackfillContinuationDelayMs" | "fanslyDmDeepBackfillContinuationJitterMs"
+  >,
+) {
+  const baseDelayMs = Math.max(0, config.fanslyDmDeepBackfillContinuationDelayMs ?? 0);
+  const jitterMs = Math.max(0, config.fanslyDmDeepBackfillContinuationJitterMs ?? 0);
+  if (baseDelayMs === 0 && jitterMs === 0) {
+    return 0;
+  }
+
+  const jitterOffsetMs = jitterMs > 0
+    ? Math.round((Math.random() * 2 - 1) * jitterMs)
+    : 0;
+  return Math.max(0, baseDelayMs + jitterOffsetMs);
+}
+
+function isFanslyDmDeepBackfillContinuationConfigured(
+  config: Pick<
+    AppContext["config"],
+    "fanslyDmDeepBackfillContinuationDelayMs" | "fanslyDmDeepBackfillContinuationJitterMs"
+  >,
+) {
+  return (config.fanslyDmDeepBackfillContinuationDelayMs ?? 0) > 0 ||
+    (config.fanslyDmDeepBackfillContinuationJitterMs ?? 0) > 0;
+}
+
 export type StreamChunkResult = {
   satisfied: boolean;
   yieldReason: SyncChunkYieldReason | null;
+  continuationRetryAt?: Date | null;
   stats?: Record<string, unknown>;
 };
 
@@ -3220,7 +3249,7 @@ export async function executeDmMessagesChunk(
     streamState: PageSyncLease;
     syncRunId: number;
   },
-) {
+): Promise<StreamChunkResult> {
   if (input.pageContext.platform === "onlyfans") {
     return executeOnlyFansDmMessagesChunk(app, input);
   }
@@ -3626,6 +3655,32 @@ export async function executeDmMessagesChunk(
       } satisfies StreamChunkResult;
     }
 
+    if (
+      deepBackfillPaused &&
+      isFanslyDmDeepBackfillContinuationConfigured(app.config)
+    ) {
+      const continuationDelayMs = resolveFanslyDmDeepBackfillContinuationDelayMs(app.config);
+      const continuationRetryAt = new Date(Date.now() + continuationDelayMs);
+      return {
+        satisfied: false,
+        yieldReason: null,
+        continuationRetryAt,
+        stats: {
+          currentConversationId: state.currentConversationId,
+          currentBeforeMessageId: state.currentBeforeMessageId,
+          currentMode: state.currentMode,
+          processedMessages,
+          completedConversations,
+          overlapHits,
+          deepBackfillRequests,
+          deepBackfillPaused,
+          deepBackfillContinuationDelayMs: continuationDelayMs,
+          deepBackfillContinuationRetryAt: continuationRetryAt.toISOString(),
+          dmMessagesChunk,
+        },
+      } satisfies StreamChunkResult;
+    }
+
     const completedCheckpoint = await upsertCheckpoint(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "dm_messages",
@@ -3674,7 +3729,7 @@ export async function executeStreamChunk(
     telemetry: SyncRunTelemetry;
     budget: SyncChunkBudget;
   },
-) {
+): Promise<StreamChunkResult> {
   if (shouldSkipOnlyFansDmPolling(app, {
     pageContext: input.pageContext,
     stream: input.streamState.stream,

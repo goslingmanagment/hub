@@ -33,6 +33,7 @@ export interface QueueCreationClient {
     options?: {
       singletonKey?: string;
       priority?: number;
+      startAfter?: number | string | Date;
       group?: {
         id: string;
       };
@@ -165,14 +166,17 @@ export async function sendSyncPageWakeup(
     provider: "fansly" | "onlyfans";
     egressKey: string;
     dedupe?: boolean;
+    singletonKey?: string;
+    startAfter?: Date | null;
   },
 ): Promise<string | null | unknown> {
   return boss.send(
     SYNC_PAGE_EXECUTE_QUEUE,
     { platformAccountId: input.platformAccountId } satisfies SyncPageExecutePayload,
     {
-      singletonKey: input.dedupe === false ? undefined : String(input.platformAccountId),
+      singletonKey: input.singletonKey ?? (input.dedupe === false ? undefined : String(input.platformAccountId)),
       priority: input.priority,
+      startAfter: input.startAfter ?? undefined,
       group: {
         id: buildSyncPageExecuteGroupId(input.provider, input.egressKey),
       },
