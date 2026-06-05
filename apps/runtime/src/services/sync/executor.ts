@@ -442,6 +442,7 @@ export async function executeNextSyncPageChunk(
       workClass,
       progress,
       retryAt: result.continuationRetryAt ?? null,
+      requestSource: result.continuationRequestSource ?? null,
     });
     if (!yielded) {
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
@@ -464,8 +465,9 @@ export async function executeNextSyncPageChunk(
       stream: taskLease.stream,
     });
     const continuationRetryAt = result.continuationRetryAt ?? null;
+    const continuationRequestSource = result.continuationRequestSource ?? normalizeRunSource(taskLease.requestSource);
     const continuationPriority = continuationRetryAt
-      ? resolvePageSyncPriority(taskLease.stream, normalizeRunSource(taskLease.requestSource))
+      ? resolvePageSyncPriority(taskLease.stream, continuationRequestSource)
       : await resolveContinuationPriority(app, platformAccountId);
     return buildContinuationResult(
       platformAccountId,

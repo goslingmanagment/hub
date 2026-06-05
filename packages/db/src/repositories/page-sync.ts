@@ -1441,11 +1441,13 @@ export async function yieldPageSync(
     workClass?: SyncWorkClass | null;
     progress?: Record<string, unknown>;
     retryAt?: Date | null;
+    requestSource?: SyncRequestSource | null;
     now?: Date;
   },
 ) {
   const now = input.now ?? new Date();
   const retryAt = input.retryAt ?? null;
+  const requestSource = input.requestSource ?? null;
   const result = await db.execute(sql`
     update ${pageSyncStates}
     set status = 'pending',
@@ -1455,6 +1457,7 @@ export async function yieldPageSync(
         phase = ${input.phase ?? null},
         work_class = ${input.workClass ?? null},
         progress = ${input.progress ?? {}},
+        request_source = coalesce(${requestSource}::sync_request_source, request_source),
         consecutive_failures = 0,
         last_error_code = null,
         last_error_summary = null,

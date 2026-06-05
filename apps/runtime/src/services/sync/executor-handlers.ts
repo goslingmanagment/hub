@@ -34,6 +34,7 @@ import {
   type DmSenderRole,
   type MessageCoverageStatus,
   type PageSyncLease,
+  type SyncRequestSource,
   type SyncStream,
   type UpsertFanPageInput,
   type UpsertPageFollowInput,
@@ -240,6 +241,7 @@ export type StreamChunkResult = {
   satisfied: boolean;
   yieldReason: SyncChunkYieldReason | null;
   continuationRetryAt?: Date | null;
+  continuationRequestSource?: SyncRequestSource | null;
   stats?: Record<string, unknown>;
 };
 
@@ -3665,6 +3667,7 @@ export async function executeDmMessagesChunk(
         satisfied: false,
         yieldReason: null,
         continuationRetryAt,
+        continuationRequestSource: "scheduled",
         stats: {
           currentConversationId: state.currentConversationId,
           currentBeforeMessageId: state.currentBeforeMessageId,
@@ -3676,6 +3679,7 @@ export async function executeDmMessagesChunk(
           deepBackfillPaused,
           deepBackfillContinuationDelayMs: continuationDelayMs,
           deepBackfillContinuationRetryAt: continuationRetryAt.toISOString(),
+          deepBackfillContinuationRequestSource: "scheduled",
           dmMessagesChunk,
         },
       } satisfies StreamChunkResult;

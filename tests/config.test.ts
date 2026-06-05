@@ -96,12 +96,12 @@ describe("config", () => {
   it("accepts Fansly DM deep backfill pacing overrides", () => {
     const config = loadConfig({
       ...baseEnv,
-      FANSLY_DM_DEEP_BACKFILL_CONTINUATION_DELAY_MS: "11000",
-      FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS: "2000",
+      FANSLY_DM_DEEP_BACKFILL_CONTINUATION_DELAY_MS: "22000",
+      FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS: "8000",
     });
 
-    expect(config.fanslyDmDeepBackfillContinuationDelayMs).toBe(11_000);
-    expect(config.fanslyDmDeepBackfillContinuationJitterMs).toBe(2_000);
+    expect(config.fanslyDmDeepBackfillContinuationDelayMs).toBe(22_000);
+    expect(config.fanslyDmDeepBackfillContinuationJitterMs).toBe(8_000);
   });
 
   it("accepts an explicit Fansly default delay override", () => {

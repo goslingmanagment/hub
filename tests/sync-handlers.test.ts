@@ -3055,7 +3055,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
         syncSharedRateLimitEnabled: true,
         fanslyDmDeepBackfillEnabled: true,
         fanslyDmDeepBackfillMaxRequestsPerRun: 1,
-        fanslyDmDeepBackfillContinuationDelayMs: 11_000,
+        fanslyDmDeepBackfillContinuationDelayMs: 22_000,
         fanslyDmDeepBackfillContinuationJitterMs: 0,
       },
       adapter: {
@@ -3116,15 +3116,17 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
 
     expect(result.satisfied).toBe(false);
     expect(result.yieldReason).toBeNull();
+    expect(result.continuationRequestSource).toBe("scheduled");
     expect(result.continuationRetryAt).toBeInstanceOf(Date);
-    expect(result.continuationRetryAt?.getTime()).toBeGreaterThanOrEqual(startedAt + 11_000);
-    expect(result.continuationRetryAt?.getTime()).toBeLessThanOrEqual(Date.now() + 11_000);
+    expect(result.continuationRetryAt?.getTime()).toBeGreaterThanOrEqual(startedAt + 22_000);
+    expect(result.continuationRetryAt?.getTime()).toBeLessThanOrEqual(Date.now() + 22_000);
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
     expect(result.stats).toMatchObject({
       currentMode: null,
       deepBackfillRequests: 1,
       deepBackfillPaused: true,
-      deepBackfillContinuationDelayMs: 11_000,
+      deepBackfillContinuationDelayMs: 22_000,
+      deepBackfillContinuationRequestSource: "scheduled",
     });
   });
 

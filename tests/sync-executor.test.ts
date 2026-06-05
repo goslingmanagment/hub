@@ -235,14 +235,19 @@ describe("sync executor", () => {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
-    const retryAt = new Date("2026-03-14T12:00:11.000Z");
+    const retryAt = new Date("2026-03-14T12:00:22.000Z");
+    const dmMessagesTaskLease = {
+      ...taskLease,
+      stream: "dm_messages" as const,
+    };
 
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(dmMessagesTaskLease);
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,
       yieldReason: null,
       continuationRetryAt: retryAt,
+      continuationRequestSource: "scheduled",
       stats: { deepBackfillRequests: 1 },
     });
 
@@ -250,10 +255,11 @@ describe("sync executor", () => {
 
     expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "followers",
+      stream: "dm_messages",
       requestSeq: 3,
       leaseToken: "lease-1",
       retryAt,
+      requestSource: "scheduled",
     }));
   });
 
@@ -269,13 +275,18 @@ describe("sync executor", () => {
       complete: ReturnType<typeof vi.fn>;
       send: ReturnType<typeof vi.fn>;
     };
-    const retryAt = new Date("2026-03-14T12:00:11.000Z");
+    const retryAt = new Date("2026-03-14T12:00:22.000Z");
+    const dmMessagesTaskLease = {
+      ...taskLease,
+      stream: "dm_messages" as const,
+    };
 
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(dmMessagesTaskLease);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,
       yieldReason: null,
       continuationRetryAt: retryAt,
+      continuationRequestSource: "scheduled",
       stats: { deepBackfillRequests: 1 },
     });
 
@@ -290,7 +301,7 @@ describe("sync executor", () => {
     expect(result).toMatchObject({
       kind: "yielded",
       needsContinuation: true,
-      continuationPriority: 75,
+      continuationPriority: 25,
       continuationRetryAt: retryAt,
     });
     expect(boss.send).toHaveBeenCalledWith(
@@ -298,7 +309,7 @@ describe("sync executor", () => {
       { platformAccountId: 55 },
       expect.objectContaining({
         singletonKey: "55:dm-messages-deep-continuation",
-        priority: 75,
+        priority: 25,
         startAfter: retryAt,
         group: {
           id: "fansly:shared-proxy-pool",
@@ -320,13 +331,18 @@ describe("sync executor", () => {
       complete: ReturnType<typeof vi.fn>;
       send: ReturnType<typeof vi.fn>;
     };
-    const retryAt = new Date("2026-03-14T12:00:11.000Z");
+    const retryAt = new Date("2026-03-14T12:00:22.000Z");
+    const dmMessagesTaskLease = {
+      ...taskLease,
+      stream: "dm_messages" as const,
+    };
 
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(dmMessagesTaskLease);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,
       yieldReason: null,
       continuationRetryAt: retryAt,
+      continuationRequestSource: "scheduled",
       stats: { deepBackfillRequests: 1 },
     });
 
