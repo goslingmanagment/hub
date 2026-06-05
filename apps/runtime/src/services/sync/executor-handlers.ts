@@ -237,6 +237,40 @@ function isFanslyDmDeepBackfillContinuationConfigured(
     (config.fanslyDmDeepBackfillContinuationJitterMs ?? 0) > 0;
 }
 
+function resolveFanslyDmDeepBackfillLiveRequestsPerDeep(
+  config: Pick<AppContext["config"], "fanslyDmDeepBackfillLiveRequestsPerDeep">,
+) {
+  return Math.max(1, Math.floor(config.fanslyDmDeepBackfillLiveRequestsPerDeep ?? 4));
+}
+
+function getDmMessagesLiveRequestsSinceDeepBackfill(state: DmMessagesCursorState) {
+  return Math.max(0, Math.floor(state.liveMessageRequestsSinceDeepBackfill ?? 0));
+}
+
+function setDmMessagesLiveRequestsSinceDeepBackfill(
+  state: DmMessagesCursorState,
+  value: number,
+) {
+  const next = { ...state };
+  const normalized = Math.max(0, Math.floor(value));
+  if (normalized > 0) {
+    next.liveMessageRequestsSinceDeepBackfill = normalized;
+  } else {
+    delete next.liveMessageRequestsSinceDeepBackfill;
+  }
+  return next;
+}
+
+function incrementDmMessagesLiveRequestsSinceDeepBackfill(
+  state: DmMessagesCursorState,
+  quota: number,
+) {
+  return setDmMessagesLiveRequestsSinceDeepBackfill(
+    state,
+    Math.min(getDmMessagesLiveRequestsSinceDeepBackfill(state) + 1, quota),
+  );
+}
+
 export type StreamChunkResult = {
   satisfied: boolean;
   yieldReason: SyncChunkYieldReason | null;
@@ -3303,6 +3337,8 @@ export async function executeDmMessagesChunk(
   const deepBackfillMaxRequests = app.config.fanslyDmDeepBackfillEnabled === true
     ? Math.max(0, app.config.fanslyDmDeepBackfillMaxRequestsPerRun ?? 1)
     : 0;
+  const deepBackfillLiveRequestsPerDeep =
+    resolveFanslyDmDeepBackfillLiveRequestsPerDeep(app.config);
   let deepBackfillRequests = 0;
   let deepBackfillPaused = false;
 
@@ -3338,46 +3374,74 @@ export async function executeDmMessagesChunk(
       }
 
       if (!conversation || !conversation.isVisible || conversation.fanId === null) {
-        const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
-          platformAccountId: input.pageContext.page.id,
-        });
-        let currentMode: "backfill" | "deep_backfill" | "incremental";
-        if (candidate) {
-          conversation = await getPageDmConversationById(app.db, candidate.id);
-          if (!conversation) {
-            exhaustedEligibleConversations = true;
-            break;
-          }
+        let currentMode: "backfill" | "deep_backfill" | "incremental" | null = null;
+        const shouldTryQuotaDeepBackfill =
+          deepBackfillRequests < deepBackfillMaxRequests &&
+          getDmMessagesLiveRequestsSinceDeepBackfill(state) >= deepBackfillLiveRequestsPerDeep;
 
-          currentMode = conversation.storedMessageCount === 0
-            ? "backfill"
-            : conversation.lastMessageId !== conversation.newestStoredMessageId
-              ? "incremental"
-              : conversation.messageCoverageStatus === "pending_backfill"
-                ? "backfill"
-                : "incremental";
-        } else if (deepBackfillRequests < deepBackfillMaxRequests) {
+        if (shouldTryQuotaDeepBackfill) {
           const deepBackfillCandidate = await selectNextPageDmMessageDeepBackfillCandidate(app.db, {
             platformAccountId: input.pageContext.page.id,
           });
-          if (!deepBackfillCandidate) {
+          if (deepBackfillCandidate) {
+            conversation = await getPageDmConversationById(app.db, deepBackfillCandidate.id);
+            if (!conversation) {
+              exhaustedEligibleConversations = true;
+              break;
+            }
+
+            currentMode = "deep_backfill";
+          } else {
+            conversation = null;
+          }
+        }
+
+        if (!conversation) {
+          const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
+            platformAccountId: input.pageContext.page.id,
+          });
+          if (candidate) {
+            conversation = await getPageDmConversationById(app.db, candidate.id);
+            if (!conversation) {
+              exhaustedEligibleConversations = true;
+              break;
+            }
+
+            currentMode = conversation.storedMessageCount === 0
+              ? "backfill"
+              : conversation.lastMessageId !== conversation.newestStoredMessageId
+                ? "incremental"
+                : conversation.messageCoverageStatus === "pending_backfill"
+                  ? "backfill"
+                  : "incremental";
+          } else if (deepBackfillRequests < deepBackfillMaxRequests) {
+            const deepBackfillCandidate = await selectNextPageDmMessageDeepBackfillCandidate(app.db, {
+              platformAccountId: input.pageContext.page.id,
+            });
+            if (!deepBackfillCandidate) {
+              exhaustedEligibleConversations = true;
+              break;
+            }
+
+            conversation = await getPageDmConversationById(app.db, deepBackfillCandidate.id);
+            if (!conversation) {
+              exhaustedEligibleConversations = true;
+              break;
+            }
+
+            currentMode = "deep_backfill";
+          } else {
             exhaustedEligibleConversations = true;
             break;
           }
+        }
 
-          conversation = await getPageDmConversationById(app.db, deepBackfillCandidate.id);
-          if (!conversation) {
-            exhaustedEligibleConversations = true;
-            break;
-          }
-
-          currentMode = "deep_backfill";
-        } else {
+        if (!conversation || currentMode === null) {
           exhaustedEligibleConversations = true;
           break;
         }
 
-        state = {
+        const nextState: DmMessagesCursorState = {
           ...emptyDmMessagesCursorState(),
           currentConversationId: conversation.id,
           currentPlatformConversationId: conversation.platformConversationId,
@@ -3386,6 +3450,12 @@ export async function executeDmMessagesChunk(
             : null,
           currentMode,
         };
+        state = currentMode === "deep_backfill"
+          ? setDmMessagesLiveRequestsSinceDeepBackfill(nextState, 0)
+          : setDmMessagesLiveRequestsSinceDeepBackfill(
+            nextState,
+            getDmMessagesLiveRequestsSinceDeepBackfill(state),
+          );
         if (currentMode !== "deep_backfill") {
           const progressCheckpoint = await upsertCheckpointProgress(app.db, {
             platformAccountId: input.pageContext.page.id,
@@ -3556,6 +3626,14 @@ export async function executeDmMessagesChunk(
           .length;
         collectedThisConversation += insertedMessageCount;
         processedMessages += normalizedMessages.length;
+        const nextLiveRequestState = deepBackfillMaxRequests <= 0
+          ? setDmMessagesLiveRequestsSinceDeepBackfill(state, 0)
+          : currentMode === "deep_backfill"
+          ? setDmMessagesLiveRequestsSinceDeepBackfill(state, 0)
+          : incrementDmMessagesLiveRequestsSinceDeepBackfill(
+            state,
+            deepBackfillLiveRequestsPerDeep,
+          );
 
         const oldestMessageId = page.items.at(-1)?.id ?? null;
         const providerHistoryExhausted = page.done || !oldestMessageId;
@@ -3588,19 +3666,24 @@ export async function executeDmMessagesChunk(
               conversationId: currentConversation.id,
               messageCoverageStatus,
             });
+            const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
+              emptyDmMessagesCursorState(),
+              getDmMessagesLiveRequestsSinceDeepBackfill(nextLiveRequestState),
+            );
             const progressCheckpoint = await upsertCheckpointProgress(dbTx, {
               platformAccountId: input.pageContext.page.id,
               stream: "dm_messages",
-              state: emptyDmMessagesCursorState(),
+              state: nextState,
             });
             return {
               finalizedConversation,
+              state: nextState,
               progressCheckpoint,
             };
           });
           conversation = finalized.finalizedConversation.conversation;
           completedConversations += 1;
-          state = emptyDmMessagesCursorState();
+          state = finalized.state;
           await input.telemetry.recordCheckpointAdvanced(
             "dm_messages",
             summarizeCheckpoint(finalized.progressCheckpoint),
@@ -3616,7 +3699,7 @@ export async function executeDmMessagesChunk(
         }
 
         state = {
-          ...state,
+          ...nextLiveRequestState,
           currentBeforeMessageId: oldestMessageId,
         };
         const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {

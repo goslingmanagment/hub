@@ -44,6 +44,7 @@ type DmMessagesCursorState = {
   currentPlatformConversationId: string | null;
   currentBeforeMessageId: string | null;
   currentMode: "backfill" | "deep_backfill" | "incremental" | null;
+  liveMessageRequestsSinceDeepBackfill?: number;
 };
 
 type TopSpendersCursorWindow = {
@@ -266,6 +267,11 @@ export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorStat
     : asNumber(state.currentConversationId);
   const currentPlatformConversationId = asNullableString(state.currentPlatformConversationId);
   const currentBeforeMessageId = asNullableString(state.currentBeforeMessageId);
+  const rawLiveMessageRequestsSinceDeepBackfill = state.liveMessageRequestsSinceDeepBackfill;
+  const liveMessageRequestsSinceDeepBackfill = rawLiveMessageRequestsSinceDeepBackfill === undefined ||
+      rawLiveMessageRequestsSinceDeepBackfill === null
+    ? 0
+    : asNumber(rawLiveMessageRequestsSinceDeepBackfill);
   const currentMode = state.currentMode === "backfill" ||
     state.currentMode === "deep_backfill" ||
     state.currentMode === "incremental"
@@ -278,6 +284,7 @@ export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorStat
     currentConversationId === undefined ||
     currentPlatformConversationId === undefined ||
     currentBeforeMessageId === undefined ||
+    liveMessageRequestsSinceDeepBackfill === null ||
     currentMode === undefined
   ) {
     return null;
@@ -289,6 +296,9 @@ export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorStat
     currentPlatformConversationId,
     currentBeforeMessageId,
     currentMode,
+    ...(liveMessageRequestsSinceDeepBackfill > 0
+      ? { liveMessageRequestsSinceDeepBackfill: Math.floor(liveMessageRequestsSinceDeepBackfill) }
+      : {}),
   };
 }
 

@@ -39,6 +39,7 @@ describe("config", () => {
     expect(config.fanslyDefaultDelayMs).toBe(2500);
     expect(config.fanslyDmConversationsDelayMs).toBe(5000);
     expect(config.fanslyDmMessagesDelayMs).toBe(5000);
+    expect(config.fanslyDmDeepBackfillLiveRequestsPerDeep).toBe(4);
     expect(config.fanslyDmDeepBackfillContinuationDelayMs).toBe(0);
     expect(config.fanslyDmDeepBackfillContinuationJitterMs).toBe(0);
     expect(config.onlyFansDefaultDelayMs).toBe(1000);
@@ -96,10 +97,12 @@ describe("config", () => {
   it("accepts Fansly DM deep backfill pacing overrides", () => {
     const config = loadConfig({
       ...baseEnv,
+      FANSLY_DM_DEEP_BACKFILL_LIVE_REQUESTS_PER_DEEP: "6",
       FANSLY_DM_DEEP_BACKFILL_CONTINUATION_DELAY_MS: "22000",
       FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS: "8000",
     });
 
+    expect(config.fanslyDmDeepBackfillLiveRequestsPerDeep).toBe(6);
     expect(config.fanslyDmDeepBackfillContinuationDelayMs).toBe(22_000);
     expect(config.fanslyDmDeepBackfillContinuationJitterMs).toBe(8_000);
   });
