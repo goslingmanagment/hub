@@ -3148,6 +3148,123 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     });
   });
 
+  it("continues immediately after a quota deep backfill page even when idle deep pacing is configured", async () => {
+    const telemetry = createTelemetry();
+    const getMessagesPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {
+      await recordStartedRequest(context.requestObserver, "messages");
+      return {
+        items: [{
+          id: "msg-24",
+          type: 1,
+          dataVersion: 1,
+          content: "older quota context",
+          groupId: "group-1",
+          senderId: "fan-1",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_769_999_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 0,
+        }],
+        groupId: "group-1",
+        before: "msg-25",
+        done: false,
+        raw: {
+          messages: [],
+        },
+      };
+    });
+    const app = {
+      db: {},
+      config: {
+        syncSharedRateLimitEnabled: true,
+        fanslyDmDeepBackfillEnabled: true,
+        fanslyDmDeepBackfillMaxRequestsPerRun: 1,
+        fanslyDmDeepBackfillLiveRequestsPerDeep: 4,
+        fanslyDmDeepBackfillContinuationDelayMs: 22_000,
+        fanslyDmDeepBackfillContinuationJitterMs: 0,
+      },
+      adapter: {
+        getMessagesPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        currentConversationId: null,
+        currentPlatformConversationId: null,
+        currentBeforeMessageId: null,
+        currentMode: null,
+        liveMessageRequestsSinceDeepBackfill: 4,
+      },
+    });
+    dbMocks.selectNextPageDmMessageDeepBackfillCandidate.mockResolvedValueOnce({
+      ...buildDmMessageSyncCandidate({
+        storedMessageCount: 25,
+        newestStoredMessageId: "msg-80",
+        retentionLimit: 500,
+        isSpender: true,
+      }),
+    });
+    dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation({
+      storedMessageCount: 25,
+      newestStoredMessageId: "msg-80",
+      oldestStoredMessageId: "msg-25",
+      messageCoverageStatus: "partial_window",
+    }));
+    dbMocks.finalizePageDmConversationMessageSync.mockResolvedValue({
+      conversation: {
+        id: 777,
+      },
+      deletedCount: 0,
+      summary: {
+        storedMessageCount: 26,
+        newestStoredMessageId: "msg-80",
+        oldestStoredMessageId: "msg-24",
+        lastFanMessageAt: new Date("2026-03-10T00:00:00.000Z"),
+        lastModelMessageAt: null,
+      },
+    });
+
+    const result = await executeDmMessagesChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 1,
+      },
+      syncRunId: 906,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(5),
+    } as never);
+
+    expect(result.satisfied).toBe(false);
+    expect(result.yieldReason).toBeNull();
+    expect(result.continuationRetryAt).toBeNull();
+    expect(result.continuationRequestSource).toBe("scheduled");
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(result.stats).toMatchObject({
+      deepBackfillRequests: 1,
+      deepBackfillPaused: true,
+      deepBackfillSelectionReason: "quota",
+      deepBackfillContinuationDelayMs: 0,
+      deepBackfillContinuationRequestSource: "scheduled",
+    });
+  });
+
   it("paces deep backfill continuation when a continuation delay is configured", async () => {
     const telemetry = createTelemetry();
     const getMessagesPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {

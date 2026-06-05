@@ -3341,6 +3341,7 @@ export async function executeDmMessagesChunk(
     resolveFanslyDmDeepBackfillLiveRequestsPerDeep(app.config);
   let deepBackfillRequests = 0;
   let deepBackfillPaused = false;
+  let deepBackfillSelectionReason: "quota" | "idle" | null = null;
 
   const emitDmMessagesChunkSummary = async () => {
     if (emittedDmMessagesChunkSummary) {
@@ -3391,6 +3392,7 @@ export async function executeDmMessagesChunk(
             }
 
             currentMode = "deep_backfill";
+            deepBackfillSelectionReason = "quota";
           } else {
             conversation = null;
           }
@@ -3430,6 +3432,7 @@ export async function executeDmMessagesChunk(
             }
 
             currentMode = "deep_backfill";
+            deepBackfillSelectionReason = "idle";
           } else {
             exhaustedEligibleConversations = true;
             break;
@@ -3744,6 +3747,29 @@ export async function executeDmMessagesChunk(
       deepBackfillPaused &&
       isFanslyDmDeepBackfillContinuationConfigured(app.config)
     ) {
+      if (deepBackfillSelectionReason === "quota") {
+        return {
+          satisfied: false,
+          yieldReason: null,
+          continuationRetryAt: null,
+          continuationRequestSource: "scheduled",
+          stats: {
+            currentConversationId: state.currentConversationId,
+            currentBeforeMessageId: state.currentBeforeMessageId,
+            currentMode: state.currentMode,
+            processedMessages,
+            completedConversations,
+            overlapHits,
+            deepBackfillRequests,
+            deepBackfillPaused,
+            deepBackfillSelectionReason,
+            deepBackfillContinuationDelayMs: 0,
+            deepBackfillContinuationRequestSource: "scheduled",
+            dmMessagesChunk,
+          },
+        } satisfies StreamChunkResult;
+      }
+
       const continuationDelayMs = resolveFanslyDmDeepBackfillContinuationDelayMs(app.config);
       const continuationRetryAt = new Date(Date.now() + continuationDelayMs);
       return {
@@ -3760,6 +3786,7 @@ export async function executeDmMessagesChunk(
           overlapHits,
           deepBackfillRequests,
           deepBackfillPaused,
+          deepBackfillSelectionReason,
           deepBackfillContinuationDelayMs: continuationDelayMs,
           deepBackfillContinuationRetryAt: continuationRetryAt.toISOString(),
           deepBackfillContinuationRequestSource: "scheduled",
@@ -3791,6 +3818,7 @@ export async function executeDmMessagesChunk(
         overlapHits,
         deepBackfillRequests,
         deepBackfillPaused,
+        deepBackfillSelectionReason,
         dmMessagesChunk,
       },
     } satisfies StreamChunkResult;
