@@ -79,6 +79,14 @@ function buildMonitorRow(overrides: Record<string, unknown> = {}) {
     dmEligibleConversationCount: 6,
     dmBackfillCompleteConversationCount: 6,
     dmLaggingConversationCount: 0,
+    dmDeepBackfillPendingConversationCount: 0,
+    dmDeepBackfillPendingPageEstimate: 0,
+    dmDeepBackfillSpenderPendingConversationCount: 0,
+    dmDeepBackfillSpenderPendingPageEstimate: 0,
+    dmDeepBackfillRegularPendingConversationCount: 0,
+    dmDeepBackfillRegularPendingPageEstimate: 0,
+    dmDeepBackfillRecentRequestCount: 0,
+    dmDeepBackfillLastCompletedAt: null,
     stream: "light",
     status: "idle",
     cadenceSeconds: 3600,
@@ -241,6 +249,58 @@ describe("sync status service", () => {
         readyConversationCount: 3,
         eligibleConversationCount: 10,
         laggingConversationCount: 2,
+      }),
+    });
+    expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");
+  });
+
+  it("keeps message history catching up while deep backfill pages remain", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }),
+      buildTaskRow({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+      buildTaskRow({ stream: "dm_messages", cadenceSeconds: 86400, workClass: "history" }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+      buildMonitorRow({
+        stream: "dm_messages",
+        cadenceSeconds: 86400,
+        dmEligibleConversationCount: 10,
+        dmBackfillCompleteConversationCount: 10,
+        dmLaggingConversationCount: 0,
+        dmDeepBackfillPendingConversationCount: 4,
+        dmDeepBackfillPendingPageEstimate: 17,
+        dmDeepBackfillSpenderPendingConversationCount: 3,
+        dmDeepBackfillSpenderPendingPageEstimate: 15,
+        dmDeepBackfillRegularPendingConversationCount: 1,
+        dmDeepBackfillRegularPendingPageEstimate: 2,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.messages_history).toMatchObject({
+      state: "delayed",
+      progress: expect.objectContaining({
+        label: "10 / 10 conversations ready, 17 deep pages",
+        details: expect.objectContaining({
+          deepBackfillPendingConversationCount: 4,
+          deepBackfillPendingPagesEstimate: 17,
+          deepBackfillSpenderPendingPagesEstimate: 15,
+          deepBackfillRegularPendingPagesEstimate: 2,
+        }),
+      }),
+      metrics: expect.objectContaining({
+        deepBackfillPendingConversationCount: 4,
+        deepBackfillPendingPagesEstimate: 17,
+        deepBackfillSpenderPendingPagesEstimate: 15,
+        deepBackfillRegularPendingPagesEstimate: 2,
       }),
     });
     expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");

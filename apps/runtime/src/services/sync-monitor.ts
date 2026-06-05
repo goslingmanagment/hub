@@ -28,6 +28,7 @@ const DEFAULT_REQUEST_LOOKBACK_MS = 60_000;
 const DEFAULT_REQUEST_LIMIT = 100;
 const MAX_REQUEST_LIMIT = 500;
 const STALLED_THRESHOLD_MS = 45_000;
+const DEEP_BACKFILL_STALLED_THRESHOLD_MS = 60 * 60 * 1000;
 const RATE_LIMITED_LOOKBACK_MS = 15 * 60 * 1000;
 const MONITORED_SYNC_STREAMS = [
   "light",
@@ -100,6 +101,21 @@ export interface SyncMonitorActiveRun {
   lastActivityAt: string;
 }
 
+export interface SyncMonitorDeepBackfill {
+  pendingConversations: number;
+  pendingPagesEstimate: number;
+  spenderPendingConversations: number;
+  spenderPendingPagesEstimate: number;
+  regularPendingConversations: number;
+  regularPendingPagesEstimate: number;
+  recentRequests: number;
+  lastCompletedAt: string | null;
+  liveRequestsSinceDeepBackfill: number;
+  active: boolean;
+  stalled: boolean;
+  stallReason: string | null;
+}
+
 export interface SyncMonitorStreamItem {
   stream: SyncStream;
   status: SyncMonitorStatus;
@@ -107,6 +123,7 @@ export interface SyncMonitorStreamItem {
   pending: boolean;
   retryAt: string | null;
   progress: SyncMonitorProgress | null;
+  deepBackfill: SyncMonitorDeepBackfill | null;
   recentRuns: SyncMonitorRecentRuns;
   recentErrors: SyncMonitorRecentErrors;
   rateHealth: SyncMonitorRateHealth;
@@ -532,14 +549,73 @@ function buildDmMessagesProgress(row: SyncMonitorStreamRow): SyncMonitorProgress
   const baseLabel = total > 0
     ? labelWithTotal(current, total, "conversations", " backfilled")
     : "No eligible conversations";
-  const label = lagging > 0 ? `${baseLabel}, ${lagging.toLocaleString()} lagging` : baseLabel;
+  const labelParts = [baseLabel];
+  if (lagging > 0) {
+    labelParts.push(`${lagging.toLocaleString()} lagging`);
+  }
+  if (row.dmDeepBackfillPendingPageEstimate > 0) {
+    labelParts.push(`${row.dmDeepBackfillPendingPageEstimate.toLocaleString()} deep pages`);
+  }
 
   return {
-    label,
+    label: labelParts.join(", "),
     current,
     total: total || 0,
     unit: "conversations",
     percent: total > 0 ? percent(current, total) : null,
+  };
+}
+
+function buildDmMessagesDeepBackfill(
+  row: SyncMonitorStreamRow,
+  status: SyncMonitorStatus,
+  now: Date,
+  enabled: boolean,
+): SyncMonitorDeepBackfill | null {
+  if (row.platform !== "fansly" || row.stream !== "dm_messages") {
+    return null;
+  }
+
+  const state = parseDmMessagesCursorState(row.checkpointState);
+  const active = status === "running" && state?.currentMode === "deep_backfill";
+  const blockedOrWaiting = status === "blocked" ||
+    status === "paused" ||
+    status === "pending" ||
+    status === "retrying" ||
+    active;
+  const lastCompletedAt = row.dmDeepBackfillLastCompletedAt;
+  const fallbackProgressAt = latestSuccessTimestamp(row) ?? row.lastFinishedAt ?? row.requestedAt;
+  const lastProgressAt = lastCompletedAt ?? fallbackProgressAt;
+  const progressAgeMs = lastProgressAt ? now.getTime() - lastProgressAt.getTime() : null;
+  const hasBacklog = row.dmDeepBackfillPendingPageEstimate > 0;
+  const stalled = enabled &&
+    hasBacklog &&
+    !blockedOrWaiting &&
+    (
+      progressAgeMs === null ||
+      progressAgeMs > DEEP_BACKFILL_STALLED_THRESHOLD_MS
+    );
+
+  return {
+    pendingConversations: row.dmDeepBackfillPendingConversationCount,
+    pendingPagesEstimate: row.dmDeepBackfillPendingPageEstimate,
+    spenderPendingConversations: row.dmDeepBackfillSpenderPendingConversationCount,
+    spenderPendingPagesEstimate: row.dmDeepBackfillSpenderPendingPageEstimate,
+    regularPendingConversations: row.dmDeepBackfillRegularPendingConversationCount,
+    regularPendingPagesEstimate: row.dmDeepBackfillRegularPendingPageEstimate,
+    recentRequests: row.dmDeepBackfillRecentRequestCount,
+    lastCompletedAt: iso(lastCompletedAt),
+    liveRequestsSinceDeepBackfill: Math.max(
+      0,
+      Math.floor(state?.liveMessageRequestsSinceDeepBackfill ?? 0),
+    ),
+    active,
+    stalled,
+    stallReason: stalled
+      ? lastCompletedAt
+        ? "deep_progress_stale"
+        : "no_deep_progress"
+      : null,
   };
 }
 
@@ -588,11 +664,23 @@ function progressFor(
   }
 }
 
-function streamItemFor(row: SyncMonitorStreamRow, now: Date): SyncMonitorStreamItem {
+function streamItemFor(
+  row: SyncMonitorStreamRow,
+  now: Date,
+  options?: {
+    deepBackfillEnabled?: boolean;
+  },
+): SyncMonitorStreamItem {
   const status = statusFor(row, now);
   const stalled = isStalled(row, now);
   const pending = isPending(row);
   const retryAt = isRetrying(row, now) ? row.retryAt : null;
+  const deepBackfill = buildDmMessagesDeepBackfill(
+    row,
+    status,
+    now,
+    options?.deepBackfillEnabled === true,
+  );
   const item = {
     stream: row.stream,
     status,
@@ -600,6 +688,7 @@ function streamItemFor(row: SyncMonitorStreamRow, now: Date): SyncMonitorStreamI
     pending,
     retryAt: iso(retryAt),
     progress: progressFor(row, status),
+    deepBackfill,
     recentRuns: recentRunsFor(row),
     recentErrors: recentErrorsFor(row),
     rateHealth: rateHealthFor({
@@ -650,7 +739,9 @@ export async function getPageStreamSyncUxByStream(
 
   return new Map(
     rows.map((row) => {
-      const stream = streamItemFor(row, now);
+      const stream = streamItemFor(row, now, {
+        deepBackfillEnabled: app.config.fanslyDmDeepBackfillEnabled === true,
+      });
       return [row.stream, stream.syncUx] satisfies [SyncStream, SyncUxSummary];
     }),
   );
@@ -775,7 +866,9 @@ export async function getSyncMonitorSnapshot(
       syncUx: buildPageSyncUx([]),
     };
 
-    const stream = streamItemFor(row, now);
+    const stream = streamItemFor(row, now, {
+      deepBackfillEnabled: app.config.fanslyDmDeepBackfillEnabled === true,
+    });
     page.streams.push(stream);
     if (stream.status === "running") {
       page.summary.runningStreams += 1;

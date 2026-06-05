@@ -807,12 +807,21 @@ function buildProgressFromPayload(
     const total = monitorRow.dmEligibleConversationCount;
     const current = monitorRow.dmBackfillCompleteConversationCount;
     const lagging = monitorRow.dmLaggingConversationCount;
-    if (total > 0 || current > 0 || lagging > 0) {
-      const label = lagging > 0
-        ? `${current.toLocaleString()} / ${total.toLocaleString()} conversations ready, ${lagging.toLocaleString()} lagging`
-        : `${current.toLocaleString()} / ${total.toLocaleString()} conversations ready`;
+    const deepPages = monitorRow.dmDeepBackfillPendingPageEstimate ?? 0;
+    if (total > 0 || current > 0 || lagging > 0 || deepPages > 0) {
+      const labelParts = [
+        total > 0
+          ? `${current.toLocaleString()} / ${total.toLocaleString()} conversations ready`
+          : "No conversation backlog",
+      ];
+      if (lagging > 0) {
+        labelParts.push(`${lagging.toLocaleString()} lagging`);
+      }
+      if (deepPages > 0) {
+        labelParts.push(`${deepPages.toLocaleString()} deep pages`);
+      }
       return {
-        label,
+        label: labelParts.join(", "),
         current,
         total,
         unit: "conversations",
@@ -821,6 +830,13 @@ function buildProgressFromPayload(
         details: {
           ...payload,
           laggingConversationCount: lagging,
+          deepBackfillPendingPagesEstimate: deepPages,
+          deepBackfillPendingConversationCount:
+            monitorRow.dmDeepBackfillPendingConversationCount ?? 0,
+          deepBackfillSpenderPendingPagesEstimate:
+            monitorRow.dmDeepBackfillSpenderPendingPageEstimate ?? 0,
+          deepBackfillRegularPendingPagesEstimate:
+            monitorRow.dmDeepBackfillRegularPendingPageEstimate ?? 0,
         },
       };
     }
@@ -1022,10 +1038,12 @@ function deriveDomainState(
   const allPrimaryFresh = primaryTasks.every(isFreshEnough);
   const primaryFresh = allPrimaryFresh;
   const messagesMonitorRow = monitorRows.find((row) => row.stream === "dm_messages") ?? monitorRows[0] ?? null;
+  const deepBackfillPendingPages = messagesMonitorRow?.dmDeepBackfillPendingPageEstimate ?? 0;
   const messagesHistoryComplete = messagesMonitorRow
-    ? messagesMonitorRow.dmEligibleConversationCount === 0 ||
+    ? (messagesMonitorRow.dmEligibleConversationCount === 0 && deepBackfillPendingPages === 0) ||
       (messagesMonitorRow.dmBackfillCompleteConversationCount >= messagesMonitorRow.dmEligibleConversationCount &&
-        messagesMonitorRow.dmLaggingConversationCount === 0)
+        messagesMonitorRow.dmLaggingConversationCount === 0 &&
+        deepBackfillPendingPages === 0)
     : !primaryPending;
 
   let state: SyncDomainBlockState;
@@ -1083,6 +1101,10 @@ function deriveDomainState(
           messagesMonitorRow.dmLaggingConversationCount > 0
             ? `, ${messagesMonitorRow.dmLaggingConversationCount.toLocaleString()} lagging`
             : ""
+        }${
+          deepBackfillPendingPages > 0
+            ? `, ${deepBackfillPendingPages.toLocaleString()} deep pages`
+            : ""
         }`,
       current: messagesMonitorRow.dmBackfillCompleteConversationCount,
       total: messagesMonitorRow.dmEligibleConversationCount,
@@ -1095,6 +1117,12 @@ function deriveDomainState(
       details: {
         laggingConversationCount: messagesMonitorRow.dmLaggingConversationCount,
         messageCount: messagesMonitorRow.dmMessageCount,
+        deepBackfillPendingPagesEstimate: deepBackfillPendingPages,
+        deepBackfillPendingConversationCount: messagesMonitorRow.dmDeepBackfillPendingConversationCount ?? 0,
+        deepBackfillSpenderPendingPagesEstimate:
+          messagesMonitorRow.dmDeepBackfillSpenderPendingPageEstimate ?? 0,
+        deepBackfillRegularPendingPagesEstimate:
+          messagesMonitorRow.dmDeepBackfillRegularPendingPageEstimate ?? 0,
       },
     } satisfies SyncDomainProgress
     : progressTask?.progress ?? null;
@@ -1124,6 +1152,12 @@ function deriveDomainState(
           eligibleConversationCount: metricsRow?.dmEligibleConversationCount ?? 0,
           readyConversationCount: metricsRow?.dmBackfillCompleteConversationCount ?? 0,
           laggingConversationCount: metricsRow?.dmLaggingConversationCount ?? 0,
+          deepBackfillPendingConversationCount: metricsRow?.dmDeepBackfillPendingConversationCount ?? 0,
+          deepBackfillPendingPagesEstimate: metricsRow?.dmDeepBackfillPendingPageEstimate ?? 0,
+          deepBackfillSpenderPendingPagesEstimate:
+            metricsRow?.dmDeepBackfillSpenderPendingPageEstimate ?? 0,
+          deepBackfillRegularPendingPagesEstimate:
+            metricsRow?.dmDeepBackfillRegularPendingPageEstimate ?? 0,
           messageCount: metricsRow?.dmMessageCount ?? 0,
         };
     }

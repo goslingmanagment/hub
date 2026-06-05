@@ -6238,6 +6238,20 @@ export interface paths {
                                         unit: string;
                                         percent: number | null;
                                     } | null;
+                                    deepBackfill?: {
+                                        pendingConversations: number;
+                                        pendingPagesEstimate: number;
+                                        spenderPendingConversations: number;
+                                        spenderPendingPagesEstimate: number;
+                                        regularPendingConversations: number;
+                                        regularPendingPagesEstimate: number;
+                                        recentRequests: number;
+                                        lastCompletedAt: string | null;
+                                        liveRequestsSinceDeepBackfill: number;
+                                        active: boolean;
+                                        stalled: boolean;
+                                        stallReason: string | null;
+                                    } | null;
                                     recentRuns: {
                                         running: number;
                                         success: number;

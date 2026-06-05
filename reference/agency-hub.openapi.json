@@ -20612,6 +20612,99 @@
                                     }
                                   ]
                                 },
+                                "deepBackfill": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "pendingConversations": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "pendingPagesEstimate": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "spenderPendingConversations": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "spenderPendingPagesEstimate": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "regularPendingConversations": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "regularPendingPagesEstimate": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "recentRequests": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "lastCompletedAt": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "liveRequestsSinceDeepBackfill": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "active": {
+                                          "type": "boolean"
+                                        },
+                                        "stalled": {
+                                          "type": "boolean"
+                                        },
+                                        "stallReason": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "pendingConversations",
+                                        "pendingPagesEstimate",
+                                        "spenderPendingConversations",
+                                        "spenderPendingPagesEstimate",
+                                        "regularPendingConversations",
+                                        "regularPendingPagesEstimate",
+                                        "recentRequests",
+                                        "lastCompletedAt",
+                                        "liveRequestsSinceDeepBackfill",
+                                        "active",
+                                        "stalled",
+                                        "stallReason"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "recentRuns": {
                                   "type": "object",
                                   "properties": {
