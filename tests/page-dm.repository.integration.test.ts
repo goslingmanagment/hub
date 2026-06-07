@@ -648,6 +648,13 @@ describe("page DM repository integration", () => {
       return;
     }
 
+    const messageCount = PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT + 30;
+    const latestMessageId = `msg-${String(messageCount).padStart(4, "0")}`;
+    const expectedPreviewIds = Array.from({ length: 10 }, (_value, index) => {
+      const sequence = messageCount - 9 + index;
+      return `msg-${String(sequence).padStart(4, "0")}`;
+    });
+
     const page = await createTestPage(testDb, "page-dm-preview");
     const [fan] = await upsertFans(testDb.db, [{
       platform: "fansly",
@@ -666,12 +673,12 @@ describe("page DM repository integration", () => {
       conversationFlags: 0,
       unreadCount: 1,
       subscriptionTierId: null,
-      lastMessageId: "msg-130",
-      lastUnreadMessageId: "msg-130",
+      lastMessageId: latestMessageId,
+      lastUnreadMessageId: latestMessageId,
       lastMessageAt: new Date("2026-03-17T14:10:00.000Z"),
       lastMessageSenderId: "fan-preview",
       lastMessageSenderRole: "fan",
-      lastMessagePreview: "message 130",
+      lastMessagePreview: `message ${messageCount}`,
       lastFanMessageAt: new Date("2026-03-17T14:10:00.000Z"),
       lastModelMessageAt: null,
       isVisible: true,
@@ -679,9 +686,9 @@ describe("page DM repository integration", () => {
       metadata: {},
     });
 
-    await upsertPageDmMessages(testDb.db, Array.from({ length: 130 }, (_value, index) => {
+    await upsertPageDmMessages(testDb.db, Array.from({ length: messageCount }, (_value, index) => {
       const sequence = index + 1;
-      const messageId = `msg-${String(sequence).padStart(3, "0")}`;
+      const messageId = `msg-${String(sequence).padStart(4, "0")}`;
       return {
         conversationId: conversation.id,
         platformAccountId: page.id,
@@ -690,7 +697,7 @@ describe("page DM repository integration", () => {
         senderRole: sequence % 2 === 0 ? "fan" : "model",
         createdAt: new Date(Date.UTC(2026, 2, 17, 12, sequence, 0, 0)),
         content: `message ${sequence}`,
-        totalTipAmountCents: sequence === 130 ? 500 : 0,
+        totalTipAmountCents: sequence === messageCount ? 500 : 0,
         inReplyToMessageId: null,
         inReplyToRootMessageId: null,
       };
@@ -726,32 +733,10 @@ describe("page DM repository integration", () => {
     expect(newestFirst).not.toBeNull();
     expect(preview?.conversation.storedMessageCount).toBe(PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT);
     expect(preview?.conversation.messageBackfillComplete).toBe(true);
-    expect(preview?.messages.map((message) => message.platformMessageId)).toEqual([
-      "msg-121",
-      "msg-122",
-      "msg-123",
-      "msg-124",
-      "msg-125",
-      "msg-126",
-      "msg-127",
-      "msg-128",
-      "msg-129",
-      "msg-130",
-    ]);
-    expect(preview?.messages[0]?.content).toBe("message 121");
+    expect(preview?.messages.map((message) => message.platformMessageId)).toEqual(expectedPreviewIds);
+    expect(preview?.messages[0]?.content).toBe(`message ${messageCount - 9}`);
     expect(preview?.messages[9]?.totalTipAmountCents).toBe(500);
-    expect(newestFirst?.messages.map((message) => message.messageId)).toEqual([
-      "msg-130",
-      "msg-129",
-      "msg-128",
-      "msg-127",
-      "msg-126",
-      "msg-125",
-      "msg-124",
-      "msg-123",
-      "msg-122",
-      "msg-121",
-    ]);
+    expect(newestFirst?.messages.map((message) => message.messageId)).toEqual([...expectedPreviewIds].reverse());
     expect(newestFirst?.messages[0]?.tipAmountCents).toBe(500);
   });
 
@@ -760,6 +745,12 @@ describe("page DM repository integration", () => {
       context.skip();
       return;
     }
+
+    const messageCount = PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT + 30;
+    const latestMessageId = `msg-${String(messageCount).padStart(4, "0")}`;
+    const oldestRetainedMessageId = `msg-${
+      String(messageCount - PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT + 1).padStart(4, "0")
+    }`;
 
     const page = await createTestPage(testDb, "page-dm-spender-retention");
     const [fan] = await upsertFans(testDb.db, [{
@@ -793,12 +784,12 @@ describe("page DM repository integration", () => {
       conversationFlags: 0,
       unreadCount: 0,
       subscriptionTierId: null,
-      lastMessageId: "msg-530",
+      lastMessageId: latestMessageId,
       lastUnreadMessageId: null,
       lastMessageAt: new Date("2026-03-18T08:50:00.000Z"),
       lastMessageSenderId: "fan-spender-retention",
       lastMessageSenderRole: "fan",
-      lastMessagePreview: "message 530",
+      lastMessagePreview: `message ${messageCount}`,
       lastFanMessageAt: new Date("2026-03-18T08:50:00.000Z"),
       lastModelMessageAt: null,
       isVisible: true,
@@ -806,9 +797,9 @@ describe("page DM repository integration", () => {
       metadata: {},
     });
 
-    await upsertPageDmMessages(testDb.db, Array.from({ length: 530 }, (_value, index) => {
+    await upsertPageDmMessages(testDb.db, Array.from({ length: messageCount }, (_value, index) => {
       const sequence = index + 1;
-      const messageId = `msg-${String(sequence).padStart(3, "0")}`;
+      const messageId = `msg-${String(sequence).padStart(4, "0")}`;
       return {
         conversationId: conversation.id,
         platformAccountId: page.id,
@@ -845,7 +836,7 @@ describe("page DM repository integration", () => {
     );
 
     expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT);
-    expect(storedMessages.rows[0]?.oldest).toBe("msg-031");
-    expect(storedMessages.rows[0]?.newest).toBe("msg-530");
+    expect(storedMessages.rows[0]?.oldest).toBe(oldestRetainedMessageId);
+    expect(storedMessages.rows[0]?.newest).toBe(latestMessageId);
   });
 });
