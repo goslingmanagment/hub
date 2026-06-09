@@ -11,6 +11,7 @@ export const WORKBOARD_RECOMPUTE_QUEUE = "workboard.recompute";
 export const WORKBOARD_CLASSIFY_QUEUE = "workboard.classify-closing";
 export const WORKBOARD_V3_CONFIRM_TOUCHES_QUEUE = "workboard-v3.confirm-touches";
 export const WORKBOARD_V3_RECOMPUTE_QUEUE = "workboard-v3.recompute";
+export const WORKBOARD_V3_DIALOG_READ_QUEUE = "workboard-v3.dialog-read";
 
 export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages";
 
@@ -168,6 +169,11 @@ export async function ensureWorkboardV3Queues(
     retryLimit: 1,
     retryDelay: 120,
   }, createdQueues);
+  await ensureQueueCreated(boss, WORKBOARD_V3_DIALOG_READ_QUEUE, {
+    policy: "standard",
+    retryLimit: 1,
+    retryDelay: 120,
+  }, createdQueues);
 }
 
 export async function ensureWorkboardV3Schedule(
@@ -181,6 +187,8 @@ export async function ensureWorkboardV3Schedule(
   await boss.schedule(WORKBOARD_V3_CONFIRM_TOUCHES_QUEUE, "*/20 * * * *", null, { tz: "UTC" });
   // Nightly FSM at 04:00 UTC — after the sync quiet window and the v2 run at 03:00.
   await boss.schedule(WORKBOARD_V3_RECOMPUTE_QUEUE, "0 4 * * *", null, { tz: "UTC" });
+  // Dialog Reads hot path every 30 min, trailing the dm_conversations sync (PRD §9).
+  await boss.schedule(WORKBOARD_V3_DIALOG_READ_QUEUE, "*/30 * * * *", null, { tz: "UTC" });
 }
 
 export async function sendSyncPlannerWakeup(

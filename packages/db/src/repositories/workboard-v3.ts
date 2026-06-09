@@ -2,6 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
+  dialogReads,
   dmBroadcastGroups,
   dmBroadcastMessages,
   workboardSnoozes,
@@ -10,6 +11,7 @@ import {
   workboardV3PlanItems,
   workboardV3Touches,
   type Wb3DialogIntent,
+  type Wb3DialogVerdict,
 } from "../schema.ts";
 
 // Workboard v3 data access. Raw SQL in/out; the FSM and detectors (apps/runtime)
@@ -428,6 +430,145 @@ export async function upsertWb3Snooze(
       target: [workboardSnoozes.platformAccountId, workboardSnoozes.fanId],
       set: { snoozedUntil: input.snoozedUntil, reason: input.reason ?? null },
     });
+}
+
+// ─── Dialog Reads (M0.5) ────────────────────────────────────────────────────
+
+export type Wb3DialogReadCandidate = {
+  conversationId: number;
+  fanId: number;
+  lastFanMessagePk: number;
+  segment: string | null;
+  /** Recent thread tail, oldest→newest, fan/creator roles only. */
+  context: Array<{ role: "fan" | "creator"; text: string }>;
+};
+
+/**
+ * Threads whose latest fan message has no Dialog Read yet (the permanent cache
+ * key is (conversation, last fan message) — a fan burst within the sync window
+ * coalesces into one read of the newest message). Under cap pressure the order
+ * is subs → spenders → fresh → mass (PRD §9), fresher tails first.
+ */
+export async function listWb3DialogReadCandidates(
+  db: Database,
+  input: { platformAccountId: number; limit: number; contextSize?: number },
+): Promise<Wb3DialogReadCandidate[]> {
+  const contextSize = input.contextSize ?? 15;
+  const result = await db.execute<{
+    conversation_id: bigint;
+    fan_id: bigint;
+    last_fan_message_pk: bigint;
+    segment: string | null;
+    context: Array<{ role: string; text: string }>;
+  }>(sql`
+    select t.id as conversation_id, t.fan_id, lf.id as last_fan_message_pk,
+      s.segment::text as segment, ctx.context
+    from page_dm_threads t
+    join lateral (
+      select m.id
+      from page_dm_messages m
+      where m.conversation_id = t.id and m.sender_role = 'fan'
+      order by m.created_at desc, m.id desc
+      limit 1
+    ) lf on true
+    left join workboard_v3_fan_state s
+      on s.platform_account_id = t.platform_account_id and s.fan_id = t.fan_id
+    join lateral (
+      select coalesce(
+        json_agg(json_build_object('role', x.role, 'text', x.content) order by x.created_at asc, x.id asc),
+        '[]'::json
+      ) as context
+      from (
+        select m2.id, m2.created_at, m2.content,
+          case when m2.sender_role = 'model' then 'creator' else 'fan' end as role
+        from page_dm_messages m2
+        where m2.conversation_id = t.id and m2.sender_role in ('fan', 'model')
+        order by m2.created_at desc, m2.id desc
+        limit ${contextSize}
+      ) x
+    ) ctx on true
+    where t.platform_account_id = ${input.platformAccountId}
+      and t.fan_id is not null
+      and t.is_visible
+      and t.last_message_sender_role = 'fan'
+      and not exists (
+        select 1 from dialog_reads dr
+        where dr.conversation_id = t.id and dr.last_fan_message_pk = lf.id
+      )
+    order by
+      case s.segment::text
+        when 'subscriber' then 0
+        when 'spender' then 1
+        when 'fresh' then 2
+        when 'mass_active' then 3
+        else 4
+      end asc,
+      t.last_fan_message_at desc nulls last,
+      t.id asc
+    limit ${input.limit}
+  `);
+  return result.rows.map((row) => ({
+    conversationId: toNumber(row.conversation_id),
+    fanId: toNumber(row.fan_id),
+    lastFanMessagePk: toNumber(row.last_fan_message_pk),
+    segment: row.segment,
+    context: (row.context ?? [])
+      .filter((m) => m.role === "fan" || m.role === "creator")
+      .map((m) => ({ role: m.role as "fan" | "creator", text: m.text ?? "" })),
+  }));
+}
+
+export async function insertWb3DialogRead(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    fanId: number;
+    conversationId: number;
+    lastFanMessagePk: number;
+    verdict: Wb3DialogVerdict;
+    model: string;
+    createdAt?: Date;
+  },
+): Promise<void> {
+  await db
+    .insert(dialogReads)
+    .values({
+      platformAccountId: input.platformAccountId,
+      fanId: input.fanId,
+      conversationId: input.conversationId,
+      lastFanMessagePk: input.lastFanMessagePk,
+      verdict: input.verdict,
+      model: input.model,
+      ...(input.createdAt ? { createdAt: input.createdAt } : {}),
+    })
+    .onConflictDoNothing();
+}
+
+/**
+ * stop_request auto-action (PRD §9): do-not-touch with a reason, reviewed in
+ * Service. Inserts a placeholder gray row when the fan has no state yet — the
+ * nightly recompute fixes the segment and carries the flag forward.
+ */
+export async function setWb3DoNotTouch(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    fanId: number;
+    doNotTouch: boolean;
+    reason: string | null;
+    now?: Date;
+  },
+): Promise<void> {
+  await db.execute(sql`
+    insert into workboard_v3_fan_state
+      (platform_account_id, fan_id, segment, do_not_touch, do_not_touch_reason, computed_at)
+    values
+      (${input.platformAccountId}, ${input.fanId}, 'gray',
+       ${input.doNotTouch}, ${input.reason}, ${input.now ?? new Date()})
+    on conflict (platform_account_id, fan_id) do update set
+      do_not_touch = excluded.do_not_touch,
+      do_not_touch_reason = excluded.do_not_touch_reason
+  `);
 }
 
 // ─── Recompute signals (M0.4) ───────────────────────────────────────────────

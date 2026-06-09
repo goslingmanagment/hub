@@ -96,6 +96,10 @@ const envSchema = z.object({
   WB_CLOSING_LLM_DAILY_CAP_MIN: z.coerce.number().int().positive().default(50),
   WB_CLOSING_LLM_DAILY_CAP_MAX: z.coerce.number().int().positive().default(400),
   WB3_ENABLED: booleanSchema.default(false),
+  WB3_DIALOG_READ_LLM_ENABLED: booleanSchema.default(false),
+  WB3_DIALOG_READ_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
+  WB3_DIALOG_READ_DAILY_CAP_MIN: z.coerce.number().int().positive().default(50),
+  WB3_DIALOG_READ_DAILY_CAP_MAX: z.coerce.number().int().positive().default(400),
 });
 
 export interface AppConfig {
@@ -148,6 +152,10 @@ export interface AppConfig {
   wbClosingLlmDailyCapMin?: number;
   wbClosingLlmDailyCapMax?: number;
   wb3Enabled?: boolean;
+  wb3DialogReadLlmEnabled?: boolean;
+  wb3DialogReadModel?: string;
+  wb3DialogReadDailyCapMin?: number;
+  wb3DialogReadDailyCapMax?: number;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -258,6 +266,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     wbClosingLlmDailyCapMin: parsed.WB_CLOSING_LLM_DAILY_CAP_MIN,
     wbClosingLlmDailyCapMax: parsed.WB_CLOSING_LLM_DAILY_CAP_MAX,
     wb3Enabled: parsed.WB3_ENABLED,
+    // Same safety as the v2 classifier: LLM reads need an explicit flag AND a key.
+    wb3DialogReadLlmEnabled:
+      parsed.WB3_DIALOG_READ_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,
+    wb3DialogReadModel: parsed.WB3_DIALOG_READ_MODEL,
+    wb3DialogReadDailyCapMin: parsed.WB3_DIALOG_READ_DAILY_CAP_MIN,
+    wb3DialogReadDailyCapMax: parsed.WB3_DIALOG_READ_DAILY_CAP_MAX,
   };
 }
 
