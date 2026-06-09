@@ -12,6 +12,14 @@ export const WORKBOARD_CLASSIFY_QUEUE = "workboard.classify-closing";
 export const WORKBOARD_V3_CONFIRM_TOUCHES_QUEUE = "workboard-v3.confirm-touches";
 export const WORKBOARD_V3_RECOMPUTE_QUEUE = "workboard-v3.recompute";
 export const WORKBOARD_V3_DIALOG_READ_QUEUE = "workboard-v3.dialog-read";
+export const WORKBOARD_V3_DOSSIER_QUEUE = "workboard-v3.dossier";
+export const WORKBOARD_V3_DOSSIER_POLL_QUEUE = "workboard-v3.dossier-poll";
+
+export interface WorkboardV3DossierPollPayload {
+  platformAccountId: number;
+  batchId: string;
+  attempts: number;
+}
 
 export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages";
 
@@ -174,6 +182,16 @@ export async function ensureWorkboardV3Queues(
     retryLimit: 1,
     retryDelay: 120,
   }, createdQueues);
+  await ensureQueueCreated(boss, WORKBOARD_V3_DOSSIER_QUEUE, {
+    policy: "standard",
+    retryLimit: 1,
+    retryDelay: 300,
+  }, createdQueues);
+  await ensureQueueCreated(boss, WORKBOARD_V3_DOSSIER_POLL_QUEUE, {
+    policy: "standard",
+    retryLimit: 2,
+    retryDelay: 120,
+  }, createdQueues);
 }
 
 export async function ensureWorkboardV3Schedule(
@@ -189,6 +207,9 @@ export async function ensureWorkboardV3Schedule(
   await boss.schedule(WORKBOARD_V3_RECOMPUTE_QUEUE, "0 4 * * *", null, { tz: "UTC" });
   // Dialog Reads hot path every 30 min, trailing the dm_conversations sync (PRD §9).
   await boss.schedule(WORKBOARD_V3_DIALOG_READ_QUEUE, "*/30 * * * *", null, { tz: "UTC" });
+  // Dossiers nightly at 04:30 UTC — after the 04:00 recompute so segments are fresh.
+  // The poll queue has no schedule; the dossier job sends poll messages itself.
+  await boss.schedule(WORKBOARD_V3_DOSSIER_QUEUE, "30 4 * * *", null, { tz: "UTC" });
 }
 
 export async function sendSyncPlannerWakeup(

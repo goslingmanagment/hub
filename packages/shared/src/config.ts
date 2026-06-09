@@ -100,6 +100,8 @@ const envSchema = z.object({
   WB3_DIALOG_READ_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
   WB3_DIALOG_READ_DAILY_CAP_MIN: z.coerce.number().int().positive().default(50),
   WB3_DIALOG_READ_DAILY_CAP_MAX: z.coerce.number().int().positive().default(400),
+  WB3_DOSSIER_LLM_ENABLED: booleanSchema.default(false),
+  WB3_DOSSIER_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
 });
 
 export interface AppConfig {
@@ -156,6 +158,8 @@ export interface AppConfig {
   wb3DialogReadModel?: string;
   wb3DialogReadDailyCapMin?: number;
   wb3DialogReadDailyCapMax?: number;
+  wb3DossierLlmEnabled?: boolean;
+  wb3DossierModel?: string;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -272,6 +276,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     wb3DialogReadModel: parsed.WB3_DIALOG_READ_MODEL,
     wb3DialogReadDailyCapMin: parsed.WB3_DIALOG_READ_DAILY_CAP_MIN,
     wb3DialogReadDailyCapMax: parsed.WB3_DIALOG_READ_DAILY_CAP_MAX,
+    wb3DossierLlmEnabled:
+      parsed.WB3_DOSSIER_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,
+    wb3DossierModel: parsed.WB3_DOSSIER_MODEL,
   };
 }
 

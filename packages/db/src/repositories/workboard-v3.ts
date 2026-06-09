@@ -12,6 +12,7 @@ import {
   workboardV3Touches,
   type Wb3DialogIntent,
   type Wb3DialogVerdict,
+  type Wb3Dossier,
 } from "../schema.ts";
 
 // Workboard v3 data access. Raw SQL in/out; the FSM and detectors (apps/runtime)
@@ -568,6 +569,204 @@ export async function setWb3DoNotTouch(
     on conflict (platform_account_id, fan_id) do update set
       do_not_touch = excluded.do_not_touch,
       do_not_touch_reason = excluded.do_not_touch_reason
+  `);
+}
+
+// ─── Dossiers (M0.6) ────────────────────────────────────────────────────────
+
+export type Wb3DossierCandidate = {
+  fanId: number;
+  segment: string;
+  hasMessages: boolean;
+  /** Worst coverage across the fan's threads with messages (null = no threads). */
+  coverage: string | null;
+};
+
+/**
+ * Backfill candidates: spenders and mass_active fans with no dossier yet.
+ * Spenders without stored conversations get a transactions_only dossier.
+ */
+export async function listWb3DossierBackfillCandidates(
+  db: Database,
+  input: { platformAccountId: number; limit: number },
+): Promise<Wb3DossierCandidate[]> {
+  const result = await db.execute<{
+    fan_id: bigint;
+    segment: string;
+    has_messages: boolean;
+    coverage: string | null;
+  }>(sql`
+    select s.fan_id, s.segment::text as segment,
+      coalesce(th.has_messages, false) as has_messages,
+      th.coverage
+    from workboard_v3_fan_state s
+    left join lateral (
+      select bool_or(t.stored_message_count > 0) as has_messages,
+        min(t.message_coverage_status::text) filter (where t.stored_message_count > 0) as coverage
+      from page_dm_threads t
+      where t.platform_account_id = s.platform_account_id and t.fan_id = s.fan_id
+    ) th on true
+    where s.platform_account_id = ${input.platformAccountId}
+      and s.segment in ('spender', 'mass_active')
+      and not exists (
+        select 1 from fan_dossiers d
+        where d.platform_account_id = s.platform_account_id and d.fan_id = s.fan_id
+      )
+      and (s.segment = 'spender' or coalesce(th.has_messages, false))
+    order by s.segment asc, s.fan_id asc
+    limit ${input.limit}
+  `);
+  return result.rows.map((row) => ({
+    fanId: toNumber(row.fan_id),
+    segment: row.segment,
+    hasMessages: row.has_messages,
+    coverage: row.coverage,
+  }));
+}
+
+/**
+ * Nightly refresh (PRD §9): fans active since the dossier was built, threads
+ * that reached complete coverage after the build, and transactions_only
+ * dossiers whose fans now have stored history.
+ */
+export async function listWb3DossierRebuildCandidates(
+  db: Database,
+  input: { platformAccountId: number; limit: number },
+): Promise<Wb3DossierCandidate[]> {
+  const result = await db.execute<{
+    fan_id: bigint;
+    segment: string;
+    has_messages: boolean;
+    coverage: string | null;
+  }>(sql`
+    select d.fan_id,
+      coalesce(s.segment::text, 'spender') as segment,
+      coalesce(th.has_messages, false) as has_messages,
+      th.coverage
+    from fan_dossiers d
+    left join workboard_v3_fan_state s
+      on s.platform_account_id = d.platform_account_id and s.fan_id = d.fan_id
+    left join lateral (
+      select bool_or(t.stored_message_count > 0) as has_messages,
+        min(t.message_coverage_status::text) filter (where t.stored_message_count > 0) as coverage,
+        max(t.last_fan_message_at) as last_fan_message_at
+      from page_dm_threads t
+      where t.platform_account_id = d.platform_account_id and t.fan_id = d.fan_id
+    ) th on true
+    where d.platform_account_id = ${input.platformAccountId}
+      and coalesce(th.has_messages, false)
+      and (
+        th.last_fan_message_at > d.built_at
+        or (d.source = 'transactions_only')
+        or (d.coverage_at_build is distinct from 'complete' and th.coverage = 'complete')
+      )
+    order by d.fan_id asc
+    limit ${input.limit}
+  `);
+  return result.rows.map((row) => ({
+    fanId: toNumber(row.fan_id),
+    segment: row.segment,
+    hasMessages: row.has_messages,
+    coverage: row.coverage,
+  }));
+}
+
+export type Wb3DossierDialogMessage = {
+  fanId: number;
+  role: "fan" | "creator";
+  text: string;
+  createdAt: Date;
+};
+
+/** Entire stored history for each fan (all threads merged, oldest→newest). */
+export async function loadWb3DossierDialogs(
+  db: Database,
+  input: { platformAccountId: number; fanIds: number[] },
+): Promise<Map<number, Wb3DossierDialogMessage[]>> {
+  if (input.fanIds.length === 0) {
+    return new Map();
+  }
+  const result = await db.execute<{
+    fan_id: bigint;
+    role: string;
+    content: string;
+    created_at: Date | string;
+  }>(sql`
+    select t.fan_id,
+      case when m.sender_role = 'model' then 'creator' else 'fan' end as role,
+      m.content, m.created_at
+    from page_dm_messages m
+    join page_dm_threads t on t.id = m.conversation_id
+    where m.platform_account_id = ${input.platformAccountId}
+      and t.fan_id in (${sql.join(input.fanIds.map((id) => sql`${id}`), sql`, `)})
+      and m.sender_role in ('fan', 'model')
+    order by t.fan_id asc, m.created_at asc, m.id asc
+  `);
+  const byFan = new Map<number, Wb3DossierDialogMessage[]>();
+  for (const row of result.rows) {
+    const fanId = toNumber(row.fan_id);
+    let bucket = byFan.get(fanId);
+    if (!bucket) {
+      bucket = [];
+      byFan.set(fanId, bucket);
+    }
+    bucket.push({
+      fanId,
+      role: row.role as "fan" | "creator",
+      text: row.content,
+      createdAt: toDate(row.created_at),
+    });
+  }
+  return byFan;
+}
+
+/** Worst thread coverage per fan — stamped on dossiers at write time. */
+export async function listWb3FanCoverage(
+  db: Database,
+  input: { platformAccountId: number; fanIds: number[] },
+): Promise<Map<number, string | null>> {
+  const map = new Map<number, string | null>();
+  if (input.fanIds.length === 0) {
+    return map;
+  }
+  const result = await db.execute<{ fan_id: bigint; coverage: string | null }>(sql`
+    select t.fan_id,
+      min(t.message_coverage_status::text) filter (where t.stored_message_count > 0) as coverage
+    from page_dm_threads t
+    where t.platform_account_id = ${input.platformAccountId}
+      and t.fan_id in (${sql.join(input.fanIds.map((id) => sql`${id}`), sql`, `)})
+    group by t.fan_id
+  `);
+  for (const row of result.rows) {
+    map.set(toNumber(row.fan_id), row.coverage);
+  }
+  return map;
+}
+
+export async function upsertWb3FanDossier(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    fanId: number;
+    dossier: Wb3Dossier;
+    source: "history" | "transactions_only";
+    coverageAtBuild: string | null;
+    model: string | null;
+    builtAt: Date;
+  },
+): Promise<void> {
+  await db.execute(sql`
+    insert into fan_dossiers
+      (platform_account_id, fan_id, dossier, source, coverage_at_build, model, built_at)
+    values
+      (${input.platformAccountId}, ${input.fanId}, ${JSON.stringify(input.dossier)}::jsonb,
+       ${input.source}::workboard_v3_dossier_source, ${input.coverageAtBuild}, ${input.model}, ${input.builtAt})
+    on conflict (platform_account_id, fan_id) do update set
+      dossier = excluded.dossier,
+      source = excluded.source,
+      coverage_at_build = excluded.coverage_at_build,
+      model = excluded.model,
+      built_at = excluded.built_at
   `);
 }
 

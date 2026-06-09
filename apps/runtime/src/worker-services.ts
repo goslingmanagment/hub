@@ -30,7 +30,10 @@ import {
   WORKBOARD_RECOMPUTE_QUEUE,
   WORKBOARD_V3_CONFIRM_TOUCHES_QUEUE,
   WORKBOARD_V3_DIALOG_READ_QUEUE,
+  WORKBOARD_V3_DOSSIER_POLL_QUEUE,
+  WORKBOARD_V3_DOSSIER_QUEUE,
   WORKBOARD_V3_RECOMPUTE_QUEUE,
+  type WorkboardV3DossierPollPayload,
 } from "./services/sync-queue.ts";
 import { recomputeAllWorkboardPages } from "./services/workboard-v2/recompute.ts";
 import { runClosingClassificationAllPages } from "./services/workboard-v2/classify-closing.ts";
@@ -38,6 +41,8 @@ import { confirmWb3TouchesAllPages } from "./services/workboard-v3/touches.ts";
 import { recomputeWb3AllPages } from "./services/workboard-v3/recompute.ts";
 import { maybeCreateWb3DialogReader } from "./services/workboard-v3/dialog-reader.ts";
 import { runWb3DialogReadsAllPages } from "./services/workboard-v3/dialog-reads.ts";
+import { maybeCreateWb3DossierBatchClient } from "./services/workboard-v3/dossier-builder.ts";
+import { processWb3DossierBatch, runWb3DossierJobAllPages } from "./services/workboard-v3/dossier.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
@@ -188,6 +193,52 @@ export async function startWorkerServices(
       capMax: app.config.wb3DialogReadDailyCapMax,
     });
     app.logger.info({ ...result, llm: reader != null }, "Workboard v3 dialog reads complete");
+  });
+
+  await boss.work(WORKBOARD_V3_DOSSIER_QUEUE, { batchSize: 1 }, async () => {
+    if (!app.config.wb3Enabled) {
+      return;
+    }
+    const batchClient = maybeCreateWb3DossierBatchClient(app.config);
+    const result = await runWb3DossierJobAllPages(app.db, batchClient, { now: new Date() });
+    for (const batch of result.batches) {
+      await boss.send(WORKBOARD_V3_DOSSIER_POLL_QUEUE, {
+        platformAccountId: batch.platformAccountId,
+        batchId: batch.batchId,
+        attempts: 0,
+      } satisfies WorkboardV3DossierPollPayload, { startAfter: 60 });
+    }
+    app.logger.info(result, "Workboard v3 dossier run complete");
+  });
+
+  await boss.work(WORKBOARD_V3_DOSSIER_POLL_QUEUE, { batchSize: 1 }, async (jobs) => {
+    const payload = (jobs as Array<{ data: WorkboardV3DossierPollPayload }>)[0]?.data;
+    if (!payload?.batchId) {
+      return;
+    }
+    const batchClient = maybeCreateWb3DossierBatchClient(app.config);
+    if (!batchClient) {
+      app.logger.warn({ payload }, "Workboard v3 dossier poll skipped (LLM disabled)");
+      return;
+    }
+    const result = await processWb3DossierBatch(app.db, batchClient, {
+      platformAccountId: payload.platformAccountId,
+      batchId: payload.batchId,
+      now: new Date(),
+    });
+    if (!result.done) {
+      // Batches finish within 24h; poll every 5 min with a hard stop at ~33h.
+      if (payload.attempts >= 400) {
+        app.logger.error({ payload }, "Workboard v3 dossier batch never ended; giving up");
+        return;
+      }
+      await boss.send(WORKBOARD_V3_DOSSIER_POLL_QUEUE, {
+        ...payload,
+        attempts: payload.attempts + 1,
+      } satisfies WorkboardV3DossierPollPayload, { startAfter: 300 });
+      return;
+    }
+    app.logger.info({ ...result, batchId: payload.batchId }, "Workboard v3 dossier batch drained");
   });
 
   await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, { batchSize: 1 }, async () => {
