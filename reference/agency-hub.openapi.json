@@ -12781,6 +12781,1192 @@
         }
       }
     },
+    "/api/v1/pages/{pageLabel}/workboard/v3/board": {
+      "get": {
+        "summary": "Get the Workboard v3 read-only board (plan preview) for one Fansly page",
+        "tags": [
+          "workboard"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "dataAsOf": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "capacity": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "needsReplyTotal": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "tabs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "enum": [
+                              "subs",
+                              "spenders",
+                              "fresh",
+                              "mass"
+                            ]
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "planned": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "live": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "proactive": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "debt": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "blocks": {
+                            "type": "object",
+                            "properties": {
+                              "live": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "section": {
+                                      "type": "string",
+                                      "enum": [
+                                        "purchase",
+                                        "needs_reply",
+                                        "risk",
+                                        "scheduled"
+                                      ]
+                                    },
+                                    "rows": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "fanId": {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "alias": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "segment": {
+                                            "type": "string"
+                                          },
+                                          "ltvMills": {
+                                            "type": "number"
+                                          },
+                                          "reason": {
+                                            "type": "object",
+                                            "properties": {
+                                              "id": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "purchase_followup",
+                                                  "needs_reply",
+                                                  "buy_signal",
+                                                  "renew_off_expiring",
+                                                  "renew_off",
+                                                  "expiry_ladder",
+                                                  "cadence_overdue",
+                                                  "fresh_last_call",
+                                                  "dead_revival",
+                                                  "cadence_due",
+                                                  "fresh_touch",
+                                                  "gray_touch"
+                                                ]
+                                              },
+                                              "section": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "purchase",
+                                                  "needs_reply",
+                                                  "risk",
+                                                  "scheduled"
+                                                ]
+                                              },
+                                              "phrase": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "id",
+                                              "section",
+                                              "phrase"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          "chips": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "key": {
+                                                  "type": "string"
+                                                },
+                                                "label": {
+                                                  "type": "string"
+                                                },
+                                                "tone": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "neutral",
+                                                    "accent",
+                                                    "warning",
+                                                    "danger",
+                                                    "success"
+                                                  ]
+                                                },
+                                                "dashed": {
+                                                  "type": "boolean"
+                                                }
+                                              },
+                                              "required": [
+                                                "key",
+                                                "label",
+                                                "tone",
+                                                "dashed"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "gist": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "gistSource": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "enum": [
+                                                  "dialog_read",
+                                                  "dossier",
+                                                  "preview"
+                                                ]
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "confidence": {
+                                            "type": "string",
+                                            "enum": [
+                                              "complete",
+                                              "partial"
+                                            ]
+                                          },
+                                          "waitingHours": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "fanId",
+                                          "name",
+                                          "alias",
+                                          "segment",
+                                          "ltvMills",
+                                          "reason",
+                                          "chips",
+                                          "gist",
+                                          "gistSource",
+                                          "confidence",
+                                          "waitingHours"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "section",
+                                    "rows"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "proactive": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "section": {
+                                      "type": "string",
+                                      "enum": [
+                                        "purchase",
+                                        "needs_reply",
+                                        "risk",
+                                        "scheduled"
+                                      ]
+                                    },
+                                    "rows": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "fanId": {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "alias": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "segment": {
+                                            "type": "string"
+                                          },
+                                          "ltvMills": {
+                                            "type": "number"
+                                          },
+                                          "reason": {
+                                            "type": "object",
+                                            "properties": {
+                                              "id": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "purchase_followup",
+                                                  "needs_reply",
+                                                  "buy_signal",
+                                                  "renew_off_expiring",
+                                                  "renew_off",
+                                                  "expiry_ladder",
+                                                  "cadence_overdue",
+                                                  "fresh_last_call",
+                                                  "dead_revival",
+                                                  "cadence_due",
+                                                  "fresh_touch",
+                                                  "gray_touch"
+                                                ]
+                                              },
+                                              "section": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "purchase",
+                                                  "needs_reply",
+                                                  "risk",
+                                                  "scheduled"
+                                                ]
+                                              },
+                                              "phrase": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "id",
+                                              "section",
+                                              "phrase"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          "chips": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "key": {
+                                                  "type": "string"
+                                                },
+                                                "label": {
+                                                  "type": "string"
+                                                },
+                                                "tone": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "neutral",
+                                                    "accent",
+                                                    "warning",
+                                                    "danger",
+                                                    "success"
+                                                  ]
+                                                },
+                                                "dashed": {
+                                                  "type": "boolean"
+                                                }
+                                              },
+                                              "required": [
+                                                "key",
+                                                "label",
+                                                "tone",
+                                                "dashed"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "gist": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "gistSource": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "enum": [
+                                                  "dialog_read",
+                                                  "dossier",
+                                                  "preview"
+                                                ]
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "confidence": {
+                                            "type": "string",
+                                            "enum": [
+                                              "complete",
+                                              "partial"
+                                            ]
+                                          },
+                                          "waitingHours": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "fanId",
+                                          "name",
+                                          "alias",
+                                          "segment",
+                                          "ltvMills",
+                                          "reason",
+                                          "chips",
+                                          "gist",
+                                          "gistSource",
+                                          "confidence",
+                                          "waitingHours"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "section",
+                                    "rows"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "live",
+                              "proactive"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "title",
+                          "planned",
+                          "live",
+                          "proactive",
+                          "debt",
+                          "blocks"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "service": {
+                      "type": "object",
+                      "properties": {
+                        "counts": {
+                          "type": "object",
+                          "properties": {
+                            "snoozed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "doNotTouch": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "dead": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "archived": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "snoozed",
+                            "doNotTouch",
+                            "dead",
+                            "archived"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "fanId": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "alias": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "snoozed",
+                                  "do_not_touch"
+                                ]
+                              },
+                              "until": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "reason": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "fanId",
+                              "name",
+                              "alias",
+                              "kind",
+                              "until",
+                              "reason"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "counts",
+                        "rows"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "generatedAt",
+                    "dataAsOf",
+                    "capacity",
+                    "needsReplyTotal",
+                    "tabs",
+                    "service"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{pageLabel}/workboard/v3/fans/{fanId}": {
+      "get": {
+        "summary": "Get Workboard v3 fan diagnostics — segment, active/suppressed reasons, touch history",
+        "tags": [
+          "workboard"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "fanId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "fanId": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "segment": {
+                      "type": "string"
+                    },
+                    "tab": {
+                      "type": "string",
+                      "enum": [
+                        "subs",
+                        "spenders",
+                        "fresh",
+                        "mass",
+                        "service"
+                      ]
+                    },
+                    "ltvMills": {
+                      "type": "number"
+                    },
+                    "hasEverReplied": {
+                      "type": "boolean"
+                    },
+                    "freeloader": {
+                      "type": "boolean"
+                    },
+                    "doNotTouch": {
+                      "type": "boolean"
+                    },
+                    "doNotTouchReason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "snoozedUntil": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "snoozeReason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "cadenceDueAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastPersonalTouchAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "enum": [
+                              "purchase_followup",
+                              "needs_reply",
+                              "buy_signal",
+                              "renew_off_expiring",
+                              "renew_off",
+                              "expiry_ladder",
+                              "cadence_overdue",
+                              "fresh_last_call",
+                              "dead_revival",
+                              "cadence_due",
+                              "fresh_touch",
+                              "gray_touch"
+                            ]
+                          },
+                          "section": {
+                            "type": "string",
+                            "enum": [
+                              "purchase",
+                              "needs_reply",
+                              "risk",
+                              "scheduled"
+                            ]
+                          },
+                          "phrase": {
+                            "type": "string"
+                          },
+                          "suppressedBy": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "snooze",
+                                  "do_not_touch",
+                                  "cross_page",
+                                  "dead",
+                                  "archived",
+                                  "capacity"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "section",
+                          "phrase",
+                          "suppressedBy"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "chips": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "tone": {
+                            "type": "string",
+                            "enum": [
+                              "neutral",
+                              "accent",
+                              "warning",
+                              "danger",
+                              "success"
+                            ]
+                          },
+                          "dashed": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "label",
+                          "tone",
+                          "dashed"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "dossier": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "gist": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "interests": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "hooks": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "ending": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "warm",
+                                    "neutral",
+                                    "sour",
+                                    "refused"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "ending_note": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "language": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "gist",
+                            "interests",
+                            "hooks",
+                            "ending",
+                            "ending_note",
+                            "language"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "touches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "openedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "confirmedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outcomeRepliedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outcomePurchaseAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "openedAt",
+                          "confirmedAt",
+                          "outcomeRepliedAt",
+                          "outcomePurchaseAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "fanId",
+                    "name",
+                    "alias",
+                    "segment",
+                    "tab",
+                    "ltvMills",
+                    "hasEverReplied",
+                    "freeloader",
+                    "doNotTouch",
+                    "doNotTouchReason",
+                    "snoozedUntil",
+                    "snoozeReason",
+                    "cadenceDueAt",
+                    "lastPersonalTouchAt",
+                    "reasons",
+                    "chips",
+                    "dossier",
+                    "touches"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pages/{pageLabel}/workboard/v2/contact": {
       "post": {
         "summary": "Record a chatter touch (Готово) on a Workboard v2 fan",

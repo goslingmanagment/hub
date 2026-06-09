@@ -9,6 +9,8 @@ import type {
   WorkboardV2AiSettingsBody,
   WorkboardV2ListsResponse,
   WorkboardV2Response,
+  WorkboardV3BoardResponse,
+  WorkboardV3FanDiagnosticsResponse,
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
 import { pathSegment } from "@/lib/path";
@@ -226,5 +228,36 @@ export function useWorkboardV2AiRuns(
     queryFn: () => api.get<WorkboardV2AiRunsResponse>(`/api/v1/workboard/ai/runs`),
     enabled: options.enabled ?? true,
     refetchInterval: typeof ri === "function" ? (query) => ri(query.state.data) : ri,
+  });
+}
+
+// ─── Workboard v3 (read-only board, Phase 1) ────────────────────────────────
+
+export function useWorkboardV3Board(
+  pageLabel: string,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["workboard-v3", pageLabel, "board"],
+    queryFn: () =>
+      api.get<WorkboardV3BoardResponse>(
+        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v3/board`,
+      ),
+    enabled: options.enabled ?? true,
+  });
+}
+
+export function useWorkboardV3FanDiagnostics(
+  pageLabel: string,
+  fanId: number | null,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["workboard-v3", pageLabel, "fan", fanId],
+    queryFn: () =>
+      api.get<WorkboardV3FanDiagnosticsResponse>(
+        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v3/fans/${fanId}`,
+      ),
+    enabled: (options.enabled ?? true) && fanId != null,
   });
 }

@@ -2632,6 +2632,155 @@ export const deletedResponseSchema = z.object({
   deleted: z.literal(true),
 });
 
+// ─── Workboard v3 (read-only board, Phase 1) ────────────────────────────────
+
+export const workboardV3SectionEnum = z.enum(["purchase", "needs_reply", "risk", "scheduled"]);
+
+export const workboardV3ReasonIdEnum = z.enum([
+  "purchase_followup",
+  "needs_reply",
+  "buy_signal",
+  "renew_off_expiring",
+  "renew_off",
+  "expiry_ladder",
+  "cadence_overdue",
+  "fresh_last_call",
+  "dead_revival",
+  "cadence_due",
+  "fresh_touch",
+  "gray_touch",
+]);
+
+export const workboardV3SuppressionEnum = z.enum([
+  "snooze",
+  "do_not_touch",
+  "cross_page",
+  "dead",
+  "archived",
+  "capacity",
+]);
+
+export const workboardV3ChipSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  tone: z.enum(["neutral", "accent", "warning", "danger", "success"]),
+  dashed: z.boolean(),
+});
+
+export const workboardV3RowSchema = z.object({
+  fanId: z.number().int(),
+  name: z.string(),
+  alias: z.string().nullable(),
+  segment: z.string(),
+  ltvMills: z.number(),
+  reason: z.object({
+    id: workboardV3ReasonIdEnum,
+    section: workboardV3SectionEnum,
+    phrase: z.string(),
+  }),
+  chips: z.array(workboardV3ChipSchema),
+  gist: z.string().nullable(),
+  gistSource: z.enum(["dialog_read", "dossier", "preview"]).nullable(),
+  confidence: z.enum(["complete", "partial"]),
+  waitingHours: z.number().int().nullable(),
+});
+
+export const workboardV3SectionBlockSchema = z.object({
+  section: workboardV3SectionEnum,
+  rows: z.array(workboardV3RowSchema),
+});
+
+export const workboardV3TabSchema = z.object({
+  key: z.enum(["subs", "spenders", "fresh", "mass"]),
+  title: z.string(),
+  planned: z.number().int(),
+  live: z.number().int(),
+  proactive: z.number().int(),
+  debt: z.number().int(),
+  blocks: z.object({
+    live: z.array(workboardV3SectionBlockSchema),
+    proactive: z.array(workboardV3SectionBlockSchema),
+  }),
+});
+
+export const workboardV3BoardResponseSchema = z.object({
+  pageLabel: z.string(),
+  generatedAt: z.string(),
+  dataAsOf: z.string().nullable(),
+  capacity: z.number().int(),
+  needsReplyTotal: z.number().int(),
+  tabs: z.array(workboardV3TabSchema),
+  service: z.object({
+    counts: z.object({
+      snoozed: z.number().int(),
+      doNotTouch: z.number().int(),
+      dead: z.number().int(),
+      archived: z.number().int(),
+    }),
+    rows: z.array(
+      z.object({
+        fanId: z.number().int(),
+        name: z.string(),
+        alias: z.string().nullable(),
+        kind: z.enum(["snoozed", "do_not_touch"]),
+        until: z.string().nullable(),
+        reason: z.string().nullable(),
+      }),
+    ),
+  }),
+});
+
+export const workboardV3DossierSchema = z.object({
+  gist: z.string().nullable(),
+  interests: z.array(z.string()),
+  hooks: z.array(z.string()),
+  ending: z.enum(["warm", "neutral", "sour", "refused"]).nullable(),
+  ending_note: z.string().nullable(),
+  language: z.string().nullable(),
+});
+
+export const workboardV3FanParamsSchema = z.object({
+  pageLabel: z.string().min(1),
+  fanId: z.coerce.number().int().positive(),
+});
+
+export const workboardV3FanDiagnosticsResponseSchema = z.object({
+  fanId: z.number().int(),
+  name: z.string(),
+  alias: z.string().nullable(),
+  segment: z.string(),
+  tab: z.enum(["subs", "spenders", "fresh", "mass", "service"]),
+  ltvMills: z.number(),
+  hasEverReplied: z.boolean(),
+  freeloader: z.boolean(),
+  doNotTouch: z.boolean(),
+  doNotTouchReason: z.string().nullable(),
+  snoozedUntil: z.string().nullable(),
+  snoozeReason: z.string().nullable(),
+  cadenceDueAt: z.string().nullable(),
+  lastPersonalTouchAt: z.string().nullable(),
+  reasons: z.array(
+    z.object({
+      id: workboardV3ReasonIdEnum,
+      section: workboardV3SectionEnum,
+      phrase: z.string(),
+      suppressedBy: workboardV3SuppressionEnum.nullable(),
+    }),
+  ),
+  chips: z.array(workboardV3ChipSchema),
+  dossier: workboardV3DossierSchema.nullable(),
+  touches: z.array(
+    z.object({
+      id: z.number().int(),
+      type: z.string(),
+      openedAt: z.string().nullable(),
+      confirmedAt: z.string().nullable(),
+      outcomeRepliedAt: z.string().nullable(),
+      outcomePurchaseAt: z.string().nullable(),
+    }),
+  ),
+});
+
 const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
 const bearerOnlySecurity: Array<Record<string, string[]>> = [{ bearerAuth: [] }];
 const cookieOrBearerSecurity: Array<Record<string, string[]>> = [
@@ -3142,6 +3291,30 @@ export const routeSchemas = {
     response: {
       200: workboardV2ListsResponseSchema,
       400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV3Board: {
+    tags: ["workboard"],
+    summary: "Get the Workboard v3 read-only board (plan preview) for one Fansly page",
+    security: cookieOnlySecurity,
+    params: pageParamsSchema,
+    response: {
+      200: workboardV3BoardResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV3FanDiagnostics: {
+    tags: ["workboard"],
+    summary: "Get Workboard v3 fan diagnostics — segment, active/suppressed reasons, touch history",
+    security: cookieOnlySecurity,
+    params: workboardV3FanParamsSchema,
+    response: {
+      200: workboardV3FanDiagnosticsResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -4079,6 +4252,10 @@ export type WorkboardUnsnoozeParams = z.infer<typeof workboardUnsnoozeParamsSche
 export type WorkboardV2Query = z.infer<typeof workboardV2QuerySchema>;
 export type WorkboardV2Item = z.infer<typeof workboardV2ItemSchema>;
 export type WorkboardV2Response = z.infer<typeof workboardV2ResponseSchema>;
+export type WorkboardV3Row = z.infer<typeof workboardV3RowSchema>;
+export type WorkboardV3Tab = z.infer<typeof workboardV3TabSchema>;
+export type WorkboardV3BoardResponse = z.infer<typeof workboardV3BoardResponseSchema>;
+export type WorkboardV3FanDiagnosticsResponse = z.infer<typeof workboardV3FanDiagnosticsResponseSchema>;
 export type WorkboardV2ListsResponse = z.infer<typeof workboardV2ListsResponseSchema>;
 export type WorkboardV2ContactBody = z.infer<typeof workboardV2ContactBodySchema>;
 export type WorkboardV2RecomputeResponse = z.infer<typeof workboardV2RecomputeResponseSchema>;

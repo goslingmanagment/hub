@@ -572,6 +572,396 @@ export async function setWb3DoNotTouch(
   `);
 }
 
+// ─── Read-only board (Phase 1) ──────────────────────────────────────────────
+
+/** Everything the read-time reason engine needs for one fan. */
+export type Wb3BoardFanRow = {
+  fan_id: bigint;
+  username: string | null;
+  display_name: string | null;
+  page_alias: string | null;
+  ltv_mills: bigint | null;
+  is_subscriber: boolean;
+  pf_auto_renew: boolean | null;
+  subscription_expires_at: Date | string | null;
+  follower_since: Date | string | null;
+  page_last_transaction_at: Date | string | null;
+  sub_ends_at: Date | string | null;
+  sub_auto_renew: boolean | null;
+  sub_auto_renew_off_detected_at: Date | string | null;
+  sub_tier_name: string | null;
+  segment: string;
+  has_ever_replied: boolean;
+  freeloader: boolean;
+  do_not_touch: boolean;
+  do_not_touch_reason: string | null;
+  dead_attempts: number;
+  dead_sleep_until: Date | string | null;
+  archived_at: Date | string | null;
+  last_personal_touch_at: Date | string | null;
+  last_any_touch_at: Date | string | null;
+  cadence_due_at: Date | string | null;
+  response_rate_90d: string | number | null;
+  last_fan_message_at: Date | string | null;
+  last_message_at: Date | string | null;
+  last_model_message_at: Date | string | null;
+  worst_coverage: string | null;
+  last_sender_role: string | null;
+  last_message_preview: string | null;
+  recent_purchase_at: Date | string | null;
+  recent_purchase_type: string | null;
+  recent_purchase_net_mills: bigint | null;
+  last_purchase_at: Date | string | null;
+  last_touch_activity_at: Date | string | null;
+  verdict: Wb3DialogVerdict | null;
+  verdict_created_at: Date | string | null;
+  dossier: Wb3Dossier | null;
+  dossier_source: string | null;
+  snoozed_until: Date | string | null;
+  snooze_reason: string | null;
+  flags: string[];
+  cross_page_touched: boolean;
+};
+
+const BOARD_ROW_SELECT = sql`
+  select
+    s.fan_id,
+    f.username,
+    f.display_name,
+    pf.page_alias,
+    pf.total_creator_net_mills as ltv_mills,
+    pf.is_subscriber,
+    pf.auto_renew as pf_auto_renew,
+    pf.subscription_expires_at,
+    pf.follower_since,
+    pf.last_transaction_at as page_last_transaction_at,
+    sub.ends_at as sub_ends_at,
+    sub.auto_renew as sub_auto_renew,
+    sub.auto_renew_off_detected_at as sub_auto_renew_off_detected_at,
+    sub.subscription_tier_name as sub_tier_name,
+    s.segment::text as segment,
+    s.has_ever_replied,
+    s.freeloader,
+    s.do_not_touch,
+    s.do_not_touch_reason,
+    s.dead_attempts,
+    s.dead_sleep_until,
+    s.archived_at,
+    s.last_personal_touch_at,
+    s.last_any_touch_at,
+    s.cadence_due_at,
+    s.response_rate_90d,
+    th.last_fan_message_at,
+    th.last_message_at,
+    th.last_model_message_at,
+    th.worst_coverage,
+    th1.last_sender_role,
+    th1.last_message_preview,
+    rp.occurred_at as recent_purchase_at,
+    rp.canonical_type as recent_purchase_type,
+    rp.creator_net_amount_mills as recent_purchase_net_mills,
+    lp.last_purchase_at,
+    ta.last_touch_activity_at,
+    v.verdict,
+    v.created_at as verdict_created_at,
+    d.dossier,
+    d.source::text as dossier_source,
+    sn.snoozed_until,
+    sn.reason as snooze_reason,
+    fl.flags,
+    cp.fan_id is not null as cross_page_touched
+`;
+
+function boardRowJoins(platformAccountId: number, now: Date) {
+  return sql`
+    from workboard_v3_fan_state s
+    join page_fans pf on pf.platform_account_id = s.platform_account_id and pf.fan_id = s.fan_id
+    join fans f on f.id = s.fan_id
+    left join lateral (
+      select max(t.last_fan_message_at) as last_fan_message_at,
+        max(t.last_message_at) as last_message_at,
+        max(t.last_model_message_at) as last_model_message_at,
+        min(t.message_coverage_status::text) filter (where t.stored_message_count > 0) as worst_coverage
+      from page_dm_threads t
+      where t.platform_account_id = s.platform_account_id and t.fan_id = s.fan_id
+    ) th on true
+    left join lateral (
+      select t.last_message_sender_role::text as last_sender_role, t.last_message_preview
+      from page_dm_threads t
+      where t.platform_account_id = s.platform_account_id and t.fan_id = s.fan_id
+      order by t.last_message_at desc nulls last, t.id desc
+      limit 1
+    ) th1 on true
+    left join lateral (
+      select x.occurred_at, x.canonical_type::text as canonical_type, x.creator_net_amount_mills
+      from transactions x
+      where x.platform_account_id = s.platform_account_id and x.fan_id = s.fan_id
+        and x.creator_net_amount_mills > 0 and x.is_active and x.transaction_state = 'posted'
+        and x.occurred_at >= ${now}::timestamptz - interval '48 hours'
+      order by x.occurred_at desc
+      limit 1
+    ) rp on true
+    left join lateral (
+      select max(x.occurred_at) as last_purchase_at
+      from transactions x
+      where x.platform_account_id = s.platform_account_id and x.fan_id = s.fan_id
+        and x.creator_net_amount_mills > 0 and x.is_active and x.transaction_state = 'posted'
+    ) lp on true
+    left join lateral (
+      select max(coalesce(t.confirmed_at, t.opened_at)) as last_touch_activity_at
+      from workboard_v3_touches t
+      where t.platform_account_id = s.platform_account_id and t.fan_id = s.fan_id
+    ) ta on true
+    left join lateral (
+      select dr.verdict, dr.created_at
+      from dialog_reads dr
+      where dr.platform_account_id = s.platform_account_id and dr.fan_id = s.fan_id
+      order by dr.created_at desc, dr.id desc
+      limit 1
+    ) v on true
+    left join fan_dossiers d
+      on d.platform_account_id = s.platform_account_id and d.fan_id = s.fan_id
+    left join lateral (
+      select w.snoozed_until, w.reason
+      from workboard_snoozes w
+      where w.platform_account_id = s.platform_account_id and w.fan_id = s.fan_id
+      order by w.snoozed_until desc
+      limit 1
+    ) sn on true
+    left join lateral (
+      select ps.ends_at, ps.auto_renew, ps.auto_renew_off_detected_at, ps.subscription_tier_name
+      from page_subscriptions ps
+      where ps.platform_account_id = s.platform_account_id and ps.fan_id = s.fan_id and ps.is_current
+      order by ps.ends_at desc nulls last, ps.id desc
+      limit 1
+    ) sub on true
+    left join lateral (
+      select coalesce(array_agg(ff.flag::text), '{}') as flags
+      from fan_flags ff
+      where ff.fan_id = s.fan_id
+    ) fl on true
+    left join lateral (
+      select t.fan_id
+      from workboard_v3_touches t
+      join pages p2 on p2.id = t.platform_account_id
+      where t.fan_id = s.fan_id
+        and t.platform_account_id <> ${platformAccountId}
+        and p2.model_id = (select model_id from pages where id = ${platformAccountId})
+        and t.type in ('personal', 'manual')
+        and coalesce(t.confirmed_at, t.opened_at) >= date_trunc('day', ${now}::timestamptz)
+      limit 1
+    ) cp on true
+  `;
+}
+
+/**
+ * Fans that can carry a reason today: every interval segment, dead fans whose
+ * sleep is served (revival candidates), plus any fan with an unanswered tail
+ * or a fresh purchase. Gray rotation comes from loadWb3GrayBatchRows.
+ */
+export async function loadWb3BoardRows(
+  db: Database,
+  input: { platformAccountId: number; now: Date; fanId?: number },
+): Promise<Wb3BoardFanRow[]> {
+  const fanFilter = input.fanId == null ? sql`` : sql` and s.fan_id = ${input.fanId}`;
+  const include =
+    input.fanId == null
+      ? sql` and (
+          s.segment in ('subscriber', 'spender', 'fresh', 'mass_active')
+          or (s.segment = 'dead' and s.dead_sleep_until is not null and s.dead_sleep_until <= ${input.now})
+          or th1.last_sender_role = 'fan'
+          or rp.occurred_at is not null
+        )`
+      : sql``;
+  const result = await db.execute<Wb3BoardFanRow>(sql`
+    ${BOARD_ROW_SELECT}
+    ${boardRowJoins(input.platformAccountId, input.now)}
+    where s.platform_account_id = ${input.platformAccountId}${fanFilter}${include}
+  `);
+  return result.rows;
+}
+
+/** Gray rotation candidates: has_ever_replied first, then LRU (PRD §5). */
+export async function loadWb3GrayBatchRows(
+  db: Database,
+  input: { platformAccountId: number; now: Date; limit: number },
+): Promise<Wb3BoardFanRow[]> {
+  const result = await db.execute<Wb3BoardFanRow>(sql`
+    ${BOARD_ROW_SELECT}
+    ${boardRowJoins(input.platformAccountId, input.now)}
+    where s.platform_account_id = ${input.platformAccountId}
+      and s.segment = 'gray'
+      and not s.do_not_touch
+    order by s.has_ever_replied desc, s.last_any_touch_at asc nulls first, s.fan_id asc
+    limit ${input.limit}
+  `);
+  return result.rows;
+}
+
+export type Wb3ServiceCounts = {
+  dead: number;
+  archived: number;
+  doNotTouch: number;
+  snoozed: number;
+};
+
+export async function loadWb3ServiceCounts(
+  db: Database,
+  input: { platformAccountId: number; now: Date },
+): Promise<Wb3ServiceCounts> {
+  const result = await db.execute<{
+    dead: bigint;
+    archived: bigint;
+    dnt: bigint;
+    snoozed: bigint;
+  }>(sql`
+    select
+      (select count(*) from workboard_v3_fan_state
+        where platform_account_id = ${input.platformAccountId} and segment = 'dead') as dead,
+      (select count(*) from workboard_v3_fan_state
+        where platform_account_id = ${input.platformAccountId} and segment = 'archived') as archived,
+      (select count(*) from workboard_v3_fan_state
+        where platform_account_id = ${input.platformAccountId} and do_not_touch) as dnt,
+      (select count(*) from workboard_snoozes
+        where platform_account_id = ${input.platformAccountId} and snoozed_until > ${input.now}) as snoozed
+  `);
+  const row = result.rows[0]!;
+  return {
+    dead: toNumber(row.dead),
+    archived: toNumber(row.archived),
+    doNotTouch: toNumber(row.dnt),
+    snoozed: toNumber(row.snoozed),
+  };
+}
+
+export type Wb3ServiceListRow = {
+  fanId: number;
+  username: string | null;
+  displayName: string | null;
+  pageAlias: string | null;
+  kind: "snoozed" | "do_not_touch";
+  until: Date | null;
+  reason: string | null;
+};
+
+export async function loadWb3ServiceRows(
+  db: Database,
+  input: { platformAccountId: number; now: Date; limit?: number },
+): Promise<Wb3ServiceListRow[]> {
+  const limit = input.limit ?? 100;
+  const result = await db.execute<{
+    fan_id: bigint;
+    username: string | null;
+    display_name: string | null;
+    page_alias: string | null;
+    kind: string;
+    until: Date | string | null;
+    reason: string | null;
+  }>(sql`
+    (
+      select w.fan_id, f.username, f.display_name, pf.page_alias,
+        'snoozed' as kind, w.snoozed_until as until, w.reason
+      from workboard_snoozes w
+      join fans f on f.id = w.fan_id
+      left join page_fans pf on pf.platform_account_id = w.platform_account_id and pf.fan_id = w.fan_id
+      where w.platform_account_id = ${input.platformAccountId} and w.snoozed_until > ${input.now}
+      order by w.snoozed_until asc
+      limit ${limit}
+    )
+    union all
+    (
+      select s.fan_id, f.username, f.display_name, pf.page_alias,
+        'do_not_touch' as kind, null as until, s.do_not_touch_reason as reason
+      from workboard_v3_fan_state s
+      join fans f on f.id = s.fan_id
+      left join page_fans pf on pf.platform_account_id = s.platform_account_id and pf.fan_id = s.fan_id
+      where s.platform_account_id = ${input.platformAccountId} and s.do_not_touch
+      order by s.fan_id asc
+      limit ${limit}
+    )
+  `);
+  return result.rows.map((row) => ({
+    fanId: toNumber(row.fan_id),
+    username: row.username,
+    displayName: row.display_name,
+    pageAlias: row.page_alias,
+    kind: row.kind as "snoozed" | "do_not_touch",
+    until: row.until == null ? null : toDate(row.until),
+    reason: row.reason,
+  }));
+}
+
+/** Кит threshold: the 10th-highest LTV on the page (null = fewer than 10 payers). */
+export async function getWb3WhaleThresholdMills(
+  db: Database,
+  platformAccountId: number,
+): Promise<number | null> {
+  const result = await db.execute<{ ltv: bigint }>(sql`
+    select total_creator_net_mills as ltv
+    from page_fans
+    where platform_account_id = ${platformAccountId} and total_creator_net_mills > 0
+    order by total_creator_net_mills desc
+    offset 9 limit 1
+  `);
+  const row = result.rows[0];
+  return row ? toNumber(row.ltv) : null;
+}
+
+/** "данные на HH:MM": the latest successful DM sync for the page. */
+export async function getWb3DataAsOf(
+  db: Database,
+  platformAccountId: number,
+): Promise<Date | null> {
+  const result = await db.execute<{ as_of: Date | string | null }>(sql`
+    select max(succeeded_at) as as_of
+    from page_sync_states
+    where page_id = ${platformAccountId} and stream in ('dm_conversations', 'dm_messages')
+  `);
+  const value = result.rows[0]?.as_of;
+  return value == null ? null : toDate(value);
+}
+
+export type Wb3FanTouchRow = {
+  id: number;
+  type: string;
+  openedAt: Date | null;
+  confirmedAt: Date | null;
+  outcomeRepliedAt: Date | null;
+  outcomePurchaseAt: Date | null;
+  createdAt: Date;
+};
+
+export async function listWb3FanTouches(
+  db: Database,
+  input: { platformAccountId: number; fanId: number; limit?: number },
+): Promise<Wb3FanTouchRow[]> {
+  const result = await db.execute<{
+    id: bigint;
+    type: string;
+    opened_at: Date | string | null;
+    confirmed_at: Date | string | null;
+    outcome_replied_at: Date | string | null;
+    outcome_purchase_at: Date | string | null;
+    created_at: Date | string;
+  }>(sql`
+    select id, type::text as type, opened_at, confirmed_at,
+      outcome_replied_at, outcome_purchase_at, created_at
+    from workboard_v3_touches
+    where platform_account_id = ${input.platformAccountId} and fan_id = ${input.fanId}
+    order by coalesce(confirmed_at, opened_at, created_at) desc, id desc
+    limit ${input.limit ?? 20}
+  `);
+  return result.rows.map((row) => ({
+    id: toNumber(row.id),
+    type: row.type,
+    openedAt: row.opened_at == null ? null : toDate(row.opened_at),
+    confirmedAt: row.confirmed_at == null ? null : toDate(row.confirmed_at),
+    outcomeRepliedAt: row.outcome_replied_at == null ? null : toDate(row.outcome_replied_at),
+    outcomePurchaseAt: row.outcome_purchase_at == null ? null : toDate(row.outcome_purchase_at),
+    createdAt: toDate(row.created_at),
+  }));
+}
+
 // ─── Dossiers (M0.6) ────────────────────────────────────────────────────────
 
 export type Wb3DossierCandidate = {

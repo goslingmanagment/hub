@@ -165,6 +165,7 @@ import {
   runWorkboardV2AiClassify,
   updateWorkboardV2AiSettings,
 } from "../services/workboard-v2/ai-analytics.ts";
+import { getWb3Board, getWb3FanDiagnostics } from "../services/workboard-v3/board.ts";
 import { assertAllowedProxyTarget } from "../services/proxy-validation.ts";
 import {
   getPageConversationProfile,
@@ -953,6 +954,47 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     return getWorkboardV2Lists(appContext, principal, request.params.pageLabel);
+  });
+
+  // Workboard v3 (read-only, Phase 1). Gated by WB3_ENABLED like the v3 jobs.
+  server.get("/api/v1/pages/:pageLabel/workboard/v3/board", {
+    schema: routeSchemas.workboardV3Board,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    if (!appContext.config.wb3Enabled) {
+      throw new NotFoundError("Workboard v3 is disabled (WB3_ENABLED)");
+    }
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getWb3Board(appContext.db, {
+      platformAccountId: page.id,
+      pageLabel: request.params.pageLabel,
+    });
+  });
+
+  server.get("/api/v1/pages/:pageLabel/workboard/v3/fans/:fanId", {
+    schema: routeSchemas.workboardV3FanDiagnostics,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    if (!appContext.config.wb3Enabled) {
+      throw new NotFoundError("Workboard v3 is disabled (WB3_ENABLED)");
+    }
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    const diagnostics = await getWb3FanDiagnostics(appContext.db, {
+      platformAccountId: page.id,
+      fanId: request.params.fanId,
+    });
+    if (!diagnostics) {
+      throw new NotFoundError("Fan has no Workboard v3 state on this page");
+    }
+    return diagnostics;
   });
 
   server.post("/api/v1/pages/:pageLabel/workboard/v2/contact", {

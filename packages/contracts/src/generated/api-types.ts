@@ -3957,6 +3957,302 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pages/{pageLabel}/workboard/v3/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the Workboard v3 read-only board (plan preview) for one Fansly page */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            pageLabel: string;
+                            generatedAt: string;
+                            dataAsOf: string | null;
+                            capacity: number;
+                            needsReplyTotal: number;
+                            tabs: {
+                                /** @enum {string} */
+                                key: "subs" | "spenders" | "fresh" | "mass";
+                                title: string;
+                                planned: number;
+                                live: number;
+                                proactive: number;
+                                debt: number;
+                                blocks: {
+                                    live: {
+                                        /** @enum {string} */
+                                        section: "purchase" | "needs_reply" | "risk" | "scheduled";
+                                        rows: {
+                                            fanId: number;
+                                            name: string;
+                                            alias: string | null;
+                                            segment: string;
+                                            ltvMills: number;
+                                            reason: {
+                                                /** @enum {string} */
+                                                id: "purchase_followup" | "needs_reply" | "buy_signal" | "renew_off_expiring" | "renew_off" | "expiry_ladder" | "cadence_overdue" | "fresh_last_call" | "dead_revival" | "cadence_due" | "fresh_touch" | "gray_touch";
+                                                /** @enum {string} */
+                                                section: "purchase" | "needs_reply" | "risk" | "scheduled";
+                                                phrase: string;
+                                            };
+                                            chips: {
+                                                key: string;
+                                                label: string;
+                                                /** @enum {string} */
+                                                tone: "neutral" | "accent" | "warning" | "danger" | "success";
+                                                dashed: boolean;
+                                            }[];
+                                            gist: string | null;
+                                            gistSource: ("dialog_read" | "dossier" | "preview") | null;
+                                            /** @enum {string} */
+                                            confidence: "complete" | "partial";
+                                            waitingHours: number | null;
+                                        }[];
+                                    }[];
+                                    proactive: {
+                                        /** @enum {string} */
+                                        section: "purchase" | "needs_reply" | "risk" | "scheduled";
+                                        rows: {
+                                            fanId: number;
+                                            name: string;
+                                            alias: string | null;
+                                            segment: string;
+                                            ltvMills: number;
+                                            reason: {
+                                                /** @enum {string} */
+                                                id: "purchase_followup" | "needs_reply" | "buy_signal" | "renew_off_expiring" | "renew_off" | "expiry_ladder" | "cadence_overdue" | "fresh_last_call" | "dead_revival" | "cadence_due" | "fresh_touch" | "gray_touch";
+                                                /** @enum {string} */
+                                                section: "purchase" | "needs_reply" | "risk" | "scheduled";
+                                                phrase: string;
+                                            };
+                                            chips: {
+                                                key: string;
+                                                label: string;
+                                                /** @enum {string} */
+                                                tone: "neutral" | "accent" | "warning" | "danger" | "success";
+                                                dashed: boolean;
+                                            }[];
+                                            gist: string | null;
+                                            gistSource: ("dialog_read" | "dossier" | "preview") | null;
+                                            /** @enum {string} */
+                                            confidence: "complete" | "partial";
+                                            waitingHours: number | null;
+                                        }[];
+                                    }[];
+                                };
+                            }[];
+                            service: {
+                                counts: {
+                                    snoozed: number;
+                                    doNotTouch: number;
+                                    dead: number;
+                                    archived: number;
+                                };
+                                rows: {
+                                    fanId: number;
+                                    name: string;
+                                    alias: string | null;
+                                    /** @enum {string} */
+                                    kind: "snoozed" | "do_not_touch";
+                                    until: string | null;
+                                    reason: string | null;
+                                }[];
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageLabel}/workboard/v3/fans/{fanId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workboard v3 fan diagnostics — segment, active/suppressed reasons, touch history */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    pageLabel: string;
+                    fanId: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            fanId: number;
+                            name: string;
+                            alias: string | null;
+                            segment: string;
+                            /** @enum {string} */
+                            tab: "subs" | "spenders" | "fresh" | "mass" | "service";
+                            ltvMills: number;
+                            hasEverReplied: boolean;
+                            freeloader: boolean;
+                            doNotTouch: boolean;
+                            doNotTouchReason: string | null;
+                            snoozedUntil: string | null;
+                            snoozeReason: string | null;
+                            cadenceDueAt: string | null;
+                            lastPersonalTouchAt: string | null;
+                            reasons: {
+                                /** @enum {string} */
+                                id: "purchase_followup" | "needs_reply" | "buy_signal" | "renew_off_expiring" | "renew_off" | "expiry_ladder" | "cadence_overdue" | "fresh_last_call" | "dead_revival" | "cadence_due" | "fresh_touch" | "gray_touch";
+                                /** @enum {string} */
+                                section: "purchase" | "needs_reply" | "risk" | "scheduled";
+                                phrase: string;
+                                suppressedBy: ("snooze" | "do_not_touch" | "cross_page" | "dead" | "archived" | "capacity") | null;
+                            }[];
+                            chips: {
+                                key: string;
+                                label: string;
+                                /** @enum {string} */
+                                tone: "neutral" | "accent" | "warning" | "danger" | "success";
+                                dashed: boolean;
+                            }[];
+                            dossier: {
+                                gist: string | null;
+                                interests: string[];
+                                hooks: string[];
+                                ending: ("warm" | "neutral" | "sour" | "refused") | null;
+                                ending_note: string | null;
+                                language: string | null;
+                            } | null;
+                            touches: {
+                                id: number;
+                                type: string;
+                                openedAt: string | null;
+                                confirmedAt: string | null;
+                                outcomeRepliedAt: string | null;
+                                outcomePurchaseAt: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pages/{pageLabel}/workboard/v2/contact": {
         parameters: {
             query?: never;

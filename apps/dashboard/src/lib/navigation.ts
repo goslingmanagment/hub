@@ -43,6 +43,10 @@ export function buildWorkboardV2Route(pageLabel: string) {
   return `${buildWorkboardRoute(pageLabel)}/v2`;
 }
 
+export function buildWorkboardV3Route(pageLabel: string) {
+  return `${buildWorkboardRoute(pageLabel)}/v3`;
+}
+
 export function buildAiAnalyticsRoute(pageLabel?: string | null) {
   if (!pageLabel) {
     return "/ai-analytics";
