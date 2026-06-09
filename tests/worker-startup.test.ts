@@ -22,6 +22,8 @@ const queueMocks = vi.hoisted(() => ({
   ensureTelegramDailyReportSchedule: vi.fn(),
   ensureWorkboardQueues: vi.fn(),
   ensureWorkboardRecomputeSchedule: vi.fn(),
+  ensureWorkboardV3Queues: vi.fn(),
+  ensureWorkboardV3Schedule: vi.fn(),
 }));
 
 const plannerMocks = vi.hoisted(() => ({
@@ -43,11 +45,18 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureSyncQueues: queueMocks.ensureSyncQueues,
   ensureWorkboardQueues: queueMocks.ensureWorkboardQueues,
   ensureWorkboardRecomputeSchedule: queueMocks.ensureWorkboardRecomputeSchedule,
+  ensureWorkboardV3Queues: queueMocks.ensureWorkboardV3Queues,
+  ensureWorkboardV3Schedule: queueMocks.ensureWorkboardV3Schedule,
   RAW_PAYLOAD_CLEANUP_QUEUE: "raw-payload-cleanup",
   SYNC_PLANNER_QUEUE: "sync-planner",
   TELEGRAM_DAILY_REPORT_QUEUE: "telegram.daily-report",
   WORKBOARD_RECOMPUTE_QUEUE: "workboard.recompute",
   WORKBOARD_CLASSIFY_QUEUE: "workboard.classify-closing",
+  WORKBOARD_V3_CONFIRM_TOUCHES_QUEUE: "workboard-v3.confirm-touches",
+  WORKBOARD_V3_RECOMPUTE_QUEUE: "workboard-v3.recompute",
+  WORKBOARD_V3_DIALOG_READ_QUEUE: "workboard-v3.dialog-read",
+  WORKBOARD_V3_DOSSIER_QUEUE: "workboard-v3.dossier",
+  WORKBOARD_V3_DOSSIER_POLL_QUEUE: "workboard-v3.dossier-poll",
 }));
 
 import { startWorkerServices } from "../apps/runtime/src/worker-services.ts";
