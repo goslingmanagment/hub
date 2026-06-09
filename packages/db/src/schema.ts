@@ -924,6 +924,8 @@ export const workboardSnoozes = pgTable(
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
     snoozedUntil: timestamp("snoozed_until", { withTimezone: true }).notNull(),
+    // Workboard v3 (additive, nullable): why the fan was snoozed. v1/v2 ignore it.
+    reason: text("reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -1663,3 +1665,336 @@ export const wbLlmUsageDaily = pgTable(
     }),
   }),
 );
+
+// ───────────────────────────────────────────────────────────────────────────
+// Workboard v3 (shift plan + reason codes). Built alongside v1/v2; nothing
+// above this block changes. See docs/workboard-v3-prd.md.
+// ───────────────────────────────────────────────────────────────────────────
+
+// Lifecycle segments only (PRD §2). The "service" presentation state is derived
+// at read time from do_not_touch / workboard_snoozes; archived/dead are real
+// lifecycle states and live here.
+export const workboardV3SegmentEnum = pgEnum("workboard_v3_segment", [
+  "subscriber",
+  "spender",
+  "fresh",
+  "gray",
+  "mass_active",
+  "dead",
+  "archived",
+]);
+
+export const workboardV3TouchTypeEnum = pgEnum("workboard_v3_touch_type", [
+  "personal",
+  "manual",
+  "broadcast",
+]);
+
+export const workboardV3SectionEnum = pgEnum("workboard_v3_section", [
+  "purchase",
+  "needs_reply",
+  "risk",
+  "scheduled",
+]);
+
+export const workboardV3PlanItemSourceEnum = pgEnum("workboard_v3_plan_item_source", [
+  "initial",
+  "live",
+  "refill",
+]);
+
+export const workboardV3PlanItemStatusEnum = pgEnum("workboard_v3_plan_item_status", [
+  "pending",
+  "in_progress",
+  "done",
+  "skipped",
+  "snoozed",
+  "expired",
+]);
+
+export const workboardV3DossierSourceEnum = pgEnum("workboard_v3_dossier_source", [
+  "history",
+  "transactions_only",
+]);
+
+// Structured Dialog Read verdict (PRD §9). Stored as words, never as scores.
+export type Wb3DialogIntent =
+  | "buy_signal"
+  | "question"
+  | "complaint"
+  | "smalltalk"
+  | "closing"
+  | "stop_request"
+  | "cold";
+
+export type Wb3DialogVerdict = {
+  needs_reply: boolean;
+  intent: Wb3DialogIntent | null;
+  temperature: "hot" | "warm" | "cool" | "cold" | null;
+  readiness: "none" | "curious" | "considering" | "ready" | null;
+  gist: string | null;
+};
+
+// Dossier payload (PRD §9). Money is deterministic and lives elsewhere.
+export type Wb3Dossier = {
+  gist: string | null;
+  interests: string[];
+  hooks: string[];
+  ending: "warm" | "neutral" | "sour" | "refused" | null;
+  ending_note: string | null;
+  language: string | null;
+};
+
+// Persisted nightly FSM output: one row per (page, fan). Volatile reasons
+// (◆/●) are computed at read time and are NOT stored here.
+export const workboardV3FanState = pgTable(
+  "workboard_v3_fan_state",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    segment: workboardV3SegmentEnum("segment").notNull(),
+    hasEverReplied: boolean("has_ever_replied").default(false).notNull(),
+    freeloader: boolean("freeloader").default(false).notNull(),
+    doNotTouch: boolean("do_not_touch").default(false).notNull(),
+    doNotTouchReason: text("do_not_touch_reason"),
+    deadAttempts: integer("dead_attempts").default(0).notNull(),
+    deadSleepUntil: timestamp("dead_sleep_until", { withTimezone: true }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    lastPersonalTouchAt: timestamp("last_personal_touch_at", { withTimezone: true }),
+    lastAnyTouchAt: timestamp("last_any_touch_at", { withTimezone: true }),
+    cadenceDueAt: timestamp("cadence_due_at", { withTimezone: true }),
+    responseRate90d: numeric("response_rate_90d", { precision: 4, scale: 3, mode: "number" }),
+    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "workboard_v3_fan_state_pkey",
+      columns: [table.platformAccountId, table.fanId],
+    }),
+    segmentIdx: index("workboard_v3_fan_state_segment_idx").on(
+      table.platformAccountId,
+      table.segment,
+    ),
+    cadenceIdx: index("workboard_v3_fan_state_cadence_idx").on(
+      table.platformAccountId,
+      table.cadenceDueAt,
+    ),
+  }),
+);
+
+export const workboardV3Shifts = pgTable(
+  "workboard_v3_shifts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    chatterUserId: bigint("chatter_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    summary: jsonb("summary"),
+  },
+  (table) => ({
+    pageStartedIdx: index("workboard_v3_shifts_page_started_idx").on(
+      table.platformAccountId,
+      table.startedAt.desc(),
+    ),
+  }),
+);
+
+// Authoritative "we touched this fan" log. personal = open-chat click confirmed
+// by sync; manual = chatter pressed Готово; broadcast = detector credit.
+// model_message_pk / message FKs are SET NULL so DM retention pruning never
+// erases touch history.
+export const workboardV3Touches = pgTable(
+  "workboard_v3_touches",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    shiftId: bigint("shift_id", { mode: "number" }).references(() => workboardV3Shifts.id, {
+      onDelete: "set null",
+    }),
+    chatterUserId: bigint("chatter_user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    type: workboardV3TouchTypeEnum("type").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    modelMessagePk: bigint("model_message_pk", { mode: "number" }).references(
+      () => pageDmMessages.id,
+      { onDelete: "set null" },
+    ),
+    outcomeRepliedAt: timestamp("outcome_replied_at", { withTimezone: true }),
+    outcomePurchaseAt: timestamp("outcome_purchase_at", { withTimezone: true }),
+    outcomeComputedAt: timestamp("outcome_computed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pageFanIdx: index("workboard_v3_touches_page_fan_idx").on(
+      table.platformAccountId,
+      table.fanId,
+      table.createdAt.desc(),
+    ),
+    openIdx: index("workboard_v3_touches_open_idx").on(
+      table.platformAccountId,
+      table.confirmedAt,
+      table.openedAt,
+    ),
+    outcomeIdx: index("workboard_v3_touches_outcome_idx").on(
+      table.platformAccountId,
+      table.outcomeComputedAt,
+    ),
+  }),
+);
+
+export const workboardV3PlanItems = pgTable(
+  "workboard_v3_plan_items",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    shiftId: bigint("shift_id", { mode: "number" })
+      .references(() => workboardV3Shifts.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    reason: text("reason").notNull(),
+    section: workboardV3SectionEnum("section").notNull(),
+    source: workboardV3PlanItemSourceEnum("source").default("initial").notNull(),
+    addedAt: timestamp("added_at", { withTimezone: true }).defaultNow().notNull(),
+    status: workboardV3PlanItemStatusEnum("status").default("pending").notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedByTouchId: bigint("resolved_by_touch_id", { mode: "number" }).references(
+      () => workboardV3Touches.id,
+      { onDelete: "set null" },
+    ),
+    skipReason: text("skip_reason"),
+  },
+  (table) => ({
+    shiftStatusIdx: index("workboard_v3_plan_items_shift_status_idx").on(
+      table.shiftId,
+      table.status,
+    ),
+    fanIdx: index("workboard_v3_plan_items_fan_idx").on(table.fanId),
+  }),
+);
+
+// Broadcast detector output (PRD §4). Mapping lives here; sync tables untouched.
+export const dmBroadcastGroups = pgTable(
+  "dm_broadcast_groups",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    contentHash: text("content_hash").notNull(),
+    messageCount: integer("message_count").default(0).notNull(),
+    firstSentAt: timestamp("first_sent_at", { withTimezone: true }).notNull(),
+    lastSentAt: timestamp("last_sent_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    hashIdx: index("dm_broadcast_groups_hash_idx").on(
+      table.platformAccountId,
+      table.contentHash,
+      table.lastSentAt.desc(),
+    ),
+  }),
+);
+
+export const dmBroadcastMessages = pgTable(
+  "dm_broadcast_messages",
+  {
+    messagePk: bigint("message_pk", { mode: "number" })
+      .primaryKey()
+      .references(() => pageDmMessages.id, { onDelete: "cascade" }),
+    groupId: bigint("group_id", { mode: "number" })
+      .references(() => dmBroadcastGroups.id, { onDelete: "cascade" })
+      .notNull(),
+  },
+  (table) => ({
+    groupIdx: index("dm_broadcast_messages_group_idx").on(table.groupId),
+  }),
+);
+
+// One row per Dialog Read; the (conversation, last fan message) pair is the
+// permanent cache key. model = 'l1' marks free pre-filter verdicts. The fan
+// message FK is SET NULL so retention pruning keeps the verdict timeline.
+export const dialogReads = pgTable(
+  "dialog_reads",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    conversationId: bigint("conversation_id", { mode: "number" })
+      .references(() => pageDmThreads.id, { onDelete: "cascade" })
+      .notNull(),
+    lastFanMessagePk: bigint("last_fan_message_pk", { mode: "number" }).references(
+      () => pageDmMessages.id,
+      { onDelete: "set null" },
+    ),
+    verdict: jsonb("verdict").$type<Wb3DialogVerdict>().notNull(),
+    model: text("model").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    cacheUniq: unique("dialog_reads_conversation_message_uniq").on(
+      table.conversationId,
+      table.lastFanMessagePk,
+    ),
+    fanTimelineIdx: index("dialog_reads_fan_timeline_idx").on(
+      table.platformAccountId,
+      table.fanId,
+      table.createdAt.desc(),
+    ),
+    conversationIdx: index("dialog_reads_conversation_idx").on(
+      table.conversationId,
+      table.id.desc(),
+    ),
+  }),
+);
+
+export const fanDossiers = pgTable(
+  "fan_dossiers",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    dossier: jsonb("dossier").$type<Wb3Dossier>().notNull(),
+    source: workboardV3DossierSourceEnum("source").notNull(),
+    coverageAtBuild: text("coverage_at_build"),
+    model: text("model"),
+    builtAt: timestamp("built_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "fan_dossiers_pkey",
+      columns: [table.platformAccountId, table.fanId],
+    }),
+  }),
+);
+
+// Per-page job watermarks (broadcast detector scans "since last run").
+export const workboardV3JobState = pgTable("workboard_v3_job_state", {
+  platformAccountId: bigint("platform_account_id", { mode: "number" })
+    .primaryKey()
+    .references(() => pages.id, { onDelete: "cascade" }),
+  broadcastScannedUntil: timestamp("broadcast_scanned_until", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
