@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
-import { buildAiAnalyticsRoute, buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, buildWorkboardV2Route, decodeRouteSegment } from "@/lib/navigation";
+import { buildAiAnalyticsRoute, buildPageRoute, buildPageSectionRoute, buildWorkboardRoute, buildWorkboardV2Route, buildWorkboardV3Route, decodeRouteSegment } from "@/lib/navigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 interface SidebarProps {
@@ -168,6 +168,19 @@ export function Sidebar({ user }: SidebarProps) {
                           }
                         >
                           <MessageSquare size={12} /> Workboard v2
+                        </NavLink>
+                      )}
+                      {page.platform === "fansly" && (
+                        <NavLink
+                          end
+                          to={buildWorkboardV3Route(page.label)}
+                          className={({ isActive }) =>
+                            `flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-md transition-colors ${
+                              isActive ? "text-text-primary font-semibold" : "text-text-muted hover:text-text-secondary"
+                            }`
+                          }
+                        >
+                          <MessageSquare size={12} /> Workboard v3
                         </NavLink>
                       )}
                     </div>
