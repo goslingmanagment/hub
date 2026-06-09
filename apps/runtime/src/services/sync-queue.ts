@@ -9,6 +9,7 @@ export const RAW_PAYLOAD_CLEANUP_QUEUE = "fansly.raw-payload-cleanup";
 export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 export const WORKBOARD_RECOMPUTE_QUEUE = "workboard.recompute";
 export const WORKBOARD_CLASSIFY_QUEUE = "workboard.classify-closing";
+export const WORKBOARD_V3_CONFIRM_TOUCHES_QUEUE = "workboard-v3.confirm-touches";
 
 export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages";
 
@@ -150,6 +151,28 @@ export async function ensureWorkboardRecomputeSchedule(
   // recompute itself at 03:00 UTC (after spend rollups settle).
   await boss.schedule(WORKBOARD_CLASSIFY_QUEUE, "0 1 * * *", null, { tz: "UTC" });
   await boss.schedule(WORKBOARD_RECOMPUTE_QUEUE, "0 3 * * *", null, { tz: "UTC" });
+}
+
+export async function ensureWorkboardV3Queues(
+  boss: QueueCreationClient,
+  createdQueues?: Set<string>,
+) {
+  await ensureQueueCreated(boss, WORKBOARD_V3_CONFIRM_TOUCHES_QUEUE, {
+    policy: "standard",
+    retryLimit: 1,
+    retryDelay: 60,
+  }, createdQueues);
+}
+
+export async function ensureWorkboardV3Schedule(
+  boss: QueueCreationClient,
+) {
+  if (!boss.schedule) {
+    return;
+  }
+
+  // Touch confirmation every 20 minutes (PRD §8: 15–30 min, tracks the DM sync).
+  await boss.schedule(WORKBOARD_V3_CONFIRM_TOUCHES_QUEUE, "*/20 * * * *", null, { tz: "UTC" });
 }
 
 export async function sendSyncPlannerWakeup(

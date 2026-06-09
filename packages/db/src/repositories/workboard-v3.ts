@@ -4,7 +4,9 @@ import type { Database } from "../client.ts";
 import {
   dmBroadcastGroups,
   dmBroadcastMessages,
+  workboardSnoozes,
   workboardV3JobState,
+  workboardV3PlanItems,
   workboardV3Touches,
 } from "../schema.ts";
 
@@ -223,6 +225,207 @@ export async function refreshWb3BroadcastGroupCount(
     set message_count = (select count(*) from dm_broadcast_messages where group_id = ${groupId})
     where id = ${groupId}
   `);
+}
+
+// ─── Touches (M0.3) ─────────────────────────────────────────────────────────
+
+/** All Fansly page ids — v3 is Fansly-first (PRD §1.6). */
+export async function listWb3PageIds(db: Database): Promise<number[]> {
+  const result = await db.execute<{ id: bigint }>(sql`
+    select id from pages where platform = 'fansly' order by id asc
+  `);
+  return result.rows.map((row) => toNumber(row.id));
+}
+
+export async function insertWb3Touch(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    fanId: number;
+    type: "personal" | "manual";
+    shiftId?: number | null;
+    chatterUserId?: number | null;
+    openedAt?: Date | null;
+    confirmedAt?: Date | null;
+  },
+): Promise<number> {
+  const [row] = await db
+    .insert(workboardV3Touches)
+    .values({
+      platformAccountId: input.platformAccountId,
+      fanId: input.fanId,
+      type: input.type,
+      shiftId: input.shiftId ?? null,
+      chatterUserId: input.chatterUserId ?? null,
+      openedAt: input.openedAt ?? null,
+      confirmedAt: input.confirmedAt ?? null,
+    })
+    .returning({ id: workboardV3Touches.id });
+  return row!.id;
+}
+
+/**
+ * "Готово" pressed while an open (unconfirmed personal) touch exists — convert
+ * it to a confirmed manual touch. Returns null when there is nothing open.
+ */
+export async function forceWb3LatestOpenTouchDone(
+  db: Database,
+  input: { platformAccountId: number; fanId: number; now: Date },
+): Promise<number | null> {
+  const result = await db.execute<{ id: bigint }>(sql`
+    update workboard_v3_touches
+    set type = 'manual', confirmed_at = ${input.now}
+    where id = (
+      select id from workboard_v3_touches
+      where platform_account_id = ${input.platformAccountId}
+        and fan_id = ${input.fanId}
+        and type = 'personal'
+        and confirmed_at is null
+      order by opened_at desc nulls last, id desc
+      limit 1
+    )
+    returning id
+  `);
+  const row = result.rows[0];
+  return row ? toNumber(row.id) : null;
+}
+
+export type Wb3ConfirmableTouchRow = {
+  touchId: number;
+  fanId: number;
+  shiftId: number | null;
+  messagePk: number;
+  messageCreatedAt: Date;
+};
+
+/**
+ * Open personal touches matched to the first non-broadcast model message in
+ * any of the fan's threads with created_at inside (opened_at, opened_at + window].
+ */
+export async function listWb3ConfirmableTouches(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    now: Date;
+    windowHours: number;
+    lookbackDays: number;
+  },
+): Promise<Wb3ConfirmableTouchRow[]> {
+  const result = await db.execute<{
+    touch_id: bigint;
+    fan_id: bigint;
+    shift_id: bigint | null;
+    message_pk: bigint;
+    message_created_at: Date | string;
+  }>(sql`
+    select t.id as touch_id, t.fan_id, t.shift_id, m.id as message_pk, m.created_at as message_created_at
+    from workboard_v3_touches t
+    join lateral (
+      select msg.id, msg.created_at
+      from page_dm_messages msg
+      join page_dm_threads th on th.id = msg.conversation_id
+      where th.platform_account_id = t.platform_account_id
+        and th.fan_id = t.fan_id
+        and msg.sender_role = 'model'
+        and msg.created_at > t.opened_at
+        and msg.created_at <= t.opened_at + ${input.windowHours} * interval '1 hour'
+        and not exists (select 1 from dm_broadcast_messages b where b.message_pk = msg.id)
+      order by msg.created_at asc, msg.id asc
+      limit 1
+    ) m on true
+    where t.platform_account_id = ${input.platformAccountId}
+      and t.type = 'personal'
+      and t.confirmed_at is null
+      and t.opened_at is not null
+      and t.opened_at > ${input.now}::timestamptz - ${input.lookbackDays} * interval '1 day'
+  `);
+  return result.rows.map((row) => ({
+    touchId: toNumber(row.touch_id),
+    fanId: toNumber(row.fan_id),
+    shiftId: row.shift_id == null ? null : toNumber(row.shift_id),
+    messagePk: toNumber(row.message_pk),
+    messageCreatedAt: toDate(row.message_created_at),
+  }));
+}
+
+export async function confirmWb3Touch(
+  db: Database,
+  input: { touchId: number; confirmedAt: Date; modelMessagePk: number },
+): Promise<void> {
+  await db
+    .update(workboardV3Touches)
+    .set({ confirmedAt: input.confirmedAt, modelMessagePk: input.modelMessagePk })
+    .where(eq(workboardV3Touches.id, input.touchId));
+}
+
+export async function setWb3PlanItemInProgress(
+  db: Database,
+  planItemId: number,
+): Promise<void> {
+  await db
+    .update(workboardV3PlanItems)
+    .set({ status: "in_progress" })
+    .where(eq(workboardV3PlanItems.id, planItemId));
+}
+
+export async function resolveWb3PlanItem(
+  db: Database,
+  input: {
+    planItemId: number;
+    status: "done" | "skipped" | "snoozed";
+    resolvedAt: Date;
+    resolvedByTouchId?: number | null;
+    skipReason?: string | null;
+  },
+): Promise<void> {
+  await db
+    .update(workboardV3PlanItems)
+    .set({
+      status: input.status,
+      resolvedAt: input.resolvedAt,
+      resolvedByTouchId: input.resolvedByTouchId ?? null,
+      skipReason: input.skipReason ?? null,
+    })
+    .where(eq(workboardV3PlanItems.id, input.planItemId));
+}
+
+/** Auto-close open plan items of the shift when a touch on the fan confirms. */
+export async function resolveWb3PlanItemsForTouch(
+  db: Database,
+  input: { shiftId: number; fanId: number; touchId: number; resolvedAt: Date },
+): Promise<number> {
+  const result = await db.execute<{ id: bigint }>(sql`
+    update workboard_v3_plan_items
+    set status = 'done', resolved_at = ${input.resolvedAt}, resolved_by_touch_id = ${input.touchId}
+    where shift_id = ${input.shiftId}
+      and fan_id = ${input.fanId}
+      and status in ('pending', 'in_progress')
+    returning id
+  `);
+  return result.rows.length;
+}
+
+export async function upsertWb3Snooze(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    fanId: number;
+    snoozedUntil: Date;
+    reason?: string | null;
+  },
+): Promise<void> {
+  await db
+    .insert(workboardSnoozes)
+    .values({
+      platformAccountId: input.platformAccountId,
+      fanId: input.fanId,
+      snoozedUntil: input.snoozedUntil,
+      reason: input.reason ?? null,
+    })
+    .onConflictDoUpdate({
+      target: [workboardSnoozes.platformAccountId, workboardSnoozes.fanId],
+      set: { snoozedUntil: input.snoozedUntil, reason: input.reason ?? null },
+    });
 }
 
 export async function insertWb3BroadcastTouches(

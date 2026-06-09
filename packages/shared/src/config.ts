@@ -95,6 +95,7 @@ const envSchema = z.object({
   WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
   WB_CLOSING_LLM_DAILY_CAP_MIN: z.coerce.number().int().positive().default(50),
   WB_CLOSING_LLM_DAILY_CAP_MAX: z.coerce.number().int().positive().default(400),
+  WB3_ENABLED: booleanSchema.default(false),
 });
 
 export interface AppConfig {
@@ -146,6 +147,7 @@ export interface AppConfig {
   wbClosingLlmModel?: string;
   wbClosingLlmDailyCapMin?: number;
   wbClosingLlmDailyCapMax?: number;
+  wb3Enabled?: boolean;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -255,6 +257,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     wbClosingLlmModel: parsed.WB_CLOSING_LLM_MODEL,
     wbClosingLlmDailyCapMin: parsed.WB_CLOSING_LLM_DAILY_CAP_MIN,
     wbClosingLlmDailyCapMax: parsed.WB_CLOSING_LLM_DAILY_CAP_MAX,
+    wb3Enabled: parsed.WB3_ENABLED,
   };
 }
 
