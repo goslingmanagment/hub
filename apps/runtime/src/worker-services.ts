@@ -29,10 +29,12 @@ import {
   WORKBOARD_CLASSIFY_QUEUE,
   WORKBOARD_RECOMPUTE_QUEUE,
   WORKBOARD_V3_CONFIRM_TOUCHES_QUEUE,
+  WORKBOARD_V3_RECOMPUTE_QUEUE,
 } from "./services/sync-queue.ts";
 import { recomputeAllWorkboardPages } from "./services/workboard-v2/recompute.ts";
 import { runClosingClassificationAllPages } from "./services/workboard-v2/classify-closing.ts";
 import { confirmWb3TouchesAllPages } from "./services/workboard-v3/touches.ts";
+import { recomputeWb3AllPages } from "./services/workboard-v3/recompute.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
@@ -161,6 +163,14 @@ export async function startWorkerServices(
     }
     const result = await confirmWb3TouchesAllPages(app.db, { now: new Date() });
     app.logger.info(result, "Workboard v3 touch confirmation complete");
+  });
+
+  await boss.work(WORKBOARD_V3_RECOMPUTE_QUEUE, { batchSize: 1 }, async () => {
+    if (!app.config.wb3Enabled) {
+      return;
+    }
+    const result = await recomputeWb3AllPages(app.db, { now: new Date() });
+    app.logger.info(result, "Workboard v3 recompute complete");
   });
 
   await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, { batchSize: 1 }, async () => {

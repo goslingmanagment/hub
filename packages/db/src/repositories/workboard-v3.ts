@@ -5,9 +5,11 @@ import {
   dmBroadcastGroups,
   dmBroadcastMessages,
   workboardSnoozes,
+  workboardV3FanState,
   workboardV3JobState,
   workboardV3PlanItems,
   workboardV3Touches,
+  type Wb3DialogIntent,
 } from "../schema.ts";
 
 // Workboard v3 data access. Raw SQL in/out; the FSM and detectors (apps/runtime)
@@ -426,6 +428,297 @@ export async function upsertWb3Snooze(
       target: [workboardSnoozes.platformAccountId, workboardSnoozes.fanId],
       set: { snoozedUntil: input.snoozedUntil, reason: input.reason ?? null },
     });
+}
+
+// ─── Recompute signals (M0.4) ───────────────────────────────────────────────
+
+export type Wb3SegmentValue =
+  | "subscriber"
+  | "spender"
+  | "fresh"
+  | "gray"
+  | "mass_active"
+  | "dead"
+  | "archived";
+
+/** Per-fan nightly signal row (money, threads, touches, dossier, prior state). */
+export type Wb3FanSignalRow = {
+  fan_id: bigint;
+  ltv_mills: bigint | null;
+  is_subscriber: boolean;
+  auto_renew: boolean | null;
+  subscription_expires_at: Date | string | null;
+  follower_since: Date | string | null;
+  page_last_transaction_at: Date | string | null;
+  paid_mills: bigint | null;
+  last_purchase_at: Date | string | null;
+  last_fan_message_at: Date | string | null;
+  any_fan_message: boolean;
+  last_personal_touch_at: Date | string | null;
+  last_broadcast_touch_at: Date | string | null;
+  last_any_touch_at: Date | string | null;
+  personal_touch_count: bigint;
+  fifth_personal_touch_at: Date | string | null;
+  outcome_total_90: bigint;
+  outcome_replied_90: bigint;
+  revival_touch_at: Date | string | null;
+  dossier_ending: string | null;
+  prior_segment: string | null;
+  prior_has_ever_replied: boolean | null;
+  prior_do_not_touch: boolean | null;
+  prior_do_not_touch_reason: string | null;
+  prior_dead_sleep_until: Date | string | null;
+  prior_archived_at: Date | string | null;
+};
+
+export async function loadWb3FanSignalRows(
+  db: Database,
+  input: { platformAccountId: number; now: Date },
+): Promise<Wb3FanSignalRow[]> {
+  const from90 = new Date(input.now.getTime() - 90 * 86_400_000);
+  const result = await db.execute<Wb3FanSignalRow>(sql`
+    with txn as (
+      select fan_id,
+        sum(creator_net_amount_mills) filter (where creator_net_amount_mills > 0) as paid_mills,
+        max(occurred_at) filter (where creator_net_amount_mills > 0) as last_purchase_at
+      from transactions
+      where platform_account_id = ${input.platformAccountId}
+        and is_active and transaction_state = 'posted' and fan_id is not null
+      group by fan_id
+    ),
+    th as (
+      select fan_id,
+        max(last_fan_message_at) as last_fan_message_at,
+        bool_or(last_fan_message_at is not null) as any_fan_message
+      from page_dm_threads
+      where platform_account_id = ${input.platformAccountId} and fan_id is not null
+      group by fan_id
+    ),
+    msg_any as (
+      select t.fan_id, count(*) as fan_msg_count
+      from page_dm_messages m
+      join page_dm_threads t on t.id = m.conversation_id
+      where m.platform_account_id = ${input.platformAccountId}
+        and m.sender_role = 'fan' and t.fan_id is not null
+      group by t.fan_id
+    ),
+    touch as (
+      select fan_id,
+        max(confirmed_at) filter (where type in ('personal','manual')) as last_personal_touch_at,
+        max(confirmed_at) filter (where type = 'broadcast') as last_broadcast_touch_at,
+        max(confirmed_at) as last_any_touch_at,
+        count(*) filter (where type in ('personal','manual') and confirmed_at is not null) as personal_touch_count,
+        (array_agg(confirmed_at order by confirmed_at)
+          filter (where type in ('personal','manual') and confirmed_at is not null))[5] as fifth_personal_touch_at,
+        count(*) filter (where type in ('personal','manual') and confirmed_at >= ${from90}
+          and outcome_computed_at is not null) as outcome_total_90,
+        count(*) filter (where type in ('personal','manual') and confirmed_at >= ${from90}
+          and outcome_computed_at is not null and outcome_replied_at is not null) as outcome_replied_90
+      from workboard_v3_touches
+      where platform_account_id = ${input.platformAccountId}
+      group by fan_id
+    ),
+    revival as (
+      select t.fan_id, min(t.confirmed_at) as revival_touch_at
+      from workboard_v3_touches t
+      join workboard_v3_fan_state s
+        on s.platform_account_id = t.platform_account_id and s.fan_id = t.fan_id
+      where t.platform_account_id = ${input.platformAccountId}
+        and t.type in ('personal','manual') and t.confirmed_at is not null
+        and s.dead_sleep_until is not null and t.confirmed_at > s.dead_sleep_until
+      group by t.fan_id
+    )
+    select
+      pf.fan_id,
+      pf.total_creator_net_mills as ltv_mills,
+      pf.is_subscriber,
+      pf.auto_renew,
+      pf.subscription_expires_at,
+      pf.follower_since,
+      pf.last_transaction_at as page_last_transaction_at,
+      txn.paid_mills,
+      txn.last_purchase_at,
+      th.last_fan_message_at,
+      (coalesce(th.any_fan_message, false) or coalesce(msg_any.fan_msg_count, 0) > 0) as any_fan_message,
+      touch.last_personal_touch_at,
+      touch.last_broadcast_touch_at,
+      touch.last_any_touch_at,
+      coalesce(touch.personal_touch_count, 0) as personal_touch_count,
+      touch.fifth_personal_touch_at,
+      coalesce(touch.outcome_total_90, 0) as outcome_total_90,
+      coalesce(touch.outcome_replied_90, 0) as outcome_replied_90,
+      revival.revival_touch_at,
+      d.dossier->>'ending' as dossier_ending,
+      s.segment::text as prior_segment,
+      s.has_ever_replied as prior_has_ever_replied,
+      s.do_not_touch as prior_do_not_touch,
+      s.do_not_touch_reason as prior_do_not_touch_reason,
+      s.dead_sleep_until as prior_dead_sleep_until,
+      s.archived_at as prior_archived_at
+    from page_fans pf
+    left join txn on txn.fan_id = pf.fan_id
+    left join th on th.fan_id = pf.fan_id
+    left join msg_any on msg_any.fan_id = pf.fan_id
+    left join touch on touch.fan_id = pf.fan_id
+    left join revival on revival.fan_id = pf.fan_id
+    left join fan_dossiers d
+      on d.platform_account_id = pf.platform_account_id and d.fan_id = pf.fan_id
+    left join workboard_v3_fan_state s
+      on s.platform_account_id = pf.platform_account_id and s.fan_id = pf.fan_id
+    where pf.platform_account_id = ${input.platformAccountId}
+  `);
+  return result.rows;
+}
+
+export type Wb3FanMessageRow = {
+  fanId: number;
+  messagePk: number;
+  createdAt: Date;
+  content: string;
+  /** Dialog Read intent for this exact message when one exists. */
+  intent: Wb3DialogIntent | null;
+};
+
+/** Fan messages of the last `sinceDays` with verdict intents — L1 runs in TS. */
+export async function loadWb3FanMessageRows(
+  db: Database,
+  input: { platformAccountId: number; now: Date; sinceDays: number },
+): Promise<Wb3FanMessageRow[]> {
+  const since = new Date(input.now.getTime() - input.sinceDays * 86_400_000);
+  const result = await db.execute<{
+    fan_id: bigint;
+    message_pk: bigint;
+    created_at: Date | string;
+    content: string;
+    intent: string | null;
+  }>(sql`
+    select t.fan_id, m.id as message_pk, m.created_at, m.content,
+      dr.verdict->>'intent' as intent
+    from page_dm_messages m
+    join page_dm_threads t on t.id = m.conversation_id
+    left join dialog_reads dr on dr.last_fan_message_pk = m.id
+    where m.platform_account_id = ${input.platformAccountId}
+      and m.sender_role = 'fan'
+      and m.created_at >= ${since}
+      and t.fan_id is not null
+    order by t.fan_id asc, m.created_at asc
+  `);
+  return result.rows.map((row) => ({
+    fanId: toNumber(row.fan_id),
+    messagePk: toNumber(row.message_pk),
+    createdAt: toDate(row.created_at),
+    content: row.content,
+    intent: (row.intent as Wb3DialogIntent | null) ?? null,
+  }));
+}
+
+/**
+ * Outcome loop (PRD §10): stamps replied/purchase-within-window for touches
+ * older than the outcome window. Set-based; one statement per page.
+ */
+export async function stampWb3TouchOutcomes(
+  db: Database,
+  input: { platformAccountId: number; now: Date; outcomeWindowHours: number },
+): Promise<number> {
+  const result = await db.execute<{ id: bigint }>(sql`
+    update workboard_v3_touches t
+    set outcome_replied_at = sub.replied_at,
+        outcome_purchase_at = sub.purchase_at,
+        outcome_computed_at = ${input.now}
+    from (
+      select t2.id,
+        (select min(m.created_at)
+          from page_dm_messages m
+          join page_dm_threads th on th.id = m.conversation_id
+          where th.platform_account_id = t2.platform_account_id
+            and th.fan_id = t2.fan_id
+            and m.sender_role = 'fan'
+            and m.created_at > coalesce(t2.confirmed_at, t2.opened_at, t2.created_at)
+            and m.created_at <= coalesce(t2.confirmed_at, t2.opened_at, t2.created_at)
+              + ${input.outcomeWindowHours} * interval '1 hour') as replied_at,
+        (select min(x.occurred_at)
+          from transactions x
+          where x.platform_account_id = t2.platform_account_id
+            and x.fan_id = t2.fan_id
+            and x.creator_net_amount_mills > 0 and x.is_active and x.transaction_state = 'posted'
+            and x.occurred_at > coalesce(t2.confirmed_at, t2.opened_at, t2.created_at)
+            and x.occurred_at <= coalesce(t2.confirmed_at, t2.opened_at, t2.created_at)
+              + ${input.outcomeWindowHours} * interval '1 hour') as purchase_at
+      from workboard_v3_touches t2
+      where t2.platform_account_id = ${input.platformAccountId}
+        and t2.outcome_computed_at is null
+        and coalesce(t2.confirmed_at, t2.opened_at, t2.created_at)
+          < ${input.now}::timestamptz - ${input.outcomeWindowHours} * interval '1 hour'
+    ) sub
+    where t.id = sub.id
+    returning t.id
+  `);
+  return result.rows.length;
+}
+
+export type Wb3FanStateRecord = {
+  platformAccountId: number;
+  fanId: number;
+  segment: Wb3SegmentValue;
+  hasEverReplied: boolean;
+  freeloader: boolean;
+  doNotTouch: boolean;
+  doNotTouchReason: string | null;
+  deadAttempts: number;
+  deadSleepUntil: Date | null;
+  archivedAt: Date | null;
+  lastPersonalTouchAt: Date | null;
+  lastAnyTouchAt: Date | null;
+  cadenceDueAt: Date | null;
+  responseRate90d: number | null;
+  computedAt: Date;
+};
+
+export async function upsertWb3FanStates(
+  db: Database,
+  records: Wb3FanStateRecord[],
+): Promise<void> {
+  if (records.length === 0) {
+    return;
+  }
+  await db
+    .insert(workboardV3FanState)
+    .values(records)
+    .onConflictDoUpdate({
+      target: [workboardV3FanState.platformAccountId, workboardV3FanState.fanId],
+      set: {
+        segment: sql`excluded.segment`,
+        hasEverReplied: sql`excluded.has_ever_replied`,
+        freeloader: sql`excluded.freeloader`,
+        doNotTouch: sql`excluded.do_not_touch`,
+        doNotTouchReason: sql`excluded.do_not_touch_reason`,
+        deadAttempts: sql`excluded.dead_attempts`,
+        deadSleepUntil: sql`excluded.dead_sleep_until`,
+        archivedAt: sql`excluded.archived_at`,
+        lastPersonalTouchAt: sql`excluded.last_personal_touch_at`,
+        lastAnyTouchAt: sql`excluded.last_any_touch_at`,
+        cadenceDueAt: sql`excluded.cadence_due_at`,
+        responseRate90d: sql`excluded.response_rate_90d`,
+        computedAt: sql`excluded.computed_at`,
+      },
+    });
+}
+
+/** Drops states for fans no longer present on the page. */
+export async function deleteWb3FanStatesForMissingFans(
+  db: Database,
+  platformAccountId: number,
+): Promise<number> {
+  const result = await db.execute<{ fan_id: bigint }>(sql`
+    delete from workboard_v3_fan_state s
+    where s.platform_account_id = ${platformAccountId}
+      and not exists (
+        select 1 from page_fans pf
+        where pf.platform_account_id = s.platform_account_id and pf.fan_id = s.fan_id
+      )
+    returning s.fan_id
+  `);
+  return result.rows.length;
 }
 
 export async function insertWb3BroadcastTouches(
