@@ -6,10 +6,13 @@ import type {
 import {
   appendFanProfile,
   findFanOnPage,
+  findPlatformFan,
   getFanProfileVersion,
   getLatestFanProfile,
   getLatestFanProfileForConversation,
   listFanProfileVersionSummaries,
+  upsertFanPages,
+  upsertFans,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -94,6 +97,48 @@ async function resolvePageFan(
   return { page, fan };
 }
 
+// Profile writes for OnlyFans must not depend on core's own sync having seen the
+// fan: OnlyMonster coverage is transactions-only, so non-spenders would 404 on the
+// first ChatMuse PUT. Create the fan + page membership on demand instead (idempotent
+// upserts). Fansly pages keep the strict 404 — their sync covers all DM fans.
+async function resolveOrCreatePageFan(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  platformUserId: string,
+) {
+  const page = await resolveAccessiblePage(app, principal, pageLabel);
+  let fan = await findFanOnPage(app.db, page.id, platformUserId);
+  if (!fan && page.platform === "onlyfans") {
+    // Fans flagged deleted by sync keep their 404 without side effects — the
+    // upserts below would otherwise leave a membership row and a bumped
+    // last_seen_at behind a not-found response.
+    const existing = await findPlatformFan(app.db, "onlyfans", platformUserId);
+    if (existing?.deletedDetectedAt) {
+      throw new NotFoundError(`Fan "${platformUserId}" not found on page "${pageLabel}"`);
+    }
+
+    // No username/displayName here: omitted fields stay untouched on conflict, so a
+    // later sync (or an earlier one) remains the identity source of truth.
+    const [created] = await upsertFans(app.db, [
+      { platform: "onlyfans", platformUserId },
+    ]);
+    if (created) {
+      await upsertFanPages(app.db, [
+        { fanId: created.id, platformAccountId: page.id },
+      ]);
+    }
+    // Re-read through findFanOnPage for the full row shape; still null when sync
+    // marked the fan deleted concurrently — that stays a 404.
+    fan = await findFanOnPage(app.db, page.id, platformUserId);
+  }
+  if (!fan) {
+    throw new NotFoundError(`Fan "${platformUserId}" not found on page "${pageLabel}"`);
+  }
+
+  return { page, fan };
+}
+
 export async function getPageFanProfile(
   app: AppContext,
   principal: AuthPrincipal,
@@ -121,7 +166,7 @@ export async function upsertPageFanProfile(
 ): Promise<FanProfileDocument> {
   requireApiKeyUser(principal);
 
-  const { page, fan } = await resolvePageFan(app, principal, pageLabel, platformUserId);
+  const { page, fan } = await resolveOrCreatePageFan(app, principal, pageLabel, platformUserId);
   const profile = await appendFanProfile(app.db, {
     fanId: fan.fanId,
     platformAccountId: page.id,

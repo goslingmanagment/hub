@@ -1,6 +1,6 @@
 # Agency Hub — Product Roadmap
 
-> Last updated: 2026-03-26
+> Last updated: 2026-06-11
 
 ## Status Overview
 
@@ -15,7 +15,7 @@
 | 4c | Fan Intelligence | **Done** | AI summaries, version history, cross-page spender analytics |
 | 5 | Telegram Notifications | **Done** | Daily reports, incident alerts, test messages |
 | 6 | Backups + Ops | **At Risk** | Job queue + monitoring done. Automated off-server backups missing |
-| 7 | ChatMuse Backend | **Not Started** | AI proxy, fan context injection, cost tracking |
+| 7 | ChatMuse Backend | **On Track** | Real-time track shipped (OFAPI webhooks → SSE, decision #48); AI proxy, fan context injection, cost tracking not started |
 | 8 | Team Management | **Not Started** | Staff profiles, schedules, chatter performance display |
 | 9 | Chatter Payroll | **Not Started** | Payout calculation, shift reports |
 | 10 | Internal TODO | **Not Started** | Task manager for agency ops |
@@ -274,14 +274,18 @@ The system is production-ready with automated backups, restore verification, and
 
 ---
 
-## Phase 7: ChatMuse Backend — **Not Started**
+## Phase 7: ChatMuse Backend — **On Track**
 
-Chatters using the ChatMuse extension get live fan context, AI-assisted replies with streaming output, and all usage is tracked and rate-limited through the hub.
+Chatters using the ChatMuse extension get live fan context, AI-assisted replies with streaming output, and all usage is tracked and rate-limited through the hub. The real-time track (2026-06-11, decision #48) serves the ChatGoose desktop app, which succeeds the extension as the chatter surface.
 
 **Features:**
-- AI proxy with streaming responses — extension sends requests through the hub, not directly to AI provider
+- ✅ OFAPI webhook receiver: raw-body HMAC verify, `x-ofapi-idempotency-key` dedupe, event journal, async pg-boss processing, owner admin flow to register the webhook + map accounts to pages
+- ✅ SSE event fanout `GET /api/v1/events/stream`: chatter-key auth, page-filtered `SyncEvent` frames, `Last-Event-ID` replay, ~7-day journal retention
+- ✅ ChatMuse pre-P4 prerequisites: profile PUT auto-creates OnlyFans fans; AI-usage batch skips invalid events per-event (`invalidCount`)
+- 🟡 Admin UI for the OFAPI webhook flow (API-only today; register via `POST /api/v1/admin/ofapi/webhook`)
+- AI proxy with streaming responses — app sends requests through the hub, not directly to AI provider
 - Fan context injection: spending (page + total), notes, AI summary, subscription status, flags in one panel
-- Fan notes via the extension: chatters create and read notes visible to others on the same page
+- Fan notes via the app: chatters create and read notes visible to others on the same page
 - AI-generated fan summaries from chat history; version history preserved
 - Rate limiting: per-chatter configurable request quota
 - Cost tracking: every AI request logged with chatter, page, token count, dollar cost
@@ -290,7 +294,7 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
 
 **Depends on:** Phase 2 + Phase 4
 
-**Milestone:** A chatter opens a Fansly DM in the extension, sees fan spending and notes. Uses AI-assisted reply with streamed output. Owner sees request count and cost in the dashboard.
+**Milestone:** A chatter opens a Fansly DM in the extension, sees fan spending and notes. Uses AI-assisted reply with streamed output. Owner sees request count and cost in the dashboard. ✅ Real-time milestone: a captured OFAPI webhook delivery reaches a connected desktop as a page-filtered SSE frame, with dedupe and Last-Event-ID resume (integration-tested end-to-end).
 
 ---
 
@@ -383,7 +387,18 @@ Items from TODO.md that affect shipped phases:
 
 ---
 
-## Changes This Update (2026-03-26)
+## Changes This Update (2026-06-11)
+
+**Statuses updated:**
+- Phase 7: → **On Track** — the real-time track shipped (decision #48): OFAPI webhook receiver (raw-body HMAC, idempotency-key dedupe, `ofapi_webhook_events` journal, pg-boss async processing, admin registration flow) and SSE fanout `GET /api/v1/events/stream` (chatter-key auth, page-filtered `SyncEvent` frames, `Last-Event-ID` replay, 7-day retention), integration-tested end-to-end against the live-captured OFAPI fixtures. AI gateway scope remains untouched.
+
+**Items added:**
+- Phase 7 pre-P4 prerequisites for the ChatGoose desktop: OnlyFans fan auto-create on profile PUT, per-event skip in AI-usage batch ingestion
+- Follow-up flagged: dashboard admin UI for the OFAPI webhook flow (API-only today)
+
+---
+
+## Changes Past Updates (2026-03-26)
 
 **Statuses updated:**
 - Phase 1: → **Done**

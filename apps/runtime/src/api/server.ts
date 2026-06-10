@@ -32,6 +32,7 @@ import {
   listAdminPages,
   listFanTransactionsCrossPage,
   listFanTransactionsOnPage,
+  listOfapiSyncEventsForReplay,
   listRevenueDailyForPages,
   listTransactionsForScope,
   listSubscriberDailyForPage,
@@ -87,6 +88,7 @@ import {
   listUsersDetailed,
   loginWithPassword,
   logoutSessionToken,
+  requireApiKeyUser,
   requireDashboardUser,
   requireOwner,
   revokeUserApiKeys,
@@ -196,6 +198,13 @@ import {
 import {
   ensureSyncQueues,
 } from "../services/sync-queue.ts";
+import { createSyncEventHub, type SyncEventFrame, type SyncEventHub } from "../services/events-stream.ts";
+import { ensureOfapiQueues } from "../services/ofapi-events.ts";
+import {
+  getOfapiWebhookStatus,
+  receiveOfapiWebhook,
+  registerOfapiWebhook,
+} from "../services/ofapi-webhooks.ts";
 import { sql } from "drizzle-orm";
 import { listStatus, getStatusDetail } from "../services/sync.ts";
 import { requestAllPagesSync, requestPageSync } from "../services/sync-control.ts";
@@ -1084,10 +1093,203 @@ export async function buildApiServer(appContext: AppContext) {
     boss = new PgBoss({ connectionString: appContext.config.databaseUrl });
     await boss.start();
     await ensureSyncQueues(boss, createdQueues);
+    await ensureOfapiQueues(boss, createdQueues);
     server.addHook("onClose", async () => {
       await boss!.stop();
     });
   }
+
+  // --- OFAPI webhook receiver + SSE sync-event fanout (ChatMuse real-time) ---
+
+  // The receiver authenticates by HMAC over the raw request bytes, so this route
+  // lives in its own plugin scope with the repo's only buffer-mode body parser.
+  await server.register(async (instance) => {
+    instance.addContentTypeParser(
+      "application/json",
+      { parseAs: "buffer" },
+      (_request, body, done) => {
+        done(null, body);
+      },
+    );
+
+    instance.post("/api/v1/ofapi/webhook", {
+      schema: routeSchemas.ofapiWebhookReceive,
+    }, async (request) => {
+      return receiveOfapiWebhook(appContext, boss, {
+        rawBody: Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0),
+        signatureHeader: request.headers.signature,
+        idempotencyKeyHeader: request.headers["x-ofapi-idempotency-key"],
+      });
+    });
+  });
+
+  let syncEventHub: SyncEventHub | null = null;
+  const activeSseStreams = new Set<FastifyReply["raw"]>();
+  server.addHook("onClose", async () => {
+    // Hijacked SSE responses would otherwise hold server.close() open forever.
+    for (const stream of activeSseStreams) {
+      stream.destroy();
+    }
+    activeSseStreams.clear();
+    await syncEventHub?.close();
+  });
+
+  const SSE_REPLAY_BATCH_SIZE = 500;
+  const SSE_HEARTBEAT_INTERVAL_MS = 25_000;
+  // Streams are bounded so revoked keys / changed page assignments take effect:
+  // clients transparently reconnect (retry: 3000) and re-authenticate, resuming
+  // via Last-Event-ID.
+  const SSE_MAX_LIFETIME_MS = 15 * 60 * 1000;
+  // A client this far behind is not consuming; drop it and let replay catch it up.
+  const SSE_MAX_BUFFERED_BYTES = 1_000_000;
+
+  server.get("/api/v1/events/stream", {
+    schema: routeSchemas.eventsStream,
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const pageIds: ReadonlySet<number> = new Set(principal.assignedPageIds);
+
+    const lastEventIdHeader = request.headers["last-event-id"];
+    const headerLastEventId = typeof lastEventIdHeader === "string"
+      ? Number.parseInt(lastEventIdHeader, 10)
+      : Number.NaN;
+    const lastEventId = Number.isInteger(headerLastEventId) && headerLastEventId >= 0
+      ? headerLastEventId
+      : request.query.lastEventId ?? null;
+
+    // Wait for the shared LISTEN connection before the replay query so no frame
+    // settles between journal catch-up and live delivery. Failure is tolerable:
+    // the hub reconnects with its own journal catch-up.
+    syncEventHub ??= createSyncEventHub(appContext);
+    await syncEventHub.ready().catch(() => undefined);
+
+    // Everything below bypasses fastify's serializer; errors must not bubble out.
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    raw.write("retry: 3000\n\n");
+    activeSseStreams.add(raw);
+
+    function writeFrame(frame: SyncEventFrame) {
+      if (raw.writableEnded || raw.destroyed) {
+        return;
+      }
+      if (raw.writableLength > SSE_MAX_BUFFERED_BYTES) {
+        request.log.warn("SSE client not consuming; dropping connection");
+        raw.destroy();
+        return;
+      }
+      raw.write(`id: ${frame.id}\nevent: sync\ndata: ${JSON.stringify(frame.syncEvent)}\n\n`);
+    }
+
+    // Subscribe before the replay query; live frames buffer until replay finishes,
+    // then exactly the frames the replay already wrote are dropped (by id set —
+    // fanout seqs are settle-ordered, but a frame can still commit during the
+    // replay window and be seen by both paths).
+    let replayDone = false;
+    const bufferedLive: SyncEventFrame[] = [];
+    const unsubscribe = syncEventHub.subscribe({
+      pageIds,
+      deliver(frame) {
+        if (!replayDone) {
+          bufferedLive.push(frame);
+          return;
+        }
+        writeFrame(frame);
+      },
+    });
+
+    const heartbeat = setInterval(() => {
+      if (!raw.writableEnded && !raw.destroyed) {
+        raw.write(": keep-alive\n\n");
+      }
+    }, SSE_HEARTBEAT_INTERVAL_MS);
+    heartbeat.unref?.();
+    const lifetimeTimer = setTimeout(() => {
+      if (!raw.writableEnded && !raw.destroyed) {
+        raw.end();
+      }
+    }, SSE_MAX_LIFETIME_MS);
+    lifetimeTimer.unref?.();
+
+    function cleanup() {
+      clearInterval(heartbeat);
+      clearTimeout(lifetimeTimer);
+      unsubscribe();
+      activeSseStreams.delete(raw);
+    }
+
+    request.raw.on("close", cleanup);
+    if (request.raw.destroyed) {
+      // The client disconnected before the listener was registered.
+      cleanup();
+      raw.destroy();
+      return;
+    }
+
+    const replayedIds = new Set<number>();
+    let replayCursor = lastEventId;
+    if (replayCursor !== null && pageIds.size > 0) {
+      try {
+        for (;;) {
+          const rows = await listOfapiSyncEventsForReplay(appContext.db, {
+            afterSeq: replayCursor,
+            pageIds: [...pageIds],
+            limit: SSE_REPLAY_BATCH_SIZE,
+          });
+          for (const row of rows) {
+            replayedIds.add(row.id);
+            writeFrame(row);
+          }
+          const lastRow = rows.at(-1);
+          if (lastRow) {
+            replayCursor = lastRow.id;
+          }
+          if (rows.length < SSE_REPLAY_BATCH_SIZE) {
+            break;
+          }
+        }
+      } catch (error) {
+        request.log.warn({ err: error }, "SSE replay failed; closing stream");
+        cleanup();
+        raw.end();
+        return;
+      }
+    }
+
+    replayDone = true;
+    for (const frame of bufferedLive) {
+      const seenByClient = lastEventId !== null && frame.id <= lastEventId;
+      if (!replayedIds.has(frame.id) && !seenByClient) {
+        writeFrame(frame);
+      }
+    }
+    bufferedLive.length = 0;
+  });
+
+  server.get("/api/v1/admin/ofapi/webhook", {
+    schema: routeSchemas.adminOfapiWebhookStatus,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    return getOfapiWebhookStatus(appContext);
+  });
+
+  server.post("/api/v1/admin/ofapi/webhook", {
+    schema: routeSchemas.adminOfapiWebhookRegister,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    return registerOfapiWebhook(appContext, { endpointUrl: request.body.endpointUrl });
+  });
 
   function initialSyncRetryFor(pageLabel: string) {
     return {

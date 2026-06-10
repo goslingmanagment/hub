@@ -28,6 +28,12 @@ const plannerMocks = vi.hoisted(() => ({
   runSyncPlannerCycle: vi.fn(),
 }));
 
+const ofapiEventMocks = vi.hoisted(() => ({
+  ensureOfapiQueues: vi.fn(),
+  ensureOfapiSchedules: vi.fn(),
+  startOfapiEventWorker: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
@@ -37,6 +43,7 @@ vi.mock("../apps/runtime/src/services/telegram-report.ts", () => telegramReportM
 vi.mock("../apps/runtime/src/services/sync/planner.ts", () => ({
   runSyncPlannerCycle: plannerMocks.runSyncPlannerCycle,
 }));
+vi.mock("../apps/runtime/src/services/ofapi-events.ts", () => ofapiEventMocks);
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,

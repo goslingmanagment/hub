@@ -19,6 +19,8 @@ import {
   resolveFanslyDefaultDelayEnvSource,
 } from "@agency_hub_core/shared";
 
+import type { OfapiClient } from "./services/ofapi.ts";
+import { createOfapiClient } from "./services/ofapi.ts";
 import type { ProviderAdapter } from "./services/provider.ts";
 
 export type AdapterLike = ProviderAdapter<
@@ -70,6 +72,10 @@ export interface AppContext {
   db: Database;
   adapter: AdapterLike;
   onlyFansAdapter: OnlyFansAdapter;
+  // onlyfansapi.com management client; absent when OFAPI_API_KEY is not set
+  // (admin webhook registration then 503s). Optional so existing AppContext
+  // literals (tests, codegen) need not provide it.
+  ofapi?: OfapiClient;
   close(): Promise<void>;
 }
 
@@ -108,6 +114,13 @@ export async function createAppContext(): Promise<AppContext> {
       defaultDelayMs: config.onlyFansDefaultDelayMs,
     });
 
+    const ofapi = config.ofapiApiKey
+      ? createOfapiClient({
+        baseUrl: config.ofapiBaseUrl ?? "https://app.onlyfansapi.com/api",
+        apiKey: config.ofapiApiKey,
+      })
+      : undefined;
+
     return {
       config,
       logger,
@@ -115,6 +128,7 @@ export async function createAppContext(): Promise<AppContext> {
       db,
       adapter,
       onlyFansAdapter,
+      ofapi,
       async close() {
         await adapter.close?.();
         await onlyFansAdapter.close();

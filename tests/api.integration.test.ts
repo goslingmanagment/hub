@@ -2064,6 +2064,7 @@ describe("api integration", () => {
     expect(response.json()).toEqual({
       receivedCount: 2,
       insertedCount: 2,
+      invalidCount: 0,
       dedupedCount: 0,
     });
 
@@ -2206,6 +2207,7 @@ describe("api integration", () => {
     expect(firstAnton.json()).toEqual({
       receivedCount: 1,
       insertedCount: 1,
+      invalidCount: 0,
       dedupedCount: 0,
     });
 
@@ -2221,6 +2223,7 @@ describe("api integration", () => {
     expect(secondAnton.json()).toEqual({
       receivedCount: 1,
       insertedCount: 0,
+      invalidCount: 0,
       dedupedCount: 1,
     });
 
@@ -2236,6 +2239,7 @@ describe("api integration", () => {
     expect(boris.json()).toEqual({
       receivedCount: 1,
       insertedCount: 1,
+      invalidCount: 0,
       dedupedCount: 0,
     });
 
@@ -2255,6 +2259,61 @@ describe("api integration", () => {
       { username: "anton", event_count: "1" },
       { username: "boris", event_count: "1" },
     ]);
+  });
+
+  it("skips events with invalid completedAt per-event instead of failing the whole batch", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-04T12:00:00.000Z"));
+
+    const appContext = createTestAppContext(testDb);
+    const issuedKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+
+    const baseEvent = {
+      feature: "fast-reply" as const,
+      model: "gpt-4o",
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0,
+      isCacheHit: false,
+      isRegeneration: false,
+    };
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai-usage/batch",
+      headers: {
+        authorization: `Bearer ${issuedKey.key}`,
+      },
+      payload: {
+        events: [
+          { ...baseEvent, clientEventId: "evt-valid", completedAt: "2026-04-04T11:00:00.000Z" },
+          { ...baseEvent, clientEventId: "evt-unparseable", completedAt: "not-a-timestamp" },
+          // More than 5 minutes in the future relative to the fake clock.
+          { ...baseEvent, clientEventId: "evt-future", completedAt: "2026-04-04T12:06:00.000Z" },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      receivedCount: 3,
+      insertedCount: 1,
+      invalidCount: 2,
+      dedupedCount: 0,
+    });
+
+    const rows = await testDb.pool.query<{ client_event_id: string }>(
+      "select client_event_id from ai_usage_events order by client_event_id asc",
+    );
+    expect(rows.rows).toEqual([{ client_event_id: "evt-valid" }]);
   });
 
   it("validates ai usage batches and rejects invalid feature, negative tokens, empty batches, and oversized batches", async (context) => {
@@ -3929,6 +3988,119 @@ describe("api integration", () => {
       },
     });
     expect(readDeniedOnHiddenPage.statusCode).toBe(403);
+  });
+
+  it("auto-creates OnlyFans fans with page memberships on profile PUT while keeping Fansly and reads strict", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const appContext = createTestAppContext(testDb);
+    const ofModel = await createModel(appContext.db, { slug: "lora-of-model", name: "Lora OF" });
+    await createOnlyFansPage(appContext.db, { modelId: ofModel.id, label: "lora-of" });
+    await assignPageToUser(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lora-of",
+    }, { source: "cli" });
+
+    // Reads stay strict: a fan core's sync has never seen still 404s on GET.
+    const readUnknown = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lora-of/fans/999777/profile",
+      headers: { authorization: `Bearer ${key}` },
+    });
+    expect(readUnknown.statusCode).toBe(404);
+
+    const firstWrite = await server.inject({
+      method: "PUT",
+      url: "/api/v1/pages/lora-of/fans/999777/profile",
+      headers: { authorization: `Bearer ${key}` },
+      payload: { body: "## Fresh OnlyFans non-spender" },
+    });
+    expect(firstWrite.statusCode).toBe(200);
+    expect(firstWrite.json()).toMatchObject({
+      version: 1,
+      source: "chatmuse",
+      body: "## Fresh OnlyFans non-spender",
+    });
+
+    const secondWrite = await server.inject({
+      method: "PUT",
+      url: "/api/v1/pages/lora-of/fans/999777/profile",
+      headers: { authorization: `Bearer ${key}` },
+      payload: { body: "## Updated" },
+    });
+    expect(secondWrite.statusCode).toBe(200);
+    expect(secondWrite.json()).toMatchObject({ version: 2 });
+
+    const created = await testDb.pool.query<{
+      platform: string;
+      username: string | null;
+      membership_count: string;
+    }>(`
+      select f.platform::text,
+             f.username,
+             count(pf.id)::text as membership_count
+      from fans f
+      left join page_fans pf on pf.fan_id = f.id
+      where f.platform = 'onlyfans' and f.platform_user_id = '999777'
+      group by f.id
+    `);
+    expect(created.rows).toEqual([
+      { platform: "onlyfans", username: null, membership_count: "1" },
+    ]);
+
+    const readAfterWrite = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lora-of/fans/999777/profile",
+      headers: { authorization: `Bearer ${key}` },
+    });
+    expect(readAfterWrite.statusCode).toBe(200);
+    expect(readAfterWrite.json()).toMatchObject({
+      fan: {
+        platform: "onlyfans",
+        platformUserId: "999777",
+        username: null,
+      },
+      profile: { version: 2 },
+    });
+
+    // Fansly pages keep the strict 404 — their sync covers DM fans already.
+    const fanslyWrite = await server.inject({
+      method: "PUT",
+      url: "/api/v1/pages/lana/fans/fan-404/profile",
+      headers: { authorization: `Bearer ${key}` },
+      payload: { body: "## Should not be created" },
+    });
+    expect(fanslyWrite.statusCode).toBe(404);
+    const fanslyFan = await testDb.pool.query(
+      "select 1 from fans where platform = 'fansly' and platform_user_id = 'fan-404'",
+    );
+    expect(fanslyFan.rowCount).toBe(0);
+
+    // Fans flagged deleted by sync stay 404 without side effects: no membership
+    // row appears behind the not-found response.
+    await upsertFans(appContext.db, [{
+      platform: "onlyfans",
+      platformUserId: "888666",
+      deletedDetectedAt: new Date(),
+    }]);
+    const deletedWrite = await server.inject({
+      method: "PUT",
+      url: "/api/v1/pages/lora-of/fans/888666/profile",
+      headers: { authorization: `Bearer ${key}` },
+      payload: { body: "## Should not be created" },
+    });
+    expect(deletedWrite.statusCode).toBe(404);
+    const deletedMemberships = await testDb.pool.query(`
+      select 1
+      from page_fans pf
+      inner join fans f on f.id = pf.fan_id
+      where f.platform = 'onlyfans' and f.platform_user_id = '888666'
+    `);
+    expect(deletedMemberships.rowCount).toBe(0);
   });
 
   it("returns null when no profile exists and resolves conversation-scoped profile reads", async (context) => {

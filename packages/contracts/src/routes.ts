@@ -1746,6 +1746,9 @@ export const aiUsageBatchBodySchema = z.object({
 export const aiUsageBatchResponseSchema = z.object({
   receivedCount: z.number().int().nonnegative(),
   insertedCount: z.number().int().nonnegative(),
+  // Events dropped for an unparseable or >5min-future completedAt; the rest of
+  // the batch is still ingested instead of failing wholesale.
+  invalidCount: z.number().int().nonnegative(),
   dedupedCount: z.number().int().nonnegative(),
 });
 
@@ -2632,6 +2635,144 @@ export const deletedResponseSchema = z.object({
   deleted: z.literal(true),
 });
 
+// ─── OFAPI webhook receiver + SSE sync-event fanout (ChatMuse real-time) ───
+//
+// SyncEvent is core's copy of the ChatGoose desktop protocol union
+// (chatgoose_desktop packages/shared/src/protocol — shared conceptually, owned
+// here). `accountId` is the OFAPI account id ("acct_…", the desktop's account
+// namespace); chatId/messageId are raw OnlyFans numeric ids serialized as strings
+// (chat_id === fan.id). Unknown frame types are skipped by consumers, so the
+// union can grow without breaking them.
+
+const syncEventIdSchema = z.string().min(1);
+
+export const chatListUpdatedEventSchema = z.object({
+  type: z.literal("chatListUpdated"),
+  accountId: syncEventIdSchema,
+});
+
+export const messageReceivedEventSchema = z.object({
+  type: z.literal("messageReceived"),
+  accountId: syncEventIdSchema,
+  chatId: syncEventIdSchema,
+  messageId: syncEventIdSchema,
+});
+
+export const messageSentEventSchema = z.object({
+  type: z.literal("messageSent"),
+  accountId: syncEventIdSchema,
+  chatId: syncEventIdSchema,
+  messageId: syncEventIdSchema,
+});
+
+// Core extension over the desktop union (load-bearing for its message tombstones);
+// the upstream messages.deleted payload carries only the message id, no chat id.
+export const messageDeletedEventSchema = z.object({
+  type: z.literal("messageDeleted"),
+  accountId: syncEventIdSchema,
+  messageId: syncEventIdSchema,
+});
+
+// messages.ppv.unlocked / tips.received payloads are notification-shaped: the fan
+// id is present, but the message id is only sometimes recoverable (from the
+// notification's message link) — optional, never fabricated.
+export const ppvUnlockedEventSchema = z.object({
+  type: z.literal("ppvUnlocked"),
+  accountId: syncEventIdSchema,
+  chatId: syncEventIdSchema,
+  messageId: syncEventIdSchema.optional(),
+});
+
+export const tipReceivedEventSchema = z.object({
+  type: z.literal("tipReceived"),
+  accountId: syncEventIdSchema,
+  chatId: syncEventIdSchema,
+  messageId: syncEventIdSchema.optional(),
+  // OFAPI amounts are dollars; absent when upstream omits it.
+  amountUsd: z.number().nonnegative().optional(),
+});
+
+export const presenceEventSchema = z.object({
+  type: z.literal("presence"),
+  accountId: syncEventIdSchema,
+  chatId: syncEventIdSchema,
+  online: z.boolean(),
+  // Epoch milliseconds.
+  lastSeenAt: z.number().optional(),
+});
+
+export const typingEventSchema = z.object({
+  type: z.literal("typing"),
+  accountId: syncEventIdSchema,
+  chatId: syncEventIdSchema,
+});
+
+export const accountAuthChangedEventSchema = z.object({
+  type: z.literal("accountAuthChanged"),
+  accountId: syncEventIdSchema,
+  authenticated: z.boolean(),
+});
+
+export const syncEventSchema = z.discriminatedUnion("type", [
+  chatListUpdatedEventSchema,
+  messageReceivedEventSchema,
+  messageSentEventSchema,
+  messageDeletedEventSchema,
+  ppvUnlockedEventSchema,
+  tipReceivedEventSchema,
+  presenceEventSchema,
+  typingEventSchema,
+  accountAuthChangedEventSchema,
+]);
+
+export const ofapiWebhookAckResponseSchema = z.object({
+  received: z.literal(true),
+  duplicate: z.boolean(),
+});
+
+export const ofapiPageMappingSchema = z.object({
+  pageId: intId,
+  label: z.string(),
+  username: z.string().nullable(),
+  ofapiAccountId: z.string().nullable(),
+});
+
+export const ofapiWebhookStatusResponseSchema = z.object({
+  configured: z.boolean(),
+  endpointUrl: z.string().nullable(),
+  externalWebhookId: z.string().nullable(),
+  accountScope: z.string().nullable(),
+  events: z.array(z.string()),
+  signingSecretMask: z.string().nullable(),
+  updatedAt: isoTimestamp.nullable(),
+  pages: z.array(ofapiPageMappingSchema),
+});
+
+export const ofapiWebhookRegisterBodySchema = z.object({
+  // Public URL OFAPI should deliver to, e.g. https://hub.example.com/api/v1/ofapi/webhook
+  endpointUrl: z.string().url().max(2000),
+});
+
+export const ofapiWebhookRegisterResponseSchema = z.object({
+  externalWebhookId: z.string().nullable(),
+  endpointUrl: z.string(),
+  accountScope: z.literal("global"),
+  events: z.array(z.string()),
+  signingSecretMask: z.string(),
+  mapping: z.object({
+    mapped: z.array(z.object({
+      pageId: intId,
+      label: z.string(),
+      ofapiAccountId: z.string(),
+    })),
+    unmatchedAccounts: z.array(z.object({
+      id: z.string(),
+      username: z.string().nullable(),
+    })),
+    unmappedPages: z.array(z.string()),
+  }),
+});
+
 const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
 const bearerOnlySecurity: Array<Record<string, string[]>> = [{ bearerAuth: [] }];
 const cookieOrBearerSecurity: Array<Record<string, string[]>> = [
@@ -2699,6 +2840,69 @@ export const routeSchemas = {
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+    },
+  },
+  ofapiWebhookReceive: {
+    tags: ["ofapi"],
+    summary: "Receive an OFAPI webhook delivery",
+    description: "Called by onlyfansapi.com, not by API clients. Authenticated by "
+      + "HMAC-SHA256 of the raw request body (hex, `signature` header) against the "
+      + "registered signing secret; deduplicated by the `x-ofapi-idempotency-key` "
+      + "header. The body is the OFAPI envelope {event, account_id, payload} and is "
+      + "intentionally not schema-validated before signature verification.",
+    response: {
+      200: ofapiWebhookAckResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  eventsStream: {
+    tags: ["events"],
+    summary: "SSE stream of sync events for the chatter's assigned pages",
+    description: "`text/event-stream` of SyncEvent frames (`event: sync`, `data` = "
+      + "JSON SyncEvent, `id` = journal event id). Chatter API-key auth only; events "
+      + "are filtered to the chatter's assigned pages. Supports `Last-Event-ID` "
+      + "header (or `lastEventId` query parameter) replay from the ~7-day journal.",
+    security: bearerOnlySecurity,
+    querystring: z.object({
+      lastEventId: z.coerce.number().int().nonnegative().optional(),
+    }),
+    response: {
+      // The handler hijacks the reply and writes text/event-stream directly;
+      // this entry documents the success shape for OpenAPI consumers only.
+      200: z.string().describe(
+        "text/event-stream — `event: sync` frames whose `data` is a JSON SyncEvent "
+        + "(see syncEventSchema) and whose `id` is the journal fanout sequence.",
+      ),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminOfapiWebhookStatus: {
+    tags: ["admin"],
+    summary: "Current OFAPI webhook registration and page mappings",
+    security: cookieOnlySecurity,
+    response: {
+      200: ofapiWebhookStatusResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminOfapiWebhookRegister: {
+    tags: ["admin"],
+    summary: "Register (or re-register) the OFAPI webhook and auto-map accounts to pages",
+    description: "Creates/updates the team webhook at onlyfansapi.com with "
+      + "account_scope=global and a freshly generated signing secret, stores the "
+      + "registration, and maps OFAPI accounts to OnlyFans pages by username.",
+    security: cookieOnlySecurity,
+    body: ofapiWebhookRegisterBodySchema,
+    response: {
+      200: ofapiWebhookRegisterResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      503: errorResponseSchema,
     },
   },
   pages: {
@@ -3951,6 +4155,12 @@ export type SyncUxSummary = z.infer<typeof syncUxSummarySchema>;
 export type AiUsageEventInput = z.infer<typeof aiUsageEventInputSchema>;
 export type AiUsageBatchBody = z.infer<typeof aiUsageBatchBodySchema>;
 export type AiUsageBatchResponse = z.infer<typeof aiUsageBatchResponseSchema>;
+export type SyncEvent = z.infer<typeof syncEventSchema>;
+export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSchema>;
+export type OfapiPageMapping = z.infer<typeof ofapiPageMappingSchema>;
+export type OfapiWebhookStatusResponse = z.infer<typeof ofapiWebhookStatusResponseSchema>;
+export type OfapiWebhookRegisterBody = z.infer<typeof ofapiWebhookRegisterBodySchema>;
+export type OfapiWebhookRegisterResponse = z.infer<typeof ofapiWebhookRegisterResponseSchema>;
 export type AdminChatterUsageQuery = z.infer<typeof adminChatterUsageQuerySchema>;
 export type AdminChatterUsageResponse = z.infer<typeof adminChatterUsageResponseSchema>;
 export type CrossPageFanDetailResponse = z.infer<typeof crossPageFanDetailResponseSchema>;

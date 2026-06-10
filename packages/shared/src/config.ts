@@ -90,6 +90,9 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
+  OFAPI_BASE_URL: z.string().url().default("https://app.onlyfansapi.com/api"),
+  OFAPI_API_KEY: optionalTrimmedStringSchema,
+  OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
   WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
@@ -141,6 +144,9 @@ export interface AppConfig {
   telegramReportHourUtc: number;
   // Optional so existing AppConfig literals (tests, codegen) need not enumerate them;
   // loadConfig always populates them, so production behavior is exact.
+  ofapiBaseUrl?: string;
+  ofapiApiKey?: string | null;
+  ofapiEventRetentionDays?: number;
   anthropicApiKey?: string | null;
   wbClosingLlmEnabled?: boolean;
   wbClosingLlmModel?: string;
@@ -249,6 +255,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     telegramChatId,
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
+    ofapiBaseUrl: parsed.OFAPI_BASE_URL,
+    ofapiApiKey: parsed.OFAPI_API_KEY ?? null,
+    ofapiEventRetentionDays: parsed.OFAPI_EVENT_RETENTION_DAYS,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     // L2 only runs when explicitly enabled AND a key is present (safe by default).
     wbClosingLlmEnabled: parsed.WB_CLOSING_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,

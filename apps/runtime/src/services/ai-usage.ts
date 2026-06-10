@@ -19,14 +19,17 @@ import { BadRequestError } from "./errors.ts";
 
 const COMPLETED_AT_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
-function parseCompletedAt(value: string, now: Date) {
+// Null instead of throwing: one bad event must not reject the rest of the batch —
+// chatter clients batch offline and a thrown 400 would make them re-send (and lose)
+// the valid events alongside the poison one.
+function parseCompletedAt(value: string, now: Date): Date | null {
   const completedAt = new Date(value);
   if (Number.isNaN(completedAt.getTime())) {
-    throw new BadRequestError("completedAt must be a valid timestamp");
+    return null;
   }
 
   if (completedAt.getTime() > now.getTime() + COMPLETED_AT_FUTURE_SKEW_MS) {
-    throw new BadRequestError("completedAt cannot be more than 5 minutes in the future");
+    return null;
   }
 
   return completedAt;
@@ -76,9 +79,16 @@ export async function ingestAiUsageBatch(
   requireApiKeyUser(principal);
 
   const now = new Date();
-  const insertedCount = await insertAiUsageEvents(app.db, {
-    userId: principal.user.id,
-    events: body.events.map((event) => ({
+  const validEvents = [];
+  let invalidCount = 0;
+  for (const event of body.events) {
+    const completedAt = parseCompletedAt(event.completedAt, now);
+    if (!completedAt) {
+      invalidCount += 1;
+      continue;
+    }
+
+    validEvents.push({
       clientEventId: event.clientEventId,
       feature: event.feature,
       model: event.model,
@@ -90,14 +100,30 @@ export async function ingestAiUsageBatch(
       durationMs: event.durationMs ?? null,
       isCacheHit: event.isCacheHit,
       isRegeneration: event.isRegeneration,
-      completedAt: parseCompletedAt(event.completedAt, now),
-    })),
-  });
+      completedAt,
+    });
+  }
+
+  const insertedCount = validEvents.length > 0
+    ? await insertAiUsageEvents(app.db, {
+      userId: principal.user.id,
+      events: validEvents,
+    })
+    : 0;
+
+  if (invalidCount > 0) {
+    app.logger.warn({
+      userId: principal.user.id,
+      receivedCount: body.events.length,
+      invalidCount,
+    }, "Skipped AI usage events with invalid completedAt");
+  }
 
   return {
     receivedCount: body.events.length,
     insertedCount,
-    dedupedCount: body.events.length - insertedCount,
+    invalidCount,
+    dedupedCount: body.events.length - invalidCount - insertedCount,
   };
 }
 

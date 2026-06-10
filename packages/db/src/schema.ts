@@ -15,6 +15,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { aiUsageFeatures, fanFlagTypes, userRoles } from "@agency_hub_core/shared";
@@ -146,6 +147,10 @@ export const pages = pgTable(
     }).default(0).notNull(),
     label: text("label").notNull().unique(),
     platformAccountId: text("external_page_id"),
+    // onlyfansapi.com account id ("acct_…") delivering webhook events for this
+    // page; set by the OFAPI webhook admin flow. Distinct from external_page_id
+    // (the OnlyMonster-sourced platform id).
+    ofapiAccountId: text("ofapi_account_id"),
     username: text("username"),
     displayName: text("display_name"),
     followerCount: integer("follower_count"),
@@ -167,6 +172,7 @@ export const pages = pgTable(
       table.platform,
       table.platformAccountId,
     ),
+    ofapiAccountUniq: unique("pages_ofapi_account_uniq").on(table.ofapiAccountId),
   }),
 );
 
@@ -1661,5 +1667,57 @@ export const wbLlmUsageDaily = pgTable(
       name: "wb_llm_usage_daily_pkey",
       columns: [table.platformAccountId, table.businessDate, table.feature],
     }),
+  }),
+);
+
+// Singleton registration record for the onlyfansapi.com webhook (signing secret is
+// an encryptJson envelope, same custody model as telegram_settings.encrypted_bot_token).
+// The previous secret is kept so deliveries signed during a rotation keep verifying.
+export const ofapiWebhookConfig = pgTable("ofapi_webhook_config", {
+  id: integer("id").primaryKey().default(1),
+  externalWebhookId: text("external_webhook_id"),
+  endpointUrl: text("endpoint_url").notNull(),
+  accountScope: text("account_scope").default("global").notNull(),
+  events: jsonb("events").$type<string[]>().default([]).notNull(),
+  encryptedSigningSecret: text("encrypted_signing_secret").notNull(),
+  previousEncryptedSigningSecret: text("previous_encrypted_signing_secret"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Journal of received OFAPI webhook deliveries; sync_event/platform_account_id are
+// filled in by the async pg-boss processor. fanout_seq (assigned in settle order from
+// ofapi_webhook_events_fanout_seq) is the SSE event id for Last-Event-ID replay —
+// receive-time ids would make late settles (retries, sweep) invisible to advanced
+// cursors. Rows are pruned after OFAPI_EVENT_RETENTION_DAYS (~7d).
+// status: 'pending' (acked, awaiting processing) | 'processed' (frame derived) |
+// 'skipped' (no fanout: unmapped account or journal-only event type) | 'failed'.
+export const ofapiWebhookEvents = pgTable(
+  "ofapi_webhook_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    eventType: text("event_type").notNull(),
+    ofapiAccountId: text("ofapi_account_id"),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "set null" }),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    syncEvent: jsonb("sync_event").$type<Record<string, unknown>>(),
+    fanoutSeq: bigint("fanout_seq", { mode: "number" }),
+    status: text("status").default("pending").notNull(),
+    error: text("error"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    idempotencyUniq: unique("ofapi_webhook_events_idempotency_uniq").on(table.idempotencyKey),
+    receivedIdx: index("ofapi_webhook_events_received_idx").on(table.receivedAt),
+    statusIdx: index("ofapi_webhook_events_status_idx").on(table.status, table.id),
+    fanoutSeqUniq: uniqueIndex("ofapi_webhook_events_fanout_seq_uniq")
+      .on(table.fanoutSeq)
+      .where(sql`${table.fanoutSeq} is not null`),
+    replayIdx: index("ofapi_webhook_events_replay_idx")
+      .on(table.platformAccountId, table.fanoutSeq)
+      .where(sql`${table.fanoutSeq} is not null`),
   }),
 );

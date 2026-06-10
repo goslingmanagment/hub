@@ -12,6 +12,11 @@ import { toBusinessDate, UTC_TIME_ZONE, addUtcDays, startOfBusinessDay } from "@
 import { PgBoss } from "pg-boss";
 
 import type { AppContext } from "./bootstrap.ts";
+import {
+  ensureOfapiQueues,
+  ensureOfapiSchedules,
+  startOfapiEventWorker,
+} from "./services/ofapi-events.ts";
 import { sendDailyRevenueTelegramReport } from "./services/telegram-report.ts";
 import { startSyncPageExecutor } from "./services/sync/executor.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
@@ -112,11 +117,13 @@ export async function startWorkerServices(
   await boss.start();
   await ensureSyncQueues(boss, createdQueues);
   await ensureWorkboardQueues(boss, createdQueues);
+  await ensureOfapiQueues(boss, createdQueues);
   await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
     ensureTelegramDailyReportSchedule(boss),
     ensureWorkboardRecomputeSchedule(boss),
+    ensureOfapiSchedules(boss),
   ]);
 
   await boss.work(SYNC_PLANNER_QUEUE, {
@@ -148,6 +155,8 @@ export async function startWorkerServices(
     const result = await runClosingClassificationAllPages(app.db, { config: app.config, now: new Date() });
     app.logger.info(result, "Workboard v2 closing classification complete");
   });
+
+  await startOfapiEventWorker(app, boss);
 
   await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, { batchSize: 1 }, async () => {
     const now = new Date();

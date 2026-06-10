@@ -16,6 +16,8 @@ export function createTestAppContext(
     logger?: StartedTestDatabase["logger"];
     onlyFansDefaultDelayMs?: number;
     onlyFansAdapter?: AppContext["onlyFansAdapter"];
+    ofapi?: AppContext["ofapi"];
+    ofapiEventRetentionDays?: number;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
     syncSharedRateLimitEnabled?: boolean;
@@ -65,9 +67,11 @@ export function createTestAppContext(
       telegramChatId: null,
       telegramEnabled: false,
       telegramReportHourUtc: 9,
+      ofapiEventRetentionDays: overrides?.ofapiEventRetentionDays ?? 7,
     },
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as AppContext["onlyFansAdapter"]),
+    ofapi: overrides?.ofapi,
     async close() {},
   } satisfies AppContext;
 }
