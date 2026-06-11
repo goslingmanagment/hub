@@ -391,6 +391,113 @@ export async function upsertPageDmMessages(
     });
 }
 
+export interface PageDmMessageLookupRow {
+  id: number;
+  conversationId: number;
+  platformMessageId: string;
+  senderRole: DmSenderRole;
+  totalTipAmountCents: number;
+  purchasedAt: Date | null;
+}
+
+/**
+ * Looks up a stored DM message by platform message id within one page. Used by
+ * the OFAPI projection for by-message events (messages.deleted, ppv.unlocked,
+ * tips.received) whose payloads do not carry the conversation id.
+ */
+export async function findPageDmMessageByPlatformMessageId(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    platformMessageId: string;
+  },
+): Promise<PageDmMessageLookupRow | null> {
+  const row = await db.query.pageDmMessages.findFirst({
+    where: and(
+      eq(pageDmMessages.platformAccountId, input.platformAccountId),
+      eq(pageDmMessages.platformMessageId, input.platformMessageId),
+    ),
+  });
+
+  return row
+    ? {
+      id: row.id,
+      conversationId: row.conversationId,
+      platformMessageId: row.platformMessageId,
+      senderRole: row.senderRole,
+      totalTipAmountCents: row.totalTipAmountCents,
+      purchasedAt: row.purchasedAt,
+    }
+    : null;
+}
+
+/** Deletes a stored DM message; returns its conversation id when a row was removed. */
+export async function deletePageDmMessageByPlatformMessageId(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    platformMessageId: string;
+  },
+) {
+  const [deleted] = await db
+    .delete(pageDmMessages)
+    .where(and(
+      eq(pageDmMessages.platformAccountId, input.platformAccountId),
+      eq(pageDmMessages.platformMessageId, input.platformMessageId),
+    ))
+    .returning({ conversationId: pageDmMessages.conversationId });
+
+  return deleted ?? null;
+}
+
+export async function markPageDmMessagePurchased(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    platformMessageId: string;
+    purchasedAt?: Date;
+  },
+) {
+  const updated = await db
+    .update(pageDmMessages)
+    .set({ purchasedAt: input.purchasedAt ?? new Date() })
+    .where(and(
+      eq(pageDmMessages.platformAccountId, input.platformAccountId),
+      eq(pageDmMessages.platformMessageId, input.platformMessageId),
+      sql`${pageDmMessages.purchasedAt} is null`,
+    ))
+    .returning({ conversationId: pageDmMessages.conversationId });
+
+  return updated.length > 0;
+}
+
+/**
+ * Raises a stored message's tip total to at least the given amount (tip events
+ * are at-least-once and can race the message upsert, so this is monotonic
+ * rather than additive).
+ */
+export async function raisePageDmMessageTipAmount(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    platformMessageId: string;
+    tipAmountCents: number;
+  },
+) {
+  const updated = await db
+    .update(pageDmMessages)
+    .set({
+      totalTipAmountCents: sql`greatest(${pageDmMessages.totalTipAmountCents}, ${input.tipAmountCents})`,
+    })
+    .where(and(
+      eq(pageDmMessages.platformAccountId, input.platformAccountId),
+      eq(pageDmMessages.platformMessageId, input.platformMessageId),
+    ))
+    .returning({ conversationId: pageDmMessages.conversationId });
+
+  return updated.length > 0;
+}
+
 export async function prunePageDmMessagesToLimit(
   db: Database,
   input: {
@@ -500,6 +607,54 @@ async function getPageDmMessageWindowSummary(
     lastFanMessageAt: parseTimestamp(row?.lastFanMessageAt),
     lastModelMessageAt: parseTimestamp(row?.lastModelMessageAt),
   } satisfies PageDmMessageWindowSummary;
+}
+
+/**
+ * Recomputes a conversation's stored-window bookkeeping (count, newest/oldest
+ * ids, last fan/model timestamps) from the rows on disk, optionally pruning to
+ * the retention tier first. Unlike finalizePageDmConversationMessageSync this
+ * deliberately leaves message_coverage_status and last_message_sync_at alone —
+ * it serves live ingest (OFAPI webhook projection) and deletions, which are not
+ * sync runs.
+ */
+export async function refreshPageDmConversationWindow(
+  db: Database,
+  input: {
+    conversationId: number;
+    enforceRetention?: boolean;
+  },
+) {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    let deletedCount = 0;
+    if (input.enforceRetention) {
+      const retentionLimit = await getPageDmMessageRetentionLimit(database, input.conversationId);
+      deletedCount = await prunePageDmMessagesToLimit(database, {
+        conversationId: input.conversationId,
+        limit: retentionLimit,
+      });
+    }
+    const summary = await getPageDmMessageWindowSummary(database, input.conversationId);
+
+    const [row] = await database
+      .update(pageDmConversations)
+      .set({
+        storedMessageCount: summary.storedMessageCount,
+        newestStoredMessageId: summary.newestStoredMessageId,
+        oldestStoredMessageId: summary.oldestStoredMessageId,
+        lastFanMessageAt: summary.lastFanMessageAt,
+        lastModelMessageAt: summary.lastModelMessageAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(pageDmConversations.id, input.conversationId))
+      .returning();
+
+    return {
+      conversation: row ? normalizeConversationRow(row) : null,
+      deletedCount,
+      summary,
+    };
+  });
 }
 
 export async function finalizePageDmConversationMessageSync(

@@ -25,6 +25,7 @@ import {
   ServiceUnavailableError,
   UnauthorizedError,
 } from "./errors.ts";
+import { isOfapiDmProjectionEventType } from "./ofapi-dm-projection.ts";
 import { ofapiWebhookEnvelopeSchema, sendOfapiEventProcessJob } from "./ofapi-events.ts";
 import { OfapiApiError, createOfapiClient, type OfapiClient } from "./ofapi.ts";
 
@@ -154,6 +155,10 @@ export async function receiveOfapiWebhook(
     ofapiAccountId: envelope.data.account_id ?? null,
     // Journal the full envelope so processing/replay never depends on parse-time choices.
     payload: parsedBody as Record<string, unknown>,
+    // DM events are stamped as projection candidates regardless of the flag, so
+    // turning OFAPI_DM_PROJECTION_ENABLED on later lets the sweep project the
+    // journal rows still inside the retention window.
+    projectionStatus: isOfapiDmProjectionEventType(envelope.data.event) ? "pending" : "none",
   });
 
   if (!created) {

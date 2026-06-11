@@ -86,6 +86,7 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
     subscriberCount: pages.subscriberCount,
     lastLightSyncAt: pages.lastLightSyncAt,
     lastFollowerSyncAt: pages.lastFollowerSyncAt,
+    ofapiAccountId: pages.ofapiAccountId,
     modelSlug: models.slug,
     modelName: models.name,
     hasCredentials: sql<boolean>`${pageCredentials.id} is not null`,

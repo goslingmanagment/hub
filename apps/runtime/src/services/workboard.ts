@@ -16,7 +16,7 @@ import { millsToNumber } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { NotFoundError } from "./errors.ts";
-import { resolveAccessibleFanslyPage } from "./fansly-page.ts";
+import { resolveAccessibleDmPage } from "./fansly-page.ts";
 
 type WorkboardSpenderSegment = WorkboardResponse["activeSpenders"]["items"][number]["segment"];
 type WorkboardSpenderRow = Awaited<ReturnType<typeof listWorkboardActiveSpenders>>[number];
@@ -96,7 +96,7 @@ export async function getWorkboardReport(
   pageLabel: string,
 ): Promise<WorkboardResponse> {
   requireDashboardUser(principal);
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, "Workboard");
+  const page = await resolveAccessibleDmPage(app, principal, pageLabel, "Workboard");
   const now = new Date();
   const [subscribers, activeSpenders, allSpenders, snoozed] = await Promise.all([
     listWorkboardSubscribers(app.db, { platformAccountId: page.id, now }),
@@ -176,7 +176,7 @@ export async function snoozeWorkboardFanReport(
   body: WorkboardSnoozeBody,
 ): Promise<WorkboardSnoozeResponse> {
   requireDashboardUser(principal);
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, "Workboard");
+  const page = await resolveAccessibleDmPage(app, principal, pageLabel, "Workboard");
   const result = await snoozeWorkboardFan(app.db, {
     platformAccountId: page.id,
     fanId: body.fanId,
@@ -199,7 +199,7 @@ export async function unsnoozeWorkboardFanReport(
   fanId: number,
 ): Promise<{ ok: true }> {
   requireDashboardUser(principal);
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, "Workboard");
+  const page = await resolveAccessibleDmPage(app, principal, pageLabel, "Workboard");
   await unsnoozeWorkboardFan(app.db, {
     platformAccountId: page.id,
     fanId,

@@ -93,6 +93,7 @@ const envSchema = z.object({
   OFAPI_BASE_URL: z.string().url().default("https://app.onlyfansapi.com/api"),
   OFAPI_API_KEY: optionalTrimmedStringSchema,
   OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+  OFAPI_DM_PROJECTION_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
   WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
@@ -147,6 +148,7 @@ export interface AppConfig {
   ofapiBaseUrl?: string;
   ofapiApiKey?: string | null;
   ofapiEventRetentionDays?: number;
+  ofapiDmProjectionEnabled?: boolean;
   anthropicApiKey?: string | null;
   wbClosingLlmEnabled?: boolean;
   wbClosingLlmModel?: string;
@@ -258,6 +260,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ofapiBaseUrl: parsed.OFAPI_BASE_URL,
     ofapiApiKey: parsed.OFAPI_API_KEY ?? null,
     ofapiEventRetentionDays: parsed.OFAPI_EVENT_RETENTION_DAYS,
+    ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     // L2 only runs when explicitly enabled AND a key is present (safe by default).
     wbClosingLlmEnabled: parsed.WB_CLOSING_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,

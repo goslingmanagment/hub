@@ -638,10 +638,18 @@ export async function deleteLastWorkboardContact(
   `);
 }
 
-/** Page ids eligible for the v2 recompute job (Fansly first, matching v1 scope). */
+/**
+ * Page ids eligible for the v2 recompute job: all Fansly pages plus OnlyFans
+ * pages with an OFAPI account mapping (their DMs are fed by the webhook
+ * projection, decision #49). Unmapped OnlyFans pages have no DM data to score.
+ */
 export async function listWorkboardRecomputePageIds(db: Database): Promise<number[]> {
   const result = await db.execute<{ id: number }>(sql`
-    select id::int as id from pages where platform = 'fansly'::platform order by id
+    select id::int as id
+    from pages
+    where platform = 'fansly'::platform
+       or (platform = 'onlyfans'::platform and ofapi_account_id is not null)
+    order by id
   `);
   return result.rows.map((row) => row.id);
 }

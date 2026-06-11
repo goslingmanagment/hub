@@ -54,6 +54,7 @@ describe("connections service", () => {
         displayName: "Lana",
         lastLightSyncAt: now,
         lastFollowerSyncAt: now,
+        ofapiAccountId: null,
         subscriberCount: 10,
         followerCount: 20,
         hasCredentials: true,

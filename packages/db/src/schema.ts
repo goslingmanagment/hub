@@ -893,11 +893,17 @@ export const pageDmMessages = pgTable(
     totalTipAmountCents: integer("total_tip_amount_cents").default(0).notNull(),
     inReplyToMessageId: text("in_reply_to_message_id"),
     inReplyToRootMessageId: text("in_reply_to_root_message_id"),
+    // When the fan unlocked this message as PPV (OFAPI messages.ppv.unlocked).
+    purchasedAt: timestamp("purchased_at", { withTimezone: true }),
     syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     uniq: unique("page_dm_messages_conversation_message_uniq").on(
       table.conversationId,
+      table.platformMessageId,
+    ),
+    accountMessageIdx: index("page_dm_messages_account_message_idx").on(
+      table.platformAccountId,
       table.platformMessageId,
     ),
     conversationIdx: index("page_dm_messages_conversation_created_idx").on(
@@ -1706,6 +1712,16 @@ export const ofapiWebhookEvents = pgTable(
     fanoutSeq: bigint("fanout_seq", { mode: "number" }),
     status: text("status").default("pending").notNull(),
     error: text("error"),
+    // DM projection bookkeeping (decision #49), separate from the settle path on
+    // purpose: settle/fanout never waits on or fails with the projection.
+    // 'none' = event type is not projected; 'pending' = awaiting projection
+    // (picked up post-settle or by the minutely sweep); 'projected' | 'skipped' |
+    // 'failed' are terminal except that the sweep retries 'failed' rows while
+    // projection_attempts stays under its cap.
+    projectionStatus: text("projection_status").default("none").notNull(),
+    projectionError: text("projection_error"),
+    projectionAttempts: integer("projection_attempts").default(0).notNull(),
+    projectedAt: timestamp("projected_at", { withTimezone: true }),
     receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
     processedAt: timestamp("processed_at", { withTimezone: true }),
   },
@@ -1713,6 +1729,9 @@ export const ofapiWebhookEvents = pgTable(
     idempotencyUniq: unique("ofapi_webhook_events_idempotency_uniq").on(table.idempotencyKey),
     receivedIdx: index("ofapi_webhook_events_received_idx").on(table.receivedAt),
     statusIdx: index("ofapi_webhook_events_status_idx").on(table.status, table.id),
+    projectionIdx: index("ofapi_webhook_events_projection_idx")
+      .on(table.projectionStatus, table.id)
+      .where(sql`${table.projectionStatus} in ('pending', 'failed')`),
     fanoutSeqUniq: uniqueIndex("ofapi_webhook_events_fanout_seq_uniq")
       .on(table.fanoutSeq)
       .where(sql`${table.fanoutSeq} is not null`),

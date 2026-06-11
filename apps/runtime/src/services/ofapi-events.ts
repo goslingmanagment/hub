@@ -8,10 +8,24 @@ import {
 } from "@agency_hub_core/db";
 import { sql } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
-import { z } from "zod";
 
 import type { AppContext } from "../bootstrap.ts";
+import {
+  runOfapiDmProjectionForSettledRow,
+  sweepOfapiDmProjections,
+} from "./ofapi-dm-projection.ts";
+import {
+  asRecord,
+  idToString,
+  ofapiWebhookEnvelopeSchema,
+  extractMessageIdFromNotification,
+  notificationChatId,
+  parseEpochMs,
+  type OfapiWebhookEnvelope,
+} from "./ofapi-payloads.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+
+export { ofapiWebhookEnvelopeSchema, type OfapiWebhookEnvelope } from "./ofapi-payloads.ts";
 
 export const OFAPI_EVENT_PROCESS_QUEUE = "ofapi.events.process";
 export const OFAPI_EVENT_SWEEP_QUEUE = "ofapi.events.sweep";
@@ -27,83 +41,8 @@ const DEFAULT_OFAPI_EVENT_RETENTION_DAYS = 7;
 const SWEEP_PENDING_GRACE_MS = 30_000;
 const SWEEP_BATCH_LIMIT = 200;
 
-// The wire envelope, live-verified 2026-06-10: the event id is NOT in the body
-// (dedupe runs on the x-ofapi-idempotency-key header before this is parsed).
-export const ofapiWebhookEnvelopeSchema = z.object({
-  event: z.string().min(1),
-  account_id: z.string().min(1).nullish(),
-  payload: z.unknown(),
-});
-
-export type OfapiWebhookEnvelope = z.infer<typeof ofapiWebhookEnvelopeSchema>;
-
 export interface OfapiEventProcessPayload {
   eventId: number;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-// OnlyFans ids arrive as numbers in message payloads and as strings in
-// notification payloads; SyncEvent serializes them all as strings.
-function idToString(value: unknown): string | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  if (typeof value === "string" && value.length > 0) {
-    return value;
-  }
-  return null;
-}
-
-function parseEpochMs(value: unknown): number | undefined {
-  if (typeof value !== "string" || value.length === 0) {
-    return undefined;
-  }
-
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? undefined : parsed;
-}
-
-// Notification payloads (ppv unlocked) carry the message id and chat (= fan) id
-// only inside the OnlyFans chat link, e.g. …/my/chats/chat/<fanId>?firstId=<msgId>.
-function notificationLinkMatch(
-  payload: Record<string, unknown>,
-  pattern: RegExp,
-): string | undefined {
-  const candidates: unknown[] = [payload.text];
-  const replacePairs = asRecord(payload.replacePairs);
-  if (replacePairs) {
-    candidates.push(...Object.values(replacePairs));
-  }
-
-  for (const candidate of candidates) {
-    if (typeof candidate !== "string") {
-      continue;
-    }
-
-    const match = pattern.exec(candidate);
-    if (match?.[1]) {
-      return match[1];
-    }
-  }
-
-  return undefined;
-}
-
-function extractMessageIdFromNotification(payload: Record<string, unknown>): string | undefined {
-  return notificationLinkMatch(payload, /[?&]firstId=(\d+)/);
-}
-
-// The fan id comes from payload.user.id or the chat link path. payload.user_id is
-// NOT a fallback — in live captures it holds the recipient creator's id, not the fan.
-function notificationChatId(payload: Record<string, unknown>): string | null {
-  return idToString(asRecord(payload.user)?.id)
-    ?? notificationLinkMatch(payload, /\/my\/chats\/chat\/(\d+)/)
-    ?? null;
 }
 
 /**
@@ -246,6 +185,10 @@ export async function sendOfapiEventProcessJob(
  * pages.ofapi_account_id, derive the SyncEvent frame, settle the row, and NOTIFY
  * the SSE fanout. Data problems settle the row as skipped/failed (no retry);
  * only infrastructure errors propagate into pg-boss retries.
+ *
+ * The DM projection runs strictly AFTER the settle commit as a best-effort
+ * post-settle step (own bookkeeping columns; the minutely sweep retries) — it
+ * can never block, fail, or reorder the settle/fanout path.
  */
 export async function processOfapiWebhookEvent(app: AppContext, eventId: number) {
   const row = await getOfapiWebhookEventById(app.db, eventId);
@@ -262,6 +205,7 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
       error: "Journaled payload is not a valid OFAPI envelope",
       processedAt,
     });
+    await runOfapiDmProjectionForSettledRow(app, row);
     return;
   }
 
@@ -277,6 +221,7 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
         : "Envelope has no account_id",
       processedAt,
     });
+    await runOfapiDmProjectionForSettledRow(app, row);
     return;
   }
 
@@ -292,6 +237,7 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
         : `Event type "${envelope.data.event}" is journaled without fanout`,
       processedAt,
     });
+    await runOfapiDmProjectionForSettledRow(app, row);
     return;
   }
 
@@ -311,6 +257,7 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
     // Same transaction: the notification fires on commit, after the row is visible.
     await tx.execute(sql`select pg_notify(${OFAPI_SYNC_EVENT_CHANNEL}, ${String(row.id)})`);
   });
+  await runOfapiDmProjectionForSettledRow(app, row);
 }
 
 export async function sweepPendingOfapiEvents(
@@ -359,6 +306,10 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
     const requeued = await sweepPendingOfapiEvents(app, boss);
     if (requeued > 0) {
       app.logger.warn({ requeued }, "OFAPI event sweep re-enqueued pending webhook events");
+    }
+    const projected = await sweepOfapiDmProjections(app);
+    if (projected > 0) {
+      app.logger.info({ projected }, "OFAPI DM projection sweep processed journal rows");
     }
   });
 

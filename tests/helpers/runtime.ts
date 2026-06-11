@@ -18,6 +18,7 @@ export function createTestAppContext(
     onlyFansAdapter?: AppContext["onlyFansAdapter"];
     ofapi?: AppContext["ofapi"];
     ofapiEventRetentionDays?: number;
+    ofapiDmProjectionEnabled?: boolean;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
     syncSharedRateLimitEnabled?: boolean;
@@ -68,6 +69,7 @@ export function createTestAppContext(
       telegramEnabled: false,
       telegramReportHourUtc: 9,
       ofapiEventRetentionDays: overrides?.ofapiEventRetentionDays ?? 7,
+      ofapiDmProjectionEnabled: overrides?.ofapiDmProjectionEnabled ?? false,
     },
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as AppContext["onlyFansAdapter"]),

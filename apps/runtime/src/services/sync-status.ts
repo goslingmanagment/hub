@@ -1,6 +1,7 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
   ensurePageSyncStates,
+  getLatestSettledOfapiDmEventTimes,
   getSyncStreamsForPlatform,
   listSyncMonitorStreamRows,
   listPageSyncStates,
@@ -14,6 +15,10 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import {
+  isOfapiDmProjectionEnabled,
+  OFAPI_DM_PROJECTION_EVENT_TYPES,
+} from "./ofapi-dm-projection.ts";
 import {
   parseDmConversationCursorState,
   parseFollowersCursorState,
@@ -1239,6 +1244,64 @@ function deriveDomainState(
   };
 }
 
+// Phase 1 of the OFAPI integration (decision #49): for OnlyFans pages fed by
+// the webhook DM projection, the messages_live block reports webhook ingest
+// freshness (age of the last settled messages.* journal event) instead of the
+// parked dm_conversations executor stream. Display-only; the threshold is
+// deliberately conservative because quiet nights are normal — loud alerting on
+// webhook silence is Phase 3's job.
+const OFAPI_DM_INGEST_STALE_AFTER_SECONDS = 24 * 60 * 60;
+
+function overrideMessagesLiveBlockWithOfapiIngest(
+  block: SyncDomainBlockStatus,
+  lastEventAt: Date | null,
+  now: Date,
+): SyncDomainBlockStatus {
+  const age = ageSeconds(lastEventAt, now);
+  const state: SyncDomainBlockState = lastEventAt === null
+    ? "not_started"
+    : age !== null && age <= OFAPI_DM_INGEST_STALE_AFTER_SECONDS
+      ? "up_to_date"
+      : "delayed";
+  const statusReason: SyncStatusReason = state === "delayed"
+    ? {
+      code: "webhook_silent",
+      summary: "No OFAPI message events have been received recently.",
+      waitingFor: null,
+    }
+    : state === "not_started"
+      ? {
+        code: "webhook_waiting",
+        summary: "Waiting for the first OFAPI message event for this page.",
+        waitingFor: null,
+      }
+      : {
+        code: "webhook_live",
+        summary: "Live DMs are fed by OFAPI webhooks.",
+        waitingFor: null,
+      };
+
+  return {
+    ...block,
+    state,
+    succeededAt: lastEventAt ? lastEventAt.toISOString() : null,
+    progress: null,
+    progressStream: null,
+    progressRole: null,
+    error: null,
+    statusReason,
+    primaryFresh: state === "up_to_date",
+    needsAttention: state === "delayed",
+    nextDueAt: null,
+    nextRetryAt: null,
+    metrics: {
+      ...block.metrics,
+      webhookIngest: true,
+      lastWebhookEventAt: lastEventAt ? lastEventAt.toISOString() : null,
+    },
+  };
+}
+
 export async function getSyncStatusSnapshot(
   app: AppContext,
   input?: {
@@ -1287,6 +1350,20 @@ export async function getSyncStatusSnapshot(
       streams: [...getSyncStreamsForPlatform("fansly")],
     }),
   ]);
+
+  const ofapiDmIngestPageIds = isOfapiDmProjectionEnabled(app.config)
+    ? new Set(
+      scopedPages
+        .filter((page) => page.platform === "onlyfans" && page.ofapiAccountId !== null)
+        .map((page) => page.id),
+    )
+    : new Set<number>();
+  const ofapiDmIngestTimes = ofapiDmIngestPageIds.size > 0
+    ? await getLatestSettledOfapiDmEventTimes(app.db, {
+      pageIds: [...ofapiDmIngestPageIds],
+      eventTypes: OFAPI_DM_PROJECTION_EVENT_TYPES,
+    })
+    : new Map<number, Date>();
 
   const visiblePageIds = new Set(allVisiblePages.map((page) => page.id));
   const pagesById = new Map(allVisiblePages.map((page) => [page.id, page] as const));
@@ -1383,6 +1460,14 @@ export async function getSyncStatusSnapshot(
 
         return [block, deriveDomainState(block, page, domainTasks, domainMonitorRows)] as const;
       })) as Record<SyncDomainBlockKey, SyncDomainBlockStatus>;
+
+      if (ofapiDmIngestPageIds.has(page.id)) {
+        blocks.messages_live = overrideMessagesLiveBlockWithOfapiIngest(
+          blocks.messages_live,
+          ofapiDmIngestTimes.get(page.id) ?? null,
+          now,
+        );
+      }
 
       const blockList = SYNC_DOMAIN_BLOCKS.map((block) => blocks[block]);
       return {

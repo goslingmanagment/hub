@@ -8,6 +8,9 @@ export interface InsertOfapiWebhookEventInput {
   eventType: string;
   ofapiAccountId: string | null;
   payload: Record<string, unknown>;
+  // 'pending' marks the row as a DM-projection candidate (picked up post-settle
+  // or by the sweep); 'none' (default) for event types that are never projected.
+  projectionStatus?: "pending" | "none";
 }
 
 /**
@@ -25,6 +28,7 @@ export async function insertOfapiWebhookEvent(
       eventType: input.eventType,
       ofapiAccountId: input.ofapiAccountId,
       payload: input.payload,
+      projectionStatus: input.projectionStatus ?? "none",
     })
     .onConflictDoNothing({ target: [ofapiWebhookEvents.idempotencyKey] })
     .returning({ id: ofapiWebhookEvents.id });
@@ -77,6 +81,121 @@ export async function settleOfapiWebhookEvent(
     .returning({ id: ofapiWebhookEvents.id });
 
   return settled.length > 0;
+}
+
+export type OfapiEventProjectionStatus = "none" | "pending" | "projected" | "skipped" | "failed";
+
+/**
+ * Records a DM-projection attempt's outcome. Separate from settle bookkeeping —
+ * the projection never touches status/fanout_seq. Guarded so a terminal
+ * 'projected'/'skipped' row is never demoted by a racing duplicate attempt
+ * (the projection itself is idempotent; this just keeps the journal tidy).
+ */
+export async function markOfapiWebhookEventProjection(
+  db: Database,
+  input: {
+    id: number;
+    status: Exclude<OfapiEventProjectionStatus, "none" | "pending">;
+    error?: string | null;
+    projectedAt?: Date;
+  },
+) {
+  const updated = await db
+    .update(ofapiWebhookEvents)
+    .set({
+      projectionStatus: input.status,
+      projectionError: input.error ?? null,
+      projectionAttempts: sql`${ofapiWebhookEvents.projectionAttempts} + 1`,
+      projectedAt: input.status === "projected" ? input.projectedAt ?? new Date() : null,
+    })
+    .where(and(
+      eq(ofapiWebhookEvents.id, input.id),
+      inArray(ofapiWebhookEvents.projectionStatus, ["pending", "failed"]),
+    ))
+    .returning({ id: ofapiWebhookEvents.id });
+
+  return updated.length > 0;
+}
+
+/**
+ * Settled journal rows still awaiting DM projection: 'pending' rows whose
+ * immediate post-settle projection was lost (crash, flag flipped on later) and
+ * 'failed' rows under the retry cap. Ordered oldest-first; the projection
+ * tolerates out-of-order application, so this is just for determinism.
+ */
+export async function listOfapiWebhookEventsForDmProjection(
+  db: Database,
+  input: {
+    eventTypes: readonly string[];
+    maxAttempts: number;
+    limit: number;
+  },
+) {
+  if (input.eventTypes.length === 0) {
+    return [];
+  }
+
+  return db
+    .select()
+    .from(ofapiWebhookEvents)
+    .where(and(
+      inArray(ofapiWebhookEvents.eventType, [...input.eventTypes]),
+      sql`${ofapiWebhookEvents.status} <> 'pending'`,
+      sql`(
+        ${ofapiWebhookEvents.projectionStatus} = 'pending'
+        or (
+          ${ofapiWebhookEvents.projectionStatus} = 'failed'
+          and ${ofapiWebhookEvents.projectionAttempts} < ${input.maxAttempts}
+        )
+      )`,
+    ))
+    .orderBy(asc(ofapiWebhookEvents.id))
+    .limit(input.limit);
+}
+
+/**
+ * Per-page age of the OFAPI DM webhook feed: latest received_at among settled
+ * message events. Backs the messages_live sync block for OFAPI-fed OnlyFans
+ * pages (webhook ingest freshness instead of executor stream freshness).
+ */
+export async function getLatestSettledOfapiDmEventTimes(
+  db: Database,
+  input: {
+    pageIds: number[];
+    eventTypes: readonly string[];
+  },
+): Promise<Map<number, Date>> {
+  if (input.pageIds.length === 0 || input.eventTypes.length === 0) {
+    return new Map();
+  }
+
+  const rows = await db
+    .select({
+      platformAccountId: ofapiWebhookEvents.platformAccountId,
+      lastReceivedAt: sql<Date | string | null>`max(${ofapiWebhookEvents.receivedAt})`,
+    })
+    .from(ofapiWebhookEvents)
+    .where(and(
+      inArray(ofapiWebhookEvents.platformAccountId, input.pageIds),
+      inArray(ofapiWebhookEvents.eventType, [...input.eventTypes]),
+      sql`${ofapiWebhookEvents.status} <> 'pending'`,
+    ))
+    .groupBy(ofapiWebhookEvents.platformAccountId);
+
+  const result = new Map<number, Date>();
+  for (const row of rows) {
+    if (row.platformAccountId === null || row.lastReceivedAt === null) {
+      continue;
+    }
+    const parsed = row.lastReceivedAt instanceof Date
+      ? row.lastReceivedAt
+      : new Date(row.lastReceivedAt);
+    if (!Number.isNaN(parsed.getTime())) {
+      result.set(row.platformAccountId, parsed);
+    }
+  }
+
+  return result;
 }
 
 /** Pending rows whose enqueue may have been lost (crash between journal insert and boss.send). */
