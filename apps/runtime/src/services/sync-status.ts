@@ -16,6 +16,10 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  isOfapiAccountHealthEnabled,
+  ofapiAuthStatusNeedsAction,
+} from "./ofapi-account-health.ts";
+import {
   isOfapiDmProjectionEnabled,
   OFAPI_DM_PROJECTION_EVENT_TYPES,
 } from "./ofapi-dm-projection.ts";
@@ -1302,6 +1306,37 @@ function overrideMessagesLiveBlockWithOfapiIngest(
   };
 }
 
+// Phase 3 of the OFAPI integration (decision #49): the connection block for
+// OFAPI-mapped OnlyFans pages also surfaces the OFAPI account auth state
+// projected from accounts.* webhooks. Display-only overlay — the underlying
+// light-stream state is preserved; needs-action auth states flip the
+// connection chip to error.
+function overlayConnectionBlockWithOfapiAuth(
+  block: SyncDomainBlockStatus,
+  page: { ofapiAuthStatus: string | null; ofapiAuthChangedAt: Date | null },
+): SyncDomainBlockStatus {
+  const needsAction = ofapiAuthStatusNeedsAction(page.ofapiAuthStatus);
+  return {
+    ...block,
+    ...(needsAction
+      ? {
+        connectionStatus: "error" as const,
+        needsAttention: true,
+        statusReason: {
+          code: "ofapi_auth",
+          summary: `OFAPI reports the OnlyFans account needs attention (${page.ofapiAuthStatus}).`,
+          waitingFor: null,
+        },
+      }
+      : {}),
+    metrics: {
+      ...block.metrics,
+      ofapiAuthStatus: page.ofapiAuthStatus,
+      ofapiAuthChangedAt: page.ofapiAuthChangedAt ? page.ofapiAuthChangedAt.toISOString() : null,
+    },
+  };
+}
+
 export async function getSyncStatusSnapshot(
   app: AppContext,
   input?: {
@@ -1467,6 +1502,13 @@ export async function getSyncStatusSnapshot(
           ofapiDmIngestTimes.get(page.id) ?? null,
           now,
         );
+      }
+      if (
+        isOfapiAccountHealthEnabled(app.config) &&
+        page.platform === "onlyfans" &&
+        page.ofapiAccountId !== null
+      ) {
+        blocks.connection = overlayConnectionBlockWithOfapiAuth(blocks.connection, page);
       }
 
       const blockList = SYNC_DOMAIN_BLOCKS.map((block) => blocks[block]);

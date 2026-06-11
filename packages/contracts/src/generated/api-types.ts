@@ -6154,7 +6154,16 @@ export interface paths {
                                 label: string;
                                 username: string | null;
                                 ofapiAccountId: string | null;
+                                ofapiAuthStatus: string | null;
+                                ofapiAuthChangedAt: string | null;
+                                lastEventAt: string | null;
+                                lastEventAgeSeconds: number | null;
                             }[];
+                            credit: {
+                                lastBalance: number | null;
+                                lastBalanceAt: string | null;
+                                spentToday: number;
+                            };
                         };
                     };
                 };
@@ -12049,7 +12058,7 @@ export interface paths {
             parameters: {
                 query?: {
                     status?: "open" | "resolved";
-                    kind?: "auth_blocked" | "proxy_failed" | "stream_failed_threshold";
+                    kind?: "auth_blocked" | "proxy_failed" | "stream_failed_threshold" | "ofapi_auth" | "ofapi_low_credit" | "ofapi_webhook_silence";
                     pageLabel?: string;
                     limit?: number;
                     offset?: number;
@@ -12071,7 +12080,7 @@ export interface paths {
                                 id: number;
                                 incidentKey: string;
                                 /** @enum {string} */
-                                kind: "auth_blocked" | "proxy_failed" | "stream_failed_threshold";
+                                kind: "auth_blocked" | "proxy_failed" | "stream_failed_threshold" | "ofapi_auth" | "ofapi_low_credit" | "ofapi_webhook_silence";
                                 pageLabel: string;
                                 /** @enum {string} */
                                 platform: "fansly" | "onlyfans";

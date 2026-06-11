@@ -100,6 +100,9 @@ const envSchema = z.object({
   OFAPI_DM_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(500),
   OFAPI_CREDIT_FLOOR: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_RECONCILE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(360),
+  OFAPI_ACCOUNT_HEALTH_ENABLED: booleanSchema.default(false),
+  OFAPI_CREDIT_ALERT_THRESHOLD: z.coerce.number().int().min(0).default(1000),
+  OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(720),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
   WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
@@ -161,6 +164,9 @@ export interface AppConfig {
   ofapiDmDailyCreditBudget?: number;
   ofapiCreditFloor?: number;
   ofapiDmReconcileIntervalMinutes?: number;
+  ofapiAccountHealthEnabled?: boolean;
+  ofapiCreditAlertThreshold?: number;
+  ofapiWebhookSilenceThresholdMinutes?: number;
   anthropicApiKey?: string | null;
   wbClosingLlmEnabled?: boolean;
   wbClosingLlmModel?: string;
@@ -279,6 +285,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ofapiDmDailyCreditBudget: parsed.OFAPI_DM_DAILY_CREDIT_BUDGET,
     ofapiCreditFloor: parsed.OFAPI_CREDIT_FLOOR,
     ofapiDmReconcileIntervalMinutes: parsed.OFAPI_DM_RECONCILE_INTERVAL_MINUTES,
+    ofapiAccountHealthEnabled: parsed.OFAPI_ACCOUNT_HEALTH_ENABLED,
+    ofapiCreditAlertThreshold: parsed.OFAPI_CREDIT_ALERT_THRESHOLD,
+    ofapiWebhookSilenceThresholdMinutes: parsed.OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     // L2 only runs when explicitly enabled AND a key is present (safe by default).
     wbClosingLlmEnabled: parsed.WB_CLOSING_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,

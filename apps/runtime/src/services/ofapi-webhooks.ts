@@ -6,8 +6,11 @@ import type {
   OfapiWebhookStatusResponse,
 } from "@agency_hub_core/contracts";
 import {
+  getLatestOfapiEventTimesForPages,
+  getOfapiCreditState,
   getOfapiWebhookConfig,
   insertOfapiWebhookEvent,
+  listOfapiMappedPages,
   listOnlyFansPagesForOfapiMapping,
   setPageOfapiAccountId,
   upsertOfapiWebhookConfig,
@@ -318,10 +321,18 @@ export async function registerOfapiWebhook(
 export async function getOfapiWebhookStatus(
   app: AppContext,
 ): Promise<OfapiWebhookStatusResponse> {
-  const [config, pages] = await Promise.all([
+  const now = new Date();
+  const [config, pages, mappedPages, credit] = await Promise.all([
     getOfapiWebhookConfig(app.db),
     listOnlyFansPagesForOfapiMapping(app.db),
+    listOfapiMappedPages(app.db),
+    getOfapiCreditState(app.db, now),
   ]);
+  const lastEventTimes = await getLatestOfapiEventTimesForPages(
+    app.db,
+    mappedPages.map((page) => page.id),
+  );
+  const mappedById = new Map(mappedPages.map((page) => [page.id, page] as const));
 
   return {
     configured: config !== null,
@@ -333,11 +344,28 @@ export async function getOfapiWebhookStatus(
       ? maskSecret(decryptSigningSecret(app, config.encryptedSigningSecret))
       : null,
     updatedAt: config ? new Date(config.updatedAt).toISOString() : null,
-    pages: pages.map((page) => ({
-      pageId: page.id,
-      label: page.label,
-      username: page.username,
-      ofapiAccountId: page.ofapiAccountId,
-    })),
+    pages: pages.map((page) => {
+      const mapped = mappedById.get(page.id) ?? null;
+      const lastEventAt = lastEventTimes.get(page.id) ?? null;
+      return {
+        pageId: page.id,
+        label: page.label,
+        username: page.username,
+        ofapiAccountId: page.ofapiAccountId,
+        ofapiAuthStatus: mapped?.ofapiAuthStatus ?? null,
+        ofapiAuthChangedAt: mapped?.ofapiAuthChangedAt
+          ? mapped.ofapiAuthChangedAt.toISOString()
+          : null,
+        lastEventAt: lastEventAt ? lastEventAt.toISOString() : null,
+        lastEventAgeSeconds: lastEventAt
+          ? Math.max(0, Math.round((now.getTime() - lastEventAt.getTime()) / 1000))
+          : null,
+      };
+    }),
+    credit: {
+      lastBalance: credit.lastBalance,
+      lastBalanceAt: credit.lastBalanceAt ? credit.lastBalanceAt.toISOString() : null,
+      spentToday: credit.spentToday,
+    },
   };
 }

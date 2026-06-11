@@ -445,3 +445,110 @@ export async function setPageOfapiAccountId(
     })
     .where(eq(pages.id, input.pageId));
 }
+
+/**
+ * Advances a page's OFAPI auth state from an accounts.* webhook event.
+ * Forward-only by event receive time: an out-of-order older event never
+ * overwrites a newer state. Returns false when skipped for that reason.
+ */
+export async function advancePageOfapiAuthStatus(
+  db: Database,
+  input: {
+    pageId: number;
+    authStatus: string;
+    changedAt: Date;
+  },
+) {
+  const updated = await db
+    .update(pages)
+    .set({
+      ofapiAuthStatus: input.authStatus,
+      ofapiAuthChangedAt: input.changedAt,
+      updatedAt: sql`now()`,
+    })
+    .where(and(
+      eq(pages.id, input.pageId),
+      sql`(${pages.ofapiAuthChangedAt} is null or ${pages.ofapiAuthChangedAt} <= ${input.changedAt})`,
+    ))
+    .returning({ id: pages.id });
+
+  return updated.length > 0;
+}
+
+export interface OfapiMappedPageRow {
+  id: number;
+  label: string;
+  platform: "fansly" | "onlyfans";
+  username: string | null;
+  ofapiAccountId: string;
+  ofapiAuthStatus: string | null;
+  ofapiAuthChangedAt: Date | null;
+}
+
+export async function listOfapiMappedPages(db: Database): Promise<OfapiMappedPageRow[]> {
+  const rows = await db
+    .select({
+      id: pages.id,
+      label: pages.label,
+      platform: pages.platform,
+      username: pages.username,
+      ofapiAccountId: pages.ofapiAccountId,
+      ofapiAuthStatus: pages.ofapiAuthStatus,
+      ofapiAuthChangedAt: pages.ofapiAuthChangedAt,
+    })
+    .from(pages)
+    .where(isNotNull(pages.ofapiAccountId))
+    .orderBy(asc(pages.label));
+
+  return rows.filter((row): row is OfapiMappedPageRow => row.ofapiAccountId !== null);
+}
+
+/** Most recent journaled delivery overall — the webhook-silence signal. */
+export async function getLatestOfapiWebhookEventReceivedAt(db: Database): Promise<Date | null> {
+  const [row] = await db
+    .select({ latest: sql<Date | string | null>`max(${ofapiWebhookEvents.receivedAt})` })
+    .from(ofapiWebhookEvents);
+
+  if (!row || row.latest === null) {
+    return null;
+  }
+  const parsed = row.latest instanceof Date ? row.latest : new Date(row.latest);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Per-page age of the latest settled event of any type (admin status view). */
+export async function getLatestOfapiEventTimesForPages(
+  db: Database,
+  pageIds: number[],
+): Promise<Map<number, Date>> {
+  if (pageIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = await db
+    .select({
+      platformAccountId: ofapiWebhookEvents.platformAccountId,
+      lastReceivedAt: sql<Date | string | null>`max(${ofapiWebhookEvents.receivedAt})`,
+    })
+    .from(ofapiWebhookEvents)
+    .where(and(
+      inArray(ofapiWebhookEvents.platformAccountId, pageIds),
+      sql`${ofapiWebhookEvents.status} <> 'pending'`,
+    ))
+    .groupBy(ofapiWebhookEvents.platformAccountId);
+
+  const result = new Map<number, Date>();
+  for (const row of rows) {
+    if (row.platformAccountId === null || row.lastReceivedAt === null) {
+      continue;
+    }
+    const parsed = row.lastReceivedAt instanceof Date
+      ? row.lastReceivedAt
+      : new Date(row.lastReceivedAt);
+    if (!Number.isNaN(parsed.getTime())) {
+      result.set(row.platformAccountId, parsed);
+    }
+  }
+
+  return result;
+}

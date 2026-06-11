@@ -11,6 +11,10 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  applyOfapiAccountHealthEvent,
+  runOfapiAccountHealthMonitor,
+} from "./ofapi-account-health.ts";
+import {
   runOfapiDmProjectionForSettledRow,
   sweepOfapiDmProjections,
 } from "./ofapi-dm-projection.ts";
@@ -43,6 +47,16 @@ const SWEEP_BATCH_LIMIT = 200;
 
 export interface OfapiEventProcessPayload {
   eventId: number;
+}
+
+type SettledOfapiEventRow = Parameters<typeof runOfapiDmProjectionForSettledRow>[1] &
+  Parameters<typeof applyOfapiAccountHealthEvent>[1];
+
+// Best-effort post-settle steps (DM projection, account health) — both are
+// internally flag-gated and never throw into the settle path.
+async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiEventRow) {
+  await runOfapiDmProjectionForSettledRow(app, row);
+  await applyOfapiAccountHealthEvent(app, row);
 }
 
 /**
@@ -205,7 +219,7 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
       error: "Journaled payload is not a valid OFAPI envelope",
       processedAt,
     });
-    await runOfapiDmProjectionForSettledRow(app, row);
+    await runPostSettleOfapiProjections(app, row);
     return;
   }
 
@@ -221,7 +235,7 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
         : "Envelope has no account_id",
       processedAt,
     });
-    await runOfapiDmProjectionForSettledRow(app, row);
+    await runPostSettleOfapiProjections(app, row);
     return;
   }
 
@@ -237,7 +251,7 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
         : `Event type "${envelope.data.event}" is journaled without fanout`,
       processedAt,
     });
-    await runOfapiDmProjectionForSettledRow(app, row);
+    await runPostSettleOfapiProjections(app, row);
     return;
   }
 
@@ -257,7 +271,7 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
     // Same transaction: the notification fires on commit, after the row is visible.
     await tx.execute(sql`select pg_notify(${OFAPI_SYNC_EVENT_CHANNEL}, ${String(row.id)})`);
   });
-  await runOfapiDmProjectionForSettledRow(app, row);
+  await runPostSettleOfapiProjections(app, row);
 }
 
 export async function sweepPendingOfapiEvents(
@@ -311,6 +325,7 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
     if (projected > 0) {
       app.logger.info({ projected }, "OFAPI DM projection sweep processed journal rows");
     }
+    await runOfapiAccountHealthMonitor(app);
   });
 
   await boss.work(OFAPI_EVENT_CLEANUP_QUEUE, { batchSize: 1 }, async () => {

@@ -8,7 +8,13 @@ import {
   telegramDeliveryAttempts,
 } from "../schema.ts";
 
-export type NotificationIncidentKind = "auth_blocked" | "proxy_failed" | "stream_failed_threshold";
+export type NotificationIncidentKind =
+  | "auth_blocked"
+  | "proxy_failed"
+  | "stream_failed_threshold"
+  | "ofapi_auth"
+  | "ofapi_low_credit"
+  | "ofapi_webhook_silence";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";
@@ -199,7 +205,7 @@ async function openNotificationIncidentInternal(
   input: {
     incidentKey: string;
     kind: NotificationIncidentKind;
-    platformAccountId: number;
+    platformAccountId: number | null;
     stream?: NotificationIncidentRow["stream"] | null;
     errorCode?: string | null;
     errorSummary?: string | null;
@@ -342,7 +348,7 @@ export async function openNotificationIncident(
   input: {
     incidentKey: string;
     kind: NotificationIncidentKind;
-    platformAccountId: number;
+    platformAccountId: number | null;
     stream?: NotificationIncidentRow["stream"] | null;
     errorCode?: string | null;
     errorSummary?: string | null;
@@ -369,7 +375,7 @@ export async function openNotificationIncidentWithRecoveryGuard(
   input: {
     incidentKey: string;
     kind: NotificationIncidentKind;
-    platformAccountId: number;
+    platformAccountId: number | null;
     stream?: NotificationIncidentRow["stream"] | null;
     errorCode?: string | null;
     errorSummary?: string | null;

@@ -55,6 +55,8 @@ describe("connections service", () => {
         lastLightSyncAt: now,
         lastFollowerSyncAt: now,
         ofapiAccountId: null,
+        ofapiAuthStatus: null,
+        ofapiAuthChangedAt: null,
         subscriberCount: 10,
         followerCount: 20,
         hasCredentials: true,

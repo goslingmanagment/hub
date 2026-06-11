@@ -24,6 +24,9 @@ export function createTestAppContext(
     ofapiDmDailyCreditBudget?: number;
     ofapiCreditFloor?: number;
     ofapiDmReconcileIntervalMinutes?: number;
+    ofapiAccountHealthEnabled?: boolean;
+    ofapiCreditAlertThreshold?: number;
+    ofapiWebhookSilenceThresholdMinutes?: number;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
     syncSharedRateLimitEnabled?: boolean;
@@ -81,6 +84,9 @@ export function createTestAppContext(
       ofapiDmDailyCreditBudget: overrides?.ofapiDmDailyCreditBudget ?? 500,
       ofapiCreditFloor: overrides?.ofapiCreditFloor ?? 500,
       ofapiDmReconcileIntervalMinutes: overrides?.ofapiDmReconcileIntervalMinutes ?? 360,
+      ofapiAccountHealthEnabled: overrides?.ofapiAccountHealthEnabled ?? false,
+      ofapiCreditAlertThreshold: overrides?.ofapiCreditAlertThreshold ?? 1000,
+      ofapiWebhookSilenceThresholdMinutes: overrides?.ofapiWebhookSilenceThresholdMinutes ?? 720,
     },
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as AppContext["onlyFansAdapter"]),

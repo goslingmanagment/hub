@@ -19,10 +19,14 @@ const STREAM_FAILURE_THRESHOLD = 3;
 function incidentKey(
   input: {
     kind: NotificationIncidentKind;
-    platformAccountId: number;
+    platformAccountId: number | null;
     stream?: SyncStream | null;
   },
 ) {
+  if (input.platformAccountId === null) {
+    // Account-global OFAPI incidents (low credit, webhook silence).
+    return `${input.kind}:global`;
+  }
   return input.kind === "stream_failed_threshold" && input.stream
     ? `${input.kind}:${input.platformAccountId}:${input.stream}`
     : `${input.kind}:${input.platformAccountId}`;
@@ -37,24 +41,35 @@ function summarizeError(errorSummary: string | null | undefined) {
   return sanitized.length <= 240 ? sanitized : `${sanitized.slice(0, 237)}...`;
 }
 
+function openTitleForIncident(kind: NotificationIncidentKind) {
+  switch (kind) {
+    case "auth_blocked":
+      return "🚨 Auth failed";
+    case "proxy_failed":
+      return "🚨 Proxy failed";
+    case "stream_failed_threshold":
+      return "🚨 Stream failed 3x in a row";
+    case "ofapi_auth":
+      return "🚨 OFAPI account auth needs attention";
+    case "ofapi_low_credit":
+      return "🚨 OFAPI credit balance low";
+    case "ofapi_webhook_silence":
+      return "🚨 OFAPI webhooks silent";
+  }
+}
+
 function openMessageForIncident(
   input: {
     kind: NotificationIncidentKind;
-    pageLabel: string;
-    platform: "fansly" | "onlyfans";
+    pageLabel: string | null;
+    platform: "fansly" | "onlyfans" | null;
     stream?: SyncStream | null;
     errorSummary: string | null;
   },
 ) {
-  const title = input.kind === "auth_blocked"
-    ? "🚨 Auth failed"
-    : input.kind === "proxy_failed"
-      ? "🚨 Proxy failed"
-      : "🚨 Stream failed 3x in a row";
-
   return [
-    title,
-    `Page: ${input.pageLabel} (${input.platform})`,
+    openTitleForIncident(input.kind),
+    ...(input.pageLabel ? [`Page: ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`] : []),
     ...(input.stream ? [`Stream: ${input.stream}`] : []),
     `Error: ${summarizeError(input.errorSummary)}`,
   ].join("\n");
@@ -63,8 +78,8 @@ function openMessageForIncident(
 function resolveMessageForIncident(
   input: {
     kind: NotificationIncidentKind;
-    pageLabel: string;
-    platform: "fansly" | "onlyfans";
+    pageLabel: string | null;
+    platform: "fansly" | "onlyfans" | null;
     stream?: SyncStream | null;
   },
 ) {
@@ -72,11 +87,19 @@ function resolveMessageForIncident(
     ? "Auth failed"
     : input.kind === "proxy_failed"
       ? "Proxy failed"
-      : `Stream ${input.stream ?? "unknown"} recovered`;
+      : input.kind === "stream_failed_threshold"
+        ? `Stream ${input.stream ?? "unknown"} recovered`
+        : input.kind === "ofapi_auth"
+          ? "OFAPI account auth recovered"
+          : input.kind === "ofapi_low_credit"
+            ? "OFAPI credit balance recovered"
+            : "OFAPI webhooks delivering again";
 
   return [
     "✅ Resolved",
-    `${detail}: ${input.pageLabel} (${input.platform})`,
+    input.pageLabel
+      ? `${detail}: ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`
+      : detail,
   ].join("\n");
 }
 
@@ -84,9 +107,9 @@ async function openIncidentAndNotify(
   app: Pick<AppContext, "db" | "logger" | "config">,
   input: {
     kind: NotificationIncidentKind;
-    platformAccountId: number;
-    pageLabel: string;
-    platform: "fansly" | "onlyfans";
+    platformAccountId: number | null;
+    pageLabel: string | null;
+    platform: "fansly" | "onlyfans" | null;
     stream?: SyncStream | null;
     errorCode?: string | null;
     errorSummary?: string | null;
@@ -150,9 +173,9 @@ async function resolveIncidentAndNotify(
   app: Pick<AppContext, "db" | "logger" | "config">,
   input: {
     kind: NotificationIncidentKind;
-    platformAccountId: number;
-    pageLabel: string;
-    platform: "fansly" | "onlyfans";
+    platformAccountId: number | null;
+    pageLabel: string | null;
+    platform: "fansly" | "onlyfans" | null;
     recoveredAt?: Date;
     stream?: SyncStream | null;
   },
@@ -303,6 +326,81 @@ export async function resolveSyncChunkRecoveryIncidents(
     ...input,
     kind: "stream_failed_threshold",
     recoveredAt,
+  });
+}
+
+/** Debounced alert for OFAPI accounts.* auth states (decision #49, Phase 3). */
+export async function notifyOfapiAuthIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    authStatus: string;
+    occurredAt?: Date;
+  },
+) {
+  await openIncidentAndNotify(app, {
+    kind: "ofapi_auth",
+    platformAccountId: input.platformAccountId,
+    pageLabel: input.pageLabel,
+    platform: input.platform,
+    errorCode: input.authStatus,
+    errorSummary: `OFAPI reported accounts.${input.authStatus}`,
+    occurredAt: input.occurredAt,
+  });
+}
+
+export async function resolveOfapiAuthIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    platformAccountId: number;
+    pageLabel: string;
+    platform: "fansly" | "onlyfans";
+    recoveredAt?: Date;
+  },
+) {
+  await resolveIncidentAndNotify(app, {
+    kind: "ofapi_auth",
+    platformAccountId: input.platformAccountId,
+    pageLabel: input.pageLabel,
+    platform: input.platform,
+    recoveredAt: input.recoveredAt,
+  });
+}
+
+/** Account-global OFAPI conditions (low credit balance, webhook silence). */
+export async function notifyOfapiGlobalIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    kind: "ofapi_low_credit" | "ofapi_webhook_silence";
+    errorSummary: string;
+    occurredAt?: Date;
+  },
+) {
+  await openIncidentAndNotify(app, {
+    kind: input.kind,
+    platformAccountId: null,
+    pageLabel: null,
+    platform: null,
+    errorSummary: input.errorSummary,
+    occurredAt: input.occurredAt,
+  });
+}
+
+export async function resolveOfapiGlobalIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    kind: "ofapi_low_credit" | "ofapi_webhook_silence";
+    recoveredAt?: Date;
+  },
+) {
+  await resolveIncidentAndNotify(app, {
+    kind: input.kind,
+    platformAccountId: null,
+    pageLabel: null,
+    platform: null,
+    recoveredAt: input.recoveredAt,
   });
 }
 

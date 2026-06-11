@@ -488,8 +488,26 @@ describe("OFAPI webhook admin flow", () => {
     };
     expect(statusBody.configured).toBe(true);
     expect(statusBody.pages).toEqual([
-      { pageId: expect.any(Number), label: "lily-of", username: "lilyvip", ofapiAccountId: null },
-      { pageId: expect.any(Number), label: "lora-of", username: "loravie", ofapiAccountId: "acct_lora" },
+      {
+        pageId: expect.any(Number),
+        label: "lily-of",
+        username: "lilyvip",
+        ofapiAccountId: null,
+        ofapiAuthStatus: null,
+        ofapiAuthChangedAt: null,
+        lastEventAt: null,
+        lastEventAgeSeconds: null,
+      },
+      {
+        pageId: expect.any(Number),
+        label: "lora-of",
+        username: "loravie",
+        ofapiAccountId: "acct_lora",
+        ofapiAuthStatus: null,
+        ofapiAuthChangedAt: null,
+        lastEventAt: null,
+        lastEventAgeSeconds: null,
+      },
     ]);
   });
 

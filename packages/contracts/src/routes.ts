@@ -2393,7 +2393,14 @@ export const adminIncidentsResponseSchema = z.object({
 
 // --- Notifications dashboard schemas ---
 const notificationConnectionStatusEnum = z.enum(["not_configured", "connected", "last_message_failed"]);
-const notificationIncidentKindEnum = z.enum(["auth_blocked", "proxy_failed", "stream_failed_threshold"]);
+const notificationIncidentKindEnum = z.enum([
+  "auth_blocked",
+  "proxy_failed",
+  "stream_failed_threshold",
+  "ofapi_auth",
+  "ofapi_low_credit",
+  "ofapi_webhook_silence",
+]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const deliveryKindEnum = z.enum([
   "test",
@@ -2735,6 +2742,12 @@ export const ofapiPageMappingSchema = z.object({
   label: z.string(),
   username: z.string().nullable(),
   ofapiAccountId: z.string().nullable(),
+  // OFAPI account health (decision #49 Phase 3): latest accounts.* state and
+  // webhook recency for the mapped account. Null when unmapped / no data yet.
+  ofapiAuthStatus: z.string().nullable(),
+  ofapiAuthChangedAt: isoTimestamp.nullable(),
+  lastEventAt: isoTimestamp.nullable(),
+  lastEventAgeSeconds: z.number().int().nullable(),
 });
 
 export const ofapiWebhookStatusResponseSchema = z.object({
@@ -2746,6 +2759,12 @@ export const ofapiWebhookStatusResponseSchema = z.object({
   signingSecretMask: z.string().nullable(),
   updatedAt: isoTimestamp.nullable(),
   pages: z.array(ofapiPageMappingSchema),
+  // Last credit balance observed in OFAPI REST _meta plus today's tracked spend.
+  credit: z.object({
+    lastBalance: z.number().int().nullable(),
+    lastBalanceAt: isoTimestamp.nullable(),
+    spentToday: z.number().int(),
+  }),
 });
 
 export const ofapiWebhookRegisterBodySchema = z.object({

@@ -109,6 +109,9 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "auth_blocked",
   "proxy_failed",
   "stream_failed_threshold",
+  "ofapi_auth",
+  "ofapi_low_credit",
+  "ofapi_webhook_silence",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -151,6 +154,11 @@ export const pages = pgTable(
     // page; set by the OFAPI webhook admin flow. Distinct from external_page_id
     // (the OnlyMonster-sourced platform id).
     ofapiAccountId: text("ofapi_account_id"),
+    // Latest accounts.* webhook state for the mapped OFAPI account (raw event
+    // suffix, e.g. "connected" / "authentication_failed"); forward-only by
+    // received_at. Null until the first accounts.* event is projected.
+    ofapiAuthStatus: text("ofapi_auth_status"),
+    ofapiAuthChangedAt: timestamp("ofapi_auth_changed_at", { withTimezone: true }),
     username: text("username"),
     displayName: text("display_name"),
     followerCount: integer("follower_count"),
@@ -207,9 +215,9 @@ export const notificationIncidents = pgTable(
     id: bigserial("id", { mode: "number" }).primaryKey(),
     incidentKey: text("incident_key").notNull().unique(),
     kind: notificationIncidentKindEnum("kind").notNull(),
+    // Null for account-global OFAPI incidents (low credit, webhook silence).
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
-      .notNull(),
+      .references(() => pages.id, { onDelete: "cascade" }),
     stream: syncStreamEnum("stream"),
     status: notificationIncidentStatusEnum("status").default("open").notNull(),
     openedAt: timestamp("opened_at", { withTimezone: true }).defaultNow().notNull(),
