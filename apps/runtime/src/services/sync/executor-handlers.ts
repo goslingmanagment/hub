@@ -1,10 +1,12 @@
 import {
+  aggregateTransactionTopSpenders,
   assertOwnedPageSyncLease,
   countRecentTerminalDmMessageConversationFailureStreak,
   countActivePageFollows,
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
   finalizePageDmConversationMessageSync,
+  getEarliestSpenderTransactionAt,
   getExistingPageDmMessageIds,
   getPageDmConversationById,
   getCheckpoint,
@@ -116,6 +118,7 @@ import {
   executeOfapiAudienceChunk,
   isOfapiAudienceSyncEligiblePage,
 } from "./ofapi-audience-sync.ts";
+import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
   dmRetentionDate,
   normalizeDmTipAmountCents,
@@ -837,6 +840,8 @@ async function upsertTopSpendersWindow(
   app: AppContext,
   input: {
     platformAccountId: number;
+    // Platform the correlation ids belong to when creating fan rows.
+    platform?: "fansly" | "onlyfans";
     windowStartedAt: Date;
     windowEndedAt: Date;
     telemetry: SyncRunTelemetry;
@@ -904,7 +909,7 @@ async function upsertTopSpendersWindow(
   const fanInputs = validItems.flatMap((item) => (
     item.correlationAccountId
       ? [{
-        platform: "fansly" as const,
+        platform: input.platform ?? "fansly" as const,
         platformUserId: item.correlationAccountId,
       }]
       : []
@@ -982,6 +987,14 @@ export async function executeTopSpendersChunk(
     syncRunId: number;
   },
 ) {
+  if (input.pageContext.platform === "onlyfans") {
+    if (isOnlyFansTopSpendersEnabled(app.config)) {
+      return executeOnlyFansTopSpendersChunk(app, input);
+    }
+    // The planner force-pauses the stream while the flag is off, so reaching
+    // here is a wiring bug.
+    throw new Error("Top spenders sync is not enabled for this OnlyFans page");
+  }
   if (input.pageContext.platform !== "fansly") {
     throw new Error("Top spenders sync is only supported for Fansly pages");
   }
@@ -1278,6 +1291,172 @@ export async function executeTopSpendersChunk(
       pendingWindows: 0,
       windowsProcessed,
       windowsSplit,
+      upsertedRankings,
+    },
+  } satisfies StreamChunkResult;
+}
+
+/**
+ * top_spenders for OnlyFans pages (docs/ofapi-parity-plan.md Phase 5, D10):
+ * the same month-window bootstrap + trailing-7-day steady state as Fansly, but
+ * computed from the existing transactions table (zero external requests) using
+ * the spenders-v2 transaction filter, so rankings reconcile with the spender
+ * projections for the same window. Windows are never split — a DB aggregate
+ * has no provider cap. OFAPI lifetime totals are deliberately not used (no
+ * monthly windows).
+ */
+async function executeOnlyFansTopSpendersChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    syncRunId: number;
+  },
+) {
+  await input.telemetry.recordPhaseStarted("top_spenders");
+  const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "top_spenders");
+  await input.telemetry.recordCheckpointLoaded("top_spenders", summarizeCheckpoint(checkpoint));
+
+  const now = new Date();
+  // The account-created-at analog: the earliest spender-relevant transaction.
+  const earliestTransactionAt = await getEarliestSpenderTransactionAt(
+    app.db,
+    input.pageContext.page.id,
+  );
+  if (!earliestTransactionAt) {
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: { mode: "empty", reason: "no spender transactions" },
+    } satisfies StreamChunkResult;
+  }
+
+  const anchorIso = earliestTransactionAt.toISOString();
+  let initialState = parseTopSpendersCursorState(checkpoint?.state);
+  if (!initialState || initialState.accountCreatedAt !== anchorIso) {
+    initialState = buildTopSpendersBootstrapState(earliestTransactionAt, now);
+    const initializedCheckpoint = await upsertCheckpointProgress(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "top_spenders",
+      state: initialState,
+    });
+    await input.telemetry.recordCheckpointAdvanced(
+      "top_spenders",
+      summarizeCheckpoint(initializedCheckpoint),
+    );
+  }
+  let state: TopSpendersCursorState = initialState;
+
+  let windowsProcessed = 0;
+  let upsertedRankings = 0;
+
+  const processWindow = async (windowStartedAt: Date, windowEndedAt: Date) => {
+    const rows = await aggregateTransactionTopSpenders(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      from: windowStartedAt,
+      to: windowEndedAt,
+    });
+    return upsertTopSpendersWindow(app, {
+      platformAccountId: input.pageContext.page.id,
+      platform: "onlyfans",
+      windowStartedAt,
+      windowEndedAt,
+      telemetry: input.telemetry,
+      items: rows.map((row) => ({
+        totalGross: Number(row.grossAmountMills),
+        totalNet: Number(row.creatorNetAmountMills),
+        correlationAccountId: row.fanPlatformUserId,
+      })),
+    });
+  };
+
+  while (state.pendingWindows.length > 0) {
+    await assertOwnedPageSyncLease(app.db);
+    const currentWindow = state.pendingWindows[0]!;
+    upsertedRankings += await processWindow(
+      new Date(currentWindow.startedAt),
+      new Date(currentWindow.endedAt),
+    );
+    windowsProcessed += 1;
+
+    const pendingWindows = state.pendingWindows.slice(1);
+    state = {
+      ...state,
+      pendingWindows,
+      completedMonths: computeCompletedTopSpenderMonths(state.totalMonths, pendingWindows),
+      lastWindowStartedAt: currentWindow.startedAt,
+      lastWindowEndedAt: currentWindow.endedAt,
+    };
+    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "top_spenders",
+      state,
+    });
+    await input.telemetry.recordCheckpointAdvanced(
+      "top_spenders",
+      summarizeCheckpoint(progressCheckpoint),
+    );
+
+    if (!input.budget.hasWallClockCapacity()) {
+      return {
+        satisfied: false,
+        yieldReason: "wall_clock",
+        stats: {
+          mode: state.mode,
+          totalMonths: state.totalMonths,
+          completedMonths: state.completedMonths,
+          pendingWindows: state.pendingWindows.length,
+          windowsProcessed,
+          upsertedRankings,
+        },
+      } satisfies StreamChunkResult;
+    }
+  }
+
+  const wasBootstrap = state.mode === "bootstrap";
+  if (!wasBootstrap) {
+    // Steady state: refresh the trailing seven days, mirroring Fansly's window.
+    const steadyStateWindowEndedAt = now;
+    const steadyStateWindowStartedAt = new Date(
+      now.getTime() - TOP_SPENDERS_STEADY_STATE_WINDOW_MS,
+    );
+    await assertOwnedPageSyncLease(app.db);
+    upsertedRankings += await processWindow(steadyStateWindowStartedAt, steadyStateWindowEndedAt);
+    windowsProcessed += 1;
+    state = {
+      ...state,
+      lastWindowStartedAt: steadyStateWindowStartedAt.toISOString(),
+      lastWindowEndedAt: steadyStateWindowEndedAt.toISOString(),
+    };
+  }
+
+  const completedState = {
+    ...state,
+    mode: "steady_state" as const,
+    completedMonths: state.totalMonths,
+    pendingWindows: [],
+  } satisfies TopSpendersCursorState;
+  const completedCheckpoint = await upsertCheckpoint(app.db, {
+    platformAccountId: input.pageContext.page.id,
+    stream: "top_spenders",
+    cursorTimestamp: completedState.lastWindowEndedAt
+      ? new Date(completedState.lastWindowEndedAt)
+      : now,
+    state: completedState,
+    lastSuccessfulRunId: input.syncRunId,
+  });
+  await input.telemetry.recordCheckpointAdvanced(
+    "top_spenders",
+    summarizeCheckpoint(completedCheckpoint),
+  );
+
+  return {
+    satisfied: true,
+    yieldReason: null,
+    stats: {
+      mode: wasBootstrap ? "bootstrap" : "steady_state",
+      totalMonths: completedState.totalMonths,
+      completedMonths: completedState.completedMonths,
+      pendingWindows: 0,
+      windowsProcessed,
       upsertedRankings,
     },
   } satisfies StreamChunkResult;

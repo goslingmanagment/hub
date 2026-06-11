@@ -11,6 +11,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
 import { pauseDisabledOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
 import { pauseDisabledOnlyFansDmPollingForAllPages } from "./onlyfans-dm-polling.ts";
+import { pauseDisabledOnlyFansTopSpendersForAllPages } from "./onlyfans-top-spenders.ts";
 
 const INACTIVE_SYNC_RUN_THRESHOLD_MS = 90 * 1000;
 const INACTIVE_SYNC_RUN_ERROR_SUMMARY = "Sync run auto-closed after inactivity";
@@ -47,6 +48,12 @@ export async function runSyncPlannerCycle(
     app.logger.warn({
       pausedOnlyFansAudiencePages,
     }, "Paused OnlyFans audience sync for pages not eligible under OFAPI_AUDIENCE_SYNC_ENABLED");
+  }
+  const pausedOnlyFansTopSpenderPages = await pauseDisabledOnlyFansTopSpendersForAllPages(app, now);
+  if (pausedOnlyFansTopSpenderPages > 0) {
+    app.logger.warn({
+      pausedOnlyFansTopSpenderPages,
+    }, "Paused OnlyFans top spenders because ONLYFANS_TOP_SPENDERS_ENABLED is false");
   }
   await scheduleDuePageSync(app.db, { now });
 

@@ -532,11 +532,20 @@ function normalizePageSyncLease(row: Record<string, unknown>): PageSyncLease {
 
 export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): SyncStream[] {
   // OnlyFans: subscribers is the OFAPI audience sweep (docs/ofapi-parity-plan.md
-  // Phase 3); the planner force-pauses it for pages that are not
-  // OFAPI-audience-eligible, mirroring the DM-polling gate.
+  // Phase 3) and top_spenders is computed from the transactions table (Phase 5);
+  // the planner force-pauses both for pages outside their flags, mirroring the
+  // DM-polling gate.
   return platform === "fansly"
     ? SYNC_STREAMS.filter((stream) => stream !== "fan_identities")
-    : ["light", "transactions", "fan_identities", "subscribers", "dm_conversations", "dm_messages"];
+    : [
+      "light",
+      "transactions",
+      "fan_identities",
+      "top_spenders",
+      "subscribers",
+      "dm_conversations",
+      "dm_messages",
+    ];
 }
 
 export function resolvePageSyncPriority(stream: SyncStream, source: SyncRequestSource) {

@@ -1,7 +1,9 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
+
+import { spenderAnalyticsTransactionTypes } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
-import { pageTopSpenders } from "../schema.ts";
+import { fans, pageTopSpenders, transactions } from "../schema.ts";
 
 export interface UpsertPageTopSpenderInput {
   platformAccountId: number;
@@ -88,4 +90,84 @@ export async function findPageTopSpenderByCorrelationAccountId(
       eq(pageTopSpenders.correlationAccountId, input.correlationAccountId),
     ),
   });
+}
+
+// Shared filter with the spenders v2 projections (rebuildSpenderDailyFacts):
+// active spender-relevant transactions linked to a fan — keeps the computed
+// rankings reconcilable with fan_spend_daily for the same window.
+function spenderTransactionClauses(platformAccountId: number, from: Date, to: Date) {
+  return and(
+    eq(transactions.platformAccountId, platformAccountId),
+    eq(transactions.isActive, true),
+    isNotNull(transactions.fanId),
+    inArray(
+      transactions.canonicalType,
+      spenderAnalyticsTransactionTypes as Array<typeof transactions.$inferSelect.canonicalType>,
+    ),
+    gte(transactions.occurredAt, from),
+    lt(transactions.occurredAt, to),
+  );
+}
+
+export interface TransactionTopSpenderRow {
+  fanId: number;
+  fanPlatformUserId: string;
+  grossAmountMills: bigint;
+  creatorNetAmountMills: bigint;
+}
+
+/**
+ * Per-fan gross/net sums over a window, straight from the transactions table —
+ * the data source for the computed OnlyFans top_spenders stream (D10).
+ */
+export async function aggregateTransactionTopSpenders(
+  db: Database,
+  input: { platformAccountId: number; from: Date; to: Date },
+): Promise<TransactionTopSpenderRow[]> {
+  const rows = await db
+    .select({
+      fanId: transactions.fanId,
+      fanPlatformUserId: fans.platformUserId,
+      grossAmountMills: sql<string>`coalesce(sum(${transactions.grossAmountMills}), 0)::bigint`,
+      creatorNetAmountMills: sql<string>`coalesce(sum(${transactions.creatorNetAmountMills}), 0)::bigint`,
+    })
+    .from(transactions)
+    .innerJoin(fans, eq(fans.id, transactions.fanId))
+    .where(spenderTransactionClauses(input.platformAccountId, input.from, input.to))
+    .groupBy(transactions.fanId, fans.platformUserId)
+    .orderBy(sql`3 desc`);
+
+  return rows.flatMap((row) => (row.fanId !== null
+    ? [{
+      fanId: row.fanId,
+      fanPlatformUserId: row.fanPlatformUserId,
+      grossAmountMills: BigInt(row.grossAmountMills),
+      creatorNetAmountMills: BigInt(row.creatorNetAmountMills),
+    }]
+    : []));
+}
+
+/** Earliest spender-relevant transaction — the bootstrap window anchor. */
+export async function getEarliestSpenderTransactionAt(
+  db: Database,
+  platformAccountId: number,
+): Promise<Date | null> {
+  const [row] = await db
+    .select({ earliest: sql<Date | string | null>`min(${transactions.occurredAt})` })
+    .from(transactions)
+    .where(and(
+      eq(transactions.platformAccountId, platformAccountId),
+      eq(transactions.isActive, true),
+      isNotNull(transactions.fanId),
+      inArray(
+        transactions.canonicalType,
+        spenderAnalyticsTransactionTypes as Array<typeof transactions.$inferSelect.canonicalType>,
+      ),
+    ));
+
+  if (!row || row.earliest === null) {
+    return null;
+  }
+  const parsed = row.earliest instanceof Date ? row.earliest : new Date(row.earliest);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }

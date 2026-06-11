@@ -20,6 +20,10 @@ import {
   pauseDisabledOnlyFansAudienceForPage,
 } from "./sync/ofapi-audience-sync.ts";
 import {
+  filterOnlyFansTopSpendersStreams,
+  pauseDisabledOnlyFansTopSpendersForPage,
+} from "./sync/onlyfans-top-spenders.ts";
+import {
   filterOnlyFansDmPollingStreams,
   ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
   pauseDisabledOnlyFansDmPollingForPage,
@@ -52,7 +56,7 @@ export function resolveStreamsForScope(
   if (scope === "data") {
     return platform === "fansly"
       ? ["light", "transactions", "top_spenders", "subscribers", "followers", "followers_reconcile"]
-      : ["light", "transactions", "fan_identities", "subscribers"];
+      : ["light", "transactions", "fan_identities", "top_spenders", "subscribers"];
   }
 
   if (scope === "messages") {
@@ -70,7 +74,15 @@ export function resolveStreamsForScope(
       "dm_conversations",
       "dm_messages",
     ]
-    : ["light", "transactions", "fan_identities", "subscribers", "dm_conversations", "dm_messages"];
+    : [
+      "light",
+      "transactions",
+      "fan_identities",
+      "top_spenders",
+      "subscribers",
+      "dm_conversations",
+      "dm_messages",
+    ];
 }
 
 export async function requestPageSync(
@@ -89,16 +101,20 @@ export async function requestPageSync(
   }
 
   const requestedStreams = resolveStreamsForScope(storedPage.page.platform, input.scope);
-  const streams = filterOnlyFansAudienceStreams(
+  const streams = filterOnlyFansTopSpendersStreams(
     storedPage.page.platform,
-    filterStreamsForSyncConfig(
+    filterOnlyFansAudienceStreams(
       storedPage.page.platform,
-      requestedStreams,
+      filterStreamsForSyncConfig(
+        storedPage.page.platform,
+        requestedStreams,
+        app.config,
+        storedPage.page,
+      ),
       app.config,
       storedPage.page,
     ),
     app.config,
-    storedPage.page,
   );
   const now = new Date();
   await ensurePageSyncStates(app.db, {
@@ -109,6 +125,7 @@ export async function requestPageSync(
   if (storedPage.page.platform === "onlyfans") {
     await pauseDisabledOnlyFansDmPollingForPage(app, storedPage.page.id, now);
     await pauseDisabledOnlyFansAudienceForPage(app, storedPage.page.id, now);
+    await pauseDisabledOnlyFansTopSpendersForPage(app, storedPage.page.id, now);
   }
 
   if (streams.length === 0) {

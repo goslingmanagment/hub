@@ -35,6 +35,7 @@ export function createTestAppContext(
     ofapiAudienceDailyCreditBudget?: number;
     ofapiAudienceSweepIntervalMinutes?: number;
     ofapiPresenceProjectionEnabled?: boolean;
+    onlyFansTopSpendersEnabled?: boolean;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
     syncSharedRateLimitEnabled?: boolean;
@@ -103,6 +104,7 @@ export function createTestAppContext(
       ofapiAudienceDailyCreditBudget: overrides?.ofapiAudienceDailyCreditBudget ?? 300,
       ofapiAudienceSweepIntervalMinutes: overrides?.ofapiAudienceSweepIntervalMinutes ?? 1440,
       ofapiPresenceProjectionEnabled: overrides?.ofapiPresenceProjectionEnabled ?? false,
+      onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
     },
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as AppContext["onlyFansAdapter"]),
