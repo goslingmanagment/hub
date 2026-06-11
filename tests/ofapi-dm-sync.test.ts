@@ -1,0 +1,139 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  isOfapiDmSyncEligiblePage,
+  parseOfapiChatSummary,
+  parseOfapiRestMessage,
+} from "../apps/runtime/src/services/sync/ofapi-dm-sync.ts";
+import { filterOnlyFansDmPollingStreams } from "../apps/runtime/src/services/sync/onlyfans-dm-polling.ts";
+
+describe("isOfapiDmSyncEligiblePage", () => {
+  it("requires the flag, the onlyfans platform, and an OFAPI account mapping", () => {
+    const page = { platform: "onlyfans", ofapiAccountId: "acct_1" };
+    expect(isOfapiDmSyncEligiblePage({ ofapiDmSyncEnabled: true }, page)).toBe(true);
+    expect(isOfapiDmSyncEligiblePage({ ofapiDmSyncEnabled: false }, page)).toBe(false);
+    expect(isOfapiDmSyncEligiblePage(undefined, page)).toBe(false);
+    expect(isOfapiDmSyncEligiblePage(
+      { ofapiDmSyncEnabled: true },
+      { platform: "fansly", ofapiAccountId: "acct_1" },
+    )).toBe(false);
+    expect(isOfapiDmSyncEligiblePage(
+      { ofapiDmSyncEnabled: true },
+      { platform: "onlyfans", ofapiAccountId: null },
+    )).toBe(false);
+  });
+});
+
+describe("filterOnlyFansDmPollingStreams", () => {
+  const streams = ["light", "dm_conversations", "dm_messages"] as const;
+
+  it("still drops DM streams for unmapped OnlyFans pages when polling is off", () => {
+    expect(filterOnlyFansDmPollingStreams(
+      "onlyfans",
+      [...streams],
+      { onlyFansDmPollingEnabled: false, ofapiDmSyncEnabled: true },
+      { ofapiAccountId: null },
+    )).toEqual(["light"]);
+  });
+
+  it("keeps DM streams for OFAPI-mapped OnlyFans pages when the sync flag is on", () => {
+    expect(filterOnlyFansDmPollingStreams(
+      "onlyfans",
+      [...streams],
+      { onlyFansDmPollingEnabled: false, ofapiDmSyncEnabled: true },
+      { ofapiAccountId: "acct_1" },
+    )).toEqual([...streams]);
+
+    expect(filterOnlyFansDmPollingStreams(
+      "onlyfans",
+      [...streams],
+      { onlyFansDmPollingEnabled: false, ofapiDmSyncEnabled: false },
+      { ofapiAccountId: "acct_1" },
+    )).toEqual(["light"]);
+  });
+});
+
+describe("parseOfapiChatSummary", () => {
+  it("maps a docs-shaped chats item to a conversation summary", () => {
+    const summary = parseOfapiChatSummary({
+      unreadMessagesCount: 3,
+      lastMessage: {
+        id: 1000300,
+        text: "<p>last <b>message</b></p>",
+        createdAt: "2026-06-11T10:00:00+00:00",
+        fromUser: { id: 1000005, _view: "s" },
+      },
+      fan: {
+        id: 1000005,
+        name: "Fan Display",
+        username: "fan005",
+        displayName: "",
+      },
+    });
+
+    expect(summary).not.toBeNull();
+    expect(summary!.fanId).toBe("1000005");
+    expect(summary!.username).toBe("fan005");
+    expect(summary!.displayName).toBe("Fan Display");
+    expect(summary!.unreadCount).toBe(3);
+    expect(summary!.lastMessage).toEqual({
+      messageId: "1000300",
+      createdAt: new Date("2026-06-11T10:00:00.000Z"),
+      senderId: "1000005",
+      senderRole: "fan",
+      preview: "last message",
+    });
+  });
+
+  it("resolves the model role when the last message is not from the fan", () => {
+    const summary = parseOfapiChatSummary({
+      unreadMessagesCount: 0,
+      lastMessage: {
+        id: 1000301,
+        text: "<p>hi</p>",
+        createdAt: "2026-06-11T10:00:00+00:00",
+        fromUser: { id: 42, _view: "i" },
+      },
+      fan: { id: 1000005, name: "Fan", username: "fan005" },
+    });
+    expect(summary!.lastMessage!.senderRole).toBe("model");
+
+    expect(parseOfapiChatSummary({ fan: {} })).toBeNull();
+  });
+});
+
+describe("parseOfapiRestMessage", () => {
+  it("maps direction from isSentByMe and records tip amounts only for tips", () => {
+    const fanMessage = parseOfapiRestMessage({
+      id: 1000200,
+      text: "<p>hello</p>",
+      createdAt: "2026-06-11T09:00:00+00:00",
+      isSentByMe: false,
+      fromUser: { id: 1000005, _view: "s" },
+      isTip: true,
+      price: 5,
+    }, "1000005");
+    expect(fanMessage).not.toBeNull();
+    expect(fanMessage!.senderRole).toBe("fan");
+    expect(fanMessage!.content).toBe("hello");
+    expect(fanMessage!.tipAmountCents).toBe(500);
+
+    const ppvMessage = parseOfapiRestMessage({
+      id: 1000201,
+      text: "<p>ppv</p>",
+      createdAt: "2026-06-11T09:01:00+00:00",
+      isSentByMe: true,
+      fromUser: { id: 42, _view: "i" },
+      isTip: false,
+      price: 25,
+    }, "1000005");
+    expect(ppvMessage!.senderRole).toBe("model");
+    // price on a non-tip message is the PPV unlock price, not revenue.
+    expect(ppvMessage!.tipAmountCents).toBe(0);
+  });
+
+  it("returns null for unusable ids or timestamps", () => {
+    expect(parseOfapiRestMessage({ id: null, createdAt: "2026-06-11T09:00:00+00:00" }, "1")).toBeNull();
+    expect(parseOfapiRestMessage({ id: 5, createdAt: "nope" }, "1")).toBeNull();
+  });
+});

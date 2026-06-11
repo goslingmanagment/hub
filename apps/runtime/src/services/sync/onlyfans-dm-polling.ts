@@ -7,6 +7,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { isOfapiDmSyncEligiblePage } from "./ofapi-dm-sync.ts";
 
 export const ONLYFANS_DM_POLLING_STREAMS = [
   "dm_conversations",
@@ -15,6 +16,11 @@ export const ONLYFANS_DM_POLLING_STREAMS = [
 
 export const ONLYFANS_DM_POLLING_DISABLED_MESSAGE =
   "OnlyFans DM polling is disabled by ONLYFANS_DM_POLLING_ENABLED=false";
+
+type DmStreamGateConfig = Pick<
+  AppContext["config"],
+  "onlyFansDmPollingEnabled" | "ofapiDmSyncEnabled"
+>;
 
 export function isOnlyFansDmPollingEnabled(
   config?: Pick<AppContext["config"], "onlyFansDmPollingEnabled">,
@@ -29,9 +35,15 @@ export function isOnlyFansDmPollingStream(stream: SyncStream) {
 export function filterOnlyFansDmPollingStreams(
   platform: "fansly" | "onlyfans",
   streams: readonly SyncStream[],
-  config?: Pick<AppContext["config"], "onlyFansDmPollingEnabled">,
+  config?: DmStreamGateConfig,
+  // OFAPI-mapped pages keep their DM streams even with polling disabled — the
+  // streams run the OFAPI REST handlers, not the parked OnlyMonster poller.
+  page?: { ofapiAccountId: string | null },
 ) {
   if (platform !== "onlyfans" || isOnlyFansDmPollingEnabled(config)) {
+    return [...streams];
+  }
+  if (page && isOfapiDmSyncEligiblePage(config, { platform, ofapiAccountId: page.ofapiAccountId })) {
     return [...streams];
   }
 
@@ -75,6 +87,9 @@ export async function pauseDisabledOnlyFansDmPollingForPage(
   if (!storedPage || storedPage.page.platform !== "onlyfans") {
     return false;
   }
+  if (isOfapiDmSyncEligiblePage(app.config, storedPage.page)) {
+    return false;
+  }
 
   return pauseOnlyFansDmPollingForPage(app, pageId, now);
 }
@@ -90,6 +105,9 @@ export async function pauseDisabledOnlyFansDmPollingForAllPages(
   let pausedPages = 0;
   const pages = await listPagesByPlatform(app.db, "onlyfans");
   for (const page of pages) {
+    if (isOfapiDmSyncEligiblePage(app.config, page)) {
+      continue;
+    }
     if (await pauseOnlyFansDmPollingForPage(app, page.id, now)) {
       pausedPages += 1;
     }

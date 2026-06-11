@@ -108,6 +108,11 @@ import {
   ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
 } from "./onlyfans-dm-polling.ts";
 import {
+  executeOfapiDmConversationsChunk,
+  executeOfapiDmMessagesChunk,
+  isOfapiDmSyncEligiblePage,
+} from "./ofapi-dm-sync.ts";
+import {
   dmRetentionDate,
   normalizeDmTipAmountCents,
   normalizeFanslyTimestamp,
@@ -141,7 +146,9 @@ function shouldSkipOnlyFansDmPolling(
 ) {
   return input.pageContext.platform === "onlyfans" &&
     isOnlyFansDmPollingStream(input.stream) &&
-    !isOnlyFansDmPollingEnabled(app.config);
+    !isOnlyFansDmPollingEnabled(app.config) &&
+    // OFAPI-mapped pages run their DM streams through the OFAPI REST handlers.
+    !isOfapiDmSyncEligiblePage(app.config, input.pageContext.page);
 }
 
 function resolveDmConversationCoverageStatus(input: {
@@ -2474,6 +2481,11 @@ export async function executeDmConversationsChunk(
   },
 ) {
   if (input.pageContext.platform === "onlyfans") {
+    // OFAPI-mapped pages sync DMs via OFAPI REST (decision #49); everything
+    // else stays on the parked OnlyMonster polling path behind its own flag.
+    if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
+      return executeOfapiDmConversationsChunk(app, input);
+    }
     return executeOnlyFansDmConversationsChunk(app, input);
   }
 
@@ -3287,6 +3299,9 @@ export async function executeDmMessagesChunk(
   },
 ): Promise<StreamChunkResult> {
   if (input.pageContext.platform === "onlyfans") {
+    if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
+      return executeOfapiDmMessagesChunk(app, input);
+    }
     return executeOnlyFansDmMessagesChunk(app, input);
   }
 

@@ -94,6 +94,12 @@ const envSchema = z.object({
   OFAPI_API_KEY: optionalTrimmedStringSchema,
   OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
   OFAPI_DM_PROJECTION_ENABLED: booleanSchema.default(false),
+  OFAPI_DM_SYNC_ENABLED: booleanSchema.default(false),
+  OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
+  OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
+  OFAPI_DM_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(500),
+  OFAPI_CREDIT_FLOOR: z.coerce.number().int().min(0).default(500),
+  OFAPI_DM_RECONCILE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(360),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
   WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
@@ -149,6 +155,12 @@ export interface AppConfig {
   ofapiApiKey?: string | null;
   ofapiEventRetentionDays?: number;
   ofapiDmProjectionEnabled?: boolean;
+  ofapiDmSyncEnabled?: boolean;
+  ofapiRestDelayMs?: number;
+  ofapiDmBootstrapMaxRequestsPerRun?: number;
+  ofapiDmDailyCreditBudget?: number;
+  ofapiCreditFloor?: number;
+  ofapiDmReconcileIntervalMinutes?: number;
   anthropicApiKey?: string | null;
   wbClosingLlmEnabled?: boolean;
   wbClosingLlmModel?: string;
@@ -261,6 +273,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ofapiApiKey: parsed.OFAPI_API_KEY ?? null,
     ofapiEventRetentionDays: parsed.OFAPI_EVENT_RETENTION_DAYS,
     ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,
+    ofapiDmSyncEnabled: parsed.OFAPI_DM_SYNC_ENABLED,
+    ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
+    ofapiDmBootstrapMaxRequestsPerRun: parsed.OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN,
+    ofapiDmDailyCreditBudget: parsed.OFAPI_DM_DAILY_CREDIT_BUDGET,
+    ofapiCreditFloor: parsed.OFAPI_CREDIT_FLOOR,
+    ofapiDmReconcileIntervalMinutes: parsed.OFAPI_DM_RECONCILE_INTERVAL_MINUTES,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     // L2 only runs when explicitly enabled AND a key is present (safe by default).
     wbClosingLlmEnabled: parsed.WB_CLOSING_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,

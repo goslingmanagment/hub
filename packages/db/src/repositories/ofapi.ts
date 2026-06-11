@@ -1,7 +1,7 @@
 import { and, asc, eq, gt, inArray, isNotNull, lt, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { ofapiWebhookConfig, ofapiWebhookEvents, pages } from "../schema.ts";
+import { ofapiCreditState, ofapiWebhookConfig, ofapiWebhookEvents, pages } from "../schema.ts";
 
 export interface InsertOfapiWebhookEventInput {
   idempotencyKey: string;
@@ -283,6 +283,80 @@ export async function deleteExpiredOfapiWebhookEvents(
   await db
     .delete(ofapiWebhookEvents)
     .where(lt(ofapiWebhookEvents.receivedAt, receivedBefore));
+}
+
+function utcDayOf(now: Date) {
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Records credits spent by an OFAPI REST call plus the response's reported
+ * balance. Day spend rolls over at UTC midnight; the increment is atomic so
+ * concurrent executor chunks can't lose spend.
+ */
+export async function recordOfapiCreditUsage(
+  db: Database,
+  input: {
+    creditsUsed: number;
+    balance?: number | null;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const day = utcDayOf(now);
+  const creditsUsed = Math.max(0, Math.round(input.creditsUsed));
+  const balance = typeof input.balance === "number" && Number.isFinite(input.balance)
+    ? Math.round(input.balance)
+    : null;
+
+  await db.execute(sql`
+    insert into ofapi_credit_state (id, spend_day, spent_credits, last_balance, last_balance_at, updated_at)
+    values (
+      1,
+      ${day}::date,
+      ${creditsUsed},
+      ${balance},
+      case when ${balance}::int is null then null else ${now}::timestamptz end,
+      ${now}::timestamptz
+    )
+    on conflict (id) do update set
+      spent_credits = case
+        when ofapi_credit_state.spend_day = ${day}::date
+          then ofapi_credit_state.spent_credits + ${creditsUsed}
+        else ${creditsUsed}
+      end,
+      spend_day = ${day}::date,
+      last_balance = coalesce(${balance}::int, ofapi_credit_state.last_balance),
+      last_balance_at = case
+        when ${balance}::int is null then ofapi_credit_state.last_balance_at
+        else ${now}::timestamptz
+      end,
+      updated_at = ${now}::timestamptz
+  `);
+}
+
+export interface OfapiCreditState {
+  spentToday: number;
+  lastBalance: number | null;
+  lastBalanceAt: Date | null;
+}
+
+export async function getOfapiCreditState(
+  db: Database,
+  now = new Date(),
+): Promise<OfapiCreditState> {
+  const row = await db.query.ofapiCreditState.findFirst({
+    where: eq(ofapiCreditState.id, 1),
+  });
+  if (!row) {
+    return { spentToday: 0, lastBalance: null, lastBalanceAt: null };
+  }
+
+  return {
+    spentToday: row.spendDay === utcDayOf(now) ? row.spentCredits : 0,
+    lastBalance: row.lastBalance,
+    lastBalanceAt: row.lastBalanceAt,
+  };
 }
 
 export async function getOfapiWebhookConfig(db: Database) {

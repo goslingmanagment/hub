@@ -1691,6 +1691,19 @@ export const ofapiWebhookConfig = pgTable("ofapi_webhook_config", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Singleton tracking the OFAPI credit budget across all pages: per-UTC-day REST
+// spend (OFAPI_DM_DAILY_CREDIT_BUDGET) and the last _meta._credits.balance seen
+// on any REST response (OFAPI_CREDIT_FLOOR + ops visibility). Credits are
+// account-global at OFAPI, so this is deliberately not per page.
+export const ofapiCreditState = pgTable("ofapi_credit_state", {
+  id: integer("id").primaryKey().default(1).notNull(),
+  spendDay: date("spend_day"),
+  spentCredits: integer("spent_credits").default(0).notNull(),
+  lastBalance: integer("last_balance"),
+  lastBalanceAt: timestamp("last_balance_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Journal of received OFAPI webhook deliveries; sync_event/platform_account_id are
 // filled in by the async pg-boss processor. fanout_seq (assigned in settle order from
 // ofapi_webhook_events_fanout_seq) is the SSE event id for Last-Event-ID replay —

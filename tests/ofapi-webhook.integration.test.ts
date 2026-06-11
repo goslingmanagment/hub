@@ -360,6 +360,8 @@ describe("OFAPI webhook admin flow", () => {
       createWebhook: vi.fn(async () => ({ id: "wh_created" })),
       updateWebhook: vi.fn(async () => ({ id: "wh_created" })),
       listAccounts: vi.fn(async () => []),
+      listChats: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
+      listChatMessages: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
       ...overrides,
     };
   }

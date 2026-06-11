@@ -118,6 +118,7 @@ export async function createAppContext(): Promise<AppContext> {
       ? createOfapiClient({
         baseUrl: config.ofapiBaseUrl ?? "https://app.onlyfansapi.com/api",
         apiKey: config.ofapiApiKey,
+        restDelayMs: config.ofapiRestDelayMs,
       })
       : undefined;
 

@@ -47,6 +47,18 @@ type DmMessagesCursorState = {
   liveMessageRequestsSinceDeepBackfill?: number;
 };
 
+// OFAPI-fed OnlyFans dm_conversations checkpoint (mode "ofapi" keeps it
+// distinct from the OnlyMonster/Fansly full_scan shape): bootstrap walks the
+// chats list by offset once; afterwards page-1 reconciles run on an interval.
+type OfapiDmConversationCursorState = {
+  version: 1;
+  mode: "ofapi";
+  offset: number;
+  pageCount: number;
+  bootstrapCompletedAt: string | null;
+  lastReconcileAt: string | null;
+};
+
 type TopSpendersCursorWindow = {
   kind: "month" | "week" | "day";
   monthKey: string;
@@ -256,6 +268,46 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
   };
 }
 
+export function parseOfapiDmConversationCursorState(value: unknown): OfapiDmConversationCursorState | null {
+  const state = asRecord(value);
+  if (!state || asNumber(state.version) !== 1 || state.mode !== "ofapi") {
+    return null;
+  }
+
+  const offset = asNumber(state.offset);
+  const pageCount = asNumber(state.pageCount);
+  const bootstrapCompletedAt = asNullableString(state.bootstrapCompletedAt);
+  const lastReconcileAt = asNullableString(state.lastReconcileAt);
+  if (
+    offset === null ||
+    pageCount === null ||
+    bootstrapCompletedAt === undefined ||
+    lastReconcileAt === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    mode: "ofapi",
+    offset,
+    pageCount,
+    bootstrapCompletedAt,
+    lastReconcileAt,
+  };
+}
+
+export function emptyOfapiDmConversationCursorState(): OfapiDmConversationCursorState {
+  return {
+    version: 1,
+    mode: "ofapi",
+    offset: 0,
+    pageCount: 0,
+    bootstrapCompletedAt: null,
+    lastReconcileAt: null,
+  };
+}
+
 export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorState | null {
   const state = asRecord(value);
   if (!state || asNumber(state.version) !== 1) {
@@ -380,6 +432,7 @@ export type {
   DmMessagesCursorState,
   FollowersCursorState,
   FollowersReconcileCursorState,
+  OfapiDmConversationCursorState,
   SubscribersCursorState,
   TopSpendersCursorState,
   TopSpendersCursorWindow,

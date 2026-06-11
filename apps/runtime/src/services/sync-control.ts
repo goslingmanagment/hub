@@ -85,7 +85,12 @@ export async function requestPageSync(
   }
 
   const requestedStreams = resolveStreamsForScope(storedPage.page.platform, input.scope);
-  const streams = filterStreamsForSyncConfig(storedPage.page.platform, requestedStreams, app.config);
+  const streams = filterStreamsForSyncConfig(
+    storedPage.page.platform,
+    requestedStreams,
+    app.config,
+    storedPage.page,
+  );
   const now = new Date();
   await ensurePageSyncStates(app.db, {
     pageId: storedPage.page.id,
