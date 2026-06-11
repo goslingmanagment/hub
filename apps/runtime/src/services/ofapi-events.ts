@@ -14,6 +14,7 @@ import {
   applyOfapiAccountHealthEvent,
   runOfapiAccountHealthMonitor,
 } from "./ofapi-account-health.ts";
+import { runOfapiCreditBurnMonitor } from "./ofapi-credits.ts";
 import {
   runOfapiDmProjectionForSettledRow,
   sweepOfapiDmProjections,
@@ -326,6 +327,7 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
       app.logger.info({ projected }, "OFAPI DM projection sweep processed journal rows");
     }
     await runOfapiAccountHealthMonitor(app);
+    await runOfapiCreditBurnMonitor(app);
   });
 
   await boss.work(OFAPI_EVENT_CLEANUP_QUEUE, { batchSize: 1 }, async () => {

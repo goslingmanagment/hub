@@ -1,7 +1,14 @@
-import { and, asc, eq, gt, inArray, isNotNull, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { ofapiCreditState, ofapiWebhookConfig, ofapiWebhookEvents, pages } from "../schema.ts";
+import {
+  ofapiCreditLedger,
+  ofapiCreditState,
+  ofapiWebhookConfig,
+  ofapiWebhookEvents,
+  pages,
+  type OFAPI_CREDIT_LEDGER_SOURCES,
+} from "../schema.ts";
 
 export interface InsertOfapiWebhookEventInput {
   idempotencyKey: string;
@@ -357,6 +364,265 @@ export async function getOfapiCreditState(
     lastBalance: row.lastBalance,
     lastBalanceAt: row.lastBalanceAt,
   };
+}
+
+export type OfapiCreditLedgerSource = (typeof OFAPI_CREDIT_LEDGER_SOURCES)[number];
+
+export type OfapiCreditLedgerRow = typeof ofapiCreditLedger.$inferSelect;
+
+export interface InsertOfapiCreditLedgerEntryInput {
+  occurredAt: Date;
+  source: OfapiCreditLedgerSource;
+  operation?: string | null;
+  pageId?: number | null;
+  httpStatus?: number | null;
+  credits: number;
+  estimated?: boolean;
+  balanceAfter?: number | null;
+  requestId?: string | null;
+  accrualDay?: string | null;
+  details?: Record<string, unknown> | null;
+}
+
+export async function insertOfapiCreditLedgerEntry(
+  db: Database,
+  input: InsertOfapiCreditLedgerEntryInput,
+) {
+  const [row] = await db
+    .insert(ofapiCreditLedger)
+    .values({
+      occurredAt: input.occurredAt,
+      source: input.source,
+      operation: input.operation ?? null,
+      pageId: input.pageId ?? null,
+      httpStatus: input.httpStatus ?? null,
+      credits: Math.round(input.credits),
+      estimated: input.estimated ?? false,
+      balanceAfter: input.balanceAfter ?? null,
+      requestId: input.requestId ?? null,
+      accrualDay: input.accrualDay ?? null,
+      details: input.details ?? null,
+    })
+    .returning({ id: ofapiCreditLedger.id });
+
+  return row ?? null;
+}
+
+export interface RecordOfapiCreditSpendInput {
+  occurredAt?: Date;
+  operation: string;
+  pageId?: number | null;
+  httpStatus?: number | null;
+  credits: number;
+  estimated?: boolean;
+  balanceAfter?: number | null;
+  requestId?: string | null;
+  details?: Record<string, unknown> | null;
+}
+
+/**
+ * Records one OFAPI REST response in the credit ledger AND the ofapi_credit_state
+ * day counter in a single transaction (D2: the counter stays for fast budget
+ * checks but can never disagree with the ledger).
+ */
+export async function recordOfapiCreditSpend(
+  db: Database,
+  input: RecordOfapiCreditSpendInput,
+) {
+  const occurredAt = input.occurredAt ?? new Date();
+  await db.transaction(async (tx) => {
+    await insertOfapiCreditLedgerEntry(tx, {
+      occurredAt,
+      source: "rest",
+      operation: input.operation,
+      pageId: input.pageId ?? null,
+      httpStatus: input.httpStatus ?? null,
+      credits: input.credits,
+      estimated: input.estimated ?? false,
+      balanceAfter: input.balanceAfter ?? null,
+      requestId: input.requestId ?? null,
+      details: input.details ?? null,
+    });
+    await recordOfapiCreditUsage(tx, {
+      creditsUsed: input.credits,
+      balance: input.balanceAfter ?? null,
+      now: occurredAt,
+    });
+  });
+}
+
+/**
+ * Posts the webhook accrual ledger row for one UTC day (D4): idempotent via the
+ * partial unique index on accrual_day, so re-running the daily job or the
+ * first-enable backfill never double-charges. Returns false when the day was
+ * already posted.
+ */
+export async function upsertOfapiWebhookAccrual(
+  db: Database,
+  input: {
+    accrualDay: string;
+    occurredAt: Date;
+    credits: number;
+    eventCount: number;
+  },
+) {
+  const inserted = await db.execute(sql`
+    insert into ofapi_credit_ledger
+      (occurred_at, source, operation, credits, estimated, accrual_day, details)
+    values (
+      ${input.occurredAt}::timestamptz,
+      'webhook_accrual',
+      'ofapi_webhook_events',
+      ${Math.round(input.credits)},
+      true,
+      ${input.accrualDay}::date,
+      ${JSON.stringify({ eventCount: input.eventCount })}::jsonb
+    )
+    on conflict (accrual_day) where source = 'webhook_accrual' do nothing
+    returning id
+  `);
+
+  return inserted.rows.length > 0;
+}
+
+/** Journaled deliveries received in [from, to) — the webhook accrual basis. */
+export async function countOfapiWebhookEventsReceivedBetween(
+  db: Database,
+  input: { from: Date; to: Date },
+): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(ofapiWebhookEvents)
+    .where(and(
+      gte(ofapiWebhookEvents.receivedAt, input.from),
+      lt(ofapiWebhookEvents.receivedAt, input.to),
+    ));
+
+  return row?.count ?? 0;
+}
+
+export interface OfapiBalanceObservationRow {
+  id: number;
+  occurredAt: Date;
+  balanceAfter: number;
+}
+
+/** Ledger rows carrying a server-reported balance, in insertion order after the cursor. */
+export async function listOfapiBalanceObservationsAfter(
+  db: Database,
+  input: { afterLedgerId: number; limit: number },
+): Promise<OfapiBalanceObservationRow[]> {
+  const rows = await db
+    .select({
+      id: ofapiCreditLedger.id,
+      occurredAt: ofapiCreditLedger.occurredAt,
+      balanceAfter: ofapiCreditLedger.balanceAfter,
+    })
+    .from(ofapiCreditLedger)
+    .where(and(
+      isNotNull(ofapiCreditLedger.balanceAfter),
+      gt(ofapiCreditLedger.id, input.afterLedgerId),
+    ))
+    .orderBy(asc(ofapiCreditLedger.id))
+    .limit(input.limit);
+
+  return rows.filter((row): row is OfapiBalanceObservationRow => row.balanceAfter !== null);
+}
+
+// Sources counted as "spend we already knew about" when decomposing balance
+// drift (D5). external/refill rows are reconciliation OUTPUT — their ids land
+// after the observations they describe, so summing them here would double-count
+// drift into later windows.
+const OFAPI_RECONCILE_KNOWN_SOURCES = ["rest", "webhook_accrual", "adjustment"] as const;
+
+/** Sum of known-spend credits over a ledger id window (from exclusive, to inclusive). */
+export async function sumOfapiKnownCreditsBetween(
+  db: Database,
+  input: { fromLedgerIdExclusive: number; toLedgerIdInclusive: number },
+): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
+    .from(ofapiCreditLedger)
+    .where(and(
+      gt(ofapiCreditLedger.id, input.fromLedgerIdExclusive),
+      lte(ofapiCreditLedger.id, input.toLedgerIdInclusive),
+      inArray(ofapiCreditLedger.source, [...OFAPI_RECONCILE_KNOWN_SOURCES]),
+    ));
+
+  return row?.total ?? 0;
+}
+
+/** Trailing-window spend across all sources except refills (burn-rate alert). */
+export async function sumOfapiCreditsSpentSince(
+  db: Database,
+  input: { since: Date },
+): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
+    .from(ofapiCreditLedger)
+    .where(and(
+      gte(ofapiCreditLedger.occurredAt, input.since),
+      ne(ofapiCreditLedger.source, "refill"),
+    ));
+
+  return row?.total ?? 0;
+}
+
+export interface OfapiCreditReconcileState {
+  reconciledThroughLedgerId: number | null;
+  lastReconcileAt: Date | null;
+  lastDriftCredits: number | null;
+}
+
+export async function getOfapiCreditReconcileState(
+  db: Database,
+): Promise<OfapiCreditReconcileState> {
+  const row = await db.query.ofapiCreditState.findFirst({
+    where: eq(ofapiCreditState.id, 1),
+  });
+
+  return {
+    reconciledThroughLedgerId: row?.reconciledThroughLedgerId ?? null,
+    lastReconcileAt: row?.lastReconcileAt ?? null,
+    lastDriftCredits: row?.lastDriftCredits ?? null,
+  };
+}
+
+/** Advances the reconciliation cursor without touching the spend counter columns. */
+export async function setOfapiCreditReconcileCursor(
+  db: Database,
+  input: {
+    reconciledThroughLedgerId: number;
+    lastReconcileAt: Date;
+    lastDriftCredits: number | null;
+  },
+) {
+  await db.execute(sql`
+    insert into ofapi_credit_state
+      (id, reconciled_through_ledger_id, last_reconcile_at, last_drift_credits, updated_at)
+    values (
+      1,
+      ${input.reconciledThroughLedgerId},
+      ${input.lastReconcileAt}::timestamptz,
+      ${input.lastDriftCredits},
+      ${input.lastReconcileAt}::timestamptz
+    )
+    on conflict (id) do update set
+      reconciled_through_ledger_id = ${input.reconciledThroughLedgerId},
+      last_reconcile_at = ${input.lastReconcileAt}::timestamptz,
+      last_drift_credits = ${input.lastDriftCredits},
+      updated_at = ${input.lastReconcileAt}::timestamptz
+  `);
+}
+
+/** Latest UTC day with a posted webhook accrual row, as YYYY-MM-DD (admin/ops). */
+export async function getLastOfapiWebhookAccrualDay(db: Database): Promise<string | null> {
+  const [row] = await db
+    .select({ day: sql<string | null>`max(${ofapiCreditLedger.accrualDay})` })
+    .from(ofapiCreditLedger)
+    .where(eq(ofapiCreditLedger.source, "webhook_accrual"));
+
+  return row?.day ?? null;
 }
 
 export async function getOfapiWebhookConfig(db: Database) {

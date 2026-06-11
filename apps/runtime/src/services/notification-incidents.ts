@@ -55,6 +55,8 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 OFAPI credit balance low";
     case "ofapi_webhook_silence":
       return "🚨 OFAPI webhooks silent";
+    case "ofapi_burn_rate":
+      return "🚨 OFAPI credit burn rate high";
   }
 }
 
@@ -93,7 +95,9 @@ function resolveMessageForIncident(
           ? "OFAPI account auth recovered"
           : input.kind === "ofapi_low_credit"
             ? "OFAPI credit balance recovered"
-            : "OFAPI webhooks delivering again";
+            : input.kind === "ofapi_burn_rate"
+              ? "OFAPI credit burn rate back to normal"
+              : "OFAPI webhooks delivering again";
 
   return [
     "✅ Resolved",
@@ -369,11 +373,11 @@ export async function resolveOfapiAuthIncident(
   });
 }
 
-/** Account-global OFAPI conditions (low credit balance, webhook silence). */
+/** Account-global OFAPI conditions (low credit balance, webhook silence, burn rate). */
 export async function notifyOfapiGlobalIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
-    kind: "ofapi_low_credit" | "ofapi_webhook_silence";
+    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate";
     errorSummary: string;
     occurredAt?: Date;
   },
@@ -391,7 +395,7 @@ export async function notifyOfapiGlobalIncident(
 export async function resolveOfapiGlobalIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
-    kind: "ofapi_low_credit" | "ofapi_webhook_silence";
+    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate";
     recoveredAt?: Date;
   },
 ) {

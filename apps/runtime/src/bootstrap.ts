@@ -19,6 +19,7 @@ import {
   resolveFanslyDefaultDelayEnvSource,
 } from "@agency_hub_core/shared";
 
+import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
 import type { OfapiClient } from "./services/ofapi.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
 import type { ProviderAdapter } from "./services/provider.ts";
@@ -116,9 +117,10 @@ export async function createAppContext(): Promise<AppContext> {
 
     const ofapi = config.ofapiApiKey
       ? createOfapiClient({
-        baseUrl: config.ofapiBaseUrl ?? "https://app.onlyfansapi.com/api",
+        baseUrl: config.ofapiBaseUrl,
         apiKey: config.ofapiApiKey,
         restDelayMs: config.ofapiRestDelayMs,
+        onCreditSpend: createOfapiCreditSpendSink({ db, logger, config }),
       })
       : undefined;
 

@@ -28,6 +28,7 @@ import {
   ServiceUnavailableError,
   UnauthorizedError,
 } from "./errors.ts";
+import { createOfapiCreditSpendSink } from "./ofapi-credits.ts";
 import { isOfapiDmProjectionEventType } from "./ofapi-dm-projection.ts";
 import { ofapiWebhookEnvelopeSchema, sendOfapiEventProcessJob } from "./ofapi-events.ts";
 import { OfapiApiError, createOfapiClient, type OfapiClient } from "./ofapi.ts";
@@ -193,8 +194,9 @@ function resolveOfapiClient(app: AppContext): OfapiClient {
   }
 
   return createOfapiClient({
-    baseUrl: app.config.ofapiBaseUrl ?? "https://app.onlyfansapi.com/api",
+    baseUrl: app.config.ofapiBaseUrl,
     apiKey,
+    onCreditSpend: createOfapiCreditSpendSink(app),
   });
 }
 

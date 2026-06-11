@@ -14,7 +14,8 @@ export type NotificationIncidentKind =
   | "stream_failed_threshold"
   | "ofapi_auth"
   | "ofapi_low_credit"
-  | "ofapi_webhook_silence";
+  | "ofapi_webhook_silence"
+  | "ofapi_burn_rate";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";

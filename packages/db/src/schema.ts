@@ -112,6 +112,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "ofapi_auth",
   "ofapi_low_credit",
   "ofapi_webhook_silence",
+  "ofapi_burn_rate",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -1709,8 +1710,58 @@ export const ofapiCreditState = pgTable("ofapi_credit_state", {
   spentCredits: integer("spent_credits").default(0).notNull(),
   lastBalance: integer("last_balance"),
   lastBalanceAt: timestamp("last_balance_at", { withTimezone: true }),
+  // Reconciliation cursor (D5): the last balance-observation ledger row that
+  // has been decomposed, plus the residual seen on the most recent pair.
+  reconciledThroughLedgerId: bigint("reconciled_through_ledger_id", { mode: "number" }),
+  lastReconcileAt: timestamp("last_reconcile_at", { withTimezone: true }),
+  lastDriftCredits: integer("last_drift_credits"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const OFAPI_CREDIT_LEDGER_SOURCES = [
+  "rest",
+  "webhook_accrual",
+  "external",
+  "refill",
+  "adjustment",
+] as const;
+
+// Append-only OFAPI credit movement (docs/ofapi-parity-plan.md D2-D5): the
+// checkbook the bank-statement reconciliation balances against. 'rest' rows
+// are written by the client's onCreditSpend sink (one per response that
+// reached the server, retries included; estimated=true when a 2xx had no
+// _meta); 'webhook_accrual' posts ceil(events/100) per UTC day from the
+// journal; 'external'/'refill' are reconciliation residuals; 'adjustment' is
+// manual. credits: positive = spent, negative = added.
+export const ofapiCreditLedger = pgTable(
+  "ofapi_credit_ledger",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    source: text("source").notNull(),
+    operation: text("operation"),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "set null" }),
+    httpStatus: integer("http_status"),
+    credits: integer("credits").notNull(),
+    estimated: boolean("estimated").default(false).notNull(),
+    balanceAfter: integer("balance_after"),
+    requestId: text("request_id"),
+    accrualDay: date("accrual_day"),
+    details: jsonb("details").$type<Record<string, unknown>>(),
+  },
+  (table) => ({
+    occurredAtIdx: index("ofapi_credit_ledger_occurred_at_idx").on(table.occurredAt),
+    sourceOccurredAtIdx: index("ofapi_credit_ledger_source_occurred_at_idx")
+      .on(table.source, table.occurredAt),
+    balanceObservationIdx: index("ofapi_credit_ledger_balance_observation_idx")
+      .on(table.id)
+      .where(sql`${table.balanceAfter} is not null`),
+    accrualDayUniq: uniqueIndex("ofapi_credit_ledger_accrual_day_uniq")
+      .on(table.accrualDay)
+      .where(sql`${table.source} = 'webhook_accrual'`),
+  }),
+);
 
 // Journal of received OFAPI webhook deliveries; sync_event/platform_account_id are
 // filled in by the async pg-boss processor. fanout_seq (assigned in settle order from

@@ -39319,7 +39319,8 @@
                 "stream_failed_threshold",
                 "ofapi_auth",
                 "ofapi_low_credit",
-                "ofapi_webhook_silence"
+                "ofapi_webhook_silence",
+                "ofapi_burn_rate"
               ]
             },
             "in": "query",
@@ -39392,7 +39393,8 @@
                               "stream_failed_threshold",
                               "ofapi_auth",
                               "ofapi_low_credit",
-                              "ofapi_webhook_silence"
+                              "ofapi_webhook_silence",
+                              "ofapi_burn_rate"
                             ]
                           },
                           "pageLabel": {

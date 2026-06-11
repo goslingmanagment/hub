@@ -27,6 +27,9 @@ export function createTestAppContext(
     ofapiAccountHealthEnabled?: boolean;
     ofapiCreditAlertThreshold?: number;
     ofapiWebhookSilenceThresholdMinutes?: number;
+    ofapiCreditLedgerEnabled?: boolean;
+    ofapiBurnAlertCreditsPerHour?: number;
+    ofapiBalancePingEnabled?: boolean;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
     syncSharedRateLimitEnabled?: boolean;
@@ -87,6 +90,9 @@ export function createTestAppContext(
       ofapiAccountHealthEnabled: overrides?.ofapiAccountHealthEnabled ?? false,
       ofapiCreditAlertThreshold: overrides?.ofapiCreditAlertThreshold ?? 1000,
       ofapiWebhookSilenceThresholdMinutes: overrides?.ofapiWebhookSilenceThresholdMinutes ?? 720,
+      ofapiCreditLedgerEnabled: overrides?.ofapiCreditLedgerEnabled ?? false,
+      ofapiBurnAlertCreditsPerHour: overrides?.ofapiBurnAlertCreditsPerHour ?? 300,
+      ofapiBalancePingEnabled: overrides?.ofapiBalancePingEnabled ?? false,
     },
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as AppContext["onlyFansAdapter"]),

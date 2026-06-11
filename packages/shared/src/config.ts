@@ -103,6 +103,9 @@ const envSchema = z.object({
   OFAPI_ACCOUNT_HEALTH_ENABLED: booleanSchema.default(false),
   OFAPI_CREDIT_ALERT_THRESHOLD: z.coerce.number().int().min(0).default(1000),
   OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(720),
+  OFAPI_CREDIT_LEDGER_ENABLED: booleanSchema.default(false),
+  OFAPI_BURN_ALERT_CREDITS_PER_HOUR: z.coerce.number().int().min(0).default(300),
+  OFAPI_BALANCE_PING_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
   WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
@@ -167,6 +170,9 @@ export interface AppConfig {
   ofapiAccountHealthEnabled?: boolean;
   ofapiCreditAlertThreshold?: number;
   ofapiWebhookSilenceThresholdMinutes?: number;
+  ofapiCreditLedgerEnabled?: boolean;
+  ofapiBurnAlertCreditsPerHour?: number;
+  ofapiBalancePingEnabled?: boolean;
   anthropicApiKey?: string | null;
   wbClosingLlmEnabled?: boolean;
   wbClosingLlmModel?: string;
@@ -288,6 +294,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ofapiAccountHealthEnabled: parsed.OFAPI_ACCOUNT_HEALTH_ENABLED,
     ofapiCreditAlertThreshold: parsed.OFAPI_CREDIT_ALERT_THRESHOLD,
     ofapiWebhookSilenceThresholdMinutes: parsed.OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
+    ofapiCreditLedgerEnabled: parsed.OFAPI_CREDIT_LEDGER_ENABLED,
+    ofapiBurnAlertCreditsPerHour: parsed.OFAPI_BURN_ALERT_CREDITS_PER_HOUR,
+    ofapiBalancePingEnabled: parsed.OFAPI_BALANCE_PING_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     // L2 only runs when explicitly enabled AND a key is present (safe by default).
     wbClosingLlmEnabled: parsed.WB_CLOSING_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,

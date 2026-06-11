@@ -147,6 +147,7 @@ function fakeOfapiClient(pages: FakePages) {
     listAccounts: vi.fn(async () => []),
     listChats: listChats as never,
     listChatMessages: listChatMessages as never,
+    pingBalance: vi.fn(async () => ({ items: [], hasNextPage: false, meta: null })),
   };
   return { client, listChats, listChatMessages };
 }

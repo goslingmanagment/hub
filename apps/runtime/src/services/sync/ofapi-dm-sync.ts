@@ -34,6 +34,7 @@ import {
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { isOfapiCreditLedgerEnabled } from "../ofapi-credits.ts";
 import { asRecord, idToString } from "../ofapi-payloads.ts";
 import type { OfapiClient, OfapiListPage, OfapiRequestContext } from "../ofapi.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
@@ -150,7 +151,13 @@ function createOfapiRestGuard(app: AppContext) {
     },
     async recordResponse(page: OfapiListPage) {
       requestsUsed += 1;
-      // Uncached account-scoped reads cost 1 credit; trust _meta when present.
+      // With the ledger on, the client's onCreditSpend sink already recorded
+      // this response (ledger row + day counter, one transaction) — recording
+      // here too would double-count. Flag off keeps the pre-ledger behavior:
+      // uncached account-scoped reads cost 1 credit; trust _meta when present.
+      if (isOfapiCreditLedgerEnabled(app.config)) {
+        return;
+      }
       await recordOfapiCreditUsage(app.db, {
         creditsUsed: page.meta?.creditsUsed ?? 1,
         balance: page.meta?.creditBalance ?? null,
@@ -424,6 +431,7 @@ export async function executeOfapiDmConversationsChunk(
 
   const requestContext: OfapiRequestContext = {
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
+    pageId: input.pageContext.page.id,
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_conversations");
   await input.telemetry.recordCheckpointLoaded("dm_conversations", summarizeCheckpoint(checkpoint));
@@ -723,6 +731,7 @@ export async function executeOfapiDmMessagesChunk(
 
   const requestContext: OfapiRequestContext = {
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
+    pageId: input.pageContext.page.id,
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_messages");
   await input.telemetry.recordCheckpointLoaded("dm_messages", summarizeCheckpoint(checkpoint));

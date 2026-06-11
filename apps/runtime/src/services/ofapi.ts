@@ -15,6 +15,11 @@ const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
 const OFAPI_DEFAULT_REST_DELAY_MS = 500;
 const OFAPI_OBSERVED_RETRIES = 3;
 
+// The only place the OFAPI host may appear in runtime code (D1 of
+// docs/ofapi-parity-plan.md, enforced by a gate test): every OFAPI HTTP call
+// goes through this client, which is also the single _meta/credit-spend tap.
+export const OFAPI_DEFAULT_BASE_URL = "https://app.onlyfansapi.com/api";
+
 export class OfapiApiError extends Error {
   constructor(
     message: string,
@@ -44,6 +49,9 @@ export interface OfapiAccountRecord {
 
 export interface OfapiRequestContext {
   requestObserver?: HttpRequestObserver | null;
+  // Attributes the request's credit spend to a page in the ledger (D2);
+  // admin/account-global calls leave it unset.
+  pageId?: number | null;
 }
 
 // Every OFAPI REST response carries _meta with the remaining credit balance —
@@ -59,6 +67,54 @@ export interface OfapiListPage {
   items: Record<string, unknown>[];
   hasNextPage: boolean;
   meta: OfapiResponseMeta | null;
+}
+
+// One credit-spend report per response that reached the server (retry attempts
+// included — OFAPI charged each). Emitted by the client itself on BOTH request
+// paths, so callers cannot forget to account spend (D1).
+export interface OfapiCreditSpendObservation {
+  operation: string;
+  httpStatus: number;
+  credits: number;
+  estimated: boolean;
+  balanceAfter: number | null;
+  requestId: string;
+  pageId: number | null;
+  attemptNumber: number;
+  isCached: boolean | null;
+}
+
+export type OfapiCreditSpendSink = (
+  observation: OfapiCreditSpendObservation,
+) => Promise<void> | void;
+
+/**
+ * Maps one HTTP response to its ledger spend, or null for no row. Server-reported
+ * `_meta._credits.used` always wins (D3); a 2xx without _meta is assumed to be the
+ * standard 1-credit uncached charge and flagged estimated; error responses without
+ * _meta get no row — reconciliation absorbs any hidden charge and empirically
+ * answers whether errors are billed (plan recommendation 1).
+ */
+export function resolveOfapiCreditSpend(input: {
+  httpStatus: number;
+  meta: OfapiResponseMeta | null;
+}): { credits: number; estimated: boolean; balanceAfter: number | null } | null {
+  const ok = input.httpStatus >= 200 && input.httpStatus < 300;
+  const creditsUsed = input.meta?.creditsUsed ?? null;
+  const balance = input.meta?.creditBalance ?? null;
+
+  if (creditsUsed !== null) {
+    return { credits: creditsUsed, estimated: false, balanceAfter: balance };
+  }
+  if (ok) {
+    return { credits: 1, estimated: true, balanceAfter: balance };
+  }
+  if (balance !== null) {
+    // An error response that still reported a balance: no spend claim, but the
+    // balance observation is a free reconciliation anchor.
+    return { credits: 0, estimated: true, balanceAfter: balance };
+  }
+  return null;
 }
 
 export interface OfapiClient {
@@ -88,6 +144,10 @@ export interface OfapiClient {
       pageIndex?: number;
     },
   ): Promise<OfapiListPage>;
+  // One cheap (1-credit) account-scoped request purely to observe the credit
+  // balance: GET /accounts carries no _meta per the OFAPI OpenAPI spec, so the
+  // ping reads a minimal chats page instead (reconciliation anchor on quiet days).
+  pingBalance(context: OfapiRequestContext, accountId: string): Promise<OfapiListPage>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -197,12 +257,51 @@ function resolveRetryAfterMs(retryAfter: string | null, attemptNumber: number) {
 }
 
 export function createOfapiClient(input: {
-  baseUrl: string;
+  baseUrl?: string;
   apiKey: string;
   restDelayMs?: number;
+  onCreditSpend?: OfapiCreditSpendSink | null;
 }): OfapiClient {
-  const baseUrl = input.baseUrl.replace(/\/+$/, "");
+  const baseUrl = (input.baseUrl ?? OFAPI_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const restDelayMs = Math.max(0, input.restDelayMs ?? OFAPI_DEFAULT_REST_DELAY_MS);
+  const onCreditSpend = input.onCreditSpend ?? null;
+
+  // Reports one response's spend to the injected sink; the sink owns durability
+  // and error handling — a sink failure must never fail the API call itself.
+  async function reportCreditSpend(report: {
+    operation: string;
+    httpStatus: number;
+    body: unknown;
+    requestId: string;
+    pageId: number | null;
+    attemptNumber: number;
+  }) {
+    if (!onCreditSpend) {
+      return;
+    }
+
+    const meta = parseResponseMeta(report.body);
+    const spend = resolveOfapiCreditSpend({ httpStatus: report.httpStatus, meta });
+    if (!spend) {
+      return;
+    }
+
+    try {
+      await onCreditSpend({
+        operation: report.operation,
+        httpStatus: report.httpStatus,
+        credits: spend.credits,
+        estimated: spend.estimated,
+        balanceAfter: spend.balanceAfter,
+        requestId: report.requestId,
+        pageId: report.pageId,
+        attemptNumber: report.attemptNumber,
+        isCached: meta?.isCached ?? null,
+      });
+    } catch {
+      // Spend recording is best-effort at this layer; reconciliation closes gaps.
+    }
+  }
   // Client-wide pacing across concurrent executor chunks: each caller claims the
   // next slot and sleeps until it; OFAPI rate limits are account-global.
   let nextRequestSlotAt = 0;
@@ -235,10 +334,11 @@ export function createOfapiClient(input: {
       }
     }
     const url = `${baseUrl}${options.pathname}${query.size > 0 ? `?${query.toString()}` : ""}`;
+    const requestId = `${options.operation}:${randomUUID()}`;
 
     return executeObservedRequest<{ response: Response; text: string }, OfapiListPage>({
       observer: options.context.requestObserver,
-      requestId: `${options.operation}:${randomUUID()}`,
+      requestId,
       operation: options.operation,
       endpointTemplate: options.endpointTemplate,
       method: "GET",
@@ -280,7 +380,31 @@ export function createOfapiClient(input: {
           error: new OfapiApiError(errorMessage, null, null),
         };
       },
-      onResponse: ({ response, text }, executionContext) => {
+      onResponse: async ({ response, text }, executionContext) => {
+        // Parse once for both the spend report and the success mapping; an
+        // unparseable body reports as body=null (errors then write no row).
+        let body: unknown = null;
+        let bodyIsJson = text.length === 0;
+        if (text.length > 0) {
+          try {
+            body = JSON.parse(text) as unknown;
+            bodyIsJson = true;
+          } catch {
+            bodyIsJson = false;
+          }
+        }
+
+        // Every attempt that produced an HTTP response is reported — the
+        // server charged each one, retries included.
+        await reportCreditSpend({
+          operation: options.operation,
+          httpStatus: response.status,
+          body,
+          requestId,
+          pageId: options.context.pageId ?? null,
+          attemptNumber: executionContext.attemptNumber,
+        });
+
         if (response.status === 429 && executionContext.retriesRemaining > 0) {
           return {
             kind: "retry",
@@ -315,10 +439,7 @@ export function createOfapiClient(input: {
           };
         }
 
-        let body: unknown;
-        try {
-          body = text.length > 0 ? JSON.parse(text) as unknown : null;
-        } catch {
+        if (!bodyIsJson) {
           const message = `OFAPI request failed: GET ${options.pathname} returned non-JSON body`;
           return {
             kind: "failed",
@@ -349,7 +470,12 @@ export function createOfapiClient(input: {
     });
   }
 
-  async function request(method: string, path: string, body?: unknown): Promise<unknown> {
+  async function request(
+    operation: string,
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<unknown> {
     let response: Response;
     try {
       response = await fetch(`${baseUrl}${path}`, {
@@ -371,6 +497,28 @@ export function createOfapiClient(input: {
     }
 
     const text = await response.text();
+    let responseBody: unknown = null;
+    let bodyIsJson = text.length === 0;
+    if (text.length > 0) {
+      try {
+        responseBody = JSON.parse(text) as unknown;
+        bodyIsJson = true;
+      } catch {
+        bodyIsJson = false;
+      }
+    }
+
+    // The admin path spends credits too (D1) — report before any throw so
+    // failed registrations and 4xx/5xx responses with _meta still land.
+    await reportCreditSpend({
+      operation,
+      httpStatus: response.status,
+      body: responseBody,
+      requestId: `${operation}:${randomUUID()}`,
+      pageId: null,
+      attemptNumber: 1,
+    });
+
     if (!response.ok) {
       throw new OfapiApiError(
         `OFAPI request failed: ${method} ${path} returned ${response.status}`,
@@ -379,30 +527,36 @@ export function createOfapiClient(input: {
       );
     }
 
-    try {
-      return text.length > 0 ? JSON.parse(text) as unknown : null;
-    } catch {
+    if (!bodyIsJson) {
       throw new OfapiApiError(
         `OFAPI request failed: ${method} ${path} returned non-JSON body`,
         response.status,
         text.slice(0, 2000),
       );
     }
+
+    return responseBody;
   }
 
   return {
     async createWebhook(registration) {
-      return toWebhookRecord(await request("POST", "/webhooks", webhookRequestBody(registration)));
+      return toWebhookRecord(await request(
+        "ofapi_webhook_crud",
+        "POST",
+        "/webhooks",
+        webhookRequestBody(registration),
+      ));
     },
     async updateWebhook(id, registration) {
       return toWebhookRecord(await request(
+        "ofapi_webhook_crud",
         "PUT",
         `/webhooks/${encodeURIComponent(id)}`,
         webhookRequestBody(registration),
       ));
     },
     async listAccounts() {
-      return toAccountRecords(await request("GET", "/accounts"));
+      return toAccountRecords(await request("ofapi_admin_accounts", "GET", "/accounts"));
     },
     async listChats(context, accountId, params) {
       const limit = params.limit ?? 100;
@@ -445,6 +599,18 @@ export function createOfapiClient(input: {
           order: "desc",
           hasFirstId: params.firstId != null,
         },
+      });
+    },
+    async pingBalance(context, accountId) {
+      return observedListRequest({
+        context,
+        operation: "ofapi_balance_ping",
+        endpointTemplate: "/:accountId/chats",
+        pathname: `/${encodeURIComponent(accountId)}/chats`,
+        query: { limit: "1" },
+        pageIndex: 0,
+        cursorPresent: false,
+        requestMetadata: { purpose: "balance_ping" },
       });
     },
   };
