@@ -1,4 +1,5 @@
 export * from "./adminNotifications.js";
+export * from "./adminOfapiCredits.js";
 export * from "./adminPages.js";
 export * from "./adminSync.js";
 export * from "./adminUsage.js";

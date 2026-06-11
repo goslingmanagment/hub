@@ -2793,6 +2793,126 @@ export const ofapiWebhookRegisterResponseSchema = z.object({
   }),
 });
 
+// --- OFAPI credit ledger schemas (docs/ofapi-parity-plan.md Phase 2) ---
+
+export const ofapiCreditLedgerSourceEnum = z.enum([
+  "rest",
+  "webhook_accrual",
+  "external",
+  "refill",
+  "adjustment",
+]);
+
+// Positive spend per ledger source over a window. Refills are negative credit
+// movement and never count as spend, so they have no key here.
+const ofapiCreditsSpendBySourceSchema = z.object({
+  rest: z.number().int(),
+  webhookAccrual: z.number().int(),
+  external: z.number().int(),
+  adjustment: z.number().int(),
+});
+
+export const ofapiCreditsSummaryResponseSchema = z.object({
+  // OFAPI_CREDIT_LEDGER_ENABLED — with the flag off the page shows a notice and
+  // the ledger-derived sections are empty.
+  enabled: z.boolean(),
+  balance: z.object({
+    value: z.number().int().nullable(),
+    observedAt: isoTimestamp.nullable(),
+  }),
+  today: z.object({
+    day: businessDate,
+    total: z.number().int(),
+    bySource: ofapiCreditsSpendBySourceSchema,
+  }),
+  budgets: z.array(z.object({
+    stream: z.string(),
+    spentToday: z.number().int(),
+    dailyCeiling: z.number().int(),
+    state: z.enum(["ok", "budget_exhausted", "floor_blocked"]),
+    retryAt: isoTimestamp.nullable(),
+  })),
+  floor: z.object({
+    value: z.number().int(),
+    blocked: z.boolean(),
+  }),
+  forecast: z.object({
+    avgDailySpend7d: z.number(),
+    daysLeft: z.number().int().nullable(),
+    runOutDate: businessDate.nullable(),
+  }),
+  incidents: z.array(z.object({
+    kind: z.string(),
+    openedAt: isoTimestamp,
+    errorSummary: z.string().nullable(),
+  })),
+  reconciliation: z.object({
+    lastRunAt: isoTimestamp.nullable(),
+    lastDriftCredits: z.number().int().nullable(),
+  }),
+  accrual: z.object({
+    lastPostedDay: businessDate.nullable(),
+  }),
+});
+
+export const adminOfapiCreditsDailyQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(90).default(30),
+});
+
+export const ofapiCreditsDailyResponseSchema = z.object({
+  days: z.array(z.object({
+    day: businessDate,
+    total: z.number().int(),
+    bySource: ofapiCreditsSpendBySourceSchema,
+  })),
+  balance: z.array(z.object({
+    at: isoTimestamp,
+    value: z.number().int(),
+  })),
+  refills: z.array(z.object({
+    at: isoTimestamp,
+    credits: z.number().int(),
+  })),
+  byOperation: z.array(z.object({
+    operation: z.string().nullable(),
+    requests: z.number().int(),
+    credits: z.number().int(),
+  })),
+  byPage: z.array(z.object({
+    pageId: intId,
+    pageLabel: z.string(),
+    credits: z.number().int(),
+  })),
+});
+
+export const adminOfapiCreditsLedgerQuerySchema = z.object({
+  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  source: ofapiCreditLedgerSourceEnum.optional(),
+  pageId: z.coerce.number().int().positive().optional(),
+  operation: z.string().min(1).optional(),
+  from: isoTimestamp.optional(),
+  to: isoTimestamp.optional(),
+});
+
+export const ofapiCreditsLedgerResponseSchema = z.object({
+  total: z.number().int(),
+  rows: z.array(z.object({
+    id: z.number().int(),
+    occurredAt: isoTimestamp,
+    source: ofapiCreditLedgerSourceEnum,
+    operation: z.string().nullable(),
+    pageId: intId.nullable(),
+    pageLabel: z.string().nullable(),
+    httpStatus: z.number().int().nullable(),
+    credits: z.number().int(),
+    estimated: z.boolean(),
+    balanceAfter: z.number().int().nullable(),
+    requestId: z.string().nullable(),
+    accrualDay: businessDate.nullable(),
+  })),
+});
+
 const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
 const bearerOnlySecurity: Array<Record<string, string[]>> = [{ bearerAuth: [] }];
 const cookieOrBearerSecurity: Array<Record<string, string[]>> = [
@@ -2923,6 +3043,40 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       503: errorResponseSchema,
+    },
+  },
+  adminOfapiCreditsSummary: {
+    tags: ["admin"],
+    summary: "Get the OFAPI credit balance, budgets, forecast, and ops state",
+    security: cookieOnlySecurity,
+    response: {
+      200: ofapiCreditsSummaryResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminOfapiCreditsDaily: {
+    tags: ["admin"],
+    summary: "Get per-day OFAPI credit spend by source plus balance/refill series",
+    security: cookieOnlySecurity,
+    querystring: adminOfapiCreditsDailyQuerySchema,
+    response: {
+      200: ofapiCreditsDailyResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminOfapiCreditsLedger: {
+    tags: ["admin"],
+    summary: "List OFAPI credit ledger rows with filters and pagination",
+    security: cookieOnlySecurity,
+    querystring: adminOfapiCreditsLedgerQuerySchema,
+    response: {
+      200: ofapiCreditsLedgerResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
   pages: {
@@ -4179,6 +4333,10 @@ export type SyncEvent = z.infer<typeof syncEventSchema>;
 export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSchema>;
 export type OfapiPageMapping = z.infer<typeof ofapiPageMappingSchema>;
 export type OfapiWebhookStatusResponse = z.infer<typeof ofapiWebhookStatusResponseSchema>;
+export type OfapiCreditsSummaryResponse = z.infer<typeof ofapiCreditsSummaryResponseSchema>;
+export type OfapiCreditsDailyResponse = z.infer<typeof ofapiCreditsDailyResponseSchema>;
+export type AdminOfapiCreditsLedgerQuery = z.infer<typeof adminOfapiCreditsLedgerQuerySchema>;
+export type OfapiCreditsLedgerResponse = z.infer<typeof ofapiCreditsLedgerResponseSchema>;
 export type OfapiWebhookRegisterBody = z.infer<typeof ofapiWebhookRegisterBodySchema>;
 export type OfapiWebhookRegisterResponse = z.infer<typeof ofapiWebhookRegisterResponseSchema>;
 export type AdminChatterUsageQuery = z.infer<typeof adminChatterUsageQuerySchema>;

@@ -199,6 +199,11 @@ import {
   ensureSyncQueues,
 } from "../services/sync-queue.ts";
 import { createSyncEventHub, type SyncEventFrame, type SyncEventHub } from "../services/events-stream.ts";
+import {
+  getOfapiCreditsDaily,
+  getOfapiCreditsLedger,
+  getOfapiCreditsSummary,
+} from "../services/ofapi-credit-report.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
 import {
   getOfapiWebhookStatus,
@@ -1289,6 +1294,33 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
 
     return registerOfapiWebhook(appContext, { endpointUrl: request.body.endpointUrl });
+  });
+
+  server.get("/api/v1/admin/ofapi/credits/summary", {
+    schema: routeSchemas.adminOfapiCreditsSummary,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    return getOfapiCreditsSummary(appContext);
+  });
+
+  server.get("/api/v1/admin/ofapi/credits/daily", {
+    schema: routeSchemas.adminOfapiCreditsDaily,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    return getOfapiCreditsDaily(appContext, { days: request.query.days });
+  });
+
+  server.get("/api/v1/admin/ofapi/credits/ledger", {
+    schema: routeSchemas.adminOfapiCreditsLedger,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    return getOfapiCreditsLedger(appContext, request.query);
   });
 
   function initialSyncRetryFor(pageLabel: string) {

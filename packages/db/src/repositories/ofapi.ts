@@ -625,6 +625,268 @@ export async function getLastOfapiWebhookAccrualDay(db: Database): Promise<strin
   return row?.day ?? null;
 }
 
+/** Positive (spend) credits by source over a time window — the "spent today" card. */
+export async function sumOfapiSpendBySourceBetween(
+  db: Database,
+  input: { from: Date; to: Date },
+): Promise<Map<OfapiCreditLedgerSource, number>> {
+  const rows = await db
+    .select({
+      source: ofapiCreditLedger.source,
+      credits: sql<number>`sum(${ofapiCreditLedger.credits})::int`,
+    })
+    .from(ofapiCreditLedger)
+    .where(and(
+      gte(ofapiCreditLedger.occurredAt, input.from),
+      lt(ofapiCreditLedger.occurredAt, input.to),
+      gt(ofapiCreditLedger.credits, 0),
+    ))
+    .groupBy(ofapiCreditLedger.source);
+
+  return new Map(rows.map((row) => [row.source as OfapiCreditLedgerSource, row.credits]));
+}
+
+/** Spend attributed to specific REST operations over a window (per-stream budgets). */
+export async function sumOfapiRestCreditsForOperationsBetween(
+  db: Database,
+  input: { operations: readonly string[]; from: Date; to: Date },
+): Promise<number> {
+  if (input.operations.length === 0) {
+    return 0;
+  }
+
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
+    .from(ofapiCreditLedger)
+    .where(and(
+      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.operation, [...input.operations]),
+      gte(ofapiCreditLedger.occurredAt, input.from),
+      lt(ofapiCreditLedger.occurredAt, input.to),
+      gt(ofapiCreditLedger.credits, 0),
+    ));
+
+  return row?.total ?? 0;
+}
+
+export interface OfapiDailySpendRow {
+  day: string;
+  source: OfapiCreditLedgerSource;
+  credits: number;
+}
+
+/** Per-UTC-day positive spend by source (the stacked daily bars). */
+export async function listOfapiDailySpendBySource(
+  db: Database,
+  input: { from: Date; to: Date },
+): Promise<OfapiDailySpendRow[]> {
+  const result = await db.execute(sql`
+    select
+      to_char((occurred_at at time zone 'UTC')::date, 'YYYY-MM-DD') as day,
+      source,
+      sum(credits)::int as credits
+    from ofapi_credit_ledger
+    where occurred_at >= ${input.from}::timestamptz
+      and occurred_at < ${input.to}::timestamptz
+      and credits > 0
+    group by 1, 2
+    order by 1 asc
+  `);
+
+  return result.rows.map((row) => ({
+    day: String(row.day),
+    source: String(row.source) as OfapiCreditLedgerSource,
+    credits: Number(row.credits),
+  }));
+}
+
+export interface OfapiBalancePoint {
+  at: Date;
+  value: number;
+}
+
+/** Balance observations over a window, oldest first (the balance chart). */
+export async function listOfapiBalanceSeriesBetween(
+  db: Database,
+  input: { from: Date; to: Date; limit?: number },
+): Promise<OfapiBalancePoint[]> {
+  const rows = await db
+    .select({
+      at: ofapiCreditLedger.occurredAt,
+      value: ofapiCreditLedger.balanceAfter,
+    })
+    .from(ofapiCreditLedger)
+    .where(and(
+      isNotNull(ofapiCreditLedger.balanceAfter),
+      gte(ofapiCreditLedger.occurredAt, input.from),
+      lt(ofapiCreditLedger.occurredAt, input.to),
+    ))
+    .orderBy(asc(ofapiCreditLedger.occurredAt))
+    .limit(input.limit ?? 2000);
+
+  return rows.filter((row): row is OfapiBalancePoint => row.value !== null);
+}
+
+export interface OfapiRefillRow {
+  at: Date;
+  credits: number;
+}
+
+export async function listOfapiRefillsBetween(
+  db: Database,
+  input: { from: Date; to: Date },
+): Promise<OfapiRefillRow[]> {
+  const rows = await db
+    .select({
+      at: ofapiCreditLedger.occurredAt,
+      credits: ofapiCreditLedger.credits,
+    })
+    .from(ofapiCreditLedger)
+    .where(and(
+      eq(ofapiCreditLedger.source, "refill"),
+      gte(ofapiCreditLedger.occurredAt, input.from),
+      lt(ofapiCreditLedger.occurredAt, input.to),
+    ))
+    .orderBy(asc(ofapiCreditLedger.occurredAt));
+
+  return rows;
+}
+
+export interface OfapiOperationBreakdownRow {
+  operation: string | null;
+  requests: number;
+  credits: number;
+}
+
+/** REST spend grouped by operation over a window (breakdown panel). */
+export async function listOfapiOperationBreakdownBetween(
+  db: Database,
+  input: { from: Date; to: Date },
+): Promise<OfapiOperationBreakdownRow[]> {
+  const rows = await db
+    .select({
+      operation: ofapiCreditLedger.operation,
+      requests: sql<number>`count(*)::int`,
+      credits: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int`,
+    })
+    .from(ofapiCreditLedger)
+    .where(and(
+      eq(ofapiCreditLedger.source, "rest"),
+      gte(ofapiCreditLedger.occurredAt, input.from),
+      lt(ofapiCreditLedger.occurredAt, input.to),
+    ))
+    .groupBy(ofapiCreditLedger.operation)
+    .orderBy(sql`3 desc`);
+
+  return rows;
+}
+
+export interface OfapiPageBreakdownRow {
+  pageId: number;
+  pageLabel: string;
+  credits: number;
+}
+
+/** REST spend attributed to pages over a window, top spenders first. */
+export async function listOfapiPageBreakdownBetween(
+  db: Database,
+  input: { from: Date; to: Date; limit?: number },
+): Promise<OfapiPageBreakdownRow[]> {
+  const rows = await db
+    .select({
+      pageId: ofapiCreditLedger.pageId,
+      pageLabel: pages.label,
+      credits: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int`,
+    })
+    .from(ofapiCreditLedger)
+    .innerJoin(pages, eq(ofapiCreditLedger.pageId, pages.id))
+    .where(and(
+      eq(ofapiCreditLedger.source, "rest"),
+      gte(ofapiCreditLedger.occurredAt, input.from),
+      lt(ofapiCreditLedger.occurredAt, input.to),
+      gt(ofapiCreditLedger.credits, 0),
+    ))
+    .groupBy(ofapiCreditLedger.pageId, pages.label)
+    .orderBy(sql`3 desc`)
+    .limit(input.limit ?? 20);
+
+  return rows.filter((row): row is OfapiPageBreakdownRow => row.pageId !== null);
+}
+
+export interface ListOfapiCreditLedgerInput {
+  offset: number;
+  limit: number;
+  source?: OfapiCreditLedgerSource;
+  pageId?: number;
+  operation?: string;
+  from?: Date;
+  to?: Date;
+}
+
+export interface OfapiCreditLedgerListRow {
+  id: number;
+  occurredAt: Date;
+  source: OfapiCreditLedgerSource;
+  operation: string | null;
+  pageId: number | null;
+  pageLabel: string | null;
+  httpStatus: number | null;
+  credits: number;
+  estimated: boolean;
+  balanceAfter: number | null;
+  requestId: string | null;
+  accrualDay: string | null;
+}
+
+export async function listOfapiCreditLedgerEntries(
+  db: Database,
+  input: ListOfapiCreditLedgerInput,
+): Promise<{ total: number; rows: OfapiCreditLedgerListRow[] }> {
+  const clauses = [
+    ...(input.source ? [eq(ofapiCreditLedger.source, input.source)] : []),
+    ...(input.pageId !== undefined ? [eq(ofapiCreditLedger.pageId, input.pageId)] : []),
+    ...(input.operation ? [eq(ofapiCreditLedger.operation, input.operation)] : []),
+    ...(input.from ? [gte(ofapiCreditLedger.occurredAt, input.from)] : []),
+    ...(input.to ? [lt(ofapiCreditLedger.occurredAt, input.to)] : []),
+  ];
+  const where = clauses.length > 0 ? and(...clauses) : undefined;
+
+  const [countRow] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(ofapiCreditLedger)
+    .where(where);
+
+  const rows = await db
+    .select({
+      id: ofapiCreditLedger.id,
+      occurredAt: ofapiCreditLedger.occurredAt,
+      source: ofapiCreditLedger.source,
+      operation: ofapiCreditLedger.operation,
+      pageId: ofapiCreditLedger.pageId,
+      pageLabel: pages.label,
+      httpStatus: ofapiCreditLedger.httpStatus,
+      credits: ofapiCreditLedger.credits,
+      estimated: ofapiCreditLedger.estimated,
+      balanceAfter: ofapiCreditLedger.balanceAfter,
+      requestId: ofapiCreditLedger.requestId,
+      accrualDay: ofapiCreditLedger.accrualDay,
+    })
+    .from(ofapiCreditLedger)
+    .leftJoin(pages, eq(ofapiCreditLedger.pageId, pages.id))
+    .where(where)
+    .orderBy(sql`${ofapiCreditLedger.occurredAt} desc, ${ofapiCreditLedger.id} desc`)
+    .limit(input.limit)
+    .offset(input.offset);
+
+  return {
+    total: countRow?.total ?? 0,
+    rows: rows.map((row) => ({
+      ...row,
+      source: row.source as OfapiCreditLedgerSource,
+    })),
+  };
+}
+
 export async function getOfapiWebhookConfig(db: Database) {
   return await db.query.ofapiWebhookConfig.findFirst({
     where: eq(ofapiWebhookConfig.id, 1),

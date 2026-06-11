@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Bell, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Code2, ChevronDown, UserX, Sparkles } from "lucide-react";
+import { BarChart3, Bell, Coins, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Code2, ChevronDown, UserX, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -225,6 +225,17 @@ export function Sidebar({ user }: SidebarProps) {
           >
             <BarChart3 size={16} />
             Usage
+          </NavLink>
+          <NavLink
+            to="/ofapi-credits"
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
+              }`
+            }
+          >
+            <Coins size={16} />
+            OFAPI Credits
           </NavLink>
           <NavLink
             to={aiAnalyticsRoute}

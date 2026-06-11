@@ -6304,6 +6304,319 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/ofapi/credits/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the OFAPI credit balance, budgets, forecast, and ops state */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            enabled: boolean;
+                            balance: {
+                                value: number | null;
+                                observedAt: string | null;
+                            };
+                            today: {
+                                day: string;
+                                total: number;
+                                bySource: {
+                                    rest: number;
+                                    webhookAccrual: number;
+                                    external: number;
+                                    adjustment: number;
+                                };
+                            };
+                            budgets: {
+                                stream: string;
+                                spentToday: number;
+                                dailyCeiling: number;
+                                /** @enum {string} */
+                                state: "ok" | "budget_exhausted" | "floor_blocked";
+                                retryAt: string | null;
+                            }[];
+                            floor: {
+                                value: number;
+                                blocked: boolean;
+                            };
+                            forecast: {
+                                avgDailySpend7d: number;
+                                daysLeft: number | null;
+                                runOutDate: string | null;
+                            };
+                            incidents: {
+                                kind: string;
+                                openedAt: string;
+                                errorSummary: string | null;
+                            }[];
+                            reconciliation: {
+                                lastRunAt: string | null;
+                                lastDriftCredits: number | null;
+                            };
+                            accrual: {
+                                lastPostedDay: string | null;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ofapi/credits/daily": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get per-day OFAPI credit spend by source plus balance/refill series */
+        get: {
+            parameters: {
+                query?: {
+                    days?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            days: {
+                                day: string;
+                                total: number;
+                                bySource: {
+                                    rest: number;
+                                    webhookAccrual: number;
+                                    external: number;
+                                    adjustment: number;
+                                };
+                            }[];
+                            balance: {
+                                at: string;
+                                value: number;
+                            }[];
+                            refills: {
+                                at: string;
+                                credits: number;
+                            }[];
+                            byOperation: {
+                                operation: string | null;
+                                requests: number;
+                                credits: number;
+                            }[];
+                            byPage: {
+                                pageId: number;
+                                pageLabel: string;
+                                credits: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ofapi/credits/ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List OFAPI credit ledger rows with filters and pagination */
+        get: {
+            parameters: {
+                query?: {
+                    offset?: number;
+                    limit?: number;
+                    source?: "rest" | "webhook_accrual" | "external" | "refill" | "adjustment";
+                    pageId?: number;
+                    operation?: string;
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            total: number;
+                            rows: {
+                                id: number;
+                                occurredAt: string;
+                                /** @enum {string} */
+                                source: "rest" | "webhook_accrual" | "external" | "refill" | "adjustment";
+                                operation: string | null;
+                                pageId: number | null;
+                                pageLabel: string | null;
+                                httpStatus: number | null;
+                                credits: number;
+                                estimated: boolean;
+                                balanceAfter: number | null;
+                                requestId: string | null;
+                                accrualDay: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/overview": {
         parameters: {
             query?: never;
