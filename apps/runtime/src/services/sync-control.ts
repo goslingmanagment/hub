@@ -16,6 +16,10 @@ import type { AppContext } from "../bootstrap.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
 import {
+  filterOnlyFansAudienceStreams,
+  pauseDisabledOnlyFansAudienceForPage,
+} from "./sync/ofapi-audience-sync.ts";
+import {
   filterOnlyFansDmPollingStreams,
   ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
   pauseDisabledOnlyFansDmPollingForPage,
@@ -48,7 +52,7 @@ export function resolveStreamsForScope(
   if (scope === "data") {
     return platform === "fansly"
       ? ["light", "transactions", "top_spenders", "subscribers", "followers", "followers_reconcile"]
-      : ["light", "transactions", "fan_identities"];
+      : ["light", "transactions", "fan_identities", "subscribers"];
   }
 
   if (scope === "messages") {
@@ -66,7 +70,7 @@ export function resolveStreamsForScope(
       "dm_conversations",
       "dm_messages",
     ]
-    : ["light", "transactions", "fan_identities", "dm_conversations", "dm_messages"];
+    : ["light", "transactions", "fan_identities", "subscribers", "dm_conversations", "dm_messages"];
 }
 
 export async function requestPageSync(
@@ -85,9 +89,14 @@ export async function requestPageSync(
   }
 
   const requestedStreams = resolveStreamsForScope(storedPage.page.platform, input.scope);
-  const streams = filterStreamsForSyncConfig(
+  const streams = filterOnlyFansAudienceStreams(
     storedPage.page.platform,
-    requestedStreams,
+    filterStreamsForSyncConfig(
+      storedPage.page.platform,
+      requestedStreams,
+      app.config,
+      storedPage.page,
+    ),
     app.config,
     storedPage.page,
   );
@@ -99,6 +108,7 @@ export async function requestPageSync(
   });
   if (storedPage.page.platform === "onlyfans") {
     await pauseDisabledOnlyFansDmPollingForPage(app, storedPage.page.id, now);
+    await pauseDisabledOnlyFansAudienceForPage(app, storedPage.page.id, now);
   }
 
   if (streams.length === 0) {

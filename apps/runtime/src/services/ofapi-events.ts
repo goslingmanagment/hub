@@ -20,6 +20,10 @@ import {
   sweepOfapiDmProjections,
 } from "./ofapi-dm-projection.ts";
 import {
+  runOfapiSubscriptionProjectionForSettledRow,
+  sweepOfapiSubscriptionProjections,
+} from "./ofapi-subscription-projection.ts";
+import {
   asRecord,
   idToString,
   ofapiWebhookEnvelopeSchema,
@@ -51,12 +55,15 @@ export interface OfapiEventProcessPayload {
 }
 
 type SettledOfapiEventRow = Parameters<typeof runOfapiDmProjectionForSettledRow>[1] &
+  Parameters<typeof runOfapiSubscriptionProjectionForSettledRow>[1] &
   Parameters<typeof applyOfapiAccountHealthEvent>[1];
 
-// Best-effort post-settle steps (DM projection, account health) — both are
-// internally flag-gated and never throw into the settle path.
+// Best-effort post-settle steps (DM projection, subscription projection,
+// account health) — all internally flag-gated and never throw into the settle
+// path.
 async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiEventRow) {
   await runOfapiDmProjectionForSettledRow(app, row);
+  await runOfapiSubscriptionProjectionForSettledRow(app, row);
   await applyOfapiAccountHealthEvent(app, row);
 }
 
@@ -325,6 +332,13 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
     const projected = await sweepOfapiDmProjections(app);
     if (projected > 0) {
       app.logger.info({ projected }, "OFAPI DM projection sweep processed journal rows");
+    }
+    const subscriptionProjected = await sweepOfapiSubscriptionProjections(app);
+    if (subscriptionProjected > 0) {
+      app.logger.info(
+        { projected: subscriptionProjected },
+        "OFAPI subscription projection sweep processed journal rows",
+      );
     }
     await runOfapiAccountHealthMonitor(app);
     await runOfapiCreditBurnMonitor(app);

@@ -68,7 +68,7 @@ type ExecutorRequestContext = {
 
 // Mirrors StreamChunkResult in executor-handlers.ts (type-only import would be
 // fine, but redeclaring avoids any executor-handlers <-> ofapi-dm-sync cycle).
-type OfapiStreamChunkResult = {
+export type OfapiStreamChunkResult = {
   satisfied: boolean;
   yieldReason: "request_budget" | "wall_clock" | null;
   continuationRetryAt?: Date | null;
@@ -108,21 +108,29 @@ function requireOfapiAccountId(pageContext: ResolvedPageContext) {
   return ofapiAccountId;
 }
 
-type OfapiBudgetBlock = "ofapi_request_budget" | "ofapi_daily_credit_budget" | "ofapi_credit_floor";
+export type OfapiBudgetBlock = "ofapi_request_budget" | "ofapi_daily_credit_budget" | "ofapi_credit_floor";
 
 /**
- * D4 budget guard, checked before every REST request. The per-chunk request cap
- * yields like a normal budget exhaustion; daily-budget and floor blocks add a
- * retry delay so the stream parks instead of spinning.
+ * D4/D6 budget guard, checked before every REST request. The per-chunk request
+ * cap yields like a normal budget exhaustion; daily-budget and floor blocks add
+ * a retry delay so the stream parks instead of spinning. Streams with their own
+ * ceiling (audience, D6) pass `resolveSpentToday` so their budget counts only
+ * their attributed spend instead of the global day counter.
  */
-function createOfapiRestGuard(app: AppContext) {
+export function createOfapiRestGuard(app: AppContext, options?: {
+  maxRequestsPerRun?: number;
+  dailyCreditBudget?: number;
+  resolveSpentToday?: () => Promise<number>;
+}) {
   const maxRequestsPerRun = Math.max(
     1,
-    app.config.ofapiDmBootstrapMaxRequestsPerRun ?? DEFAULT_MAX_REQUESTS_PER_RUN,
+    options?.maxRequestsPerRun ??
+      app.config.ofapiDmBootstrapMaxRequestsPerRun ?? DEFAULT_MAX_REQUESTS_PER_RUN,
   );
   const dailyCreditBudget = Math.max(
     1,
-    app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
+    options?.dailyCreditBudget ??
+      app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
   );
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
   let requestsUsed = 0;
@@ -137,7 +145,10 @@ function createOfapiRestGuard(app: AppContext) {
       }
 
       const credit = await getOfapiCreditState(app.db);
-      if (credit.spentToday >= dailyCreditBudget) {
+      const spentToday = options?.resolveSpentToday
+        ? await options.resolveSpentToday()
+        : credit.spentToday;
+      if (spentToday >= dailyCreditBudget) {
         return "ofapi_daily_credit_budget";
       }
       if (
@@ -166,7 +177,7 @@ function createOfapiRestGuard(app: AppContext) {
   };
 }
 
-function budgetBlockResult(
+export function budgetBlockResult(
   block: OfapiBudgetBlock,
   stats: Record<string, unknown>,
 ): OfapiStreamChunkResult {

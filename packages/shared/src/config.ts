@@ -106,6 +106,10 @@ const envSchema = z.object({
   OFAPI_CREDIT_LEDGER_ENABLED: booleanSchema.default(false),
   OFAPI_BURN_ALERT_CREDITS_PER_HOUR: z.coerce.number().int().min(0).default(300),
   OFAPI_BALANCE_PING_ENABLED: booleanSchema.default(false),
+  OFAPI_AUDIENCE_SYNC_ENABLED: booleanSchema.default(false),
+  OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
+  OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(300),
+  OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1440),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
   WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
@@ -173,6 +177,10 @@ export interface AppConfig {
   ofapiCreditLedgerEnabled?: boolean;
   ofapiBurnAlertCreditsPerHour?: number;
   ofapiBalancePingEnabled?: boolean;
+  ofapiAudienceSyncEnabled?: boolean;
+  ofapiAudienceMaxRequestsPerRun?: number;
+  ofapiAudienceDailyCreditBudget?: number;
+  ofapiAudienceSweepIntervalMinutes?: number;
   anthropicApiKey?: string | null;
   wbClosingLlmEnabled?: boolean;
   wbClosingLlmModel?: string;
@@ -297,6 +305,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ofapiCreditLedgerEnabled: parsed.OFAPI_CREDIT_LEDGER_ENABLED,
     ofapiBurnAlertCreditsPerHour: parsed.OFAPI_BURN_ALERT_CREDITS_PER_HOUR,
     ofapiBalancePingEnabled: parsed.OFAPI_BALANCE_PING_ENABLED,
+    ofapiAudienceSyncEnabled: parsed.OFAPI_AUDIENCE_SYNC_ENABLED,
+    ofapiAudienceMaxRequestsPerRun: parsed.OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN,
+    ofapiAudienceDailyCreditBudget: parsed.OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET,
+    ofapiAudienceSweepIntervalMinutes: parsed.OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     // L2 only runs when explicitly enabled AND a key is present (safe by default).
     wbClosingLlmEnabled: parsed.WB_CLOSING_LLM_ENABLED && (parsed.ANTHROPIC_API_KEY ?? null) !== null,

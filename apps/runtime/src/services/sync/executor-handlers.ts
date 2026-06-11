@@ -113,6 +113,10 @@ import {
   isOfapiDmSyncEligiblePage,
 } from "./ofapi-dm-sync.ts";
 import {
+  executeOfapiAudienceChunk,
+  isOfapiAudienceSyncEligiblePage,
+} from "./ofapi-audience-sync.ts";
+import {
   dmRetentionDate,
   normalizeDmTipAmountCents,
   normalizeFanslyTimestamp,
@@ -1385,6 +1389,14 @@ export async function executeSubscribersChunk(
     syncRunId: number;
   },
 ) {
+  if (input.pageContext.platform === "onlyfans") {
+    if (isOfapiAudienceSyncEligiblePage(app.config, input.pageContext.page)) {
+      return executeOfapiAudienceChunk(app, input);
+    }
+    // No legacy OnlyFans subscribers path exists; the planner force-pauses the
+    // stream for non-eligible pages, so reaching here is a wiring bug.
+    throw new Error("Subscriber sync is not enabled for this OnlyFans page");
+  }
   if (input.pageContext.platform !== "fansly") {
     throw new Error("Subscriber sync is only supported for Fansly pages");
   }

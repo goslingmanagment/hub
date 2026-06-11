@@ -531,9 +531,12 @@ function normalizePageSyncLease(row: Record<string, unknown>): PageSyncLease {
 }
 
 export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): SyncStream[] {
+  // OnlyFans: subscribers is the OFAPI audience sweep (docs/ofapi-parity-plan.md
+  // Phase 3); the planner force-pauses it for pages that are not
+  // OFAPI-audience-eligible, mirroring the DM-polling gate.
   return platform === "fansly"
     ? SYNC_STREAMS.filter((stream) => stream !== "fan_identities")
-    : ["light", "transactions", "fan_identities", "dm_conversations", "dm_messages"];
+    : ["light", "transactions", "fan_identities", "subscribers", "dm_conversations", "dm_messages"];
 }
 
 export function resolvePageSyncPriority(stream: SyncStream, source: SyncRequestSource) {
@@ -894,6 +897,49 @@ export async function ensurePageSyncStates(
   );
 }
 
+/**
+ * Stream dependencies are a Fansly ordering concern (hydrate audience before
+ * DMs). OnlyFans DM ingest is OFAPI-fed and independent of the audience sweep
+ * (decision #49 shipped without subscribers rows), so the audience/top-spender
+ * streams must never dependency-block it — a flag-off page would park
+ * subscribers forever and dead-lock the DM streams otherwise.
+ */
+const ONLYFANS_EXCLUDED_DEPENDENCIES: readonly SyncStream[] = [
+  "subscribers",
+  "followers",
+  "top_spenders",
+];
+
+export function getSyncStreamDependenciesForPlatform(
+  platform: "fansly" | "onlyfans",
+  stream: SyncStream,
+): SyncStream[] {
+  const base = SYNC_STREAM_DEPENDENCIES[stream] ?? [];
+  if (platform !== "onlyfans") {
+    return [...base];
+  }
+  return base.filter((dependency) => !ONLYFANS_EXCLUDED_DEPENDENCIES.includes(dependency));
+}
+
+async function getPagePlatforms(
+  db: Database,
+  pageIds: number[],
+): Promise<Map<number, "fansly" | "onlyfans">> {
+  if (pageIds.length === 0) {
+    return new Map();
+  }
+
+  const result = await db.execute(sql`
+    select id, platform from pages where id in (${sql.join(pageIds.map((id) => sql`${id}`), sql`, `)})
+  `);
+  const platforms = new Map<number, "fansly" | "onlyfans">();
+  for (const row of result.rows) {
+    const platform = row.platform === "onlyfans" ? "onlyfans" : "fansly";
+    platforms.set(Number(row.id), platform);
+  }
+  return platforms;
+}
+
 function dependencyMet(streamByName: Map<SyncStream, PageSyncState>, dependency: SyncStream) {
   const row = streamByName.get(dependency);
   return Boolean(row && (row.succeededAt !== null || row.appliedSeq > 0));
@@ -930,11 +976,15 @@ async function refreshLockedPageSyncDependencies(
     rowsByPage.set(row.pageId, current);
   }
 
+  const platformByPage = await getPagePlatforms(db, [...rowsByPage.keys()]);
+
   for (const [pageId, pageRows] of rowsByPage) {
     const streamByName = new Map(pageRows.map((row) => [row.stream, row] as const));
     for (const row of pageRows) {
-      const dependencies = (SYNC_STREAM_DEPENDENCIES[row.stream] ?? [])
-        .filter((dependency) => streamByName.has(dependency));
+      const dependencies = getSyncStreamDependenciesForPlatform(
+        platformByPage.get(pageId) ?? "fansly",
+        row.stream,
+      ).filter((dependency) => streamByName.has(dependency));
       if (dependencies.length === 0) {
         continue;
       }

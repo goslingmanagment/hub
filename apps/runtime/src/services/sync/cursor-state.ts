@@ -59,6 +59,19 @@ type OfapiDmConversationCursorState = {
   lastReconcileAt: string | null;
 };
 
+// OFAPI-fed OnlyFans subscribers checkpoint (docs/ofapi-parity-plan.md Phase 3):
+// full fans/active offset sweeps on an interval; generation drives the Fansly-
+// style end-of-sweep expiry of subscriptions missing from the sweep.
+type OfapiAudienceCursorState = {
+  version: 1;
+  mode: "ofapi_audience";
+  generation: number;
+  offset: number;
+  pageCount: number;
+  sweepStartedAt: string | null;
+  lastSweepCompletedAt: string | null;
+};
+
 type TopSpendersCursorWindow = {
   kind: "month" | "week" | "day";
   monthKey: string;
@@ -305,6 +318,50 @@ export function emptyOfapiDmConversationCursorState(): OfapiDmConversationCursor
     pageCount: 0,
     bootstrapCompletedAt: null,
     lastReconcileAt: null,
+  };
+}
+
+export function parseOfapiAudienceCursorState(value: unknown): OfapiAudienceCursorState | null {
+  const state = asRecord(value);
+  if (!state || asNumber(state.version) !== 1 || state.mode !== "ofapi_audience") {
+    return null;
+  }
+
+  const generation = asNumber(state.generation);
+  const offset = asNumber(state.offset);
+  const pageCount = asNumber(state.pageCount);
+  const sweepStartedAt = asNullableString(state.sweepStartedAt);
+  const lastSweepCompletedAt = asNullableString(state.lastSweepCompletedAt);
+  if (
+    generation === null ||
+    offset === null ||
+    pageCount === null ||
+    sweepStartedAt === undefined ||
+    lastSweepCompletedAt === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    mode: "ofapi_audience",
+    generation,
+    offset,
+    pageCount,
+    sweepStartedAt,
+    lastSweepCompletedAt,
+  };
+}
+
+export function emptyOfapiAudienceCursorState(): OfapiAudienceCursorState {
+  return {
+    version: 1,
+    mode: "ofapi_audience",
+    generation: 0,
+    offset: 0,
+    pageCount: 0,
+    sweepStartedAt: null,
+    lastSweepCompletedAt: null,
   };
 }
 

@@ -9,6 +9,7 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
+import { pauseDisabledOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
 import { pauseDisabledOnlyFansDmPollingForAllPages } from "./onlyfans-dm-polling.ts";
 
 const INACTIVE_SYNC_RUN_THRESHOLD_MS = 90 * 1000;
@@ -40,6 +41,12 @@ export async function runSyncPlannerCycle(
     app.logger.warn({
       pausedOnlyFansDmPages,
     }, "Paused OnlyFans DM polling because ONLYFANS_DM_POLLING_ENABLED is false");
+  }
+  const pausedOnlyFansAudiencePages = await pauseDisabledOnlyFansAudienceForAllPages(app, now);
+  if (pausedOnlyFansAudiencePages > 0) {
+    app.logger.warn({
+      pausedOnlyFansAudiencePages,
+    }, "Paused OnlyFans audience sync for pages not eligible under OFAPI_AUDIENCE_SYNC_ENABLED");
   }
   await scheduleDuePageSync(app.db, { now });
 

@@ -32,10 +32,13 @@ import { BadRequestError } from "./errors.ts";
 import { isOfapiCreditLedgerEnabled } from "./ofapi-credits.ts";
 
 const DEFAULT_DM_DAILY_CREDIT_BUDGET = 500;
+const DEFAULT_AUDIENCE_DAILY_CREDIT_BUDGET = 300;
 const DEFAULT_CREDIT_FLOOR = 500;
 
-// Ledger operations attributed to the DM bootstrap/reconcile stream (decision #49).
+// Ledger operations attributed to the DM bootstrap/reconcile stream (decision #49)
+// and to the audience sweep (parity Phase 3).
 const DM_STREAM_OPERATIONS = ["ofapi_chats", "ofapi_chat_messages"] as const;
+const AUDIENCE_STREAM_OPERATIONS = ["ofapi_fans_active"] as const;
 
 function utcDayStart(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -72,22 +75,35 @@ export async function getOfapiCreditsSummary(
   const dayStart = utcDayStart(now);
   const nextDayStart = addUtcDays(dayStart, 1);
 
-  const [credit, reconcile, lastAccrualDay, todaySpend, dmSpentToday, spend7d, openIncidents] =
-    await Promise.all([
-      getOfapiCreditState(app.db, now),
-      getOfapiCreditReconcileState(app.db),
-      getLastOfapiWebhookAccrualDay(app.db),
-      sumOfapiSpendBySourceBetween(app.db, { from: dayStart, to: nextDayStart }),
-      sumOfapiRestCreditsForOperationsBetween(app.db, {
-        operations: DM_STREAM_OPERATIONS,
-        from: dayStart,
-        to: nextDayStart,
-      }),
-      sumOfapiCreditsSpentSince(app.db, {
-        since: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
-      }),
-      listNotificationIncidents(app.db, { status: "open" }),
-    ]);
+  const [
+    credit,
+    reconcile,
+    lastAccrualDay,
+    todaySpend,
+    dmSpentToday,
+    audienceSpentToday,
+    spend7d,
+    openIncidents,
+  ] = await Promise.all([
+    getOfapiCreditState(app.db, now),
+    getOfapiCreditReconcileState(app.db),
+    getLastOfapiWebhookAccrualDay(app.db),
+    sumOfapiSpendBySourceBetween(app.db, { from: dayStart, to: nextDayStart }),
+    sumOfapiRestCreditsForOperationsBetween(app.db, {
+      operations: DM_STREAM_OPERATIONS,
+      from: dayStart,
+      to: nextDayStart,
+    }),
+    sumOfapiRestCreditsForOperationsBetween(app.db, {
+      operations: AUDIENCE_STREAM_OPERATIONS,
+      from: dayStart,
+      to: nextDayStart,
+    }),
+    sumOfapiCreditsSpentSince(app.db, {
+      since: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
+    }),
+    listNotificationIncidents(app.db, { status: "open" }),
+  ]);
 
   const bySource = toSpendBySource(todaySpend);
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
@@ -95,13 +111,20 @@ export async function getOfapiCreditsSummary(
     credit.lastBalance !== null &&
     credit.lastBalance < creditFloor;
 
-  // Budget state mirrors the executor guard exactly: the ceiling is compared
-  // against the GLOBAL day counter (that is what parks the stream), while the
+  // Budget state mirrors the executor guards exactly: the DM ceiling is
+  // compared against the GLOBAL day counter (that is what parks the stream);
+  // the audience ceiling uses its own ledger-attributed spend when the ledger
+  // is on (D6), falling back to the global counter like the guard does. The
   // displayed per-stream spend is ledger-attributed when available.
-  const resolveBudget = (input: { stream: string; spentToday: number; ceiling: number }) => {
+  const resolveBudget = (input: {
+    stream: string;
+    spentToday: number;
+    ceiling: number;
+    guardSpentToday: number;
+  }) => {
     const state = floorBlocked
       ? "floor_blocked" as const
-      : credit.spentToday >= input.ceiling
+      : input.guardSpentToday >= input.ceiling
         ? "budget_exhausted" as const
         : "ok" as const;
     return {
@@ -118,7 +141,19 @@ export async function getOfapiCreditsSummary(
       stream: "dm",
       spentToday: dmSpentToday,
       ceiling: Math.max(1, app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DM_DAILY_CREDIT_BUDGET),
+      guardSpentToday: credit.spentToday,
     }),
+    ...(app.config.ofapiAudienceSyncEnabled === true
+      ? [resolveBudget({
+        stream: "audience",
+        spentToday: audienceSpentToday,
+        ceiling: Math.max(
+          1,
+          app.config.ofapiAudienceDailyCreditBudget ?? DEFAULT_AUDIENCE_DAILY_CREDIT_BUDGET,
+        ),
+        guardSpentToday: enabled ? audienceSpentToday : credit.spentToday,
+      })]
+      : []),
   ];
 
   const avgDailySpend7d = Math.round((Math.max(0, spend7d) / 7) * 10) / 10;

@@ -26,6 +26,7 @@ describe("resolveStreamsForScope", () => {
       "light",
       "transactions",
       "fan_identities",
+      "subscribers",
     ]);
     expect(resolveStreamsForScope("onlyfans", "messages")).toEqual([
       "dm_conversations",
@@ -34,6 +35,8 @@ describe("resolveStreamsForScope", () => {
   });
 
   it("filters OnlyFans DM polling streams unless explicitly enabled", () => {
+    // The audience filter (filterOnlyFansAudienceStreams) strips "subscribers"
+    // separately in requestPageSync; the DM filter leaves it alone.
     expect(
       filterStreamsForSyncConfig("onlyfans", resolveStreamsForScope("onlyfans", "all"), {
         onlyFansDmPollingEnabled: false,
@@ -42,6 +45,7 @@ describe("resolveStreamsForScope", () => {
       "light",
       "transactions",
       "fan_identities",
+      "subscribers",
     ]);
     expect(
       filterStreamsForSyncConfig("onlyfans", resolveStreamsForScope("onlyfans", "messages"), {

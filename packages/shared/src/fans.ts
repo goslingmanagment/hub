@@ -25,6 +25,9 @@ export const FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_AC
   "partner_unresolvable_from_account_lookup" as const;
 export const FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN =
   "fansly_followers_last_seen" as const;
+// OnlyFans lastSeen signals fed through OFAPI: the audience sweep's per-fan
+// lastSeen, users.online/offline webhook events, and message-payload lastSeen.
+export const OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN = "ofapi_last_seen" as const;
 
 export type FanslyDmMessageSyncExcludedReason =
   | typeof FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
@@ -32,6 +35,10 @@ export type FanslyDmMessageSyncExcludedReason =
 
 export type FanslyExternalPresenceSource =
   typeof FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN;
+
+export type ExternalPresenceSource =
+  | FanslyExternalPresenceSource
+  | typeof OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN;
 
 function normalizeFanNamePart(value: string | null | undefined) {
   if (typeof value !== "string") {

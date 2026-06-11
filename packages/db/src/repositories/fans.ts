@@ -2,7 +2,7 @@ import { and, eq, notInArray, sql } from "drizzle-orm";
 
 import {
   FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN,
-  type FanslyExternalPresenceSource,
+  type ExternalPresenceSource,
 } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
@@ -204,7 +204,7 @@ export interface UpsertFanPageExternalPresenceInput {
   platformAccountId: number;
   externalPresenceAt: Date;
   externalPresenceObservedAt: Date;
-  externalPresenceSource?: FanslyExternalPresenceSource;
+  externalPresenceSource?: ExternalPresenceSource;
 }
 
 function mergeUpsertFanPageInput(
@@ -965,6 +965,23 @@ export async function listTopFansForPage(
              f.id asc
     limit ${limit}
   `);
+}
+
+/** One subscription row by its platform identity (OFAPI live projection lookups). */
+export async function findPageSubscription(
+  db: Database,
+  input: { platformAccountId: number; platformSubscriptionId: string },
+) {
+  const [row] = await db
+    .select()
+    .from(pageSubscriptions)
+    .where(and(
+      eq(pageSubscriptions.platformAccountId, input.platformAccountId),
+      eq(pageSubscriptions.platformSubscriptionId, input.platformSubscriptionId),
+    ))
+    .limit(1);
+
+  return row ?? null;
 }
 
 export async function getCurrentSubscribers(db: Database, platformAccountId: number) {

@@ -14,6 +14,8 @@ import {
 const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
 const OFAPI_DEFAULT_REST_DELAY_MS = 500;
 const OFAPI_OBSERVED_RETRIES = 3;
+// fans/active hard-caps limit at 20 per the OpenAPI validation text.
+const OFAPI_FANS_PAGE_LIMIT = 20;
 
 // The only place the OFAPI host may appear in runtime code (D1 of
 // docs/ofapi-parity-plan.md, enforced by a gate test): every OFAPI HTTP call
@@ -144,6 +146,17 @@ export interface OfapiClient {
       pageIndex?: number;
     },
   ): Promise<OfapiListPage>;
+  // GET /api/{account}/fans/active — the audience sweep (docs/ofapi-parity-plan.md
+  // Phase 3). The documented hard cap is 20 fans per request.
+  listActiveFans(
+    context: OfapiRequestContext,
+    accountId: string,
+    params: {
+      limit?: number;
+      offset?: number;
+      pageIndex?: number;
+    },
+  ): Promise<OfapiListPage>;
   // One cheap (1-credit) account-scoped request purely to observe the credit
   // balance: GET /accounts carries no _meta per the OFAPI OpenAPI spec, so the
   // ping reads a minimal chats page instead (reconciliation anchor on quiet days).
@@ -243,6 +256,34 @@ function toListPage(body: unknown): OfapiListPage {
   };
 }
 
+/**
+ * Fans endpoints wrap the page as {data: {list: [...], hasMore}} per the OFAPI
+ * OpenAPI spec, unlike chats' bare {data: [...]}; tolerate both shapes since
+ * the wrapper is only spec-verified, not live-verified.
+ */
+export function toFansListPage(body: unknown): OfapiListPage {
+  const record = asRecord(body);
+  const data = record?.data;
+  const dataRecord = asRecord(data);
+  const list = Array.isArray(dataRecord?.list)
+    ? dataRecord.list
+    : Array.isArray(data)
+      ? data
+      : [];
+  const pagination = asRecord(record?._pagination);
+  const nextPage = pagination?.next_page;
+  return {
+    items: list.flatMap((item) => {
+      const itemRecord = asRecord(item);
+      return itemRecord ? [itemRecord] : [];
+    }),
+    hasNextPage: typeof dataRecord?.hasMore === "boolean"
+      ? dataRecord.hasMore
+      : typeof nextPage === "string" && nextPage.length > 0,
+    meta: parseResponseMeta(body),
+  };
+}
+
 function resolveRetryAfterMs(retryAfter: string | null, attemptNumber: number) {
   const fallbackMs = Math.min(2 ** attemptNumber * 1000, 30_000);
   if (!retryAfter) {
@@ -326,6 +367,7 @@ export function createOfapiClient(input: {
     pageIndex: number;
     cursorPresent: boolean;
     requestMetadata: Record<string, unknown>;
+    mapResponse?: (body: unknown) => OfapiListPage;
   }): Promise<OfapiListPage> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(options.query)) {
@@ -450,7 +492,7 @@ export function createOfapiClient(input: {
           };
         }
 
-        const page = toListPage(body);
+        const page = (options.mapResponse ?? toListPage)(body);
         return {
           kind: "success",
           value: page,
@@ -599,6 +641,26 @@ export function createOfapiClient(input: {
           order: "desc",
           hasFirstId: params.firstId != null,
         },
+      });
+    },
+    async listActiveFans(context, accountId, params) {
+      // Docs prose says 1-50 but validation caps at 20 ("Must not be greater
+      // than 20") — clamp so a misconfigured caller can't 422 every request.
+      const limit = Math.min(params.limit ?? OFAPI_FANS_PAGE_LIMIT, OFAPI_FANS_PAGE_LIMIT);
+      const offset = params.offset ?? 0;
+      return observedListRequest({
+        context,
+        operation: "ofapi_fans_active",
+        endpointTemplate: "/:accountId/fans/active",
+        pathname: `/${encodeURIComponent(accountId)}/fans/active`,
+        query: {
+          limit: String(limit),
+          offset: offset > 0 ? String(offset) : undefined,
+        },
+        pageIndex: params.pageIndex ?? 0,
+        cursorPresent: offset > 0,
+        requestMetadata: { limit, offset },
+        mapResponse: toFansListPage,
       });
     },
     async pingBalance(context, accountId) {
