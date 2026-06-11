@@ -27,6 +27,7 @@ const syncStatusMocks = vi.hoisted(() => ({
 
 const fanslyPageMocks = vi.hoisted(() => ({
   resolveAccessibleFanslyPage: vi.fn(),
+  resolveAccessibleDmPage: vi.fn(),
 }));
 
 const pageContextMocks = vi.hoisted(() => ({
@@ -68,6 +69,7 @@ vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
 }));
 vi.mock("../apps/runtime/src/services/fansly-page.ts", () => ({
   resolveAccessibleFanslyPage: fanslyPageMocks.resolveAccessibleFanslyPage,
+  resolveAccessibleDmPage: fanslyPageMocks.resolveAccessibleDmPage,
 }));
 vi.mock("../apps/runtime/src/services/page-context.ts", () => ({
   resolvePageContext: pageContextMocks.resolvePageContext,
@@ -357,8 +359,10 @@ describe("runtime page services", () => {
 
   it("uses workboard-specific unsupported-page errors", async () => {
     authMocks.canAccessPage.mockReturnValue(true);
-    fanslyPageMocks.resolveAccessibleFanslyPage.mockRejectedValue(
-      Object.assign(new Error("Workboard is only supported for Fansly pages"), {
+    // The workboard queue accepts DM-capable pages (Fansly + OnlyFans since
+    // decision #49); the resolver still rejects anything else.
+    fanslyPageMocks.resolveAccessibleDmPage.mockRejectedValue(
+      Object.assign(new Error("Workboard is not supported on this page"), {
         statusCode: 400,
       }),
     );
@@ -381,7 +385,7 @@ describe("runtime page services", () => {
       {} as never,
       "lana-of",
     )).rejects.toMatchObject({
-      message: "Workboard is only supported for Fansly pages",
+      message: "Workboard is not supported on this page",
       statusCode: 400,
     });
   });

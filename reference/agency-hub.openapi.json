@@ -19718,16 +19718,100 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "ofapiAuthStatus": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "ofapiAuthChangedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lastEventAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lastEventAgeSeconds": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
                           "pageId",
                           "label",
                           "username",
-                          "ofapiAccountId"
+                          "ofapiAccountId",
+                          "ofapiAuthStatus",
+                          "ofapiAuthChangedAt",
+                          "lastEventAt",
+                          "lastEventAgeSeconds"
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "credit": {
+                      "type": "object",
+                      "properties": {
+                        "lastBalance": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lastBalanceAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "spentToday": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "lastBalance",
+                        "lastBalanceAt",
+                        "spentToday"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -19738,7 +19822,8 @@
                     "events",
                     "signingSecretMask",
                     "updatedAt",
-                    "pages"
+                    "pages",
+                    "credit"
                   ],
                   "additionalProperties": false
                 }
@@ -39231,7 +39316,10 @@
               "enum": [
                 "auth_blocked",
                 "proxy_failed",
-                "stream_failed_threshold"
+                "stream_failed_threshold",
+                "ofapi_auth",
+                "ofapi_low_credit",
+                "ofapi_webhook_silence"
               ]
             },
             "in": "query",
@@ -39301,7 +39389,10 @@
                             "enum": [
                               "auth_blocked",
                               "proxy_failed",
-                              "stream_failed_threshold"
+                              "stream_failed_threshold",
+                              "ofapi_auth",
+                              "ofapi_low_credit",
+                              "ofapi_webhook_silence"
                             ]
                           },
                           "pageLabel": {
