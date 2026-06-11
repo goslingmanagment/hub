@@ -10648,7 +10648,8 @@
                                   "source": {
                                     "type": "string",
                                     "enum": [
-                                      "fansly_followers_last_seen"
+                                      "fansly_followers_last_seen",
+                                      "ofapi_last_seen"
                                     ]
                                   }
                                 },
@@ -10791,7 +10792,8 @@
                                   "source": {
                                     "type": "string",
                                     "enum": [
-                                      "fansly_followers_last_seen"
+                                      "fansly_followers_last_seen",
+                                      "ofapi_last_seen"
                                     ]
                                   }
                                 },

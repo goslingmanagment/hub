@@ -30,6 +30,7 @@ import {
 } from "./errors.ts";
 import { createOfapiCreditSpendSink } from "./ofapi-credits.ts";
 import { isOfapiDmProjectionEventType } from "./ofapi-dm-projection.ts";
+import { isOfapiPresenceProjectionEventType } from "./ofapi-presence-projection.ts";
 import { isOfapiSubscriptionProjectionEventType } from "./ofapi-subscription-projection.ts";
 import { ofapiWebhookEnvelopeSchema, sendOfapiEventProcessJob } from "./ofapi-events.ts";
 import { OfapiApiError, createOfapiClient, type OfapiClient } from "./ofapi.ts";
@@ -160,12 +161,13 @@ export async function receiveOfapiWebhook(
     ofapiAccountId: envelope.data.account_id ?? null,
     // Journal the full envelope so processing/replay never depends on parse-time choices.
     payload: parsedBody as Record<string, unknown>,
-    // DM and subscription events are stamped as projection candidates
-    // regardless of their flags, so turning OFAPI_DM_PROJECTION_ENABLED /
-    // OFAPI_AUDIENCE_SYNC_ENABLED on later lets the sweep project the journal
-    // rows still inside the retention window.
+    // DM, subscription, and presence events are stamped as projection
+    // candidates regardless of their flags, so turning the respective flag on
+    // later lets the sweep project the journal rows still inside the retention
+    // window.
     projectionStatus: isOfapiDmProjectionEventType(envelope.data.event) ||
-        isOfapiSubscriptionProjectionEventType(envelope.data.event)
+        isOfapiSubscriptionProjectionEventType(envelope.data.event) ||
+        isOfapiPresenceProjectionEventType(envelope.data.event)
       ? "pending"
       : "none",
   });

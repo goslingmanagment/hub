@@ -8758,16 +8758,17 @@ describe("api integration", () => {
       expect.objectContaining({ flag: "vip" }),
     ]);
 
+    // Decision #49 opened the workboard queue to OnlyFans pages (DM store is
+    // platform-agnostic); pages without DM data simply serve an empty queue.
     const nonFansly = await server.inject({
       method: "GET",
       url: "/api/v1/pages/lana-of-workboard/workboard",
       headers: { cookie: ownerCookie },
     });
-    expect(nonFansly.statusCode).toBe(400);
-    expect(nonFansly.json()).toMatchObject({
-      message: "Workboard is only supported for Fansly pages",
-    });
+    expect(nonFansly.statusCode).toBe(200);
 
+    // Presence stays Fansly-only while the page is outside the OFAPI presence
+    // pipeline (OFAPI_PRESENCE_PROJECTION_ENABLED off / unmapped page).
     const nonFanslyPresence = await server.inject({
       method: "GET",
       url: "/api/v1/pages/lana-of-workboard/workboard/presence",

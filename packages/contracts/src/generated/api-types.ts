@@ -3317,7 +3317,7 @@ export interface paths {
                                         lastSeenAt: string;
                                         observedAt: string;
                                         /** @enum {string} */
-                                        source: "fansly_followers_last_seen";
+                                        source: "fansly_followers_last_seen" | "ofapi_last_seen";
                                     };
                                     ltv: {
                                         creatorNetAmountMills: number;
@@ -3341,7 +3341,7 @@ export interface paths {
                                         lastSeenAt: string;
                                         observedAt: string;
                                         /** @enum {string} */
-                                        source: "fansly_followers_last_seen";
+                                        source: "fansly_followers_last_seen" | "ofapi_last_seen";
                                     };
                                     ltv: {
                                         creatorNetAmountMills: number;

@@ -1105,7 +1105,10 @@ const workboardPresenceItemSchema = z.object({
   presence: z.object({
     lastSeenAt: isoTimestamp,
     observedAt: isoTimestamp,
-    source: z.literal("fansly_followers_last_seen"),
+    // fansly_followers_last_seen: Fansly follower sync; ofapi_last_seen:
+    // OnlyFans lastSeen via OFAPI (audience sweep, presence webhooks, message
+    // payloads — docs/ofapi-parity-plan.md Phases 3-4).
+    source: z.enum(["fansly_followers_last_seen", "ofapi_last_seen"]),
   }),
   ltv: z.object({ creatorNetAmountMills: mills }),
   isSubscriber: z.boolean(),

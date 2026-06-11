@@ -20,6 +20,10 @@ import {
   sweepOfapiDmProjections,
 } from "./ofapi-dm-projection.ts";
 import {
+  runOfapiPresenceProjectionForSettledRow,
+  sweepOfapiPresenceProjections,
+} from "./ofapi-presence-projection.ts";
+import {
   runOfapiSubscriptionProjectionForSettledRow,
   sweepOfapiSubscriptionProjections,
 } from "./ofapi-subscription-projection.ts";
@@ -56,14 +60,15 @@ export interface OfapiEventProcessPayload {
 
 type SettledOfapiEventRow = Parameters<typeof runOfapiDmProjectionForSettledRow>[1] &
   Parameters<typeof runOfapiSubscriptionProjectionForSettledRow>[1] &
+  Parameters<typeof runOfapiPresenceProjectionForSettledRow>[1] &
   Parameters<typeof applyOfapiAccountHealthEvent>[1];
 
-// Best-effort post-settle steps (DM projection, subscription projection,
-// account health) — all internally flag-gated and never throw into the settle
-// path.
+// Best-effort post-settle steps (DM/subscription/presence projections, account
+// health) — all internally flag-gated and never throw into the settle path.
 async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiEventRow) {
   await runOfapiDmProjectionForSettledRow(app, row);
   await runOfapiSubscriptionProjectionForSettledRow(app, row);
+  await runOfapiPresenceProjectionForSettledRow(app, row);
   await applyOfapiAccountHealthEvent(app, row);
 }
 
@@ -338,6 +343,13 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
       app.logger.info(
         { projected: subscriptionProjected },
         "OFAPI subscription projection sweep processed journal rows",
+      );
+    }
+    const presenceProjected = await sweepOfapiPresenceProjections(app);
+    if (presenceProjected > 0) {
+      app.logger.info(
+        { projected: presenceProjected },
+        "OFAPI presence projection sweep processed journal rows",
       );
     }
     await runOfapiAccountHealthMonitor(app);

@@ -18,6 +18,7 @@ import {
   markPageDmMessagePurchased,
   raisePageDmMessageTipAmount,
   refreshPageDmConversationWindow,
+  upsertFanPageExternalPresences,
   upsertFanPages,
   upsertFans,
   upsertPageDmConversation,
@@ -25,7 +26,10 @@ import {
   type Database,
   type PageDmConversationRow,
 } from "@agency_hub_core/db";
-import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import {
+  normalizeDmMessageText,
+  OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN,
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
@@ -130,6 +134,9 @@ export interface OfapiProjectedDmMessage {
   createdAt: Date;
   tipAmountCents: number;
   inReplyToMessageId: string | null;
+  // The fan's lastSeen carried on the partner user object — folded into the
+  // presence store when OFAPI_PRESENCE_PROJECTION_ENABLED (parity Phase 4).
+  partnerLastSeenAt: Date | null;
 }
 
 /**
@@ -171,6 +178,7 @@ export function parseOfapiDmMessagePayload(
     // so only tip messages carry an amount here. D5: media is never downloaded.
     tipAmountCents: payload.isTip === true ? usdToCents(payload.price) : 0,
     inReplyToMessageId: idToString(asRecord(payload.replyToMessage)?.id),
+    partnerLastSeenAt: parseMessageTimestamp(partner.lastSeen),
   };
 }
 
@@ -223,6 +231,18 @@ async function projectDmMessageEvent(
         fanId: fanRow.id,
         platformAccountId: page.id,
       }]);
+      // One journal pass folds the payload's lastSeen into presence (plan
+      // recommendation 5) — gated by the Phase 4 flag, forward-only by the
+      // store's greatest() semantics.
+      if (app.config.ofapiPresenceProjectionEnabled === true && message.partnerLastSeenAt) {
+        await upsertFanPageExternalPresences(db, [{
+          fanId: fanRow.id,
+          platformAccountId: page.id,
+          externalPresenceAt: message.partnerLastSeenAt,
+          externalPresenceObservedAt: message.createdAt,
+          externalPresenceSource: OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN,
+        }]);
+      }
     }
 
     const received = message.direction === "received";

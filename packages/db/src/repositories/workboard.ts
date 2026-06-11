@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
   FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN,
-  type FanslyExternalPresenceSource,
+  type ExternalPresenceSource,
 } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
@@ -878,7 +878,7 @@ export interface WorkboardPresenceRow {
   lastTransactionAt: Date | null;
   externalPresenceAt: Date;
   externalPresenceObservedAt: Date;
-  externalPresenceSource: FanslyExternalPresenceSource;
+  externalPresenceSource: ExternalPresenceSource;
 }
 
 export async function listWorkboardPresence(
@@ -985,7 +985,7 @@ export async function listWorkboardPresence(
       ),
       externalPresenceSource: (
         row.externalPresenceSource ?? FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN
-      ) as FanslyExternalPresenceSource,
+      ) as ExternalPresenceSource,
     })),
   };
 }

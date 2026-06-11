@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const repoMocks = vi.hoisted(() => ({
   PAGE_DM_MESSAGE_HISTORY_LIMIT: 25,
+  findPageById: vi.fn(),
   findPageSummaryByLabel: vi.fn(),
   getPageConversationPreview: vi.fn(),
   getPageConversationMessages: vi.fn(),
@@ -268,7 +269,11 @@ describe("runtime page services", () => {
       egressKey: "shared-proxy-pool",
     };
     let observedContext: Record<string, unknown> | null = null;
-    fanslyPageMocks.resolveAccessibleFanslyPage.mockResolvedValue({ id: 7 });
+    // Presence resolves the page inline since the OnlyFans branch landed
+    // (parity Phase 4): summary lookup + access check instead of the
+    // Fansly-only resolver.
+    repoMocks.findPageSummaryByLabel.mockResolvedValue({ id: 7, label: "lana", platform: "fansly" });
+    authMocks.canAccessPage.mockReturnValue(true);
     pageContextMocks.resolvePageContext.mockResolvedValue(pageContext);
     repoMocks.listWorkboardPresence.mockResolvedValue({ total: 0, items: [] });
     fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map());

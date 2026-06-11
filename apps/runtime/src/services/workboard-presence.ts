@@ -1,17 +1,20 @@
 import type { WorkboardPresenceResponse } from "@agency_hub_core/contracts";
 import {
+  findPageById,
+  findPageSummaryByLabel,
   listWorkboardPresence,
   upsertFanPageExternalPresences,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
+import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
+import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 import {
   buildFanslyFollowerPresenceSignals,
   FANSLY_RECENTLY_ACTIVE_WINDOW_MS,
 } from "./fansly-presence.ts";
 import { resolveFanslyPlatformAccountId } from "./fansly.ts";
-import { resolveAccessibleFanslyPage } from "./fansly-page.ts";
+import { isOfapiPresenceProjectionEnabled } from "./ofapi-presence-projection.ts";
 import { resolvePageContext, type ResolvedFanslyPageContext } from "./page-context.ts";
 import { upsertHydratedFansForPage } from "./sync/fan-hydration.ts";
 
@@ -140,10 +143,32 @@ export async function getWorkboardPresenceReport(
   pageLabel: string,
 ): Promise<WorkboardPresenceResponse> {
   requireDashboardUser(principal);
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, "Workboard presence");
+  const page = await findPageSummaryByLabel(app.db, pageLabel);
+  if (!page) {
+    throw new NotFoundError(`Page "${pageLabel}" was not found`);
+  }
+  if (!canAccessPage(principal, page.id)) {
+    throw new ForbiddenError();
+  }
+
+  if (page.platform === "onlyfans") {
+    // D9: OnlyFans presence is DB-read-only — the webhook projection keeps the
+    // store fresh, so refresh is a no-op (and no platform credentials are
+    // required, unlike the Fansly refresh path). Pages outside the OFAPI
+    // presence pipeline keep the historical Fansly-only rejection.
+    const storedPage = await findPageById(app.db, page.id);
+    const eligible = isOfapiPresenceProjectionEnabled(app.config) &&
+      typeof storedPage?.page.ofapiAccountId === "string" &&
+      storedPage.page.ofapiAccountId.length > 0;
+    if (!eligible) {
+      throw new BadRequestError("Workboard presence is only supported for Fansly pages");
+    }
+    return readStoredPresence(app, page.id, new Date());
+  }
+
   const pageContext = await resolvePageContext(app, pageLabel);
   if (pageContext.platform !== "fansly") {
-    throw new Error("Expected Fansly page context");
+    throw new BadRequestError("Workboard presence is only supported for Fansly pages");
   }
   const updatedAt = new Date();
   const lastSeenAfter = updatedAt.getTime() - FANSLY_RECENTLY_ACTIVE_WINDOW_MS;
@@ -175,15 +200,23 @@ export async function getWorkboardPresenceReport(
     await inFlight;
   }
 
+  return readStoredPresence(app, page.id, updatedAt);
+}
+
+async function readStoredPresence(
+  app: AppContext,
+  pageId: number,
+  updatedAt: Date,
+): Promise<WorkboardPresenceResponse> {
   const [activeNow, recentlyActive] = await Promise.all([
     listWorkboardPresence(app.db, {
-      platformAccountId: page.id,
+      platformAccountId: pageId,
       bucket: "active_now",
       now: updatedAt,
       limit: 20,
     }),
     listWorkboardPresence(app.db, {
-      platformAccountId: page.id,
+      platformAccountId: pageId,
       bucket: "recently_active",
       now: updatedAt,
       limit: 20,
