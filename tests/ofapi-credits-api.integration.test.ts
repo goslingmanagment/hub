@@ -64,7 +64,11 @@ async function seedLedgerFixture() {
   const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label: "lora-of" });
   await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId: "acct_credits" });
 
-  const now = Date.now();
+  // Anchor inside the CURRENT UTC day — "now minus hours" would straddle the
+  // UTC midnight boundary when the suite runs early in the UTC day.
+  const now = new Date();
+  const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const minutes = (count: number) => new Date(dayStart + count * 60 * 1000);
   await recordOfapiCreditSpend(appContext.db, {
     operation: "ofapi_chats",
     credits: 90,
@@ -72,7 +76,7 @@ async function seedLedgerFixture() {
     pageId: page.id,
     httpStatus: 200,
     requestId: "ofapi_chats:seed",
-    occurredAt: new Date(now - 3 * 60 * 60 * 1000),
+    occurredAt: minutes(1),
   });
   await recordOfapiCreditSpend(appContext.db, {
     operation: "ofapi_chat_messages",
@@ -80,40 +84,37 @@ async function seedLedgerFixture() {
     balanceAfter: 23_950,
     pageId: page.id,
     httpStatus: 200,
-    occurredAt: new Date(now - 2 * 60 * 60 * 1000),
+    occurredAt: minutes(2),
   });
   await insertOfapiCreditLedgerEntry(appContext.db, {
-    occurredAt: new Date(now - 60 * 60 * 1000),
+    occurredAt: minutes(3),
     source: "webhook_accrual",
     operation: "ofapi_webhook_events",
     credits: 40,
     estimated: true,
-    accrualDay: new Date(now - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    accrualDay: new Date(dayStart - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
   });
   await insertOfapiCreditLedgerEntry(appContext.db, {
-    occurredAt: new Date(now - 30 * 60 * 1000),
+    occurredAt: minutes(4),
     source: "external",
     credits: 5,
     estimated: true,
   });
   await insertOfapiCreditLedgerEntry(appContext.db, {
-    occurredAt: new Date(now - 20 * 60 * 1000),
+    occurredAt: minutes(5),
     source: "refill",
     credits: -1000,
     estimated: true,
   });
   await setOfapiCreditReconcileCursor(appContext.db, {
     reconciledThroughLedgerId: 2,
-    lastReconcileAt: new Date(now - 10 * 60 * 1000),
+    lastReconcileAt: minutes(6),
     lastDriftCredits: 0,
   });
 
   return page;
 }
 
-// The seed above is entirely "today"-relative; tests near UTC midnight could
-// straddle the day boundary, so day-bucket assertions tolerate either bucket
-// only where noted.
 describe("ofapi credits admin api", () => {
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();

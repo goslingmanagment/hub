@@ -264,6 +264,14 @@ describe("ofapi credit ledger integration", () => {
     expect(rows.map((row) => row.credits).sort()).toEqual([1, 2]);
     expect(rows.every((row) => row.estimated)).toBe(true);
 
+    // occurred_at must land INSIDE the accrued day so daily/burn aggregates
+    // attribute the credits to the day the events arrived.
+    const { rows: accrualDays } = await testDb.pool.query<{ matches: boolean }>(
+      `select bool_and((occurred_at at time zone 'UTC')::date = accrual_day) as matches
+       from ofapi_credit_ledger where source = 'webhook_accrual'`,
+    );
+    expect(accrualDays[0]!.matches).toBe(true);
+
     // Re-running never double-posts a day.
     expect(await runOfapiWebhookAccrual(appContext)).toBe(0);
     expect(

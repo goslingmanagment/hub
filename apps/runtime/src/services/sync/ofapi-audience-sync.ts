@@ -137,6 +137,10 @@ export async function pauseDisabledOnlyFansAudienceForPage(
   pageId: number,
   now = new Date(),
 ) {
+  if (!app.config) {
+    return false;
+  }
+
   const storedPage = await findPageById(app.db, pageId);
   if (!storedPage || storedPage.page.platform !== "onlyfans") {
     return false;
@@ -152,6 +156,10 @@ export async function pauseDisabledOnlyFansAudienceForAllPages(
   app: AppContext,
   now = new Date(),
 ) {
+  if (!app.config) {
+    return 0;
+  }
+
   let pausedPages = 0;
   const pages = await listPagesByPlatform(app.db, "onlyfans");
   for (const page of pages) {
@@ -469,6 +477,10 @@ export async function executeOfapiAudienceChunk(
     }
 
     const sweepComplete = !page.hasNextPage || page.items.length === 0;
+    // An empty page that still claims hasNextPage is contradictory pagination —
+    // complete the sweep (offset += 0 would loop forever) but refuse the
+    // destructive generational expiry on a signal we cannot trust.
+    const contradictoryPagination = page.items.length === 0 && page.hasNextPage;
     const nextState = sweepComplete
       ? {
         ...state,
@@ -483,15 +495,32 @@ export async function executeOfapiAudienceChunk(
         pageCount: state.pageCount + 1,
       };
 
+    if (contradictoryPagination) {
+      await input.telemetry.addAnomaly({
+        code: "ofapi_fans_contradictory_pagination",
+        severity: "warn",
+        message: "fans/active returned an empty page with hasMore=true; completing the sweep without the generational expiry",
+        details: { offset: state.offset, generation: state.generation },
+      });
+    }
+
     const written = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       await applyActiveFans(dbTx, fans);
-      if (sweepComplete) {
+      if (sweepComplete && !contradictoryPagination) {
         await deactivatePageSubscriptionsByGeneration(dbTx, {
           platformAccountId: input.pageContext.page.id,
           generation: state.generation,
         });
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
+        return upsertCheckpoint(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "subscribers",
+          state: nextState,
+          lastSuccessfulRunId: input.syncRunId,
+        });
+      }
+      if (sweepComplete) {
         return upsertCheckpoint(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "subscribers",

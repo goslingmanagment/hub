@@ -34,6 +34,15 @@ const ofapiEventMocks = vi.hoisted(() => ({
   startOfapiEventWorker: vi.fn(),
 }));
 
+const ofapiCreditMocks = vi.hoisted(() => ({
+  ensureOfapiCreditQueues: vi.fn(),
+  ensureOfapiCreditSchedules: vi.fn(),
+  startOfapiCreditWorker: vi.fn(),
+  isOfapiCreditLedgerEnabled: vi.fn(() => false),
+  createOfapiCreditSpendSink: vi.fn(() => async () => {}),
+  runOfapiCreditBurnMonitor: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
@@ -44,6 +53,7 @@ vi.mock("../apps/runtime/src/services/sync/planner.ts", () => ({
   runSyncPlannerCycle: plannerMocks.runSyncPlannerCycle,
 }));
 vi.mock("../apps/runtime/src/services/ofapi-events.ts", () => ofapiEventMocks);
+vi.mock("../apps/runtime/src/services/ofapi-credits.ts", () => ofapiCreditMocks);
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,

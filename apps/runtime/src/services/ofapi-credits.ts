@@ -130,9 +130,12 @@ export async function runOfapiWebhookAccrual(app: AppContext, now = new Date()) 
       continue;
     }
 
+    // occurred_at sits INSIDE the accrued day so every occurred_at-bucketed
+    // aggregate (daily bars, "spent today", the trailing-hour burn window)
+    // attributes the credits to the day the events actually arrived.
     const inserted = await upsertOfapiWebhookAccrual(app.db, {
       accrualDay: isoDay(dayStart),
-      occurredAt: dayEnd,
+      occurredAt: dayStart,
       credits: webhookAccrualCredits(eventCount),
       eventCount,
     });

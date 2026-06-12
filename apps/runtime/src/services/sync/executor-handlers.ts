@@ -991,9 +991,14 @@ export async function executeTopSpendersChunk(
     if (isOnlyFansTopSpendersEnabled(app.config)) {
       return executeOnlyFansTopSpendersChunk(app, input);
     }
-    // The planner force-pauses the stream while the flag is off, so reaching
-    // here is a wiring bug.
-    throw new Error("Top spenders sync is not enabled for this OnlyFans page");
+    // The planner force-pauses the stream while the flag is off, but a manual
+    // block resume can race one run in before the next planner cycle re-pauses
+    // it — skip gracefully instead of recording a failure (DM-polling pattern).
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: { skipped: "onlyfans_top_spenders_disabled" },
+    } satisfies StreamChunkResult;
   }
   if (input.pageContext.platform !== "fansly") {
     throw new Error("Top spenders sync is only supported for Fansly pages");
@@ -1572,9 +1577,14 @@ export async function executeSubscribersChunk(
     if (isOfapiAudienceSyncEligiblePage(app.config, input.pageContext.page)) {
       return executeOfapiAudienceChunk(app, input);
     }
-    // No legacy OnlyFans subscribers path exists; the planner force-pauses the
-    // stream for non-eligible pages, so reaching here is a wiring bug.
-    throw new Error("Subscriber sync is not enabled for this OnlyFans page");
+    // The planner force-pauses the stream for non-eligible pages, but a manual
+    // block resume can race one run in before the next planner cycle re-pauses
+    // it — skip gracefully instead of recording a failure (DM-polling pattern).
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: { skipped: "onlyfans_audience_not_eligible" },
+    } satisfies StreamChunkResult;
   }
   if (input.pageContext.platform !== "fansly") {
     throw new Error("Subscriber sync is only supported for Fansly pages");

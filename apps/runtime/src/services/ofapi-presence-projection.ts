@@ -51,9 +51,10 @@ function parseTimestamp(value: unknown): Date | null {
 
 export interface OfapiPresenceEventData {
   fanId: string;
-  // When the fan was last seen online: for users.online this is "now", for
-  // users.offline the moment they dropped — last_seen_online_at covers both
-  // (live-captured fixtures), with status_changed_at/observed_at as fallbacks.
+  // When the fan was last seen online: for users.online this is "now"; for
+  // users.offline it is the historical lastSeen (earlier than the status
+  // change, per the live captures) — last_seen_online_at carries the right
+  // value for both, with status_changed_at/observed_at as fallbacks.
   lastSeenAt: Date | null;
   observedAt: Date | null;
 }

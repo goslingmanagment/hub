@@ -705,7 +705,12 @@ export interface OfapiBalancePoint {
   value: number;
 }
 
-/** Balance observations over a window, oldest first (the balance chart). */
+/**
+ * Balance observations over a window, oldest first (the balance chart). When
+ * the window holds more rows than the cap, the NEWEST ones win — every charged
+ * REST response is an observation, so a busy month easily exceeds the cap and
+ * the chart must not lose its right edge.
+ */
 export async function listOfapiBalanceSeriesBetween(
   db: Database,
   input: { from: Date; to: Date; limit?: number },
@@ -721,10 +726,12 @@ export async function listOfapiBalanceSeriesBetween(
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
     ))
-    .orderBy(asc(ofapiCreditLedger.occurredAt))
+    .orderBy(sql`${ofapiCreditLedger.occurredAt} desc, ${ofapiCreditLedger.id} desc`)
     .limit(input.limit ?? 2000);
 
-  return rows.filter((row): row is OfapiBalancePoint => row.value !== null);
+  return rows
+    .filter((row): row is OfapiBalancePoint => row.value !== null)
+    .reverse();
 }
 
 export interface OfapiRefillRow {

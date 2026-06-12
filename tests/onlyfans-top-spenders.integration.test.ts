@@ -296,9 +296,11 @@ describe("OnlyFans top spenders (computed from transactions)", () => {
     });
     expect(states[0]?.status).toBe("paused");
 
-    await expect(
-      executeTopSpendersChunk(disabledContext, await buildChunkInput(page)),
-    ).rejects.toThrow("not enabled for this OnlyFans page");
+    // A manual resume can race one run in before the planner re-pauses; the
+    // executor skips gracefully instead of recording a failure.
+    const skipped = await executeTopSpendersChunk(disabledContext, await buildChunkInput(page));
+    expect(skipped.satisfied).toBe(true);
+    expect(skipped.stats).toMatchObject({ skipped: "onlyfans_top_spenders_disabled" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("exposes top_spenders in the financials block for OnlyFans pages", async (context) => {

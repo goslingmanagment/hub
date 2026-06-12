@@ -66,7 +66,7 @@ export async function pauseDisabledOnlyFansTopSpendersForPage(
   pageId: number,
   now = new Date(),
 ) {
-  if (isOnlyFansTopSpendersEnabled(app.config)) {
+  if (!app.config || isOnlyFansTopSpendersEnabled(app.config)) {
     return false;
   }
 
@@ -82,7 +82,7 @@ export async function pauseDisabledOnlyFansTopSpendersForAllPages(
   app: AppContext,
   now = new Date(),
 ) {
-  if (isOnlyFansTopSpendersEnabled(app.config)) {
+  if (!app.config || isOnlyFansTopSpendersEnabled(app.config)) {
     return 0;
   }
 
