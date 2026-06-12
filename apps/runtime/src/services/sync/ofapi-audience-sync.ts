@@ -18,7 +18,6 @@ import {
   pausePageSync,
   rebuildSubscriberRollups,
   refreshFanPageSubscriberState,
-  sumOfapiRestCreditsForOperationsBetween,
   upsertCheckpoint,
   upsertCheckpointProgress,
   upsertFanPageExternalPresences,
@@ -39,7 +38,6 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { isOfapiCreditLedgerEnabled } from "../ofapi-credits.ts";
 import { asRecord, idToString } from "../ofapi-payloads.ts";
 import type { OfapiClient, OfapiRequestContext } from "../ofapi.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
@@ -259,10 +257,6 @@ function requireOfapiAccountId(pageContext: ResolvedPageContext) {
   return ofapiAccountId;
 }
 
-function utcDayStart(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
 /**
  * The subscribers stream for OFAPI-fed OnlyFans pages: one full fans/active
  * offset sweep per OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES, checkpointed so
@@ -293,21 +287,14 @@ export async function executeOfapiAudienceChunk(
   let state = parseOfapiAudienceCursorState(checkpoint?.state) ?? emptyOfapiAudienceCursorState();
 
   // D6: the audience sweep gets its own daily ceiling. With the credit ledger
-  // on, only fans/active spend counts against it; otherwise fall back to the
-  // global day counter (conservative — shared with DM spend).
-  const day = utcDayStart(new Date());
+  // on, the guard reserves against the sweep's dedicated day counter (audit
+  // F9 — the ledger-attributed SUM it replaced could not see in-flight
+  // spend); otherwise it falls back to the global day counter (conservative —
+  // shared with DM spend).
   const guard = createOfapiRestGuard(app, {
     maxRequestsPerRun: app.config.ofapiAudienceMaxRequestsPerRun ?? DEFAULT_MAX_REQUESTS_PER_RUN,
     dailyCreditBudget: app.config.ofapiAudienceDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
-    ...(isOfapiCreditLedgerEnabled(app.config)
-      ? {
-        resolveSpentToday: () => sumOfapiRestCreditsForOperationsBetween(app.db, {
-          operations: ["ofapi_fans_active"],
-          from: day,
-          to: new Date(day.getTime() + 24 * 60 * 60 * 1000),
-        }),
-      }
-      : {}),
+    budgetScope: "audience",
   });
 
   const sweepIntervalMs = Math.max(
@@ -507,9 +494,19 @@ export async function executeOfapiAudienceChunk(
     const written = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       await applyActiveFans(dbTx, fans);
       if (sweepComplete && !contradictoryPagination) {
+        // P-25: a multi-chunk sweep can take hours; a subscription the live
+        // webhook projection created mid-sweep (lastSeenGeneration null) may
+        // sit at an offset the walk already passed — retiring it here would
+        // hide a fresh, real subscriber until the next sweep. Rows touched
+        // since the sweep started are spared; the next sweep adopts or
+        // retires them on real data.
+        const sweepStartedAt = state.sweepStartedAt ? new Date(state.sweepStartedAt) : null;
         await deactivatePageSubscriptionsByGeneration(dbTx, {
           platformAccountId: input.pageContext.page.id,
           generation: state.generation,
+          ...(sweepStartedAt !== null && !Number.isNaN(sweepStartedAt.getTime())
+            ? { lastSeenBefore: sweepStartedAt }
+            : {}),
         });
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);

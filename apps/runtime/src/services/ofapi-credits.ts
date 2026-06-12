@@ -172,11 +172,21 @@ export interface OfapiReconciliationPlan {
  * Positive residual -> external spend; negative -> refill; |residual| below the
  * tolerance is noise. Observations closer than the minimum gap to the previous
  * accepted one are skipped (their spend still counts in the next window).
+ *
+ * Audit F8: webhook burn drains the balance continuously but our accrual rows
+ * post once daily, after the fact — counting them as ledger-known spend let
+ * an intra-day drop reconcile as a duplicate `external` row and the spanning
+ * window then emit a compensating phantom `refill`, double-counting the
+ * webhook component in every non-refill aggregate. Instead, the expected
+ * webhook burn for each observation window is estimated from our own journal
+ * (events/100, fractional — the daily accrual keeps the per-day ceil) and
+ * treated as known spend; accrual rows are no longer ledger-known at all.
  */
 export async function planOfapiCreditReconciliation(input: {
   cursor: OfapiBalanceObservationRow;
   observations: OfapiBalanceObservationRow[];
   sumKnownCredits: (fromIdExclusive: number, toIdInclusive: number) => Promise<number>;
+  estimateWebhookCreditsBetween?: (from: Date, to: Date) => Promise<number>;
   minObservationGapMs?: number;
   toleranceCredits?: number;
 }): Promise<OfapiReconciliationPlan> {
@@ -196,7 +206,11 @@ export async function planOfapiCreditReconciliation(input: {
       continue;
     }
 
-    const knownCredits = await input.sumKnownCredits(previous.id, observation.id);
+    const ledgerKnownCredits = await input.sumKnownCredits(previous.id, observation.id);
+    const webhookCredits = input.estimateWebhookCreditsBetween
+      ? await input.estimateWebhookCreditsBetween(previous.occurredAt, observation.occurredAt)
+      : 0;
+    const knownCredits = ledgerKnownCredits + webhookCredits;
     const residual = previous.balanceAfter - knownCredits - observation.balanceAfter;
     if (Math.abs(residual) >= tolerance) {
       adjustments.push({
@@ -206,9 +220,14 @@ export async function planOfapiCreditReconciliation(input: {
         details: {
           fromLedgerId: previous.id,
           toLedgerId: observation.id,
+          // P-33: the residual describes drift accumulated over the whole
+          // window, so the burn monitor pro-rates it by window overlap with
+          // the trailing hour instead of taking the lump at occurredAt.
+          fromOccurredAt: previous.occurredAt.toISOString(),
           fromBalance: previous.balanceAfter,
           toBalance: observation.balanceAfter,
           knownCredits,
+          webhookCreditsEstimated: webhookCredits,
         },
       });
     }
@@ -272,6 +291,11 @@ export async function runOfapiCreditReconciliation(app: AppContext, now = new Da
     observations,
     sumKnownCredits: (fromIdExclusive, toIdInclusive) =>
       sumOfapiKnownCreditsBetween(app.db, { fromLedgerIdExclusive: fromIdExclusive, toLedgerIdInclusive: toIdInclusive }),
+    // F8: webhook burn is known spend — we journal every delivery — it just
+    // is not in the ledger until the daily accrual posts it. Estimating it
+    // per window keeps it out of the external/refill residuals.
+    estimateWebhookCreditsBetween: async (from, to) =>
+      (await countOfapiWebhookEventsReceivedBetween(app.db, { from, to })) / 100,
   });
 
   await app.db.transaction(async (tx) => {
@@ -288,7 +312,11 @@ export async function runOfapiCreditReconciliation(app: AppContext, now = new Da
     await setOfapiCreditReconcileCursor(tx, {
       reconciledThroughLedgerId: plan.cursorObservation?.id ?? cursor.id,
       lastReconcileAt: now,
-      lastDriftCredits: plan.lastDriftCredits ?? state.lastDriftCredits,
+      // The webhook estimate makes residuals fractional; the cursor column is
+      // an integer.
+      lastDriftCredits: plan.lastDriftCredits !== null
+        ? Math.round(plan.lastDriftCredits)
+        : state.lastDriftCredits,
     });
   });
 

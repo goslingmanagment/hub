@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
@@ -131,7 +131,34 @@ export interface UpsertPageDmConversationInput {
   isVisible?: boolean;
   lastSeenGeneration: number | null;
   metadata?: Record<string, unknown>;
+  // Audit B11 / decision #50 "heads only ever advance": when two writers race
+  // on a row that did not exist at read time (so there was nothing to lock),
+  // the conflict-update itself refuses to move the head block backwards. Only
+  // the OFAPI writers set this — Fansly's REST sync stays authoritative for
+  // its heads (it has no concurrent second writer and must be able to move a
+  // head back when the platform deleted the head message).
+  headForwardOnly?: boolean;
 }
+
+// Mirrors the OFAPI writers' headAdvances(): a head moves only to a strictly
+// later timestamp, or to a greater message id (numeric when both ids are
+// numeric strings) on an equal timestamp.
+const headAdvanceCondition = sql`(
+  excluded.last_message_at is not null and (
+    ${pageDmConversations.lastMessageAt} is null
+    or excluded.last_message_at > ${pageDmConversations.lastMessageAt}
+    or (
+      excluded.last_message_at = ${pageDmConversations.lastMessageAt}
+      and case
+        when ${pageDmConversations.lastMessageId} is null then true
+        when excluded.last_message_id is null then false
+        when excluded.last_message_id ~ '^[0-9]+$' and ${pageDmConversations.lastMessageId} ~ '^[0-9]+$'
+          then excluded.last_message_id::numeric > ${pageDmConversations.lastMessageId}::numeric
+        else excluded.last_message_id > ${pageDmConversations.lastMessageId}
+      end
+    )
+  )
+)`;
 
 export async function upsertPageDmConversation(
   db: Database,
@@ -173,6 +200,16 @@ export async function upsertPageDmConversation(
     updatedAt: now,
   };
 
+  const headGuardedSet = input.headForwardOnly === true
+    ? {
+      lastMessageId: sql`case when ${headAdvanceCondition} then excluded.last_message_id else ${pageDmConversations.lastMessageId} end`,
+      lastMessageAt: sql`case when ${headAdvanceCondition} then excluded.last_message_at else ${pageDmConversations.lastMessageAt} end`,
+      lastMessageSenderId: sql`case when ${headAdvanceCondition} then excluded.last_message_sender_id else ${pageDmConversations.lastMessageSenderId} end`,
+      lastMessageSenderRole: sql`case when ${headAdvanceCondition} then excluded.last_message_sender_role else ${pageDmConversations.lastMessageSenderRole} end`,
+      lastMessagePreview: sql`case when ${headAdvanceCondition} then excluded.last_message_preview else ${pageDmConversations.lastMessagePreview} end`,
+    }
+    : {};
+
   const [row] = await db
     .insert(pageDmConversations)
     .values({
@@ -181,7 +218,7 @@ export async function upsertPageDmConversation(
     })
     .onConflictDoUpdate({
       target: [pageDmConversations.platformAccountId, pageDmConversations.platformConversationId],
-      set: patch,
+      set: { ...patch, ...headGuardedSet },
     })
     .returning();
 
@@ -304,18 +341,26 @@ export async function listPageDmConversationsByPlatformConversationIds(
   input: {
     platformAccountId: number;
     platformConversationIds: string[];
+    // Audit B11: the OFAPI webhook projection and the REST reconcile both
+    // read-then-full-row-upsert these rows; callers that go on to write must
+    // lock the read inside their transaction so a concurrent writer cannot
+    // regress a fresher head with a stale snapshot. Rows are locked in id
+    // order so multi-row lockers cannot deadlock each other.
+    forUpdate?: boolean;
   },
 ) {
   if (input.platformConversationIds.length === 0) {
     return [] as PageDmConversationRow[];
   }
 
-  const rows = await db.select()
+  const query = db.select()
     .from(pageDmConversations)
     .where(and(
       eq(pageDmConversations.platformAccountId, input.platformAccountId),
       inArray(pageDmConversations.platformConversationId, input.platformConversationIds),
-    ));
+    ))
+    .orderBy(asc(pageDmConversations.id));
+  const rows = input.forUpdate === true ? await query.for("update") : await query;
 
   return rows.map((row) => normalizeConversationRow(row));
 }

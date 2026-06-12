@@ -841,15 +841,24 @@ export async function deactivatePageSubscriptionsByGeneration(
   input: {
     platformAccountId: number;
     generation: number;
+    // Audit P-25: a sweep can only retire what it had a chance to observe.
+    // The live webhook projection inserts subscriptions with a null
+    // generation; one created mid-sweep may sit at an offset the walk already
+    // passed and would be retired at finalization despite being fresh and
+    // real. Passing the sweep's start time spares every row touched since.
+    lastSeenBefore?: Date;
   },
 ) {
+  const touchedSinceSweepStartGuard = input.lastSeenBefore
+    ? sql` and last_seen_at < ${input.lastSeenBefore}`
+    : sql``;
   await db.execute(sql`
     update page_subscriptions
     set is_current = false,
         last_seen_at = now()
     where platform_account_id = ${input.platformAccountId}
       and is_current = true
-      and (last_seen_generation is null or last_seen_generation < ${input.generation})
+      and (last_seen_generation is null or last_seen_generation < ${input.generation})${touchedSinceSweepStartGuard}
   `);
 }
 
@@ -967,12 +976,23 @@ export async function listTopFansForPage(
   `);
 }
 
-/** One subscription row by its platform identity (OFAPI live projection lookups). */
+/**
+ * One subscription row by its platform identity (OFAPI live projection
+ * lookups). Audit P-26: the projection carries the row it read forward into a
+ * full-row upsert, so its read must be locked (forUpdate inside the writing
+ * transaction) — otherwise a concurrent audience sweep's fresher
+ * renew/expiry dates and generation stamp get clobbered back to the stale
+ * snapshot (the same lost-update shape as B11).
+ */
 export async function findPageSubscription(
   db: Database,
-  input: { platformAccountId: number; platformSubscriptionId: string },
+  input: {
+    platformAccountId: number;
+    platformSubscriptionId: string;
+    forUpdate?: boolean;
+  },
 ) {
-  const [row] = await db
+  const query = db
     .select()
     .from(pageSubscriptions)
     .where(and(
@@ -980,6 +1000,7 @@ export async function findPageSubscription(
       eq(pageSubscriptions.platformSubscriptionId, input.platformSubscriptionId),
     ))
     .limit(1);
+  const [row] = input.forUpdate === true ? await query.for("update") : await query;
 
   return row ?? null;
 }

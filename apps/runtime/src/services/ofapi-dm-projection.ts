@@ -203,9 +203,14 @@ async function projectDmMessageEvent(
 ): Promise<OfapiDmProjectionOutcome> {
   return app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
+    // B11: lock the conversation row for the whole read-compute-upsert cycle
+    // so the REST reconcile's full-row upsert and this projection serialize
+    // instead of racing (lost update on the head/unread fields). Lock order —
+    // conversation before fans — matches applyChatSummaries in ofapi-dm-sync.
     const [existing] = await listPageDmConversationsByPlatformConversationIds(db, {
       platformAccountId: page.id,
       platformConversationIds: [message.fanId],
+      forUpdate: true,
     });
 
     if (existing) {
@@ -293,6 +298,10 @@ async function projectDmMessageEvent(
         ...existing?.metadata,
         provider: nonEmpty(existing?.metadata.provider) ?? "ofapi",
       },
+      // B11 insert-race defense: when the row did not exist at read time
+      // there was nothing to lock, so the upsert itself refuses to move the
+      // head backwards (decision #50: heads only ever advance).
+      headForwardOnly: true,
     });
 
     await upsertPageDmMessages(db, [{

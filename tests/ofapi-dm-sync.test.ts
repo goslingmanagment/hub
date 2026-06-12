@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isOfapiCreditFloorBlocking,
   isOfapiDmSyncEligiblePage,
+  OFAPI_FLOOR_BALANCE_FRESHNESS_MS,
   parseOfapiChatSummary,
   parseOfapiRestMessage,
 } from "../apps/runtime/src/services/sync/ofapi-dm-sync.ts";
@@ -21,6 +23,46 @@ describe("isOfapiDmSyncEligiblePage", () => {
       { ofapiDmSyncEnabled: true },
       { platform: "onlyfans", ofapiAccountId: null },
     )).toBe(false);
+  });
+});
+
+// Audit F7: a sub-floor balance must only park while the observation is fresh
+// — parked streams make no requests, so a stale observation would otherwise
+// outlive an account top-up forever (the only other refresher, the balance
+// ping, is default-off).
+describe("isOfapiCreditFloorBlocking", () => {
+  const now = new Date("2026-06-13T12:00:00Z");
+  const fresh = new Date(now.getTime() - 60_000);
+  const stale = new Date(now.getTime() - OFAPI_FLOOR_BALANCE_FRESHNESS_MS);
+
+  it("parks on a fresh sub-floor balance", () => {
+    expect(isOfapiCreditFloorBlocking({
+      creditFloor: 500, lastBalance: 100, lastBalanceAt: fresh, now,
+    })).toBe(true);
+  });
+
+  it("lets a probe through once the observation is as old as the park delay", () => {
+    expect(isOfapiCreditFloorBlocking({
+      creditFloor: 500, lastBalance: 100, lastBalanceAt: stale, now,
+    })).toBe(false);
+  });
+
+  it("treats a balance with no observation time as stale", () => {
+    expect(isOfapiCreditFloorBlocking({
+      creditFloor: 500, lastBalance: 100, lastBalanceAt: null, now,
+    })).toBe(false);
+  });
+
+  it("never parks at or above the floor, with no floor, or with no balance", () => {
+    expect(isOfapiCreditFloorBlocking({
+      creditFloor: 500, lastBalance: 500, lastBalanceAt: fresh, now,
+    })).toBe(false);
+    expect(isOfapiCreditFloorBlocking({
+      creditFloor: 0, lastBalance: 100, lastBalanceAt: fresh, now,
+    })).toBe(false);
+    expect(isOfapiCreditFloorBlocking({
+      creditFloor: 500, lastBalance: null, lastBalanceAt: fresh, now,
+    })).toBe(false);
   });
 });
 

@@ -1708,6 +1708,12 @@ export const ofapiCreditState = pgTable("ofapi_credit_state", {
   id: integer("id").primaryKey().default(1).notNull(),
   spendDay: date("spend_day"),
   spentCredits: integer("spent_credits").default(0).notNull(),
+  // The audience sweep's own day counter (audit F9): budget checks reserve
+  // against it in one conditional update before each request, settled to
+  // _meta actuals after — the ledger-attributed SUM it replaced could not see
+  // in-flight spend, so concurrent streams near the cap could overspend.
+  audienceSpendDay: date("audience_spend_day"),
+  audienceSpentCredits: integer("audience_spent_credits").default(0).notNull(),
   lastBalance: integer("last_balance"),
   lastBalanceAt: timestamp("last_balance_at", { withTimezone: true }),
   // Reconciliation cursor (D5): the last balance-observation ledger row that

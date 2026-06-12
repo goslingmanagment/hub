@@ -81,7 +81,15 @@ describe("planOfapiCreditReconciliation", () => {
       source: "external",
       credits: 40,
       occurredAt: at(5),
-      details: { fromLedgerId: 1, toLedgerId: 5, fromBalance: 1000, toBalance: 900, knownCredits: 60 },
+      details: {
+        fromLedgerId: 1,
+        toLedgerId: 5,
+        fromOccurredAt: at(0).toISOString(),
+        fromBalance: 1000,
+        toBalance: 900,
+        knownCredits: 60,
+        webhookCreditsEstimated: 0,
+      },
     }]);
     expect(plan.cursorObservation?.id).toBe(5);
     expect(plan.lastDriftCredits).toBe(40);
@@ -98,7 +106,15 @@ describe("planOfapiCreditReconciliation", () => {
       source: "refill",
       credits: -25_000,
       occurredAt: at(5),
-      details: { fromLedgerId: 1, toLedgerId: 7, fromBalance: 1000, toBalance: 25_900, knownCredits: 100 },
+      details: {
+        fromLedgerId: 1,
+        toLedgerId: 7,
+        fromOccurredAt: at(0).toISOString(),
+        fromBalance: 1000,
+        toBalance: 25_900,
+        knownCredits: 100,
+        webhookCreditsEstimated: 0,
+      },
     }]);
     expect(plan.lastDriftCredits).toBe(-25_000);
   });
@@ -146,6 +162,56 @@ describe("planOfapiCreditReconciliation", () => {
     ]);
     expect(plan.cursorObservation?.id).toBe(9);
     expect(plan.lastDriftCredits).toBe(0);
+  });
+
+  // Audit F8: a balance drop caused by webhook burn must not reconcile as an
+  // `external` row — the daily accrual posts those credits later, and counting
+  // both doubles the webhook component in every non-refill aggregate.
+  it("treats journal-estimated webhook burn as known spend instead of external drift", async () => {
+    const plan = await planOfapiCreditReconciliation({
+      cursor: { id: 1, occurredAt: at(0), balanceAfter: 1000 },
+      // 400 webhook events landed between the observations: the balance
+      // dropped 4 credits beyond the ledger-known REST spend.
+      observations: [{ id: 5, occurredAt: at(10), balanceAfter: 936 }],
+      sumKnownCredits: sums({ "1-5": 60 }),
+      estimateWebhookCreditsBetween: async () => 4,
+    });
+
+    expect(plan.adjustments).toEqual([]);
+    expect(plan.cursorObservation?.id).toBe(5);
+    expect(plan.lastDriftCredits).toBe(0);
+  });
+
+  it("still surfaces genuinely external drift beyond the webhook estimate", async () => {
+    const plan = await planOfapiCreditReconciliation({
+      cursor: { id: 1, occurredAt: at(0), balanceAfter: 1000 },
+      // 4 webhook credits + 60 REST credits explain 64 of the 100-credit drop.
+      observations: [{ id: 5, occurredAt: at(10), balanceAfter: 900 }],
+      sumKnownCredits: sums({ "1-5": 60 }),
+      estimateWebhookCreditsBetween: async () => 4,
+    });
+
+    expect(plan.adjustments).toEqual([
+      expect.objectContaining({
+        source: "external",
+        credits: 36,
+        details: expect.objectContaining({ knownCredits: 64, webhookCreditsEstimated: 4 }),
+      }),
+    ]);
+  });
+
+  it("keeps fractional webhook estimates inside the noise tolerance", async () => {
+    const plan = await planOfapiCreditReconciliation({
+      cursor: { id: 1, occurredAt: at(0), balanceAfter: 1000 },
+      // 70 events ≈ 0.7 credits estimated, 1 credit actually charged (started
+      // batch): the 0.3 residual is noise, not external spend.
+      observations: [{ id: 5, occurredAt: at(10), balanceAfter: 989 }],
+      sumKnownCredits: sums({ "1-5": 10 }),
+      estimateWebhookCreditsBetween: async () => 0.7,
+    });
+
+    expect(plan.adjustments).toEqual([]);
+    expect(plan.lastDriftCredits).toBeCloseTo(0.3);
   });
 });
 

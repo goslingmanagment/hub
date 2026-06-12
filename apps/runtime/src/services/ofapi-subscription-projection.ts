@@ -167,9 +167,16 @@ async function projectOfapiSubscriptionEvent(
       throw new Error("Fan upsert returned no row");
     }
 
+    // P-26: lock the row for the whole read-carry-forward-upsert cycle. The
+    // audience sweep owns renew/expiry dates and the generation stamp; without
+    // the lock a sweep landing between this read and the full-row upsert below
+    // would get its fresher dates clobbered back to this stale snapshot (the
+    // same lost-update shape as B11). Lock order — fans before subscriptions —
+    // matches the sweep's applyActiveFans.
     const existing = await findPageSubscription(tx, {
       platformAccountId: page.id,
       platformSubscriptionId: parsed.fanId,
+      forUpdate: true,
     });
 
     const priceMills = parsed.priceDollars !== null

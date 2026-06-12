@@ -30,6 +30,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError } from "./errors.ts";
 import { isOfapiCreditLedgerEnabled } from "./ofapi-credits.ts";
+import { isOfapiCreditFloorBlocking } from "./sync/ofapi-dm-sync.ts";
 
 const DEFAULT_DM_DAILY_CREDIT_BUDGET = 500;
 const DEFAULT_AUDIENCE_DAILY_CREDIT_BUDGET = 300;
@@ -107,15 +108,20 @@ export async function getOfapiCreditsSummary(
 
   const bySource = toSpendBySource(todaySpend);
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
-  const floorBlocked = creditFloor > 0 &&
-    credit.lastBalance !== null &&
-    credit.lastBalance < creditFloor;
+  // Mirrors the guard (audit F7): a sub-floor balance whose observation has
+  // gone stale no longer parks — the guard lets a probe through to refresh it.
+  const floorBlocked = isOfapiCreditFloorBlocking({
+    creditFloor,
+    lastBalance: credit.lastBalance,
+    lastBalanceAt: credit.lastBalanceAt,
+    now,
+  });
 
   // Budget state mirrors the executor guards exactly: the DM ceiling is
   // compared against the GLOBAL day counter (that is what parks the stream);
-  // the audience ceiling uses its own ledger-attributed spend when the ledger
-  // is on (D6), falling back to the global counter like the guard does. The
-  // displayed per-stream spend is ledger-attributed when available.
+  // the audience ceiling uses its own reservation day counter when the ledger
+  // is on (D6/F9), falling back to the global counter like the guard does.
+  // The displayed per-stream spend is ledger-attributed when available.
   const resolveBudget = (input: {
     stream: string;
     spentToday: number;
@@ -151,7 +157,7 @@ export async function getOfapiCreditsSummary(
           1,
           app.config.ofapiAudienceDailyCreditBudget ?? DEFAULT_AUDIENCE_DAILY_CREDIT_BUDGET,
         ),
-        guardSpentToday: enabled ? audienceSpentToday : credit.spentToday,
+        guardSpentToday: enabled ? credit.audienceSpentToday : credit.spentToday,
       })]
       : []),
   ];

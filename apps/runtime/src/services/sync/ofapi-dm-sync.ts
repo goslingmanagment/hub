@@ -16,9 +16,10 @@ import {
   getPageDmConversationById,
   getPageDmMessageRetentionLimit,
   listPageDmConversationsByPlatformConversationIds,
-  recordOfapiCreditUsage,
   requestPageSync,
+  reserveOfapiDayCredits,
   selectNextPageDmMessageSyncCandidate,
+  settleOfapiDayCreditReservation,
   upsertCheckpoint,
   upsertCheckpointProgress,
   upsertFanPages,
@@ -29,6 +30,7 @@ import {
   type Database,
   type DmSenderRole,
   type MessageCoverageStatus,
+  type OfapiDayBudgetScope,
   type PageSyncLease,
 } from "@agency_hub_core/db";
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
@@ -110,17 +112,58 @@ function requireOfapiAccountId(pageContext: ResolvedPageContext) {
 
 export type OfapiBudgetBlock = "ofapi_request_budget" | "ofapi_daily_credit_budget" | "ofapi_credit_floor";
 
+// The per-request reservation estimate: the standard uncached account-scoped
+// read costs 1 credit; recordResponse settles to the _meta-reported actuals.
+const OFAPI_REQUEST_CREDIT_ESTIMATE = 1;
+
+/**
+ * Audit F7: a sub-floor balance only parks while the observation is fresh.
+ * Parked streams make no requests, so nothing would ever refresh a stale
+ * balance and a floor crossing would outlive an account top-up — with the
+ * optional balance ping off, permanently. Once the observation is older than
+ * the park delay, one probe request per park cycle is let through; its _meta
+ * (via the ledger sink or the settle path) refreshes the balance and the
+ * stream resumes or re-parks on real data.
+ */
+export const OFAPI_FLOOR_BALANCE_FRESHNESS_MS = BUDGET_BLOCK_RETRY_DELAY_MS;
+
+export function isOfapiCreditFloorBlocking(input: {
+  creditFloor: number;
+  lastBalance: number | null;
+  lastBalanceAt: Date | null;
+  now?: Date;
+}) {
+  if (
+    input.creditFloor <= 0 ||
+    input.lastBalance === null ||
+    input.lastBalance >= input.creditFloor
+  ) {
+    return false;
+  }
+  const nowMs = (input.now ?? new Date()).getTime();
+  return input.lastBalanceAt !== null &&
+    nowMs - input.lastBalanceAt.getTime() < OFAPI_FLOOR_BALANCE_FRESHNESS_MS;
+}
+
 /**
  * D4/D6 budget guard, checked before every REST request. The per-chunk request
  * cap yields like a normal budget exhaustion; daily-budget and floor blocks add
  * a retry delay so the stream parks instead of spinning. Streams with their own
- * ceiling (audience, D6) pass `resolveSpentToday` so their budget counts only
- * their attributed spend instead of the global day counter.
+ * ceiling (audience, D6) pass `budgetScope: "audience"` so their budget counts
+ * only their own spend (its dedicated day counter with the ledger on, the
+ * global day counter fallback otherwise, per decision #50).
+ *
+ * Audit F9: the day-budget check is reserve-before-request — the comparison
+ * and the counter increment are one conditional update, so concurrent streams
+ * near the cap can never pass the check together and overspend. recordResponse
+ * settles each reservation to the server-reported actuals; a request that
+ * throws in between leaks at most the 1-credit estimate until the UTC-day
+ * rollover (conservative direction).
  */
 export function createOfapiRestGuard(app: AppContext, options?: {
   maxRequestsPerRun?: number;
   dailyCreditBudget?: number;
-  resolveSpentToday?: () => Promise<number>;
+  budgetScope?: OfapiDayBudgetScope;
 }) {
   const maxRequestsPerRun = Math.max(
     1,
@@ -133,6 +176,13 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
   );
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
+  // The audience's dedicated counter mirrors its ledger-attributed spend, so
+  // it applies only with the ledger on; off, the audience falls back to the
+  // shared global day counter exactly as before (decision #50).
+  const scope: OfapiDayBudgetScope =
+    options?.budgetScope === "audience" && isOfapiCreditLedgerEnabled(app.config)
+      ? "audience"
+      : "global";
   let requestsUsed = 0;
 
   return {
@@ -145,32 +195,43 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       }
 
       const credit = await getOfapiCreditState(app.db);
-      const spentToday = options?.resolveSpentToday
-        ? await options.resolveSpentToday()
-        : credit.spentToday;
-      if (spentToday >= dailyCreditBudget) {
-        return "ofapi_daily_credit_budget";
-      }
-      if (
-        creditFloor > 0 &&
-        credit.lastBalance !== null &&
-        credit.lastBalance < creditFloor
-      ) {
+      if (isOfapiCreditFloorBlocking({
+        creditFloor,
+        lastBalance: credit.lastBalance,
+        lastBalanceAt: credit.lastBalanceAt,
+      })) {
         return "ofapi_credit_floor";
       }
-      return null;
+
+      const reserved = await reserveOfapiDayCredits(app.db, {
+        scope,
+        estimate: OFAPI_REQUEST_CREDIT_ESTIMATE,
+        budget: dailyCreditBudget,
+      });
+      return reserved ? null : "ofapi_daily_credit_budget";
     },
     async recordResponse(page: OfapiListPage) {
       requestsUsed += 1;
+      const actualCredits = page.meta?.creditsUsed ?? OFAPI_REQUEST_CREDIT_ESTIMATE;
       // With the ledger on, the client's onCreditSpend sink already recorded
-      // this response (ledger row + day counter, one transaction) — recording
-      // here too would double-count. Flag off keeps the pre-ledger behavior:
-      // uncached account-scoped reads cost 1 credit; trust _meta when present.
+      // the actuals (ledger row + global day counter + balance, one
+      // transaction) before the response reached us — only the reservation
+      // remains to release. The audience counter settles to actuals because
+      // the sink maintains only the global one. Flag off keeps the pre-ledger
+      // accounting (uncached reads cost 1 credit; trust _meta when present),
+      // applied as a settle against the reservation.
       if (isOfapiCreditLedgerEnabled(app.config)) {
+        await settleOfapiDayCreditReservation(app.db, {
+          scope,
+          creditsDelta: scope === "audience"
+            ? actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE
+            : -OFAPI_REQUEST_CREDIT_ESTIMATE,
+        });
         return;
       }
-      await recordOfapiCreditUsage(app.db, {
-        creditsUsed: page.meta?.creditsUsed ?? 1,
+      await settleOfapiDayCreditReservation(app.db, {
+        scope,
+        creditsDelta: actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE,
         balance: page.meta?.creditBalance ?? null,
       });
     },
@@ -515,6 +576,17 @@ export async function executeOfapiDmConversationsChunk(
       return;
     }
 
+    // B11: lock the conversation rows for the whole read-compute-upsert cycle
+    // so a concurrent webhook projection cannot land a fresher head between
+    // our read and our full-row upsert (which would then regress it to this
+    // stale snapshot and re-burn credits on the re-walk). Lock order matters:
+    // conversations before fans, the same order the projection acquires them.
+    const existingConversations = await listPageDmConversationsByPlatformConversationIds(dbTx, {
+      platformAccountId: input.pageContext.page.id,
+      platformConversationIds: summaries.map((summary) => summary.fanId),
+      forUpdate: true,
+    });
+
     const fanRows = await upsertFans(dbTx, summaries.map((summary) => ({
       platform: "onlyfans" as const,
       platformUserId: summary.fanId,
@@ -527,10 +599,6 @@ export async function executeOfapiDmConversationsChunk(
     })));
     const fanByPlatformUserId = new Map(fanRows.map((fan) => [fan.platformUserId, fan] as const));
 
-    const existingConversations = await listPageDmConversationsByPlatformConversationIds(dbTx, {
-      platformAccountId: input.pageContext.page.id,
-      platformConversationIds: summaries.map((summary) => summary.fanId),
-    });
     const existingByFanId = new Map(
       existingConversations.map((conversation) => [
         conversation.platformConversationId,
@@ -588,6 +656,10 @@ export async function executeOfapiDmConversationsChunk(
           ...existing?.metadata,
           provider: nonEmpty(existing?.metadata.provider) ?? "ofapi",
         },
+        // B11 insert-race defense: when the row did not exist at read time
+        // there was nothing to lock, so the upsert itself refuses to move the
+        // head backwards (decision #50: heads only ever advance).
+        headForwardOnly: true,
       });
       processedConversations += 1;
       if (upserted && needsDmMessagesFollowup(upserted)) {

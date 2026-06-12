@@ -349,8 +349,122 @@ export async function recordOfapiCreditUsage(
   `);
 }
 
+export type OfapiDayBudgetScope = "global" | "audience";
+
+const OFAPI_DAY_COUNTER_COLUMNS = {
+  global: { day: "spend_day", credits: "spent_credits" },
+  audience: { day: "audience_spend_day", credits: "audience_spent_credits" },
+} as const;
+
+/**
+ * Atomically reserves `estimate` credits against the scope's UTC-day counter
+ * (audit F9): the budget comparison and the counter increment are one
+ * conditional update, so concurrent streams near the cap can never pass the
+ * check together and overspend. Returns false when the reservation would
+ * exceed `budget`. Callers settle the estimate to the server-reported actuals
+ * via settleOfapiDayCreditReservation; a crash in between leaks at most the
+ * estimate until the UTC-day rollover (conservative direction).
+ */
+export async function reserveOfapiDayCredits(
+  db: Database,
+  input: {
+    scope: OfapiDayBudgetScope;
+    estimate: number;
+    budget: number;
+    now?: Date;
+  },
+): Promise<boolean> {
+  const now = input.now ?? new Date();
+  const day = utcDayOf(now);
+  const estimate = Math.max(0, Math.round(input.estimate));
+  const budget = Math.round(input.budget);
+  if (estimate > budget) {
+    return false;
+  }
+
+  const columns = OFAPI_DAY_COUNTER_COLUMNS[input.scope];
+  const dayColumn = sql.raw(columns.day);
+  const creditsColumn = sql.raw(columns.credits);
+  const reserved = await db.execute(sql`
+    insert into ofapi_credit_state (id, ${dayColumn}, ${creditsColumn}, updated_at)
+    values (1, ${day}::date, ${estimate}, ${now}::timestamptz)
+    on conflict (id) do update set
+      ${creditsColumn} = case
+        when ofapi_credit_state.${dayColumn} = ${day}::date
+          then ofapi_credit_state.${creditsColumn} + ${estimate}
+        else ${estimate}
+      end,
+      ${dayColumn} = ${day}::date,
+      updated_at = ${now}::timestamptz
+    where (case
+        when ofapi_credit_state.${dayColumn} = ${day}::date
+          then ofapi_credit_state.${creditsColumn}
+        else 0
+      end) + ${estimate} <= ${budget}
+    returning id
+  `);
+
+  return reserved.rows.length > 0;
+}
+
+/**
+ * Settles a reservation made by reserveOfapiDayCredits to the server-reported
+ * actuals: applies `creditsDelta` (actual minus estimate, or minus the whole
+ * estimate when the ledger sink already recorded the actuals) to the scope's
+ * day counter, clamped at zero — a reservation that straddled the UTC-day
+ * rollover settles against the new day. Optionally records the response's
+ * balance observation, exactly like recordOfapiCreditUsage.
+ */
+export async function settleOfapiDayCreditReservation(
+  db: Database,
+  input: {
+    scope: OfapiDayBudgetScope;
+    creditsDelta: number;
+    balance?: number | null;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const day = utcDayOf(now);
+  const delta = Math.round(input.creditsDelta);
+  const balance = typeof input.balance === "number" && Number.isFinite(input.balance)
+    ? Math.round(input.balance)
+    : null;
+
+  const columns = OFAPI_DAY_COUNTER_COLUMNS[input.scope];
+  const dayColumn = sql.raw(columns.day);
+  const creditsColumn = sql.raw(columns.credits);
+  await db.execute(sql`
+    insert into ofapi_credit_state (id, ${dayColumn}, ${creditsColumn}, last_balance, last_balance_at, updated_at)
+    values (
+      1,
+      ${day}::date,
+      greatest(0, ${delta}),
+      ${balance},
+      case when ${balance}::int is null then null else ${now}::timestamptz end,
+      ${now}::timestamptz
+    )
+    on conflict (id) do update set
+      ${creditsColumn} = greatest(0, case
+        when ofapi_credit_state.${dayColumn} = ${day}::date
+          then ofapi_credit_state.${creditsColumn} + ${delta}
+        else ${delta}
+      end),
+      ${dayColumn} = ${day}::date,
+      last_balance = coalesce(${balance}::int, ofapi_credit_state.last_balance),
+      last_balance_at = case
+        when ${balance}::int is null then ofapi_credit_state.last_balance_at
+        else ${now}::timestamptz
+      end,
+      updated_at = ${now}::timestamptz
+  `);
+}
+
 export interface OfapiCreditState {
   spentToday: number;
+  // The audience sweep's reservation counter (audit F9) — what its budget
+  // guard compares against when the credit ledger is on.
+  audienceSpentToday: number;
   lastBalance: number | null;
   lastBalanceAt: Date | null;
 }
@@ -363,11 +477,12 @@ export async function getOfapiCreditState(
     where: eq(ofapiCreditState.id, 1),
   });
   if (!row) {
-    return { spentToday: 0, lastBalance: null, lastBalanceAt: null };
+    return { spentToday: 0, audienceSpentToday: 0, lastBalance: null, lastBalanceAt: null };
   }
 
   return {
     spentToday: row.spendDay === utcDayOf(now) ? row.spentCredits : 0,
+    audienceSpentToday: row.audienceSpendDay === utcDayOf(now) ? row.audienceSpentCredits : 0,
     lastBalance: row.lastBalance,
     lastBalanceAt: row.lastBalanceAt,
   };
@@ -539,8 +654,14 @@ export async function listOfapiBalanceObservationsAfter(
 // Sources counted as "spend we already knew about" when decomposing balance
 // drift (D5). external/refill rows are reconciliation OUTPUT — their ids land
 // after the observations they describe, so summing them here would double-count
-// drift into later windows.
-const OFAPI_RECONCILE_KNOWN_SOURCES = ["rest", "webhook_accrual", "adjustment"] as const;
+// drift into later windows. webhook_accrual is deliberately NOT here (audit
+// F8): the daily accrual row posts a whole day's webhook burn at ~00:40 the
+// next day, long after the balance observations that already absorbed that
+// burn — counting it would first let the intra-day drop reconcile as a
+// duplicate `external` row, then make the spanning window emit a compensating
+// phantom `refill`. The planner instead estimates un-posted webhook burn per
+// observation window from the journal (estimateWebhookCreditsBetween).
+const OFAPI_RECONCILE_KNOWN_SOURCES = ["rest", "adjustment"] as const;
 
 /** Sum of known-spend credits over a ledger id window (from exclusive, to inclusive). */
 export async function sumOfapiKnownCreditsBetween(
@@ -559,13 +680,34 @@ export async function sumOfapiKnownCreditsBetween(
   return row?.total ?? 0;
 }
 
-/** Trailing-window spend across all sources except refills (burn-rate alert). */
+/**
+ * Trailing-window spend across all sources except refills (burn-rate alert).
+ * Reconciliation `external` rows describe drift accumulated over a whole
+ * observation window but are stamped at the window's closing observation, so
+ * a sparse-observation residual (days of drift) would otherwise land in the
+ * trailing hour as one lump and trip a false burn alert (audit P-33): rows
+ * that carry their window start (details.fromOccurredAt) are pro-rated by the
+ * window's overlap with [since, occurredAt].
+ */
 export async function sumOfapiCreditsSpentSince(
   db: Database,
   input: { since: Date },
 ): Promise<number> {
+  const fromOccurredAt = sql`(${ofapiCreditLedger.details} ->> 'fromOccurredAt')::timestamptz`;
   const [row] = await db
-    .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
+    .select({
+      total: sql<number>`coalesce(round(sum(
+        case
+          when ${ofapiCreditLedger.source} = 'external'
+            and (${ofapiCreditLedger.details} ->> 'fromOccurredAt') is not null
+            and ${fromOccurredAt} < ${ofapiCreditLedger.occurredAt}
+          then ${ofapiCreditLedger.credits}::double precision
+            * extract(epoch from (${ofapiCreditLedger.occurredAt} - greatest(${fromOccurredAt}, ${input.since})))
+            / extract(epoch from (${ofapiCreditLedger.occurredAt} - ${fromOccurredAt}))
+          else ${ofapiCreditLedger.credits}
+        end
+      )), 0)::int`,
+    })
     .from(ofapiCreditLedger)
     .where(and(
       gte(ofapiCreditLedger.occurredAt, input.since),
