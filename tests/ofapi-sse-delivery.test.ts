@@ -20,6 +20,7 @@ vi.mock("../apps/runtime/src/services/ofapi-events.ts", () => ({
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
+  createMonotonicSeqGuard,
   createSyncEventHub,
   type SyncEventFrame,
   type SyncEventHub,
@@ -215,5 +216,31 @@ describe("sync event hub delivery contract (audit B3)", () => {
     h.settle(102);
 
     await vi.waitFor(() => expect(h.delivered).toEqual([100, 101, 102]), { timeout: 4_000 });
+  });
+});
+
+describe("per-connection monotonic seq guard (audit B3/P-6)", () => {
+  // Sim scenario D: a frame returned by the replay query whose live broadcast
+  // landed after the buffered-live flush was written twice (the post-replayDone
+  // path had no replayedIds check).
+  it("drops a live re-delivery of a frame the replay already wrote", () => {
+    const guard = createMonotonicSeqGuard(99);
+    expect(guard.advance(100)).toBe(true); // replay writes 100
+    expect(guard.advance(100)).toBe(false); // post-flush live broadcast of 100
+  });
+
+  it("drops frames at or below the client's Last-Event-ID", () => {
+    const guard = createMonotonicSeqGuard(100);
+    expect(guard.advance(99)).toBe(false);
+    expect(guard.advance(100)).toBe(false);
+    expect(guard.advance(101)).toBe(true);
+  });
+
+  it("allows seq gaps (other pages' frames) but never a regression", () => {
+    const guard = createMonotonicSeqGuard(null);
+    expect(guard.advance(5)).toBe(true);
+    expect(guard.advance(50)).toBe(true);
+    expect(guard.advance(49)).toBe(false);
+    expect(guard.advance(51)).toBe(true);
   });
 });

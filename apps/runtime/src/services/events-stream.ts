@@ -33,6 +33,28 @@ export interface SyncEventHub {
 }
 
 /**
+ * Per-connection monotonic Last-Event-ID guard. SSE frame ids on one connection
+ * must be strictly increasing: a frame can legitimately reach a connection twice
+ * (journal replay plus a live broadcast landing after the replay flushed), and
+ * EventSource resume relies on the last written id being the stream's maximum —
+ * a non-monotonic id would make the strict `fanout_seq > Last-Event-ID` replay
+ * skip frames after a reconnect.
+ */
+export function createMonotonicSeqGuard(lastSeenSeq: number | null) {
+  let lastWrittenSeq = lastSeenSeq;
+  return {
+    /** True exactly when the frame advances the stream; false = already written/seen. */
+    advance(seq: number): boolean {
+      if (lastWrittenSeq !== null && seq <= lastWrittenSeq) {
+        return false;
+      }
+      lastWrittenSeq = seq;
+      return true;
+    },
+  };
+}
+
+/**
  * Single shared LISTEN connection fanning worker-processed journal rows out to
  * the API process's SSE subscribers. The worker NOTIFYs on settle commit
  * (services/ofapi-events.ts).

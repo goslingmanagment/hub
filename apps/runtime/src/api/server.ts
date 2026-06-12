@@ -198,7 +198,12 @@ import {
 import {
   ensureSyncQueues,
 } from "../services/sync-queue.ts";
-import { createSyncEventHub, type SyncEventFrame, type SyncEventHub } from "../services/events-stream.ts";
+import {
+  createMonotonicSeqGuard,
+  createSyncEventHub,
+  type SyncEventFrame,
+  type SyncEventHub,
+} from "../services/events-stream.ts";
 import {
   getOfapiCreditsDaily,
   getOfapiCreditsLedger,
@@ -1187,8 +1192,18 @@ export async function buildApiServer(appContext: AppContext) {
     raw.write("retry: 3000\n\n");
     activeSseStreams.add(raw);
 
+    // Monotonic seq guard: every frame write — replay, buffered flush, live —
+    // goes through writeFrame, which drops anything at or below the highest id
+    // already written (seeded from Last-Event-ID). A frame seen by both the
+    // replay and a live broadcast goes out exactly once, and ids on the wire are
+    // strictly increasing, which the strict `> Last-Event-ID` resume relies on.
+    const seqGuard = createMonotonicSeqGuard(lastEventId);
+
     function writeFrame(frame: SyncEventFrame) {
       if (raw.writableEnded || raw.destroyed) {
+        return;
+      }
+      if (!seqGuard.advance(frame.id)) {
         return;
       }
       if (raw.writableLength > SSE_MAX_BUFFERED_BYTES) {
@@ -1199,10 +1214,8 @@ export async function buildApiServer(appContext: AppContext) {
       raw.write(`id: ${frame.id}\nevent: sync\ndata: ${JSON.stringify(frame.syncEvent)}\n\n`);
     }
 
-    // Subscribe before the replay query; live frames buffer until replay finishes,
-    // then exactly the frames the replay already wrote are dropped (by id set —
-    // fanout seqs are settle-ordered, but a frame can still commit during the
-    // replay window and be seen by both paths).
+    // Subscribe before the replay query; live frames buffer until replay
+    // finishes, then flush through the seq guard.
     let replayDone = false;
     const bufferedLive: SyncEventFrame[] = [];
     const unsubscribe = syncEventHub.subscribe({
@@ -1244,7 +1257,6 @@ export async function buildApiServer(appContext: AppContext) {
       return;
     }
 
-    const replayedIds = new Set<number>();
     let replayCursor = lastEventId;
     if (replayCursor !== null && pageIds.size > 0) {
       try {
@@ -1255,7 +1267,6 @@ export async function buildApiServer(appContext: AppContext) {
             limit: SSE_REPLAY_BATCH_SIZE,
           });
           for (const row of rows) {
-            replayedIds.add(row.id);
             writeFrame(row);
           }
           const lastRow = rows.at(-1);
@@ -1276,10 +1287,7 @@ export async function buildApiServer(appContext: AppContext) {
 
     replayDone = true;
     for (const frame of bufferedLive) {
-      const seenByClient = lastEventId !== null && frame.id <= lastEventId;
-      if (!replayedIds.has(frame.id) && !seenByClient) {
-        writeFrame(frame);
-      }
+      writeFrame(frame);
     }
     bufferedLive.length = 0;
   });

@@ -366,6 +366,15 @@ describe("OFAPI webhook → SSE end-to-end", () => {
 
         await sleep(300);
         expect(resumed.frames).toHaveLength(3);
+
+        // Audit B3/P-6: ids on each connection are strictly increasing — no
+        // duplicate or out-of-order frame ever reaches the wire, so the strict
+        // `> Last-Event-ID` resume can never skip frames.
+        for (const frames of [client.frames, resumed.frames]) {
+          for (let i = 1; i < frames.length; i += 1) {
+            expect(frames[i]!.id!).toBeGreaterThan(frames[i - 1]!.id!);
+          }
+        }
       } finally {
         await resumed.close();
       }
