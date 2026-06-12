@@ -237,6 +237,11 @@ export interface OfapiSyncEventRow {
  * Processed frames after a fanout-seq cursor, oldest first. Page-filtered when
  * pageIds is given (SSE replay); unfiltered when omitted (the hub's catch-up after
  * a LISTEN gap — subscribers filter per connection).
+ *
+ * Rows orphaned by page deletion (null platform_account_id) are excluded in SQL,
+ * not post-filtered: callers detect "more rows remain" via rows.length === limit,
+ * so a post-fetch filter shrinking a full batch would end pagination early and
+ * silently skip the rest of the gap.
  */
 export async function listOfapiSyncEventsForReplay(
   db: Database,
@@ -261,6 +266,7 @@ export async function listOfapiSyncEventsForReplay(
       gt(ofapiWebhookEvents.fanoutSeq, input.afterSeq),
       eq(ofapiWebhookEvents.status, "processed"),
       isNotNull(ofapiWebhookEvents.syncEvent),
+      isNotNull(ofapiWebhookEvents.platformAccountId),
       ...(input.pageIds
         ? [inArray(ofapiWebhookEvents.platformAccountId, input.pageIds)]
         : []),
@@ -268,6 +274,7 @@ export async function listOfapiSyncEventsForReplay(
     .orderBy(asc(ofapiWebhookEvents.fanoutSeq))
     .limit(input.limit);
 
+  // Type narrowing only — every condition is already enforced in the WHERE clause.
   return rows.filter(
     (row): row is OfapiSyncEventRow =>
       row.id !== null && row.platformAccountId !== null && row.syncEvent !== null,

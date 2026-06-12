@@ -8,7 +8,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   createModel,
   createOnlyFansPage,
+  insertOfapiWebhookEvent,
+  listOfapiSyncEventsForReplay,
   setPageOfapiAccountId,
+  settleOfapiWebhookEvent,
   upsertOfapiWebhookConfig,
 } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
@@ -370,6 +373,61 @@ describe("OFAPI webhook → SSE end-to-end", () => {
       await client.close();
     }
   }, E2E_TIMEOUT_MS);
+
+  it("paginates the replay past rows orphaned by page deletion (audit P-7)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Six processed frames; the third orphaned (null platform_account_id — the
+    // shape page deletion leaves behind). The orphan must be excluded in SQL:
+    // a post-fetch filter would shrink a full LIMIT batch, the pagination loop
+    // would read it as "no more rows" and every later frame in the gap is lost.
+    const model = await createModel(appContext.db, { slug: "p7", name: "P7" });
+    const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label: "p7-of" });
+
+    for (let i = 0; i < 6; i++) {
+      const created = await insertOfapiWebhookEvent(appContext.db, {
+        idempotencyKey: `evt_p7_${i}`,
+        eventType: "users.typing",
+        ofapiAccountId: ACCOUNT_ONE,
+        payload: { event: "users.typing" },
+      });
+      await settleOfapiWebhookEvent(appContext.db, {
+        id: created!.id,
+        status: "processed",
+        platformAccountId: i === 2 ? null : page.id,
+        syncEvent: { type: "typing", accountId: ACCOUNT_ONE, chatId: String(i) },
+        processedAt: new Date(),
+      });
+    }
+
+    const { rows: seqRows } = await testDb.pool.query<{ seq: string; orphan: boolean }>(
+      `select fanout_seq as seq, platform_account_id is null as orphan
+         from ofapi_webhook_events order by fanout_seq`,
+    );
+    const allSeqs = seqRows.map((row) => Number(row.seq));
+    const expected = seqRows.filter((row) => !row.orphan).map((row) => Number(row.seq));
+    expect(expected).toHaveLength(5);
+
+    // The same pagination loop the hub drain and the SSE replay run: limit 4
+    // puts the orphan inside the first batch.
+    const collected: number[] = [];
+    let cursor = allSeqs[0]! - 1;
+    for (;;) {
+      const rows = await listOfapiSyncEventsForReplay(appContext.db, { afterSeq: cursor, limit: 4 });
+      for (const row of rows) {
+        collected.push(row.id);
+        cursor = row.id;
+      }
+      if (rows.length < 4) {
+        break;
+      }
+    }
+
+    expect(collected).toEqual(expected);
+  }, 60_000);
 
   it("requires chatter API-key auth on the stream", async (context) => {
     if (!testDb || !server) {
