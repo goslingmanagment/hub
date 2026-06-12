@@ -29,10 +29,11 @@ function buildSubscriberVm(overrides: Partial<SubscriberCardVm> = {}): Subscribe
     fanId: 101,
     fanLabel: "Dejan/Serbia",
     fanSubLabel: "@nymanoreus69",
+    platform: "fansly",
     platformConversationId: "797139409953628160",
     profileHref: "/pages/lana/fans/fansly/fan-101",
-    fanslyExternalUrl: "https://fansly.com/messages/797139409953628160",
-    fanslyExternalKind: "chat",
+    externalUrl: "https://fansly.com/messages/797139409953628160",
+    externalKind: "chat",
     ltvMills: 160000000,
     ltvLabel: "$160.00",
     touchpointCode: "1d",
@@ -66,8 +67,8 @@ describe("WorkboardCard", () => {
   it("falls back to a profile copy action when chat is unavailable", () => {
     const html = renderCard(buildSubscriberVm({
       platformConversationId: null,
-      fanslyExternalUrl: "https://fansly.com/nymanoreus69",
-      fanslyExternalKind: "profile",
+      externalUrl: "https://fansly.com/nymanoreus69",
+      externalKind: "profile",
     }));
 
     expect(html).toContain("Скопировать профиль");
@@ -77,14 +78,25 @@ describe("WorkboardCard", () => {
   it("hides the Copy action when no Fansly external URL is available", () => {
     const html = renderCard(buildSubscriberVm({
       platformConversationId: null,
-      fanslyExternalUrl: null,
-      fanslyExternalKind: null,
+      externalUrl: null,
+      externalKind: null,
     }));
 
     expect(html).not.toContain("Скопировать ссылку на чат Fansly");
     expect(html).not.toContain("Скопировать ссылку на профиль Fansly");
     expect(html).not.toContain("Скопировать чат");
     expect(html).not.toContain("Скопировать профиль");
+  });
+
+  it("labels the copy action with the page platform (audit B6)", () => {
+    const html = renderCard(buildSubscriberVm({
+      platform: "onlyfans",
+      externalUrl: "https://onlyfans.com/my/chats/chat/123456789/",
+      externalKind: "chat",
+    }));
+
+    expect(html).toContain("Скопировать ссылку на чат OnlyFans");
+    expect(html).not.toContain("Fansly");
   });
 
   it("shows visible ranking cues directly on the card", () => {

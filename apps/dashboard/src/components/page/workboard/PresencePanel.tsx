@@ -2,6 +2,7 @@ import { useState, type MouseEvent } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import { formatRelativeTime } from "@/lib/format";
+import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
 import type { WorkboardPresenceVm } from "@/pages/workboard/viewModel";
 
 interface PresencePanelProps {
@@ -24,14 +25,15 @@ interface PresenceBucketProps {
 
 function PresenceRow({ item }: { item: WorkboardPresenceVm }) {
   const [copied, setCopied] = useState(false);
-  const externalLinkLabel = item.fanslyExternalKind === "profile" ? "Профиль" : "Чат";
-  const externalLinkTitle = item.fanslyExternalKind === "profile"
-    ? "Скопировать ссылку на профиль Fansly"
-    : "Скопировать ссылку на чат Fansly";
+  const platformName = PLATFORM_DISPLAY_NAME[item.platform];
+  const externalLinkLabel = item.externalKind === "profile" ? "Профиль" : "Чат";
+  const externalLinkTitle = item.externalKind === "profile"
+    ? `Скопировать ссылку на профиль ${platformName}`
+    : `Скопировать ссылку на чат ${platformName}`;
 
-  async function handleCopyFanslyLink(event: MouseEvent<HTMLButtonElement>) {
+  async function handleCopyExternalLink(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
-    if (!item.fanslyExternalUrl) {
+    if (!item.externalUrl) {
       return;
     }
     if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
@@ -40,9 +42,9 @@ function PresenceRow({ item }: { item: WorkboardPresenceVm }) {
     }
 
     try {
-      await navigator.clipboard.writeText(item.fanslyExternalUrl);
+      await navigator.clipboard.writeText(item.externalUrl);
       setCopied(true);
-      toast.success(item.fanslyExternalKind === "chat" ? "Ссылка на чат скопирована" : "Ссылка на профиль скопирована");
+      toast.success(item.externalKind === "chat" ? "Ссылка на чат скопирована" : "Ссылка на профиль скопирована");
       globalThis.setTimeout(() => setCopied(false), 2000);
     } catch {
       toast.error("Не удалось скопировать ссылку");
@@ -76,10 +78,10 @@ function PresenceRow({ item }: { item: WorkboardPresenceVm }) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        {item.fanslyExternalUrl && (
+        {item.externalUrl && (
           <button
             type="button"
-            onClick={handleCopyFanslyLink}
+            onClick={handleCopyExternalLink}
             className="px-1.5 py-0.5 text-[10px] font-medium rounded border border-border text-text-secondary hover:bg-hover transition-colors"
             title={externalLinkTitle}
             aria-label={externalLinkTitle}

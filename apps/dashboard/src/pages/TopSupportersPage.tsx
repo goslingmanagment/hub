@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "reac
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { Copy, Check, ArrowUp, ArrowDown } from "lucide-react";
-import { resolveFanslyExternalLink } from "@/lib/platformUrls";
+import {
+  PLATFORM_DISPLAY_NAME,
+  resolveExternalLink,
+  type ExternalLinkPlatform,
+} from "@/lib/platformUrls";
 import { useSpenders, useSpenderBatch } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
@@ -281,15 +285,17 @@ function SubCell({ subscription, ready }: {
   );
 }
 
-function CopyFanslyLinkButton({
+function CopyExternalLinkButton({
+  platform,
   username,
   platformConversationId,
 }: {
+  platform: ExternalLinkPlatform;
   username: string | null;
   platformConversationId: string | null;
 }) {
   const [copied, setCopied] = useState(false);
-  const link = resolveFanslyExternalLink({ username, platformConversationId });
+  const link = resolveExternalLink(platform, { username, platformConversationId });
   if (!link) return null;
 
   const handleClick = async (e: MouseEvent<HTMLButtonElement>) => {
@@ -308,7 +314,10 @@ function CopyFanslyLinkButton({
     }
   };
 
-  const tooltipLabel = link.kind === "chat" ? "Скопировать ссылку на чат Fansly" : "Скопировать ссылку на профиль Fansly";
+  const platformName = PLATFORM_DISPLAY_NAME[platform];
+  const tooltipLabel = link.kind === "chat"
+    ? `Скопировать ссылку на чат ${platformName}`
+    : `Скопировать ссылку на профиль ${platformName}`;
 
   return (
     <Tooltip content={tooltipLabel}>
@@ -727,7 +736,8 @@ export function TopSupportersPage() {
                       {fanLabel.secondaryPlatformHandle && (
                         <span className="ml-2 text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</span>
                       )}
-                      <CopyFanslyLinkButton
+                      <CopyExternalLinkButton
+                        platform={platform!}
                         username={item.fan.username}
                         platformConversationId={item.conversation.platformConversationId}
                       />

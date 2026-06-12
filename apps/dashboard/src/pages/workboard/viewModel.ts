@@ -1,7 +1,11 @@
 import type { WorkboardPresenceResponse, WorkboardResponse } from "@agency_hub_core/contracts";
 import { resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { buildFanProfileRoute } from "@/lib/navigation";
-import { resolveFanslyExternalLink, type FanslyExternalLinkKind } from "@/lib/platformUrls";
+import {
+  resolveExternalLink,
+  type ExternalLinkKind,
+  type ExternalLinkPlatform,
+} from "@/lib/platformUrls";
 import { formatMills, formatRelativeTime, formatDate, daysRemaining } from "@/lib/format";
 import { resolveOverdueSeverity, type OverdueSeverity } from "./theme.js";
 
@@ -26,10 +30,11 @@ interface WorkboardBaseVm {
   fanId: number;
   fanLabel: string;
   fanSubLabel: string | null;
+  platform: ExternalLinkPlatform;
   platformConversationId: string | null;
   profileHref: string;
-  fanslyExternalUrl: string | null;
-  fanslyExternalKind: FanslyExternalLinkKind | null;
+  externalUrl: string | null;
+  externalKind: ExternalLinkKind | null;
   ltvMills: number;
   ltvLabel: string;
   overdueDays: number;
@@ -62,13 +67,17 @@ export interface WorkboardSpenderVm extends WorkboardBaseVm {
 
 export type WorkboardCardVm = WorkboardSubscriberVm | WorkboardSpenderVm;
 
-function buildBaseVm(pageLabel: string, item: SubscriberItem | SpenderItem): WorkboardBaseVm | null {
+function buildBaseVm(
+  pageLabel: string,
+  platform: ExternalLinkPlatform,
+  item: SubscriberItem | SpenderItem,
+): WorkboardBaseVm | null {
   const fan = resolveVisibleWorkboardFan(item.fan);
   if (!fan) {
     return null;
   }
 
-  const fanslyExternalLink = resolveFanslyExternalLink({
+  const externalLink = resolveExternalLink(platform, {
     platformConversationId: item.conversation.platformConversationId,
     username: fan.username,
   });
@@ -77,10 +86,11 @@ function buildBaseVm(pageLabel: string, item: SubscriberItem | SpenderItem): Wor
     fanId: item.fanId,
     fanLabel: fan.label,
     fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
+    platform,
     platformConversationId: item.conversation.platformConversationId,
-    profileHref: buildFanProfileRoute(pageLabel, "fansly", item.fan.platformUserId),
-    fanslyExternalUrl: fanslyExternalLink?.url ?? null,
-    fanslyExternalKind: fanslyExternalLink?.kind ?? null,
+    profileHref: buildFanProfileRoute(pageLabel, platform, item.fan.platformUserId),
+    externalUrl: externalLink?.url ?? null,
+    externalKind: externalLink?.kind ?? null,
     ltvMills: item.ltv.creatorNetAmountMills,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
     overdueDays: item.overdueDays,
@@ -100,8 +110,12 @@ function buildBaseVm(pageLabel: string, item: SubscriberItem | SpenderItem): Wor
   };
 }
 
-export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): WorkboardSubscriberVm | null {
-  const baseVm = buildBaseVm(pageLabel, item);
+export function mapSubscriberVm(
+  pageLabel: string,
+  platform: ExternalLinkPlatform,
+  item: SubscriberItem,
+): WorkboardSubscriberVm | null {
+  const baseVm = buildBaseVm(pageLabel, platform, item);
   if (!baseVm) {
     return null;
   }
@@ -127,9 +141,10 @@ export function mapSubscriberVm(pageLabel: string, item: SubscriberItem): Workbo
 
 export function mapSpenderVm(
   pageLabel: string,
+  platform: ExternalLinkPlatform,
   item: SpenderItem,
 ): WorkboardSpenderVm | null {
-  const baseVm = buildBaseVm(pageLabel, item);
+  const baseVm = buildBaseVm(pageLabel, platform, item);
   if (!baseVm) {
     return null;
   }
@@ -174,9 +189,10 @@ export interface WorkboardPresenceVm {
   fanId: number;
   fanLabel: string;
   fanSubLabel: string | null;
+  platform: ExternalLinkPlatform;
   profileHref: string;
-  fanslyExternalUrl: string | null;
-  fanslyExternalKind: FanslyExternalLinkKind | null;
+  externalUrl: string | null;
+  externalKind: ExternalLinkKind | null;
   ltvMills: number;
   ltvLabel: string;
   presenceLabel: string;
@@ -184,13 +200,17 @@ export interface WorkboardPresenceVm {
   lastTransactionLabel: string | null;
 }
 
-export function mapPresenceVm(pageLabel: string, item: PresenceItem): WorkboardPresenceVm | null {
+export function mapPresenceVm(
+  pageLabel: string,
+  platform: ExternalLinkPlatform,
+  item: PresenceItem,
+): WorkboardPresenceVm | null {
   const fan = resolveVisibleWorkboardFan(item.fan);
   if (!fan) {
     return null;
   }
 
-  const fanslyExternalLink = resolveFanslyExternalLink({
+  const externalLink = resolveExternalLink(platform, {
     platformConversationId: item.platformConversationId,
     username: fan.username,
   });
@@ -199,9 +219,10 @@ export function mapPresenceVm(pageLabel: string, item: PresenceItem): WorkboardP
     fanId: item.fanId,
     fanLabel: fan.label,
     fanSubLabel: fan.secondaryPlatformHandle ? `@${fan.secondaryPlatformHandle}` : null,
-    profileHref: buildFanProfileRoute(pageLabel, "fansly", item.fan.platformUserId),
-    fanslyExternalUrl: fanslyExternalLink?.url ?? null,
-    fanslyExternalKind: fanslyExternalLink?.kind ?? null,
+    platform,
+    profileHref: buildFanProfileRoute(pageLabel, platform, item.fan.platformUserId),
+    externalUrl: externalLink?.url ?? null,
+    externalKind: externalLink?.kind ?? null,
     ltvMills: item.ltv.creatorNetAmountMills,
     ltvLabel: formatMills(item.ltv.creatorNetAmountMills),
     presenceLabel: formatRelativeTime(item.presence.lastSeenAt),

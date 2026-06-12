@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { toast } from "sonner";
 import { ChatPreviewPanel } from "@/components/shared/ChatPreviewPanel";
 import { TouchpointBadge } from "@/components/shared/TouchpointBadge";
+import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
 import type { WorkboardCardVm } from "@/pages/workboard/viewModel";
 import { OVERDUE_BADGE, OVERDUE_BG } from "@/pages/workboard/theme";
 
@@ -115,15 +116,16 @@ export function WorkboardCard({
   const [copied, setCopied] = useState(false);
   const platformConversationId = vm.platformConversationId;
   const canPreview = vm.canPreview && platformConversationId !== null;
-  const externalLinkLabel = vm.fanslyExternalKind === "chat" ? "Скопировать чат" : "Скопировать профиль";
-  const externalLinkTitle = vm.fanslyExternalKind === "chat"
-    ? "Скопировать ссылку на чат Fansly"
-    : "Скопировать ссылку на профиль Fansly";
+  const platformName = PLATFORM_DISPLAY_NAME[vm.platform];
+  const externalLinkLabel = vm.externalKind === "chat" ? "Скопировать чат" : "Скопировать профиль";
+  const externalLinkTitle = vm.externalKind === "chat"
+    ? `Скопировать ссылку на чат ${platformName}`
+    : `Скопировать ссылку на профиль ${platformName}`;
 
-  async function handleCopyFanslyLink(event: MouseEvent<HTMLButtonElement>) {
+  async function handleCopyExternalLink(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
 
-    if (!vm.fanslyExternalUrl) {
+    if (!vm.externalUrl) {
       return;
     }
 
@@ -133,9 +135,9 @@ export function WorkboardCard({
     }
 
     try {
-      await navigator.clipboard.writeText(vm.fanslyExternalUrl);
+      await navigator.clipboard.writeText(vm.externalUrl);
       setCopied(true);
-      toast.success(vm.fanslyExternalKind === "chat" ? "Ссылка на чат скопирована" : "Ссылка на профиль скопирована");
+      toast.success(vm.externalKind === "chat" ? "Ссылка на чат скопирована" : "Ссылка на профиль скопирована");
       globalThis.setTimeout(() => setCopied(false), 2000);
     } catch {
       toast.error("Не удалось скопировать ссылку");
@@ -223,10 +225,10 @@ export function WorkboardCard({
 
           <div className="flex items-center gap-2 shrink-0">
             <ActionButtons onContacted={onContacted} onSnooze={onSnooze} isPending={isSnoozePending} />
-            {vm.fanslyExternalUrl && (
+            {vm.externalUrl && (
               <button
                 type="button"
-                onClick={handleCopyFanslyLink}
+                onClick={handleCopyExternalLink}
                 className="px-3 py-0.5 text-[11px] font-semibold rounded border border-border text-text-secondary hover:bg-hover transition-colors"
                 title={externalLinkTitle}
                 aria-label={externalLinkTitle}

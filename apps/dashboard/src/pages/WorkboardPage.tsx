@@ -251,25 +251,26 @@ export function WorkboardPage() {
   const [pendingSnoozeFanId, setPendingSnoozeFanId] = useState<number | null>(null);
   const [pendingUnsnoozeFanId, setPendingUnsnoozeFanId] = useState<number | null>(null);
 
+  const platform = page?.platform ?? "fansly";
   const subscriberVms = useMemo(
     () => data?.subscribers.items
-      .map((item) => mapSubscriberVm(resolvedPageLabel, item))
+      .map((item) => mapSubscriberVm(resolvedPageLabel, platform, item))
       .filter(isPresent) ?? [],
-    [data?.subscribers.items, resolvedPageLabel],
+    [data?.subscribers.items, resolvedPageLabel, platform],
   );
 
   const activeSpenderVms = useMemo(
     () => data?.activeSpenders.items
-      .map((item) => mapSpenderVm(resolvedPageLabel, item))
+      .map((item) => mapSpenderVm(resolvedPageLabel, platform, item))
       .filter(isPresent) ?? [],
-    [data?.activeSpenders.items, resolvedPageLabel],
+    [data?.activeSpenders.items, resolvedPageLabel, platform],
   );
 
   const inactiveSpenderVms = useMemo(
     () => data?.inactiveSpenders.items
-      .map((item) => mapSpenderVm(resolvedPageLabel, item))
+      .map((item) => mapSpenderVm(resolvedPageLabel, platform, item))
       .filter(isPresent) ?? [],
-    [data?.inactiveSpenders.items, resolvedPageLabel],
+    [data?.inactiveSpenders.items, resolvedPageLabel, platform],
   );
 
   const snoozedVms = useMemo(
@@ -278,15 +279,15 @@ export function WorkboardPage() {
   );
   const activeNowPresenceVms = useMemo(
     () => presenceQuery.data?.activeNow.items
-      .map((item) => mapPresenceVm(resolvedPageLabel, item))
+      .map((item) => mapPresenceVm(resolvedPageLabel, platform, item))
       .filter(isPresent) ?? [],
-    [presenceQuery.data?.activeNow.items, resolvedPageLabel],
+    [presenceQuery.data?.activeNow.items, resolvedPageLabel, platform],
   );
   const recentlyActivePresenceVms = useMemo(
     () => presenceQuery.data?.recentlyActive.items
-      .map((item) => mapPresenceVm(resolvedPageLabel, item))
+      .map((item) => mapPresenceVm(resolvedPageLabel, platform, item))
       .filter(isPresent) ?? [],
-    [presenceQuery.data?.recentlyActive.items, resolvedPageLabel],
+    [presenceQuery.data?.recentlyActive.items, resolvedPageLabel, platform],
   );
 
   const tabCounts: Record<Tab, number> = {

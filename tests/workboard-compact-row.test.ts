@@ -35,10 +35,11 @@ function buildSubscriberVm(overrides: Partial<SubscriberCardVm> = {}): Subscribe
     fanId: 101,
     fanLabel: "Dejan/Serbia",
     fanSubLabel: "@nymanoreus69",
+    platform: "fansly",
     platformConversationId: "797139409953628160",
     profileHref: "/pages/lana/fans/fansly/fan-101",
-    fanslyExternalUrl: "https://fansly.com/messages/797139409953628160",
-    fanslyExternalKind: "chat",
+    externalUrl: "https://fansly.com/messages/797139409953628160",
+    externalKind: "chat",
     ltvMills: 160000000,
     ltvLabel: "$160.00",
     touchpointCode: "1d",
@@ -72,8 +73,8 @@ describe("WorkboardCompactRow", () => {
   it("falls back to a profile copy action when chat is unavailable", () => {
     const html = renderCompactRow(buildSubscriberVm({
       platformConversationId: null,
-      fanslyExternalUrl: "https://fansly.com/nymanoreus69",
-      fanslyExternalKind: "profile",
+      externalUrl: "https://fansly.com/nymanoreus69",
+      externalKind: "profile",
     }));
 
     expect(html).toContain("Скопировать ссылку на профиль Fansly");
@@ -82,8 +83,8 @@ describe("WorkboardCompactRow", () => {
   it("hides the copy action when no Fansly external URL is available", () => {
     const html = renderCompactRow(buildSubscriberVm({
       platformConversationId: null,
-      fanslyExternalUrl: null,
-      fanslyExternalKind: null,
+      externalUrl: null,
+      externalKind: null,
     }));
 
     expect(html).not.toContain("Скопировать ссылку на чат Fansly");
