@@ -13,6 +13,7 @@ import type {
   PageDeletedFansResponse,
   PageFanDetailResponse,
   PageRevenueResponse,
+  PlatformRevenueWindow,
   SubscriberDailyResponse,
   SubscriberListQuery,
   SubscriberListResponse,
@@ -149,12 +150,14 @@ function serializeRevenueWindow(
   input: PeriodInput,
   bounds: PeriodBounds,
   rows: RevenueBreakdownRow[],
+  platformWindows: PlatformRevenueWindow[],
 ): RevenueWindowBase {
   const summary = summarizeRevenueRows(rows);
   return {
     period: input.period,
     from: bounds.from?.toISOString() ?? null,
     to: bounds.to?.toISOString() ?? null,
+    platformWindows,
     currency: "USD" as const,
     ...serializeRevenueSummary(summary),
     breakdown: rows.map((row) => ({
@@ -233,6 +236,34 @@ function addComparison(
         : (Number(delta) / Number(previousNetEarnings < 0n ? -previousNetEarnings : previousNetEarnings)) * 100,
     },
   };
+}
+
+// Audit B2: OnlyFans trailing windows are deliberately one calendar day longer
+// than other platforms', so a mixed-platform total under one top-level window
+// silently spans different widths. Every revenue report now discloses the
+// exact window (and comparison window) each platform contributed.
+function buildPlatformRevenueWindows(
+  platforms: Platform[],
+  input: PeriodInput,
+  now: Date,
+): PlatformRevenueWindow[] {
+  return [...platforms].sort().map((platform) => {
+    const bounds = resolveRevenuePeriodBoundsForPlatform(platform, input.period, now, input.custom);
+    const comparison = resolveRevenueComparisonPeriodBoundsForPlatform(
+      platform,
+      input.period,
+      now,
+      input.custom,
+    );
+
+    return {
+      platform,
+      from: bounds.from?.toISOString() ?? null,
+      to: bounds.to?.toISOString() ?? null,
+      comparisonFrom: comparison?.from?.toISOString() ?? null,
+      comparisonTo: comparison?.to?.toISOString() ?? null,
+    };
+  });
 }
 
 function combinePeriodBounds(bounds: PeriodBounds[]): PeriodBounds {
@@ -462,7 +493,12 @@ export async function getPageRevenueReport(
 
   return {
     ...addComparison(
-      serializeRevenueWindow(input, bounds, currentRows),
+      serializeRevenueWindow(
+        input,
+        bounds,
+        currentRows,
+        buildPlatformRevenueWindows([page.platform], input, now),
+      ),
       currentTotal,
       comparisonBounds,
       comparisonRows,
@@ -504,7 +540,16 @@ export async function getOverviewRevenueReport(
 
   return {
     ...addComparison(
-      serializeRevenueWindow(input, current.bounds, currentRows),
+      serializeRevenueWindow(
+        input,
+        current.bounds,
+        currentRows,
+        buildPlatformRevenueWindows(
+          Array.from(groupedPageIds.keys()),
+          input,
+          input.now ?? new Date(),
+        ),
+      ),
       currentTotal,
       comparison.bounds,
       comparison.rows,
@@ -546,7 +591,16 @@ export async function getModelRevenueReport(
 
   return {
     ...addComparison(
-      serializeRevenueWindow(input, current.bounds, currentRows),
+      serializeRevenueWindow(
+        input,
+        current.bounds,
+        currentRows,
+        buildPlatformRevenueWindows(
+          Array.from(groupedPageIds.keys()),
+          input,
+          input.now ?? new Date(),
+        ),
+      ),
       currentTotal,
       comparison.bounds,
       comparison.rows,

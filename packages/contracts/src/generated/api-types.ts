@@ -726,6 +726,15 @@ export interface paths {
                                 deltaNetMills: number;
                                 deltaPct: number | null;
                             } | null;
+                            /** @description Billing window each included platform contributed to this report (audit B2). Single-platform reports carry one entry; mixed-platform totals span every listed window. */
+                            platformWindows: {
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                from: string | null;
+                                to: string | null;
+                                comparisonFrom: string | null;
+                                comparisonTo: string | null;
+                            }[];
                             models: {
                                 modelId: number;
                                 modelSlug: string;
@@ -913,6 +922,15 @@ export interface paths {
                                 deltaNetMills: number;
                                 deltaPct: number | null;
                             } | null;
+                            /** @description Billing window each included platform contributed to this report (audit B2). Single-platform reports carry one entry; mixed-platform totals span every listed window. */
+                            platformWindows: {
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                from: string | null;
+                                to: string | null;
+                                comparisonFrom: string | null;
+                                comparisonTo: string | null;
+                            }[];
                             model: {
                                 id: number;
                                 slug: string;
@@ -1039,6 +1057,15 @@ export interface paths {
                                 deltaNetMills: number;
                                 deltaPct: number | null;
                             } | null;
+                            /** @description Billing window each included platform contributed to this report (audit B2). Single-platform reports carry one entry; mixed-platform totals span every listed window. */
+                            platformWindows: {
+                                /** @enum {string} */
+                                platform: "fansly" | "onlyfans";
+                                from: string | null;
+                                to: string | null;
+                                comparisonFrom: string | null;
+                                comparisonTo: string | null;
+                            }[];
                             page: {
                                 id: number;
                                 label: string;

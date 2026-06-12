@@ -1947,6 +1947,70 @@
                         }
                       ]
                     },
+                    "platformWindows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
+                          },
+                          "from": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "to": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "comparisonFrom": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "comparisonTo": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "platform",
+                          "from",
+                          "to",
+                          "comparisonFrom",
+                          "comparisonTo"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Billing window each included platform contributed to this report (audit B2). Single-platform reports carry one entry; mixed-platform totals span every listed window."
+                    },
                     "models": {
                       "type": "array",
                       "items": {
@@ -2044,6 +2108,7 @@
                     "currency",
                     "breakdown",
                     "comparison",
+                    "platformWindows",
                     "models",
                     "pages"
                   ],
@@ -2480,6 +2545,70 @@
                         }
                       ]
                     },
+                    "platformWindows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
+                          },
+                          "from": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "to": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "comparisonFrom": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "comparisonTo": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "platform",
+                          "from",
+                          "to",
+                          "comparisonFrom",
+                          "comparisonTo"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Billing window each included platform contributed to this report (audit B2). Single-platform reports carry one entry; mixed-platform totals span every listed window."
+                    },
                     "model": {
                       "type": "object",
                       "properties": {
@@ -2562,6 +2691,7 @@
                     "currency",
                     "breakdown",
                     "comparison",
+                    "platformWindows",
                     "model",
                     "pages"
                   ],
@@ -2881,6 +3011,70 @@
                         }
                       ]
                     },
+                    "platformWindows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
+                          },
+                          "from": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "to": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "comparisonFrom": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "comparisonTo": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "platform",
+                          "from",
+                          "to",
+                          "comparisonFrom",
+                          "comparisonTo"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Billing window each included platform contributed to this report (audit B2). Single-platform reports carry one entry; mixed-platform totals span every listed window."
+                    },
                     "page": {
                       "type": "object",
                       "properties": {
@@ -3024,6 +3218,7 @@
                     "currency",
                     "breakdown",
                     "comparison",
+                    "platformWindows",
                     "page"
                   ],
                   "additionalProperties": false

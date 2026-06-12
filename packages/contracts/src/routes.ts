@@ -501,6 +501,20 @@ export const revenueBreakdownItemSchema = z.object({
   netAmountMills: mills,
 });
 
+// Audit B2: OnlyFans trailing windows deliberately run one calendar day longer
+// than other platforms (7d spans 8 days, 30d spans 31 — see
+// ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS in packages/shared/src/time.ts), so
+// mixed-platform totals and their comparisons combine different per-platform
+// widths. These entries disclose the exact window each platform contributed;
+// the top-level from/to stays the union.
+export const platformRevenueWindowSchema = z.object({
+  platform: platformEnum,
+  from: isoTimestamp.nullable(),
+  to: isoTimestamp.nullable(),
+  comparisonFrom: isoTimestamp.nullable(),
+  comparisonTo: isoTimestamp.nullable(),
+});
+
 export const revenueComparisonSchema = z.object({
   from: isoTimestamp.describe(
     "Comparison window start. For mixed-platform scopes, this is the earliest included platform-local start.",
@@ -525,6 +539,9 @@ export const revenueWindowSchema = revenueSummarySchema.extend({
   currency: z.literal("USD"),
   breakdown: z.array(revenueBreakdownItemSchema),
   comparison: revenueComparisonSchema.nullable(),
+  platformWindows: z.array(platformRevenueWindowSchema).describe(
+    "Billing window each included platform contributed to this report (audit B2). Single-platform reports carry one entry; mixed-platform totals span every listed window.",
+  ),
 });
 
 export const pageRevenueItemSchema = z.object({
@@ -4374,6 +4391,7 @@ export type FanProfileVersionParams = z.infer<typeof fanProfileVersionParamsSche
 export type PageParams = z.infer<typeof pageParamsSchema>;
 export type PageConversationProfileParams = z.infer<typeof pageConversationProfileParamsSchema>;
 export type PageRevenueResponse = z.infer<typeof pageRevenueResponseSchema>;
+export type PlatformRevenueWindow = z.infer<typeof platformRevenueWindowSchema>;
 export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 export type RevenueQuery = z.infer<typeof revenueQuerySchema>;
 export type RevenueDailyQuery = z.infer<typeof revenueDailyQuerySchema>;

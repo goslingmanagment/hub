@@ -3170,6 +3170,96 @@ describe("api integration", () => {
     });
   });
 
+  it("discloses per-platform revenue windows on mixed-platform reports (audit B2)", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const onlyFansPage = await createOnlyFansPage(testDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-of",
+    });
+    await updatePageMetadata(testDb.db, onlyFansPage.id, {
+      platformAccountIdValue: "of-acct-b2",
+      username: "lana_of",
+      displayName: "Lana OF",
+      followerCount: 0,
+      subscriberCount: 0,
+      earningsBalanceMills: 0n,
+      metadata: {
+        onlyMonsterAccountId: 42,
+      },
+      syncType: "light",
+    });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/overview/revenue?period=7d",
+      headers: {
+        cookie,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const body = response.json();
+    const windows = body.platformWindows as Array<{
+      platform: string;
+      from: string;
+      to: string;
+      comparisonFrom: string;
+      comparisonTo: string;
+    }>;
+
+    expect(windows.map((w) => w.platform)).toEqual(["fansly", "onlyfans"]);
+
+    const dayCount = (from: string, to: string) =>
+      Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86_400_000);
+
+    const fansly = windows[0];
+    const onlyfans = windows[1];
+    // The deliberate OnlyFans offset: 7d spans one more calendar day.
+    expect(dayCount(fansly.from, fansly.to)).toBe(7);
+    expect(dayCount(onlyfans.from, onlyfans.to)).toBe(8);
+    expect(dayCount(fansly.comparisonFrom, fansly.comparisonTo)).toBe(7);
+    expect(dayCount(onlyfans.comparisonFrom, onlyfans.comparisonTo)).toBe(8);
+
+    // The top-level window stays the union of the per-platform windows.
+    const fromTimes = windows.map((w) => new Date(w.from).getTime());
+    const toTimes = windows.map((w) => new Date(w.to).getTime());
+    expect(new Date(body.from).getTime()).toBe(Math.min(...fromTimes));
+    expect(new Date(body.to).getTime()).toBe(Math.max(...toTimes));
+
+    // Single-platform page reports disclose their one window too.
+    const pageResponse = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/revenue?period=7d",
+      headers: {
+        cookie,
+      },
+    });
+    expect(pageResponse.statusCode).toBe(200);
+    expect(pageResponse.json().platformWindows).toHaveLength(1);
+    expect(pageResponse.json().platformWindows[0]).toMatchObject({
+      platform: "fansly",
+      from: pageResponse.json().from,
+      to: pageResponse.json().to,
+    });
+  });
+
   it("merges and sorts overview revenue daily rows across platforms", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

@@ -7,9 +7,10 @@ import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
 import { getSyncUxDisplayMode, getSyncUxExceptionKind } from "@/components/shared/syncUxDisplay";
 import { buildPageRoute, buildSettingsRoute } from "@/lib/navigation";
 import { PLATFORM_COLORS } from "@/lib/constants";
+import { PLATFORM_DISPLAY_NAME } from "@/lib/platformUrls";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import { usePeriodStore } from "@/stores/periodStore";
-import type { OverviewResponse } from "@agency_hub_core/contracts";
+import type { OverviewResponse, PlatformRevenueWindow } from "@agency_hub_core/contracts";
 
 const PageActivityChart = lazy(() =>
   import("@/components/page/PageActivityChart").then((m) => ({ default: m.PageActivityChart })),
@@ -95,6 +96,37 @@ function getOverviewExceptionMessage(
   }
 }
 
+const MS_PER_DAY = 86_400_000;
+
+// Audit B2: OnlyFans trailing windows deliberately cover one more calendar day
+// than other platforms', so a mixed-platform total under one period label sums
+// different window widths. Returns the disclosure line, or null when every
+// platform's window has the same width (single platform, custom range, etc.).
+export function describeMixedRevenueWindows(
+  windows: PlatformRevenueWindow[] | undefined,
+  periodLabel: string,
+): string | null {
+  if (!windows || windows.length < 2) {
+    return null;
+  }
+
+  const spans = windows
+    .filter((window) => window.from && window.to)
+    .map((window) => ({
+      platform: PLATFORM_DISPLAY_NAME[window.platform] ?? window.platform,
+      days: Math.round(
+        (new Date(window.to!).getTime() - new Date(window.from!).getTime()) / MS_PER_DAY,
+      ),
+    }));
+
+  if (spans.length < 2 || new Set(spans.map((span) => span.days)).size < 2) {
+    return null;
+  }
+
+  const parts = spans.map((span) => `${span.days} days on ${span.platform}`);
+  return `“${periodLabel}” spans ${parts.join(", ")} (platform billing offsets); totals and Δ combine these windows.`;
+}
+
 export function OverviewPage() {
   const navigate = useNavigate();
   const { data: auth } = useAuthMe();
@@ -173,6 +205,9 @@ export function OverviewPage() {
   const isOwner = auth?.user.role === "owner";
 
   const periodLabel = PERIOD_LABELS[selectedPeriod] ?? "30 Days";
+  const mixedWindowsNote = revenueReady
+    ? describeMixedRevenueWindows(revenueData?.platformWindows, periodLabel)
+    : null;
 
   return (
     <div>
@@ -247,6 +282,10 @@ export function OverviewPage() {
           </tr>
         </tbody>
       </table>
+
+      {mixedWindowsNote && (
+        <p className="mt-2 px-1 text-xs text-text-muted">{mixedWindowsNote}</p>
+      )}
 
       <Suspense
         fallback={
