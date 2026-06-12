@@ -19,6 +19,7 @@ const cliMocks = vi.hoisted(() => {
 
   class PgBossMock {
     start = vi.fn(async (): Promise<this> => this);
+    on = vi.fn((_event: string, _listener: (...args: unknown[]) => void): this => this);
     createQueue = vi.fn(async (_name: string, _options?: Omit<Queue, "name">) => {});
     send = vi.fn(async (_name: string, _data?: object | null, _options?: SendOptions) => {
       if (bossBehavior.sendError) {
