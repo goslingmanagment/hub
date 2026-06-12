@@ -4744,6 +4744,48 @@ describe("api integration", () => {
     });
   });
 
+  it("rejects invalid spender period combinations with 400 (audit B5)", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    // Audit repro 1: period=custom without bounds used to escape validation
+    // and 500 in the period resolver.
+    const missingBounds = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&period=custom&limit=10&offset=0",
+      headers: { cookie: ownerCookie },
+    });
+    expect(missingBounds.statusCode).toBe(400);
+
+    // Audit repro 2: stray from/to on a non-custom period used to return 200.
+    const strayBounds = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&period=7d&from=2026-01-01&to=2026-01-31&limit=10&offset=0",
+      headers: { cookie: ownerCookie },
+    });
+    expect(strayBounds.statusCode).toBe(400);
+
+    // Scope cross-field rule, also dropped by the old merge chain.
+    const missingPageLabel = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&period=30d&limit=10&offset=0",
+      headers: { cookie: ownerCookie },
+    });
+    expect(missingPageLabel.statusCode).toBe(400);
+  });
+
   it("filters v2 spenders by retention status and exposes activity timestamps", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

@@ -164,6 +164,19 @@ function serializeSpenderLastTransaction(row: RankedSpenderRow): SerializedSpend
 
 function normalizePeriodInput(input: PeriodFields) {
   const period = input.period ?? "lifetime";
+
+  // The route schemas already reject these combinations with a 400; this guard
+  // keeps a schema regression (audit B5) or direct service misuse from reaching
+  // the period resolver, which throws a plain Error and would surface as a 500.
+  if (period === "custom") {
+    if (!input.from || !input.to) {
+      throw new BadRequestError("`from` and `to` are required when `period=custom`");
+    }
+    if (input.from > input.to) {
+      throw new BadRequestError("`from` must be on or before `to`");
+    }
+  }
+
   return {
     period,
     custom: period === "custom" && input.from && input.to

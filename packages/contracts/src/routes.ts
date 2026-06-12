@@ -282,153 +282,156 @@ export const followerListQuerySchema = paginationQuerySchema.extend({
   activeWithinMinutes: z.coerce.number().int().min(1).max(24 * 60).optional(),
 });
 
+// Zod 4's `.merge()` (and `.pick()`/`.omit()`/`.partial()`) rebuilds the object
+// from raw shapes and silently drops `superRefine` checks (audit B5). The
+// spender cross-field rules therefore live in plain helpers that return issue
+// lists, the base field schemas stay refinement-free, and every composed schema
+// applies the relevant rules in a single `.superRefine()` as its final step.
 const spenderScopeFieldsSchema = z.object({
   scope: spenderScopeKindEnum,
   pageLabel: z.string().min(1).optional(),
   modelSlug: z.string().min(1).optional(),
   platform: platformEnum.optional(),
-}).superRefine((value, context) => {
-  if (value.scope === "page" && !value.pageLabel) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["pageLabel"],
-      message: "`pageLabel` is required for page scope",
-    });
-  }
-
-  if (value.scope === "model") {
-    if (!value.modelSlug) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["modelSlug"],
-        message: "`modelSlug` is required for model scope",
-      });
-    }
-    if (!value.platform) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["platform"],
-        message: "`platform` is required for model scope",
-      });
-    }
-  }
-
-  if (value.scope === "agency" && !value.platform) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["platform"],
-      message: "`platform` is required for agency scope",
-    });
-  }
 });
 
 const spenderPeriodFieldsSchema = z.object({
   period: spenderPeriodEnum,
   from: businessDate.optional(),
   to: businessDate.optional(),
-}).superRefine((value, context) => {
-  if (value.period === "custom") {
-    if (!value.from) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["from"],
-        message: "`from` is required when `period=custom`",
-      });
-    }
-    if (!value.to) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["to"],
-        message: "`to` is required when `period=custom`",
-      });
-    }
-    if (value.from && value.to && value.from > value.to) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["to"],
-        message: "`from` must be on or before `to`",
-      });
-    }
-  }
 });
 
 const spenderOptionalPeriodFieldsSchema = z.object({
   period: spenderPeriodEnum.optional(),
   from: businessDate.optional(),
   to: businessDate.optional(),
-}).superRefine((value, context) => {
+});
+
+interface SpenderFieldIssue {
+  path: string[];
+  message: string;
+}
+
+function spenderScopeIssues(
+  value: z.infer<typeof spenderScopeFieldsSchema>,
+): SpenderFieldIssue[] {
+  const issues: SpenderFieldIssue[] = [];
+
+  if (value.scope === "page" && !value.pageLabel) {
+    issues.push({ path: ["pageLabel"], message: "`pageLabel` is required for page scope" });
+  }
+
+  if (value.scope === "model") {
+    if (!value.modelSlug) {
+      issues.push({ path: ["modelSlug"], message: "`modelSlug` is required for model scope" });
+    }
+    if (!value.platform) {
+      issues.push({ path: ["platform"], message: "`platform` is required for model scope" });
+    }
+  }
+
+  if (value.scope === "agency" && !value.platform) {
+    issues.push({ path: ["platform"], message: "`platform` is required for agency scope" });
+  }
+
+  return issues;
+}
+
+function spenderPeriodIssues(
+  value: z.infer<typeof spenderOptionalPeriodFieldsSchema>,
+): SpenderFieldIssue[] {
+  const issues: SpenderFieldIssue[] = [];
+
   if (value.period === "custom") {
     if (!value.from) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["from"],
-        message: "`from` is required when `period=custom`",
-      });
+      issues.push({ path: ["from"], message: "`from` is required when `period=custom`" });
     }
     if (!value.to) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["to"],
-        message: "`to` is required when `period=custom`",
-      });
+      issues.push({ path: ["to"], message: "`to` is required when `period=custom`" });
     }
     if (value.from && value.to && value.from > value.to) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["to"],
-        message: "`from` must be on or before `to`",
-      });
+      issues.push({ path: ["to"], message: "`from` must be on or before `to`" });
     }
   }
 
   if (value.period !== "custom" && (value.from || value.to)) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
+    issues.push({
       path: ["period"],
       message: "`from` and `to` are only supported when `period=custom`",
     });
   }
-});
+
+  return issues;
+}
+
+function addSpenderIssues(
+  issues: SpenderFieldIssue[],
+  context: { addIssue: (issue: { code: "custom"; path: string[]; message: string }) => void },
+): void {
+  for (const issue of issues) {
+    context.addIssue({ code: z.ZodIssueCode.custom, ...issue });
+  }
+}
 
 export const spenderListQuerySchema = spenderScopeFieldsSchema
-  .merge(spenderPeriodFieldsSchema)
-  .merge(paginationQuerySchema)
+  .extend(spenderPeriodFieldsSchema.shape)
+  .extend(paginationQuerySchema.shape)
   .extend({
     query: z.string().min(1).optional(),
     sortBy: spenderSortByEnum.optional(),
     sortDir: sortDirEnum.optional(),
     retentionStatus: spenderRetentionStatusEnum.optional(),
+  })
+  .superRefine((value, context) => {
+    addSpenderIssues([...spenderScopeIssues(value), ...spenderPeriodIssues(value)], context);
   });
 
-export const spenderDetailQuerySchema = spenderScopeFieldsSchema.merge(spenderPeriodFieldsSchema);
+export const spenderDetailQuerySchema = spenderScopeFieldsSchema
+  .extend(spenderPeriodFieldsSchema.shape)
+  .superRefine((value, context) => {
+    addSpenderIssues([...spenderScopeIssues(value), ...spenderPeriodIssues(value)], context);
+  });
 
 export const spenderSeriesQuerySchema = spenderScopeFieldsSchema
-  .merge(spenderPeriodFieldsSchema)
+  .extend(spenderPeriodFieldsSchema.shape)
   .extend({
     granularity: spenderSeriesGranularityEnum.default("auto"),
+  })
+  .superRefine((value, context) => {
+    addSpenderIssues([...spenderScopeIssues(value), ...spenderPeriodIssues(value)], context);
   });
 
 export const spenderBatchBodySchema = spenderScopeFieldsSchema
-  .merge(spenderOptionalPeriodFieldsSchema)
+  .extend(spenderOptionalPeriodFieldsSchema.shape)
   .extend({
     fans: z.array(fanLookupParamsSchema).min(1).max(200),
+  })
+  .superRefine((value, context) => {
+    addSpenderIssues([...spenderScopeIssues(value), ...spenderPeriodIssues(value)], context);
   });
 
-export const pageSpenderAutoListsQuerySchema = spenderOptionalPeriodFieldsSchema;
+export const pageSpenderAutoListsQuerySchema = spenderOptionalPeriodFieldsSchema
+  .superRefine((value, context) => {
+    addSpenderIssues(spenderPeriodIssues(value), context);
+  });
 
 export const pageSpenderAutoListQuerySchema = fanListQuerySchema
-  .merge(spenderOptionalPeriodFieldsSchema)
+  .extend(spenderOptionalPeriodFieldsSchema.shape)
   .extend({
     excludeNonFollowers: queryBooleanSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    addSpenderIssues(spenderPeriodIssues(value), context);
   });
 
 export const fansSearchQuerySchema = spenderScopeFieldsSchema
-  .merge(paginationQuerySchema)
+  .extend(paginationQuerySchema.shape)
   .extend({
     query: z.string().min(1).optional(),
     q: z.string().min(1).optional(),
   })
   .superRefine((value, context) => {
+    addSpenderIssues(spenderScopeIssues(value), context);
+
     if (!value.query && !value.q) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
