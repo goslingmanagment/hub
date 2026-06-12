@@ -396,3 +396,107 @@ describe("OFAPI presence projection", () => {
     expect(response.json().message).toContain("only supported for Fansly pages");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
+
+describe("staged-rollout cross-stamping (audit B4)", () => {
+  it("keeps presence rows out of the DM runner's hands when both flags are on", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // The audit's live repro config: DM projection AND presence projection on.
+    appContext = createTestAppContext(testDb, {
+      ofapiDmProjectionEnabled: true,
+      ofapiPresenceProjectionEnabled: true,
+    });
+    const page = await seedMappedPage();
+    await seedKnownFan(page.id, "777005");
+    await startServer();
+
+    const eventId = await deliverAndProcess(presenceEnvelope({
+      event: "users.online",
+      fanId: "777005",
+      lastSeenOnlineAt: new Date().toISOString(),
+    }));
+
+    // Pre-fix the DM runner stamped this row "skipped" before the presence
+    // projection ran, so the journal lied even though presence applied.
+    const status = await getProjectionStatus(eventId);
+    expect(status.projection_status).toBe("projected");
+    expect((await getPresence(page.id, "777005"))?.external_presence_at).not.toBeNull();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("leaves presence rows pending under the staged rollout (DM flag first)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    appContext = createTestAppContext(testDb, {
+      ofapiDmProjectionEnabled: true,
+      ofapiPresenceProjectionEnabled: false,
+    });
+    const page = await seedMappedPage();
+    await seedKnownFan(page.id, "777006");
+    await startServer();
+
+    const eventId = await deliverAndProcess(presenceEnvelope({
+      event: "users.online",
+      fanId: "777006",
+      lastSeenOnlineAt: new Date().toISOString(),
+    }));
+
+    // Pending, not skipped: enabling the presence flag later must let the
+    // sweep back-project this row (decision #48/#50 enable-later contract).
+    expect((await getProjectionStatus(eventId)).projection_status).toBe("pending");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("requeues rows the DM runner mis-stamped (migration 0032)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const insertEvent = async (input: {
+      key: string;
+      eventType: string;
+      status: string;
+      error: string | null;
+    }) => {
+      const { rows } = await testDb!.pool.query<{ id: number }>(
+        `insert into ofapi_webhook_events
+           (idempotency_key, event_type, ofapi_account_id, payload, status,
+            projection_status, projection_error, projection_attempts)
+         values ($1, $2, $3, '{}', 'processed', $4, $5, 1)
+         returning id`,
+        [input.key, input.eventType, OFAPI_ACCOUNT, input.status, input.error],
+      );
+      return rows[0]!.id;
+    };
+
+    const misStamped = await insertEvent({
+      key: nextIdempotencyKey(),
+      eventType: "users.online",
+      status: "skipped",
+      error: 'Event type "users.online" is not projected',
+    });
+    const legitimateDmSkip = await insertEvent({
+      key: nextIdempotencyKey(),
+      eventType: "messages.received",
+      status: "skipped",
+      error: 'No page mapped to OFAPI account "acct_other"',
+    });
+
+    const migrationSql = readFileSync(
+      path.resolve("packages/db/migrations/0032_requeue_cross_stamped_ofapi_projections.sql"),
+      "utf8",
+    );
+    await testDb.pool.query(migrationSql);
+
+    const requeued = await getProjectionStatus(misStamped);
+    expect(requeued.projection_status).toBe("pending");
+    expect(requeued.projection_error).toBeNull();
+
+    expect((await getProjectionStatus(legitimateDmSkip)).projection_status).toBe("skipped");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});

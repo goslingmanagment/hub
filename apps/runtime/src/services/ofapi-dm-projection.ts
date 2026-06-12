@@ -451,7 +451,14 @@ export async function runOfapiDmProjectionForSettledRow(
   app: AppContext,
   row: OfapiDmProjectableRow,
 ) {
-  if (!isOfapiDmProjectionEnabled(app.config)) {
+  if (
+    !isOfapiDmProjectionEnabled(app.config) ||
+    // Presence/subscription rows belong to their own projections; stamping
+    // them "skipped" here would terminally block the enable-later
+    // back-projection because the mark never demotes a settled status
+    // (pre-deploy audit B4).
+    !isOfapiDmProjectionEventType(row.eventType)
+  ) {
     return;
   }
   if (row.projectionStatus !== "pending" && row.projectionStatus !== "failed") {
