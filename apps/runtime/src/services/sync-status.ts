@@ -29,6 +29,7 @@ import {
   parseFollowersReconcileCursorState,
   parseSubscribersCursorState,
 } from "./sync/cursor-state.ts";
+import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
 export const SYNC_DOMAIN_BLOCKS = [
@@ -1435,7 +1436,16 @@ export async function getSyncStatusSnapshot(
     generatedAt: now.toISOString(),
     recentCounters: recentCountersFor(monitorRows),
     pages: scopedPages.map((page) => {
-      const supportedTasks = getSyncStreamsForPlatform(page.platform);
+      // OnlyFans audience sync exists only for OFAPI-mapped pages with
+      // OFAPI_AUDIENCE_SYNC_ENABLED on; for everyone else the block must read
+      // not_available rather than nag about a sync that is intentionally not
+      // running (pre-deploy audit B1).
+      const supportedTasks = filterOnlyFansAudienceStreams(
+        page.platform,
+        getSyncStreamsForPlatform(page.platform),
+        app.config,
+        page,
+      );
       const blocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) => {
         const domainTasks = supportedTasks
           .filter((stream) => SYNC_DOMAIN_POLICY[block].primaryStreams.includes(stream) || SYNC_DOMAIN_POLICY[block].supportingStreams.includes(stream))

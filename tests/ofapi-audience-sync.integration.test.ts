@@ -36,6 +36,7 @@ import {
   pauseDisabledOnlyFansAudienceForPage,
 } from "../apps/runtime/src/services/sync/ofapi-audience-sync.ts";
 import { triggerSyncBlock } from "../apps/runtime/src/services/sync-blocks.ts";
+import { getSyncStatusSnapshot } from "../apps/runtime/src/services/sync-status.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -618,5 +619,41 @@ describe("audience stream plumbing", () => {
     // never among the unmet dependencies (decision #49 regression guard).
     expect(byStream.get("dm_conversations")?.blockerMessage ?? "").not.toContain("subscribers");
     expect(byStream.get("dm_messages")?.blockerMessage ?? "").not.toContain("subscribers");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reports the audience block not_available unless flag+mapping are active (audit B1)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const mapped = await seedMappedPage();
+    const unmappedModel = await createModel(appContext.db, {
+      slug: "model-lora-of-unmapped",
+      name: "Model lora-of-unmapped",
+    });
+    const unmapped = await createOnlyFansPage(appContext.db, {
+      modelId: unmappedModel.id,
+      label: "lora-of-unmapped",
+    });
+    await ensurePageSyncStates(appContext.db, { pageId: unmapped.id });
+
+    // Flag on: only the OFAPI-mapped page exposes a live audience block.
+    const enabled = await getSyncStatusSnapshot(appContext, {
+      pageIds: [mapped.id, unmapped.id],
+    });
+    const enabledByLabel = new Map(enabled.pages.map((page) => [page.pageLabel, page]));
+    expect(enabledByLabel.get("lora-of")?.blocks.audience.state).not.toBe("not_available");
+    expect(enabledByLabel.get("lora-of-unmapped")?.blocks.audience.state).toBe("not_available");
+    expect(enabledByLabel.get("lora-of-unmapped")?.blocks.messages_live.state).not.toBe("not_available");
+
+    // Flag off: even the mapped page must read not_available instead of
+    // nagging about a sync that is intentionally not running.
+    const disabledContext = createTestAppContext(testDb, {
+      ofapiAudienceSyncEnabled: false,
+      ofapiDmSyncEnabled: true,
+    });
+    const disabled = await getSyncStatusSnapshot(disabledContext, { pageIds: [mapped.id] });
+    expect(disabled.pages[0]?.blocks.audience.state).toBe("not_available");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
