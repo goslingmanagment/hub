@@ -1,6 +1,5 @@
 import {
   getMaxOfapiFanoutSeq,
-  getOfapiWebhookEventById,
   listOfapiSyncEventsForReplay,
 } from "@agency_hub_core/db";
 import type { PoolClient } from "pg";
@@ -10,6 +9,8 @@ import { OFAPI_SYNC_EVENT_CHANNEL } from "./ofapi-events.ts";
 
 const LISTEN_RECONNECT_MIN_MS = 1_000;
 const LISTEN_RECONNECT_MAX_MS = 30_000;
+const DRAIN_RETRY_MIN_MS = 1_000;
+const DRAIN_RETRY_MAX_MS = 30_000;
 const CATCH_UP_BATCH_SIZE = 500;
 
 export interface SyncEventFrame {
@@ -33,10 +34,18 @@ export interface SyncEventHub {
 
 /**
  * Single shared LISTEN connection fanning worker-processed journal rows out to
- * the API process's SSE subscribers. The worker NOTIFYs row ids on commit
- * (services/ofapi-events.ts); each notification is one indexed row fetch here.
- * NOTIFY only reaches sessions listening at commit time, so after every
- * (re)connect the hub catches up from its delivery watermark via the journal.
+ * the API process's SSE subscribers. The worker NOTIFYs on settle commit
+ * (services/ofapi-events.ts).
+ *
+ * Delivery contract: a NOTIFY is a wake-up signal only — frames are never built
+ * from individual notifications. One serialized drain loop reads the journal
+ * forward from the delivery watermark in fanout-seq order and advances the
+ * watermark only after a row was broadcast, so delivery is in-order and a
+ * transient journal-read failure is retried from the same position instead of
+ * dropping frames (NOTIFY itself is one-shot). LISTEN-gap catch-up is the same
+ * drain, so a live wake-up arriving mid-catch-up cannot move the watermark past
+ * unread rows. Seq-order delivery assumes settles commit in fanout_seq order,
+ * which the single serialized event worker guarantees.
  */
 export function createSyncEventHub(app: AppContext): SyncEventHub {
   const subscribers = new Set<SyncEventSubscriber>();
@@ -45,13 +54,15 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
   let reconnectTimer: NodeJS.Timeout | null = null;
   let reconnectDelayMs = LISTEN_RECONNECT_MIN_MS;
   let closed = false;
-  // Highest fanout seq delivered to subscribers; null until the first delivery.
+  // Highest fanout seq broadcast to subscribers; null until the first LISTEN
+  // baselines it at the journal's high-water mark. Advanced only by the drain.
   let deliveredSeq: number | null = null;
+  let draining: Promise<void> | null = null;
+  let drainAgain = false;
+  let drainRetryTimer: NodeJS.Timeout | null = null;
+  let drainRetryDelayMs = DRAIN_RETRY_MIN_MS;
 
   function broadcast(frame: SyncEventFrame) {
-    if (deliveredSeq === null || frame.id > deliveredSeq) {
-      deliveredSeq = frame.id;
-    }
     for (const subscriber of subscribers) {
       if (!subscriber.pageIds.has(frame.platformAccountId)) {
         continue;
@@ -64,46 +75,70 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
     }
   }
 
-  async function handleNotification(payload: string | undefined) {
-    const id = Number(payload);
-    if (!Number.isInteger(id) || id <= 0) {
+  // Wake-ups arriving while a drain is in flight coalesce into one follow-up
+  // pass, so two drains never interleave (and never broadcast out of order).
+  function requestDrain() {
+    if (closed) {
       return;
     }
-
-    const row = await getOfapiWebhookEventById(app.db, id);
-    if (
-      !row || row.status !== "processed" || !row.syncEvent ||
-      row.platformAccountId === null || row.fanoutSeq === null
-    ) {
+    if (draining) {
+      drainAgain = true;
       return;
     }
-
-    broadcast({
-      id: row.fanoutSeq,
-      platformAccountId: row.platformAccountId,
-      syncEvent: row.syncEvent,
-    });
+    draining = (async () => {
+      try {
+        do {
+          drainAgain = false;
+          await drainJournal();
+        } while (drainAgain && !closed);
+      } finally {
+        draining = null;
+      }
+    })();
   }
 
-  // Frames settled while no LISTEN connection existed (or before its NOTIFYs were
-  // wired) are re-read from the journal so connected clients don't silently miss them.
-  async function catchUpFromJournal() {
+  async function drainJournal() {
     if (deliveredSeq === null) {
       return;
     }
 
     for (;;) {
-      const rows = await listOfapiSyncEventsForReplay(app.db, {
-        afterSeq: deliveredSeq,
-        limit: CATCH_UP_BATCH_SIZE,
-      });
+      if (closed) {
+        return;
+      }
+      let rows: SyncEventFrame[];
+      try {
+        rows = await listOfapiSyncEventsForReplay(app.db, {
+          afterSeq: deliveredSeq,
+          limit: CATCH_UP_BATCH_SIZE,
+        });
+      } catch (error) {
+        // Watermark untouched — the failed read is retried, not skipped.
+        app.logger.warn({ err: error }, "OFAPI sync event journal drain failed; retrying");
+        scheduleDrainRetry();
+        return;
+      }
+      drainRetryDelayMs = DRAIN_RETRY_MIN_MS;
       for (const row of rows) {
         broadcast(row);
+        deliveredSeq = row.id;
       }
       if (rows.length < CATCH_UP_BATCH_SIZE) {
         return;
       }
     }
+  }
+
+  function scheduleDrainRetry() {
+    if (closed || drainRetryTimer) {
+      return;
+    }
+    drainRetryTimer = setTimeout(() => {
+      drainRetryTimer = null;
+      requestDrain();
+    }, drainRetryDelayMs);
+    drainRetryTimer.unref?.();
+    drainRetryDelayMs = Math.min(drainRetryDelayMs * 2, DRAIN_RETRY_MAX_MS);
   }
 
   function dropListenClient() {
@@ -151,9 +186,9 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
           if (message.channel !== OFAPI_SYNC_EVENT_CHANNEL) {
             return;
           }
-          void handleNotification(message.payload).catch((error) => {
-            app.logger.warn({ err: error }, "Failed to fan out OFAPI sync event notification");
-          });
+          // The payload (a journal row id) is deliberately unused: building the
+          // frame here would reintroduce unordered per-notification fetches.
+          requestDrain();
         });
         client.on("error", (error) => {
           app.logger.warn({ err: error }, "OFAPI sync event LISTEN connection failed; reconnecting");
@@ -161,6 +196,13 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
           scheduleReconnect();
         });
         await client.query(`listen ${OFAPI_SYNC_EVENT_CHANNEL}`);
+        // First LISTEN: baseline the watermark at the journal's current high-water
+        // mark so later catch-ups cover exactly the gap, nothing more. A baseline
+        // failure fails the whole connect (and is retried with backoff) — leaving
+        // it null would silently disable delivery.
+        if (deliveredSeq === null) {
+          deliveredSeq = await getMaxOfapiFanoutSeq(app.db);
+        }
       } catch (error) {
         releaseListenClient(client);
         throw error;
@@ -173,14 +215,9 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
 
       listenClient = client;
       reconnectDelayMs = LISTEN_RECONNECT_MIN_MS;
-      // First LISTEN: baseline the watermark at the journal's current high-water
-      // mark so later reconnect catch-ups cover exactly the gap, nothing more.
-      if (deliveredSeq === null) {
-        deliveredSeq = await getMaxOfapiFanoutSeq(app.db).catch(() => null);
-      }
-      await catchUpFromJournal().catch((error) => {
-        app.logger.warn({ err: error }, "OFAPI sync event journal catch-up failed");
-      });
+      // Frames settled while no LISTEN connection existed are caught up through
+      // the same serialized drain as live delivery.
+      requestDrain();
     })();
 
     try {
@@ -210,9 +247,14 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+      if (drainRetryTimer) {
+        clearTimeout(drainRetryTimer);
+        drainRetryTimer = null;
+      }
       subscribers.clear();
       // An in-flight connect re-checks `closed` and releases its own client.
       await connecting?.catch(() => undefined);
+      await draining?.catch(() => undefined);
       dropListenClient();
     },
   };
