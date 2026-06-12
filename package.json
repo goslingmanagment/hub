@@ -12,7 +12,7 @@
     "cli": "node --import tsx/esm apps/runtime/src/cli.ts",
     "contracts:generate": "node --import tsx/esm packages/contracts/src/generate.ts",
     "worker": "node --import tsx/esm apps/runtime/src/worker.ts",
-    "db:generate": "drizzle-kit generate --config=packages/db/drizzle.config.ts",
+    "db:generate": "node scripts/db-generate-disabled.mjs",
     "db:migrate": "node --import tsx/esm packages/db/src/migrate.ts",
     "test": "NODE_OPTIONS=--max-old-space-size=8192 vitest run",
     "test:unit": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --exclude tests/**/*.integration.test.ts --exclude tests/schema-guard.test.ts --exclude tests/http-client.test.ts --exclude tests/network.test.ts",
