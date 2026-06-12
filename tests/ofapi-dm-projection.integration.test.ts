@@ -343,6 +343,100 @@ describe("OFAPI DM projection", () => {
     expect(conversation!.storedMessageCount).toBe(0);
     expect(conversation!.newestStoredMessageId).toBeNull();
     expect(await getStoredMessages(conversation!.id)).toHaveLength(0);
+    // Deleting the only (head) message must not leave its preview behind (B10).
+    expect(conversation!.lastMessageId).toBeNull();
+    expect(conversation!.lastMessageAt).toBeNull();
+    expect(conversation!.lastMessagePreview).toBeNull();
+  });
+
+  it("rebuilds the conversation head when the head message is deleted (audit B10)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOnlyFansPage({ label: "lora-of", ofapiAccountId: RECEIVED_ACCOUNT });
+    await deliverAndProcess(await loadFixtureEnvelope("messages_received.json"));
+
+    const sent = await loadFixtureEnvelope("messages_sent.json");
+    sent.account_id = RECEIVED_ACCOUNT;
+    sent.payload = {
+      ...sent.payload,
+      id: 1000030,
+      text: "<p>Model reply at the head.</p>",
+      createdAt: "2026-06-10T19:00:00+00:00",
+      toUser: {
+        ...(sent.payload.toUser as Record<string, unknown>),
+        id: Number(RECEIVED_FAN_ID),
+        username: "fan005",
+        name: "Fan 4",
+      },
+    };
+    await deliverAndProcess(sent);
+
+    // Delete the model head: preview/sender/timestamps fall back to the
+    // newest remaining (fan) message instead of showing deleted content.
+    await deliverAndProcess({
+      event: "messages.deleted",
+      account_id: RECEIVED_ACCOUNT,
+      payload: { id: "1000030" },
+    });
+
+    let conversation = await getConversation(page.id, RECEIVED_FAN_ID);
+    expect(conversation!.lastMessageId).toBe(RECEIVED_MESSAGE_ID);
+    expect(conversation!.lastMessageSenderRole).toBe("fan");
+    expect(conversation!.lastMessagePreview).toContain("Sample fan message text");
+    expect(conversation!.unreadCount).toBe(0);
+    expect(conversation!.storedMessageCount).toBe(1);
+
+    // An unread fan message becomes the head, then gets deleted: the unread
+    // state is dropped with it, not left pointing at deleted content.
+    const unreadFan = await loadFixtureEnvelope("messages_received.json");
+    unreadFan.payload = {
+      ...unreadFan.payload,
+      id: 1000040,
+      text: "<p>Fan follow-up that gets deleted.</p>",
+      createdAt: "2026-06-10T20:00:00+00:00",
+    };
+    await deliverAndProcess(unreadFan);
+
+    conversation = await getConversation(page.id, RECEIVED_FAN_ID);
+    expect(conversation!.unreadCount).toBe(1);
+    expect(conversation!.lastUnreadMessageId).toBe("1000040");
+
+    await deliverAndProcess({
+      event: "messages.deleted",
+      account_id: RECEIVED_ACCOUNT,
+      payload: { id: "1000040" },
+    });
+
+    conversation = await getConversation(page.id, RECEIVED_FAN_ID);
+    expect(conversation!.lastMessageId).toBe(RECEIVED_MESSAGE_ID);
+    expect(conversation!.lastMessagePreview).toContain("Sample fan message text");
+    expect(conversation!.unreadCount).toBe(0);
+    expect(conversation!.lastUnreadMessageId).toBeNull();
+
+    // A head legitimately ahead of the stored window is never regressed:
+    // deleting a non-head stored message leaves the head fields alone.
+    const ahead = await loadFixtureEnvelope("messages_received.json");
+    ahead.payload = {
+      ...ahead.payload,
+      id: 1000050,
+      text: "<p>Newest head message.</p>",
+      createdAt: "2026-06-10T21:00:00+00:00",
+    };
+    await deliverAndProcess(ahead);
+
+    await deliverAndProcess({
+      event: "messages.deleted",
+      account_id: RECEIVED_ACCOUNT,
+      payload: { id: RECEIVED_MESSAGE_ID },
+    });
+
+    conversation = await getConversation(page.id, RECEIVED_FAN_ID);
+    expect(conversation!.lastMessageId).toBe("1000050");
+    expect(conversation!.lastMessagePreview).toContain("Newest head message");
+    expect(conversation!.storedMessageCount).toBe(1);
   });
 
   it("marks held messages purchased on ppv.unlocked and raises tips from tips.received", async (context) => {

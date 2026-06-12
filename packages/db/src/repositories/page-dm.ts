@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
@@ -609,6 +609,40 @@ async function getPageDmMessageWindowSummary(
   } satisfies PageDmMessageWindowSummary;
 }
 
+// Matches the OFAPI DM projection's preview rule (truncatePreview).
+const PAGE_DM_HEAD_PREVIEW_MAX_LENGTH = 280;
+
+function truncateHeadPreview(content: string | null): string | null {
+  if (!content) {
+    return null;
+  }
+
+  return content.length <= PAGE_DM_HEAD_PREVIEW_MAX_LENGTH
+    ? content
+    : `${content.slice(0, PAGE_DM_HEAD_PREVIEW_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+async function getNewestStoredPageDmMessage(db: Database, conversationId: number) {
+  const [row] = await db
+    .select({
+      platformMessageId: pageDmMessages.platformMessageId,
+      createdAt: pageDmMessages.createdAt,
+      senderPlatformUserId: pageDmMessages.senderPlatformUserId,
+      senderRole: pageDmMessages.senderRole,
+      content: pageDmMessages.content,
+    })
+    .from(pageDmMessages)
+    .where(eq(pageDmMessages.conversationId, conversationId))
+    .orderBy(
+      desc(pageDmMessages.createdAt),
+      desc(pageDmMessages.platformMessageId),
+      desc(pageDmMessages.id),
+    )
+    .limit(1);
+
+  return row ?? null;
+}
+
 /**
  * Recomputes a conversation's stored-window bookkeeping (count, newest/oldest
  * ids, last fan/model timestamps) from the rows on disk, optionally pruning to
@@ -622,6 +656,15 @@ export async function refreshPageDmConversationWindow(
   input: {
     conversationId: number;
     enforceRetention?: boolean;
+    /**
+     * Platform message id that was just deleted. When it was the conversation
+     * head, the head fields (last message id/at/sender/preview, unread state)
+     * are rebuilt from the newest remaining stored row instead of previewing
+     * deleted content forever (pre-deploy audit B10). The head is only
+     * rebuilt on an exact id match, so heads legitimately ahead of the stored
+     * window (pending backfill) are never regressed.
+     */
+    rebuildHeadForDeletedMessageId?: string;
   },
 ) {
   return db.transaction(async (tx) => {
@@ -636,6 +679,39 @@ export async function refreshPageDmConversationWindow(
     }
     const summary = await getPageDmMessageWindowSummary(database, input.conversationId);
 
+    let headRepair: Partial<typeof pageDmConversations.$inferInsert> = {};
+    if (input.rebuildHeadForDeletedMessageId) {
+      const [current] = await database
+        .select({
+          lastMessageId: pageDmConversations.lastMessageId,
+          lastUnreadMessageId: pageDmConversations.lastUnreadMessageId,
+          unreadCount: pageDmConversations.unreadCount,
+        })
+        .from(pageDmConversations)
+        .where(eq(pageDmConversations.id, input.conversationId));
+
+      if (current?.lastMessageId === input.rebuildHeadForDeletedMessageId) {
+        const newest = await getNewestStoredPageDmMessage(database, input.conversationId);
+        headRepair = {
+          lastMessageId: newest?.platformMessageId ?? null,
+          lastMessageAt: newest?.createdAt ?? null,
+          lastMessageSenderId: newest?.senderPlatformUserId ?? null,
+          lastMessageSenderRole: newest?.senderRole ?? "unknown",
+          lastMessagePreview: truncateHeadPreview(newest?.content ?? null),
+        };
+        if (current.lastUnreadMessageId === input.rebuildHeadForDeletedMessageId) {
+          // The deleted head was the latest unread fan message; drop it from
+          // the unread state (the Phase 2 reconcile corrects residual drift).
+          const remainingUnread = Math.max(0, current.unreadCount - 1);
+          headRepair.unreadCount = remainingUnread;
+          headRepair.lastUnreadMessageId =
+            remainingUnread > 0 && newest?.senderRole === "fan"
+              ? newest.platformMessageId
+              : null;
+        }
+      }
+    }
+
     const [row] = await database
       .update(pageDmConversations)
       .set({
@@ -644,6 +720,7 @@ export async function refreshPageDmConversationWindow(
         oldestStoredMessageId: summary.oldestStoredMessageId,
         lastFanMessageAt: summary.lastFanMessageAt,
         lastModelMessageAt: summary.lastModelMessageAt,
+        ...headRepair,
         updatedAt: new Date(),
       })
       .where(eq(pageDmConversations.id, input.conversationId))

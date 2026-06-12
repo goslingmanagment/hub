@@ -340,7 +340,12 @@ async function projectDmMessageDeleted(
       } satisfies OfapiDmProjectionOutcome;
     }
 
-    await refreshPageDmConversationWindow(db, { conversationId: deleted.conversationId });
+    await refreshPageDmConversationWindow(db, {
+      conversationId: deleted.conversationId,
+      // Rebuilds the conversation head when the deleted message was the head,
+      // so the preview/unread state never points at deleted content (B10).
+      rebuildHeadForDeletedMessageId: messageId,
+    });
     return { status: "projected" } satisfies OfapiDmProjectionOutcome;
   });
 }
