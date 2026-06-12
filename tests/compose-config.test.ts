@@ -213,4 +213,45 @@ describe("compose config", () => {
     expect(rollback).toContain("Schema migrations changed only by rollback-compatible data migrations");
     expect(rollback).toContain("Rollback skipped; schema_migrations changed during this deploy");
   });
+
+  // Pre-deploy audit B8: crash-recovery invariants. A deploy must not report
+  // green with a dead worker, a failed startup must exit (not zombie-hang on
+  // pg-boss handles), and every PgBoss instance needs an 'error' listener so
+  // a transient Postgres blip cannot crash the process via an unhandled
+  // EventEmitter 'error' throw.
+  it("deploy-production.sh gates the deploy on worker container health (audit B8)", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const workerGate = getShellFunction(text, "wait_for_worker_health");
+
+    expect(workerGate).toContain("ps -q worker");
+    expect(workerGate).toContain(".State.Health.Status");
+    expect(text).toMatch(/wait_for_worker_health \|\| fail/);
+  });
+
+  it("startup.ts exits explicitly when main() fails (audit B8)", async () => {
+    const text = await readComposeFile("apps/runtime/src/startup.ts");
+    const catchBlock = text.slice(text.indexOf("main().catch"));
+
+    expect(catchBlock).toContain("process.exit(1)");
+    expect(catchBlock).not.toContain("process.exitCode");
+  });
+
+  it("every PgBoss instance attaches an error listener (audit B8)", async () => {
+    const sources = await Promise.all([
+      "apps/runtime/src/worker-runtime.ts",
+      "apps/runtime/src/api/server.ts",
+      "apps/runtime/src/cli.ts",
+    ].map((file) => readComposeFile(file)));
+
+    for (const source of sources) {
+      const instantiations = source.split(/new PgBoss\(/).slice(1);
+      expect(instantiations.length).toBeGreaterThan(0);
+      for (const tail of instantiations) {
+        // The listener (or the CLI helper that attaches one) must follow the
+        // instantiation before any boss.start() call.
+        const beforeStart = tail.split("boss.start()")[0]!;
+        expect(beforeStart).toMatch(/boss\.on\("error"|attachCliPgBossErrorLogger\(boss\)/);
+      }
+    }
+  });
 });

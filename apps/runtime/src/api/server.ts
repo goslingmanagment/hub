@@ -1096,6 +1096,12 @@ export async function buildApiServer(appContext: AppContext) {
   const createdQueues = new Set<string>();
   if (appContext.config.databaseUrl) {
     boss = new PgBoss({ connectionString: appContext.config.databaseUrl });
+    // Without a listener an EventEmitter 'error' throws and takes the API
+    // down on a transient Postgres blip (audit B8). Log only: this instance
+    // merely enqueues jobs, and /health covers API liveness.
+    boss.on("error", (error) => {
+      appContext.logger.error({ err: error }, "pg-boss api error");
+    });
     await boss.start();
     await ensureSyncQueues(boss, createdQueues);
     await ensureOfapiQueues(boss, createdQueues);

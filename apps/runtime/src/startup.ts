@@ -55,5 +55,8 @@ export async function main() {
 
 main().catch((error) => {
   console.error(error);
-  process.exitCode = 1;
+  // Explicit exit: after boss.start() pg-boss handles keep the event loop
+  // alive, so setting exitCode alone leaves a zombie process that Docker's
+  // restart policy (which acts only on exit) never recovers (audit B8).
+  process.exit(1);
 });

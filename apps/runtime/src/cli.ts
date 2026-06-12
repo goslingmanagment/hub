@@ -411,12 +411,21 @@ function describeError(error: unknown) {
   return redactSensitiveText(error instanceof Error ? error.message : String(error));
 }
 
+// PgBoss extends EventEmitter: without a listener an 'error' event throws and
+// kills the CLI mid-operation, skipping the try/finally cleanup (audit B8).
+function attachCliPgBossErrorLogger(boss: PgBoss) {
+  boss.on("error", (error) => {
+    console.error(`pg-boss error: ${describeError(error)}`);
+  });
+}
+
 async function queueInitialFullSyncAfterPageCreate(
   databaseUrl: string,
   app: Awaited<ReturnType<typeof createAppContext>>,
   pageLabel: string,
 ) {
   const boss = new PgBoss({ connectionString: databaseUrl });
+  attachCliPgBossErrorLogger(boss);
 
   try {
     await boss.start();
@@ -439,6 +448,7 @@ async function queuePlannerRecovery(
   databaseUrl: string,
 ) {
   const boss = new PgBoss({ connectionString: databaseUrl });
+  attachCliPgBossErrorLogger(boss);
 
   try {
     await boss.start();
@@ -855,6 +865,7 @@ export function buildProgram() {
         const egressSummaryPromise = resolvePageEgressSummary(route);
 
         const boss = new PgBoss({ connectionString: app.config.databaseUrl });
+        attachCliPgBossErrorLogger(boss);
         try {
           await boss.start();
           await ensureSyncQueues(boss);

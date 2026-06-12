@@ -420,6 +420,31 @@ wait_for_api_health() {
   return 1
 }
 
+# The worker is the whole sync engine; a dead or crash-looping worker must not
+# report a green deploy (audit B8). Asserts the compose healthcheck (worker
+# health file freshness + DB reachability) reaches 'healthy'.
+wait_for_worker_health() {
+  local attempt=0
+  local status
+
+  while (( attempt < 60 )); do
+    attempt=$((attempt + 1))
+    status="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; container_id=\$(${REMOTE_COMPOSE} ps -q worker 2>/dev/null || true); if [[ -z \"\$container_id\" ]]; then printf missing; else docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \"\$container_id\"; fi" || true)"
+    case "$status" in
+      healthy)
+        return 0
+        ;;
+      missing|exited|dead|restarting)
+        log "Worker container status: ${status:-unknown}"
+        ;;
+    esac
+    sleep 3
+  done
+
+  log "Worker container last observed status: ${status:-unknown}"
+  return 1
+}
+
 require_command docker
 require_command ssh
 require_command tar
@@ -476,6 +501,9 @@ fi
 
 log "Waiting for ${VERIFY_URL%/}/api/v1/health"
 wait_for_api_health "$HEALTH_FILE" || fail "API health never reached 200 at ${VERIFY_URL%/}/api/v1/health"
+
+log "Waiting for the worker container healthcheck"
+wait_for_worker_health || fail "Worker container never reached a healthy state"
 
 if [[ -n "$SYNC_MONITORING_TOKEN" ]]; then
   log "Verifying sync health endpoint"
