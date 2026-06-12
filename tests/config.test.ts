@@ -72,6 +72,15 @@ describe("config", () => {
     expect(config.trustProxy).toBe(true);
   });
 
+  it("narrows trust proxy to a hop count or address list (audit P-9)", () => {
+    expect(loadConfig({ ...baseEnv, TRUST_PROXY: "1" }).trustProxy).toBe(1);
+    expect(loadConfig({ ...baseEnv, TRUST_PROXY: "2" }).trustProxy).toBe(2);
+    expect(loadConfig({ ...baseEnv, TRUST_PROXY: "false" }).trustProxy).toBe(false);
+    expect(loadConfig({ ...baseEnv, TRUST_PROXY: "" }).trustProxy).toBe(false);
+    expect(loadConfig({ ...baseEnv, TRUST_PROXY: "127.0.0.1, 10.0.0.0/8" }).trustProxy)
+      .toBe("127.0.0.1, 10.0.0.0/8");
+  });
+
   it("accepts explicit Fansly DM delay overrides", () => {
     const config = loadConfig({
       ...baseEnv,

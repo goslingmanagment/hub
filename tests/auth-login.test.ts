@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockDb = {
   failAudit: boolean;
@@ -116,5 +116,120 @@ describe("loginWithPassword", () => {
       username: "dima",
       targetUserId: 7,
     }), "Failed-login audit insert failed; continuing with unauthorized response");
+  });
+});
+
+describe("per-account login backoff (audit B7)", () => {
+  // The backoff registry is keyed per AppContext, so each test shares one
+  // app object across attempts and gets isolated state from its neighbours.
+  function makeApp() {
+    return {
+      db: { failAudit: false },
+      logger: { warn: vi.fn() },
+      config: { sessionTtlDays: 30 },
+    } as never;
+  }
+
+  const failedAttempt = (app: never, username: string, password = "wrong") =>
+    loginWithPassword(app, { username, password });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-13T12:00:00.000Z"));
+    repoMocks.findUserByUsername.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("locks an account after five consecutive failures without touching the db", async () => {
+    const app = makeApp();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 401 });
+    }
+    expect(repoMocks.findUserByUsername).toHaveBeenCalledTimes(5);
+
+    await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({
+      statusCode: 429,
+      message: "Too many login attempts",
+    });
+    // The locked attempt is rejected before any user lookup, so the fast
+    // path leaks no timing signal and costs no argon2 work.
+    expect(repoMocks.findUserByUsername).toHaveBeenCalledTimes(5);
+  });
+
+  it("keys the backoff on the normalized username", async () => {
+    const app = makeApp();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(failedAttempt(app, "Ghost")).rejects.toMatchObject({ statusCode: 401 });
+    }
+
+    await expect(failedAttempt(app, "  GHOST ")).rejects.toMatchObject({ statusCode: 429 });
+    await expect(failedAttempt(app, "other")).rejects.toMatchObject({ statusCode: 401 });
+  });
+
+  it("releases the lock after the backoff window and escalates on repeat failures", async () => {
+    const app = makeApp();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 401 });
+    }
+    await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 429 });
+
+    // First lock is 30s; afterwards the next failure earns a 60s lock.
+    vi.advanceTimersByTime(30_000);
+    await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 401 });
+
+    vi.advanceTimersByTime(30_000);
+    await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 429 });
+
+    vi.advanceTimersByTime(30_000);
+    await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 401 });
+  });
+
+  it("forgets stale failures after the forget window", async () => {
+    const app = makeApp();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 401 });
+    }
+    await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 429 });
+
+    vi.advanceTimersByTime(30 * 60_000);
+    await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 401 });
+    // Counter restarted: still in the free-failure band, no lock yet.
+    await expect(failedAttempt(app, "ghost")).rejects.toMatchObject({ statusCode: 401 });
+  });
+
+  it("clears the counter on a successful login", async () => {
+    const app = makeApp();
+    const user = {
+      id: 7,
+      username: "dima",
+      role: "owner",
+      passwordHash: "hashed-password",
+    };
+
+    repoMocks.findUserByUsername.mockResolvedValue(user);
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await expect(failedAttempt(app, "dima")).rejects.toMatchObject({ statusCode: 401 });
+    }
+
+    argon2Mocks.verify.mockResolvedValue(true);
+    repoMocks.createAuthSession.mockResolvedValue({ id: 1 });
+    repoMocks.findUserById.mockResolvedValue(user);
+    const success = await loginWithPassword(app, { username: "dima", password: "right" });
+    expect(success.authMethod).toBe("session");
+
+    // The failure streak restarts from zero: five more are free again.
+    argon2Mocks.verify.mockResolvedValue(false);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(failedAttempt(app, "dima")).rejects.toMatchObject({ statusCode: 401 });
+    }
+    await expect(failedAttempt(app, "dima")).rejects.toMatchObject({ statusCode: 429 });
   });
 });

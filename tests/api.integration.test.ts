@@ -1753,6 +1753,125 @@ describe("api integration", () => {
     });
   });
 
+  it("keeps the account backoff when the attacker rotates IPs (audit B7)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        remoteAddress: `10.0.0.${attempt + 1}`,
+        payload: {
+          username: "dima",
+          password: "wrong",
+        },
+      });
+      expect(response.statusCode).toBe(401);
+    }
+
+    // A fresh IP gets a fresh per-IP bucket, but the per-account lock holds.
+    const freshIp = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      remoteAddress: "10.0.0.99",
+      payload: {
+        username: "dima",
+        password: "wrong",
+      },
+    });
+    expect(freshIp.statusCode).toBe(429);
+
+    // Other accounts stay loggable from that IP.
+    const otherAccount = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      remoteAddress: "10.0.0.99",
+      payload: {
+        username: "lead",
+        password: "lead-secret",
+      },
+    });
+    expect(otherAccount.statusCode).toBe(200);
+  });
+
+  it("rate limits cross-account spraying per IP (audit B7)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        remoteAddress: "10.1.1.1",
+        payload: {
+          username: `sprayed-user-${attempt}`,
+          password: "wrong",
+        },
+      });
+      expect(response.statusCode).toBe(401);
+    }
+
+    const limited = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      remoteAddress: "10.1.1.1",
+      payload: {
+        username: "sprayed-user-final",
+        password: "wrong",
+      },
+    });
+    expect(limited.statusCode).toBe(429);
+
+    // The spray bucket is per IP: another address is unaffected.
+    const otherIp = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      remoteAddress: "10.1.1.2",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    expect(otherIp.statusCode).toBe(200);
+  });
+
+  it("rejects oversized login bodies before they reach the audit log (audit P-3)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const oversizedUsername = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "u".repeat(255),
+        password: "wrong",
+      },
+    });
+    expect(oversizedUsername.statusCode).toBe(400);
+
+    const oversizedPassword = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "p".repeat(1025),
+      },
+    });
+    expect(oversizedPassword.statusCode).toBe(400);
+
+    const audited = await testDb.pool.query(
+      "select count(*)::int as count from audit_events where event_type = 'auth.login_failed'",
+    );
+    expect(audited.rows[0].count).toBe(0);
+  });
+
   it("rejects expired sessions", async (context) => {
     if (!testDb || !server) {
       context.skip();

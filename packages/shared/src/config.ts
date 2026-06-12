@@ -48,6 +48,28 @@ const booleanSchema = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
+// `true` trusts the whole x-forwarded-for chain, which lets a client spoof
+// `request.ip` whenever any hop forwards client-supplied XFF (audit P-9).
+// A hop count (e.g. "1" for the single TLS proxy) or an IP/CIDR allowlist
+// narrows trust to the proxies actually in front of the API.
+const trustProxySchema = z
+  .string()
+  .trim()
+  .default("false")
+  .transform((value) => {
+    const normalized = value.toLowerCase();
+    if (normalized === "" || normalized === "false") {
+      return false;
+    }
+    if (normalized === "true") {
+      return true;
+    }
+    if (/^\d+$/.test(normalized)) {
+      return Number.parseInt(normalized, 10);
+    }
+    return value;
+  });
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   APP_ENCRYPTION_KEY: z.string().min(1),
@@ -56,7 +78,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default("info"),
   API_HOST: z.string().default("0.0.0.0"),
   API_PORT: z.coerce.number().int().positive().default(3000),
-  TRUST_PROXY: booleanSchema.default(false),
+  TRUST_PROXY: trustProxySchema,
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
   ONLYMONSTER_BASE_URL: z.string().url().default("https://omapi.onlymonster.ai"),
@@ -128,7 +150,7 @@ export interface AppConfig {
   apiHost: string;
   apiPort: number;
   isProduction: boolean;
-  trustProxy: boolean;
+  trustProxy: boolean | number | string;
   sessionTtlDays: number;
   fanslyBaseUrl: string;
   onlyMonsterBaseUrl: string;

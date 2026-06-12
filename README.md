@@ -54,7 +54,7 @@ openssl rand -base64 32
 - `POSTGRES_PASSWORD`
 - `DATABASE_URL`
 - `APP_ENCRYPTION_KEY`
-- `TRUST_PROXY=true` when the app is behind the production TLS reverse proxy
+- `TRUST_PROXY=1` when the app is behind the production TLS reverse proxy (one trusted hop; the proxy must append the client address to `X-Forwarded-For` — see `.env.production.example`)
 - any optional Telegram values you want enabled
 
 The default production compose file expects the bundled Postgres container and binds the app to `127.0.0.1:3000`. Put a TLS reverse proxy on the same host in front of that loopback port. Compose reads interpolation values from `.env.production`, while only the API and worker receive the full app environment; Postgres receives only `POSTGRES_*`.

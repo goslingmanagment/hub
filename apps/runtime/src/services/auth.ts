@@ -34,7 +34,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from "./errors.ts";
+import { BadRequestError, ForbiddenError, NotFoundError, TooManyRequestsError, UnauthorizedError } from "./errors.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 
 export const SESSION_COOKIE_NAME = "agency_hub_core_session";
@@ -490,6 +490,104 @@ export async function cleanupExpiredSessions(app: AppContext, now = new Date()) 
   await deleteExpiredAuthSessions(app.db, now);
 }
 
+// Audit B7: the route-level @fastify/rate-limit plugin runs at onRequest where
+// the body is not yet parsed, so it can only honestly key on the client IP.
+// This registry adds the per-account half: consecutive failures for a username
+// earn an escalating lockout regardless of which IPs the attempts come from.
+// State is in-memory (one API process) and keyed per AppContext so parallel
+// test servers stay isolated; a restart clearing it only resets the backoff.
+interface LoginBackoffEntry {
+  failures: number;
+  lastFailureAt: number;
+  lockedUntil: number;
+}
+
+const LOGIN_BACKOFF_FREE_FAILURES = 5;
+const LOGIN_BACKOFF_BASE_LOCK_MS = 30_000;
+const LOGIN_BACKOFF_MAX_LOCK_MS = 15 * 60_000;
+const LOGIN_BACKOFF_FORGET_MS = 30 * 60_000;
+const LOGIN_BACKOFF_MAX_TRACKED_ACCOUNTS = 10_000;
+
+const loginBackoffRegistries = new WeakMap<object, Map<string, LoginBackoffEntry>>();
+
+function loginBackoffRegistryFor(app: AppContext): Map<string, LoginBackoffEntry> {
+  let registry = loginBackoffRegistries.get(app);
+  if (!registry) {
+    registry = new Map();
+    loginBackoffRegistries.set(app, registry);
+  }
+  return registry;
+}
+
+function loginBackoffKey(username: string): string {
+  return username.trim().toLowerCase();
+}
+
+// Applies to existing and unknown usernames alike, so the 429 carries no
+// username-enumeration signal.
+function assertLoginNotBackedOff(app: AppContext, username: string, now: number): void {
+  const registry = loginBackoffRegistryFor(app);
+  const key = loginBackoffKey(username);
+  const entry = registry.get(key);
+  if (!entry) {
+    return;
+  }
+
+  if (now - entry.lastFailureAt >= LOGIN_BACKOFF_FORGET_MS) {
+    registry.delete(key);
+    return;
+  }
+
+  if (entry.lockedUntil > now) {
+    throw new TooManyRequestsError("Too many login attempts");
+  }
+}
+
+function recordLoginFailureForBackoff(app: AppContext, username: string, now: number): void {
+  const registry = loginBackoffRegistryFor(app);
+  const key = loginBackoffKey(username);
+  const previous = registry.get(key);
+  const failures = previous && now - previous.lastFailureAt < LOGIN_BACKOFF_FORGET_MS
+    ? previous.failures + 1
+    : 1;
+  const lockMs = failures >= LOGIN_BACKOFF_FREE_FAILURES
+    ? Math.min(
+      LOGIN_BACKOFF_BASE_LOCK_MS * 2 ** (failures - LOGIN_BACKOFF_FREE_FAILURES),
+      LOGIN_BACKOFF_MAX_LOCK_MS,
+    )
+    : 0;
+
+  // Delete-then-set keeps Map insertion order aligned with recency so the
+  // size-cap eviction below drops the stalest usernames first.
+  registry.delete(key);
+  registry.set(key, { failures, lastFailureAt: now, lockedUntil: now + lockMs });
+
+  if (registry.size <= LOGIN_BACKOFF_MAX_TRACKED_ACCOUNTS) {
+    return;
+  }
+
+  for (const [trackedKey, entry] of registry) {
+    if (now - entry.lastFailureAt >= LOGIN_BACKOFF_FORGET_MS && entry.lockedUntil <= now) {
+      registry.delete(trackedKey);
+    }
+  }
+
+  // Still over the cap means an active spray across many usernames; the
+  // per-IP limiter is the primary bound there, so shedding the stalest
+  // entries is safe.
+  while (registry.size > LOGIN_BACKOFF_MAX_TRACKED_ACCOUNTS) {
+    const oldest = registry.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    registry.delete(oldest);
+  }
+}
+
+function clearLoginBackoff(app: AppContext, username: string): void {
+  loginBackoffRegistryFor(app).delete(loginBackoffKey(username));
+}
+
 export async function loginWithPassword(
   app: AppContext,
   input: {
@@ -497,12 +595,16 @@ export async function loginWithPassword(
     password: string;
   },
 ) {
+  const now = Date.now();
+  assertLoginNotBackedOff(app, input.username, now);
+
   const user = await findUserByUsername(app.db, input.username);
 
   if (!user || !roleCanUseSession(user.role) || !user.passwordHash) {
     // Run a dummy verification so this path takes comparable time to the
     // wrong-password path below, avoiding a username-enumeration timing oracle.
     await argon2.verify(DUMMY_PASSWORD_HASH, input.password).catch(() => false);
+    recordLoginFailureForBackoff(app, input.username, now);
     await recordFailedLoginAuditBestEffort(app, {
       username: input.username,
     });
@@ -511,12 +613,15 @@ export async function loginWithPassword(
 
   const isValid = await argon2.verify(user.passwordHash, input.password);
   if (!isValid) {
+    recordLoginFailureForBackoff(app, input.username, now);
     await recordFailedLoginAuditBestEffort(app, {
       username: user.username,
       targetUserId: user.id,
     });
     throw new UnauthorizedError("Invalid username or password");
   }
+
+  clearLoginBackoff(app, input.username);
 
   const sessionToken = randomToken(32);
   const expiresAt = new Date(Date.now() + app.config.sessionTtlDays * 24 * 60 * 60 * 1000);

@@ -39,6 +39,12 @@ export class ConflictError extends AppError {
   }
 }
 
+export class TooManyRequestsError extends AppError {
+  constructor(message = "Too many requests") {
+    super(message, 429, "rate_limit_exceeded");
+  }
+}
+
 export class ServiceUnavailableError extends AppError {
   constructor(message = "Service unavailable") {
     super(message, 503, "service_unavailable");

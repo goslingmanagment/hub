@@ -199,9 +199,11 @@ export const syncHealthResponseSchema = z.object({
   pages: z.array(syncHealthPageSchema),
 });
 
+// Bounded so a failed attempt cannot persist megabyte-sized usernames into
+// the append-only audit_events table (audit P-3).
 export const loginBodySchema = z.object({
-  username: z.string().min(1),
-  password: z.string().min(1),
+  username: z.string().min(1).max(254),
+  password: z.string().min(1).max(1024),
 });
 
 export const paginationQuerySchema = z.object({
@@ -2956,6 +2958,7 @@ export const routeSchemas = {
     body: loginBodySchema,
     response: {
       200: authStateSchema,
+      400: errorResponseSchema,
       401: errorResponseSchema,
       429: errorResponseSchema,
     },

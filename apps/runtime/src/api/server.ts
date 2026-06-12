@@ -592,18 +592,15 @@ export async function buildApiServer(appContext: AppContext) {
   server.post("/api/v1/auth/login", {
     schema: routeSchemas.login,
     config: {
+      // Pure per-IP bound against cross-account spraying (audit B7). The
+      // plugin runs at onRequest, before the body is parsed, so an IP key is
+      // the only honest key here; per-account brute force is handled by the
+      // escalating backoff inside loginWithPassword. request.ip is only
+      // meaningful behind a proxy when TRUST_PROXY narrows trust to the
+      // actual hops — see .env.production.example.
       rateLimit: {
-        max: 5,
+        max: 20,
         timeWindow: 60_000,
-        keyGenerator: (request) => {
-          const body = request.body;
-          const username =
-            typeof body === "object" && body !== null && "username" in body &&
-            typeof (body as { username?: unknown }).username === "string"
-              ? (body as { username: string }).username
-              : "";
-          return `${username.toLowerCase()}|${request.ip}`;
-        },
       },
     },
   }, async (request, reply) => {
