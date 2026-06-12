@@ -14,6 +14,7 @@ import {
   useWorkboardV2UndoContact,
   type WorkboardV2Tab,
 } from "@/api/queries";
+import { Pagination } from "@/components/shared/Pagination";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { CapMeter } from "@/components/page/workboard/v2/CapMeter";
 import { FocusStrip } from "@/components/page/workboard/v2/FocusStrip";
@@ -29,6 +30,11 @@ import { buildAiAnalyticsRoute } from "@/lib/navigation";
 const TABS: WorkboardV2Tab[] = ["subscribers", "spenders", "fresh_mass", "old_mass", "service"];
 
 const LISTS_MODE_STORAGE_KEY = "wb-v2-lists";
+
+// Queue page size; the tab badges show the unbounded counts, so anything past
+// this window must be reachable through pagination, never silently cut
+// (pre-deploy audit B9).
+const QUEUE_PAGE_SIZE = 100;
 
 // Snooze durations per tab; the first is the smart default (also used by the `s` shortcut).
 const SNOOZE_DAYS: Record<WorkboardV2Tab, number[]> = {
@@ -76,7 +82,12 @@ export function WorkboardV2Page() {
     });
 
   const enabled = Boolean(pageLabel);
-  const { data, isLoading, isError } = useWorkboardV2(label, { tab, limit: 100 }, { enabled: enabled && !listsMode });
+  const [offset, setOffset] = useState(0);
+  const { data, isLoading, isError } = useWorkboardV2(
+    label,
+    { tab, limit: QUEUE_PAGE_SIZE, offset },
+    { enabled: enabled && !listsMode },
+  );
   const lists = useWorkboardV2Lists(label, { enabled: enabled && listsMode });
   const contact = useWorkboardV2Contact(label);
   const recompute = useWorkboardV2Recompute(label);
@@ -191,7 +202,16 @@ export function WorkboardV2Page() {
   useEffect(() => {
     setFocusedFanId(null);
     setExpandedFanId(null);
+    setOffset(0);
   }, [tab, listsMode]);
+
+  // If the queue shrinks under the current offset (handled fans, recompute),
+  // an out-of-range page would render as a false "all done" empty state.
+  useEffect(() => {
+    if (!listsMode && data && offset > 0 && data.items.length === 0 && data.total > 0) {
+      setOffset(0);
+    }
+  }, [data, offset, listsMode]);
 
   if (!pageLabel) {
     return null;
@@ -386,6 +406,20 @@ export function WorkboardV2Page() {
               );
             })}
           </div>
+          {!listsMode && data && data.total > data.limit && (
+            <div className="mt-2 overflow-hidden rounded-card border border-border bg-card">
+              <Pagination
+                offset={data.offset}
+                limit={data.limit}
+                total={data.total}
+                onPageChange={(nextOffset) => {
+                  setOffset(nextOffset);
+                  setFocusedFanId(null);
+                  setExpandedFanId(null);
+                }}
+              />
+            </div>
+          )}
           {listsMode && lists.data?.truncated && (
             <p className="mt-2 text-center text-[11px] text-text-muted">
               В крупных бэндах показаны топ-спендеры; счётчик отражает полное число.

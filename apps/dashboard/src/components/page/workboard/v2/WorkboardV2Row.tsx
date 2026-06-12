@@ -6,7 +6,7 @@ import { Check, MessageSquare, MoonStar } from "lucide-react";
 import { usePageConversationPreview } from "@/api/queries";
 import { formatMills } from "@/lib/format";
 
-import { QuadrantGlyph } from "./QuadrantGlyph";
+import { QuadrantGlyph } from "./QuadrantGlyph.js";
 import {
   closingVerdictLabel,
   coverageTone,
@@ -20,7 +20,7 @@ import {
   whyNowLabel,
   type UrgencySeverity,
   type ValueTier,
-} from "./tone";
+} from "./tone.js";
 
 const MAX_CHIPS = 3;
 

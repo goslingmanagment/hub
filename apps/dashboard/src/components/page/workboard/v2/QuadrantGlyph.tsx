@@ -1,6 +1,6 @@
 import { useId } from "react";
 
-import { SEVERITY_HEX, valueTierRadius, type UrgencySeverity, type ValueTier } from "./tone";
+import { SEVERITY_HEX, valueTierRadius, type UrgencySeverity, type ValueTier } from "./tone.js";
 
 /**
  * A 14×14 value × urgency glyph: a single dot plotted on value (x) × urgency (y),

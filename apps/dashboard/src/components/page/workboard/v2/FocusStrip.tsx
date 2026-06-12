@@ -1,6 +1,6 @@
 import { ArrowRight, Target } from "lucide-react";
 
-import { TAB_LABELS, type WorkboardV2Tab } from "./tone";
+import { TAB_LABELS, type WorkboardV2Tab } from "./tone.js";
 
 type Count = { tab: string; secondaryStatus: string; count: number };
 
