@@ -625,14 +625,18 @@ describe("OFAPI DM messages sync", () => {
       await buildChunkInput(page, "dm_messages"),
     )).satisfied).toBe(true);
 
-    // Reconcile reports a newer head → head-stale candidate.
+    // Reconcile reports a newer head → head-stale candidate. The head's
+    // createdAt must postdate last_message_sync_at (stamped with the REAL
+    // clock during the backfill above), so it cannot be a fixed date — the
+    // original 2026-06-11T11:00Z went stale the moment the wall clock passed it.
+    const divergedHeadIso = new Date(Date.now() + 60_000).toISOString();
     const reconcile = fakeOfapiClient({
       chats: new Map([
         [0, listPage([
           chatItem({
             fanId: FAN_A,
             unread: 2,
-            lastMessage: { id: "1000310", createdAt: "2026-06-11T11:00:00+00:00" },
+            lastMessage: { id: "1000310", createdAt: divergedHeadIso },
           }),
         ], false)],
       ]),
@@ -661,7 +665,7 @@ describe("OFAPI DM messages sync", () => {
         {
           expectFirstId: null,
           page: listPage([
-            messageItem({ id: "1000310", fanId: FAN_A, createdAt: "2026-06-11T11:00:00+00:00" }),
+            messageItem({ id: "1000310", fanId: FAN_A, createdAt: divergedHeadIso }),
             messageItem({ id: "1000300", fanId: FAN_A, createdAt: "2026-06-11T10:00:00+00:00" }),
             messageItem({ id: "1000290", fanId: FAN_A, createdAt: "2026-06-11T08:00:00+00:00" }),
           ], true),
