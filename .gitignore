@@ -31,3 +31,8 @@ docs/design-ref-overview.jpg
 docs/design-ref-page-detail.jpg
 TODO.md
 apps/dashboard/tsconfig.tsbuildinfo
+
+# Work screenshots and generated reports carry real page data — never commit
+# new ones by accident (pre-deploy audit P-37).
+*.png
+generated-reports/
