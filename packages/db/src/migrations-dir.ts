@@ -16,7 +16,7 @@ function isFallbackableMigrationsError(error: unknown) {
 
 async function listMigrationFiles(migrationsDir: string) {
   const files = (await readdir(migrationsDir))
-    .filter((file) => file.endsWith(".sql"))
+    .filter((file) => file.endsWith(".sql") && !file.startsWith("."))
     .sort();
 
   if (files.length === 0) {

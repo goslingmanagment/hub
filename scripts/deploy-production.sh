@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# macOS bsdtar emits AppleDouble sidecar files for extended attributes unless
+# this is disabled. Those sidecars can look like real SQL migrations after the
+# archive is extracted on Linux.
+export COPYFILE_DISABLE=1
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -639,6 +644,11 @@ copy_dist_overlay_path() {
   cp -R "$source_path" "$target_path"
 }
 
+prune_macos_metadata_files() {
+  local target_dir="$1"
+  find "$target_dir" \( -name '._*' -o -name '.DS_Store' \) -type f -delete
+}
+
 create_dist_overlay_context() {
   DIST_CONTEXT_DIR="${TEMP_DIR}/dist-overlay-context"
   mkdir -p "$DIST_CONTEXT_DIR"
@@ -668,6 +678,7 @@ EOF
   for path in "${DIST_OVERLAY_PATHS[@]}"; do
     copy_dist_overlay_path "$path"
   done
+  prune_macos_metadata_files "$DIST_CONTEXT_DIR"
 }
 
 build_dist_only_candidate_image() {
@@ -723,6 +734,7 @@ require_command mktemp
 require_command shasum
 require_command git
 require_command cp
+require_command find
 
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT

@@ -224,12 +224,18 @@ describe("compose config", () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const validator = getShellFunction(text, "validate_dist_only_base");
     const autoBuild = getShellFunction(text, "build_candidate_image");
+    const pruneMetadata = getShellFunction(text, "prune_macos_metadata_files");
+    const createContext = getShellFunction(text, "create_dist_overlay_context");
 
+    expect(text).toContain("export COPYFILE_DISABLE=1");
     expect(validator).toContain("read_remote_rollback_dependency_checksum");
     expect(validator).toContain("ALLOW_UNLABELED_DIST_BASE");
     expect(validator).toContain("Dist-only deploy cannot prove dependency compatibility");
     expect(validator).toContain("Dist-only deploy refused: dependency checksum changed");
     expect(autoBuild).toContain("Full Docker build failed before release sync; attempting dist-only fallback");
+    expect(pruneMetadata).toContain("-name '._*'");
+    expect(pruneMetadata).toContain("-name '.DS_Store'");
+    expect(createContext).toContain('prune_macos_metadata_files "$DIST_CONTEXT_DIR"');
   });
 
   it("deploy-production.sh allows rollback across known data-only migrations", async () => {
