@@ -173,10 +173,27 @@ scripts/deploy-production.sh user@server --verify-url https://YOUR_DOMAIN
 
 On Apple Silicon workstations, this deploy path still targets `linux/amd64` for amd64 servers. The Docker build compiles the JS/TS artifacts in a native build stage while installing runtime dependencies for the target platform, which avoids running `esbuild` under amd64 emulation during the production build.
 
+By default the script uses `--mode auto`:
+
+- first it tries a full Docker image build
+- the Node base image is read through a stable local cache tag, `agency_hub_core/node:22-bookworm-slim`, to avoid re-resolving Docker Hub metadata on every deploy
+- every built runtime image is labeled with the dependency checksum and source revision
+- if the full build fails before the remote release is modified, the script can fall back to a dist-only overlay build from the currently running production image
+- dist-only fallback is allowed only when the current production image carries the same dependency checksum label
+
+For the first deploy from an older unlabeled production image, use the override only after confirming that `Dockerfile`, package manifests, and `pnpm-lock.yaml` are compatible with the running image:
+
+```bash
+scripts/deploy-production.sh --mode dist-only --allow-unlabeled-dist-base \
+  user@server --verify-url https://YOUR_DOMAIN
+```
+
+Use `--mode full` when runtime dependencies, Dockerfile structure, Playwright/system dependencies, or package installation behavior changes.
+
 What the script does:
 
-- builds `agency_hub_core/runtime:production` locally
-- streams that image to the remote host with `docker load`
+- builds `agency_hub_core/runtime:production-candidate` locally, or as a verified dist-only overlay on the remote host
+- streams a locally built image to the remote host with `docker load`
 - syncs release files into `/opt/agency-hub` by default
 - runs `docker compose --env-file .env.production -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build`
 - verifies `/api/v1/health`, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`

@@ -175,8 +175,9 @@ describe("compose config", () => {
   it("deploy-production.sh promotes candidate images only after validation", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const candidateIndex = text.indexOf("IMAGE_CANDIDATE_TAG=");
-    const buildCandidateIndex = text.indexOf('docker build --platform="${BUILD_PLATFORM}" -t "$IMAGE_CANDIDATE_TAG"');
-    const loadCandidateIndex = text.indexOf('docker save "$IMAGE_CANDIDATE_TAG"');
+    const buildCandidateFunction = getShellFunction(text, "build_candidate_image");
+    const buildCandidateCallIndex = text.lastIndexOf("build_candidate_image");
+    const releaseSyncIndex = text.indexOf("log \"Syncing release files");
     const validationIndex = text.indexOf("log \"Validating remote prerequisites\"");
     const schemaCaptureIndex = text.indexOf("Captured remote schema migration state for rollback safety");
     const recreateIndex = text.indexOf("log \"Recreating the remote production stack\"");
@@ -190,12 +191,45 @@ describe("compose config", () => {
     );
 
     expect(candidateIndex).toBeGreaterThan(-1);
-    expect(buildCandidateIndex).toBeGreaterThan(candidateIndex);
-    expect(loadCandidateIndex).toBeGreaterThan(buildCandidateIndex);
-    expect(validationIndex).toBeGreaterThan(loadCandidateIndex);
+    expect(buildCandidateFunction).toContain("build_full_candidate_image");
+    expect(buildCandidateFunction).toContain("build_dist_only_candidate_image");
+    expect(buildCandidateFunction).toContain("load_candidate_image");
+    expect(buildCandidateCallIndex).toBeGreaterThan(candidateIndex);
+    expect(releaseSyncIndex).toBeGreaterThan(buildCandidateCallIndex);
+    expect(validationIndex).toBeGreaterThan(releaseSyncIndex);
     expect(recreateIndex).toBeGreaterThan(schemaCaptureIndex);
     expect(promoteIndex).toBeGreaterThan(schemaCaptureIndex);
     expect(deployComposeUpIndex).toBeGreaterThan(promoteIndex);
+  });
+
+  it("production Dockerfile and deploy script label dependency-compatible images", async () => {
+    const dockerfile = await readComposeFile("Dockerfile");
+    const deploy = await readComposeFile("scripts/deploy-production.sh");
+    const fullBuild = getShellFunction(deploy, "build_full_candidate_image");
+    const distBuild = getShellFunction(deploy, "build_dist_only_candidate_image");
+
+    expect(dockerfile).toContain("ARG NODE_BASE_IMAGE=node:22-bookworm-slim");
+    expect(dockerfile).toContain("FROM ${NODE_BASE_IMAGE} AS target-base");
+    expect(dockerfile).toContain("LABEL agency-hub.dependency-checksum=");
+    expect(dockerfile).toContain("LABEL agency-hub.source-revision=");
+    expect(fullBuild).toContain('--build-arg "NODE_BASE_IMAGE=${NODE_BASE_CACHE_IMAGE}"');
+    expect(fullBuild).toContain('--build-arg "APP_DEPENDENCY_CHECKSUM=${APP_DEPENDENCY_CHECKSUM}"');
+    expect(fullBuild).toContain('--build-arg "APP_SOURCE_REVISION=${APP_SOURCE_REVISION}"');
+    expect(distBuild).toContain("docker tag $(printf '%q' \"$ROLLBACK_IMAGE_TAG\") $(printf '%q' \"$DIST_BASE_TAG\")");
+    expect(distBuild).toContain("--build-arg APP_DEPENDENCY_CHECKSUM=");
+    expect(distBuild).toContain("--build-arg APP_SOURCE_REVISION=");
+  });
+
+  it("deploy-production.sh guards dist-only fallback with dependency checksum labels", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const validator = getShellFunction(text, "validate_dist_only_base");
+    const autoBuild = getShellFunction(text, "build_candidate_image");
+
+    expect(validator).toContain("read_remote_rollback_dependency_checksum");
+    expect(validator).toContain("ALLOW_UNLABELED_DIST_BASE");
+    expect(validator).toContain("Dist-only deploy cannot prove dependency compatibility");
+    expect(validator).toContain("Dist-only deploy refused: dependency checksum changed");
+    expect(autoBuild).toContain("Full Docker build failed before release sync; attempting dist-only fallback");
   });
 
   it("deploy-production.sh allows rollback across known data-only migrations", async () => {

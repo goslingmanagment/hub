@@ -9,6 +9,16 @@ Usage:
 Options:
   --app-dir <path>       Remote release directory. Default: /opt/agency-hub
   --image <tag>          Docker image tag. Default: agency_hub_core/runtime:production
+  --mode <mode>          Build mode: auto, full, or dist-only. Default: auto
+  --node-base-image <tag>
+                        Node base image used to seed the local Docker cache.
+                        Default: node:22-bookworm-slim
+  --node-base-cache-image <tag>
+                        Local Docker tag used for stable full builds.
+                        Default: agency_hub_core/node:22-bookworm-slim
+  --allow-unlabeled-dist-base
+                        Allow dist-only deploy from an existing production image
+                        without agency-hub dependency checksum labels.
   --port <port>          Remote loopback HTTP port used for verification. Default: 3000
   --verify-url <url>     Public HTTPS base URL to verify after deploy. Default: remote http://127.0.0.1:<port>
   --identity <path>      SSH identity file
@@ -19,6 +29,10 @@ Environment variable equivalents:
   DEPLOY_REMOTE
   DEPLOY_APP_DIR
   DEPLOY_IMAGE_TAG
+  DEPLOY_BUILD_MODE
+  DEPLOY_NODE_BASE_IMAGE
+  DEPLOY_NODE_BASE_CACHE_IMAGE
+  DEPLOY_ALLOW_UNLABELED_DIST_BASE
   DEPLOY_HTTP_PORT
   DEPLOY_VERIFY_URL
   DEPLOY_IDENTITY_FILE
@@ -54,6 +68,10 @@ require_command() {
 REMOTE="${DEPLOY_REMOTE:-}"
 APP_DIR="${DEPLOY_APP_DIR:-/opt/agency-hub}"
 IMAGE_TAG="${DEPLOY_IMAGE_TAG:-agency_hub_core/runtime:production}"
+BUILD_MODE="${DEPLOY_BUILD_MODE:-auto}"
+NODE_BASE_IMAGE="${DEPLOY_NODE_BASE_IMAGE:-node:22-bookworm-slim}"
+NODE_BASE_CACHE_IMAGE="${DEPLOY_NODE_BASE_CACHE_IMAGE:-agency_hub_core/node:22-bookworm-slim}"
+ALLOW_UNLABELED_DIST_BASE="${DEPLOY_ALLOW_UNLABELED_DIST_BASE:-0}"
 HTTP_PORT="${DEPLOY_HTTP_PORT:-3000}"
 VERIFY_URL="${DEPLOY_VERIFY_URL:-}"
 IDENTITY_FILE="${DEPLOY_IDENTITY_FILE:-}"
@@ -70,6 +88,25 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       IMAGE_TAG="$2"
       shift 2
+      ;;
+    --mode)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      BUILD_MODE="$2"
+      shift 2
+      ;;
+    --node-base-image)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      NODE_BASE_IMAGE="$2"
+      shift 2
+      ;;
+    --node-base-cache-image)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      NODE_BASE_CACHE_IMAGE="$2"
+      shift 2
+      ;;
+    --allow-unlabeled-dist-base)
+      ALLOW_UNLABELED_DIST_BASE=1
+      shift
       ;;
     --port)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
@@ -119,6 +156,30 @@ fi
 
 [[ -n "$REMOTE" ]] || fail "Missing remote target. Pass <user@host> or set DEPLOY_REMOTE."
 
+case "$BUILD_MODE" in
+  auto|full|dist-only)
+    ;;
+  *)
+    fail "Invalid build mode: ${BUILD_MODE}. Expected auto, full, or dist-only."
+    ;;
+esac
+
+case "$ALLOW_UNLABELED_DIST_BASE" in
+  0|1|true|false|yes|no)
+    ;;
+  *)
+    fail "Invalid DEPLOY_ALLOW_UNLABELED_DIST_BASE value: ${ALLOW_UNLABELED_DIST_BASE}"
+    ;;
+esac
+case "$ALLOW_UNLABELED_DIST_BASE" in
+  true|yes)
+    ALLOW_UNLABELED_DIST_BASE=1
+    ;;
+  false|no)
+    ALLOW_UNLABELED_DIST_BASE=0
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_PLATFORM="linux/amd64"
@@ -140,6 +201,7 @@ fi
 STACK_RECREATED=0
 ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback"
 IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate"
+DIST_BASE_TAG="${IMAGE_TAG}-dist-base"
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
 ROLLBACK_RELEASE_FILES_RESTORED=0
@@ -170,6 +232,31 @@ do
     REMOTE_RELEASE_FILES+=("$file")
   fi
 done
+
+DEPENDENCY_MANIFEST_FILES=(
+  Dockerfile
+  package.json
+  pnpm-lock.yaml
+  pnpm-workspace.yaml
+  apps/dashboard/package.json
+  apps/runtime/package.json
+  packages/contracts/package.json
+  packages/db/package.json
+  packages/fansly/package.json
+  packages/onlyfans/package.json
+  packages/shared/package.json
+)
+
+DIST_OVERLAY_PATHS=(
+  apps/dashboard/dist
+  apps/runtime/dist
+  packages/contracts/dist
+  packages/db/dist
+  packages/db/migrations
+  packages/fansly/dist
+  packages/onlyfans/dist
+  packages/shared/dist
+)
 
 run_remote() {
   local command="$1"
@@ -445,11 +532,197 @@ wait_for_worker_health() {
   return 1
 }
 
+calculate_dependency_checksum() {
+  (
+    cd "$ROOT_DIR"
+    local file
+    for file in "${DEPENDENCY_MANIFEST_FILES[@]}"; do
+      [[ -f "$file" ]] || fail "Dependency checksum file is missing: $file"
+      printf 'file:%s\n' "$file"
+      shasum -a 256 "$file"
+    done
+  ) | shasum -a 256 | awk '{print $1}'
+}
+
+calculate_source_revision() {
+  local revision
+  if revision="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD 2>/dev/null)"; then
+    if [[ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+      revision="${revision}-dirty"
+    fi
+    printf '%s' "$revision"
+  else
+    printf 'unknown'
+  fi
+}
+
+ensure_node_base_cache() {
+  if docker image inspect "$NODE_BASE_CACHE_IMAGE" >/dev/null 2>&1; then
+    log "Using cached Node base image ${NODE_BASE_CACHE_IMAGE}"
+    return 0
+  fi
+
+  local attempt
+  for attempt in 1 2 3; do
+    log "Pulling Node base image ${NODE_BASE_IMAGE} for ${BUILD_PLATFORM} (attempt ${attempt}/3)"
+    if docker pull --platform="${BUILD_PLATFORM}" "$NODE_BASE_IMAGE"; then
+      if [[ "$NODE_BASE_IMAGE" != "$NODE_BASE_CACHE_IMAGE" ]]; then
+        docker tag "$NODE_BASE_IMAGE" "$NODE_BASE_CACHE_IMAGE"
+      fi
+      log "Cached Node base image as ${NODE_BASE_CACHE_IMAGE}"
+      return 0
+    fi
+    sleep $((attempt * 5))
+  done
+
+  log "Unable to pull ${NODE_BASE_IMAGE}, and ${NODE_BASE_CACHE_IMAGE} is not cached locally"
+  return 1
+}
+
+build_full_candidate_image() {
+  ensure_node_base_cache || return 1
+
+  log "Building ${IMAGE_CANDIDATE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
+  docker build \
+    --platform="${BUILD_PLATFORM}" \
+    --build-arg "NODE_BASE_IMAGE=${NODE_BASE_CACHE_IMAGE}" \
+    --build-arg "APP_DEPENDENCY_CHECKSUM=${APP_DEPENDENCY_CHECKSUM}" \
+    --build-arg "APP_SOURCE_REVISION=${APP_SOURCE_REVISION}" \
+    -t "$IMAGE_CANDIDATE_TAG" \
+    "$ROOT_DIR"
+}
+
+load_candidate_image() {
+  log "Loading ${IMAGE_CANDIDATE_TAG} on ${REMOTE}"
+  docker save "$IMAGE_CANDIDATE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
+}
+
+read_remote_rollback_dependency_checksum() {
+  local template
+  template='{{ index .Config.Labels "agency-hub.dependency-checksum" }}'
+  run_remote "set -euo pipefail; docker image inspect -f $(printf '%q' "$template") $(printf '%q' "$ROLLBACK_IMAGE_TAG")" 2>/dev/null || true
+}
+
+validate_dist_only_base() {
+  if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
+    fail "Dist-only deploy requires a captured remote rollback image to use as the base"
+  fi
+
+  local remote_checksum
+  remote_checksum="$(read_remote_rollback_dependency_checksum)"
+  if [[ "$remote_checksum" == "<no value>" ]]; then
+    remote_checksum=""
+  fi
+
+  if [[ -z "$remote_checksum" ]]; then
+    if [[ "$ALLOW_UNLABELED_DIST_BASE" == "1" ]]; then
+      log "Dist-only base image has no dependency checksum label; continuing because --allow-unlabeled-dist-base was set"
+      return 0
+    fi
+    fail "Dist-only deploy cannot prove dependency compatibility because the current production image is unlabeled. Re-run with --allow-unlabeled-dist-base only if package manifests, lockfile, and Dockerfile are compatible with the running image."
+  fi
+
+  if [[ "$remote_checksum" != "$APP_DEPENDENCY_CHECKSUM" ]]; then
+    fail "Dist-only deploy refused: dependency checksum changed (${remote_checksum} -> ${APP_DEPENDENCY_CHECKSUM}). Use a full deploy after refreshing the Node base cache."
+  fi
+
+  log "Dist-only base dependency checksum matches ${APP_DEPENDENCY_CHECKSUM}"
+}
+
+copy_dist_overlay_path() {
+  local relative_path="$1"
+  local source_path="${ROOT_DIR}/${relative_path}"
+  local target_path="${DIST_CONTEXT_DIR}/${relative_path}"
+
+  [[ -e "$source_path" ]] || fail "Dist-only deploy output is missing: ${relative_path}"
+  mkdir -p "$(dirname "$target_path")"
+  cp -R "$source_path" "$target_path"
+}
+
+create_dist_overlay_context() {
+  DIST_CONTEXT_DIR="${TEMP_DIR}/dist-overlay-context"
+  mkdir -p "$DIST_CONTEXT_DIR"
+
+  cat >"${DIST_CONTEXT_DIR}/Dockerfile" <<EOF
+FROM ${DIST_BASE_TAG}
+
+WORKDIR /app
+
+ARG APP_DEPENDENCY_CHECKSUM=unknown
+ARG APP_SOURCE_REVISION=unknown
+
+LABEL agency-hub.dependency-checksum="\${APP_DEPENDENCY_CHECKSUM}"
+LABEL agency-hub.source-revision="\${APP_SOURCE_REVISION}"
+
+COPY apps/dashboard/dist ./apps/dashboard/dist
+COPY apps/runtime/dist ./apps/runtime/dist
+COPY packages/contracts/dist ./packages/contracts/dist
+COPY packages/db/dist ./packages/db/dist
+COPY packages/db/migrations ./packages/db/migrations
+COPY packages/fansly/dist ./packages/fansly/dist
+COPY packages/onlyfans/dist ./packages/onlyfans/dist
+COPY packages/shared/dist ./packages/shared/dist
+EOF
+
+  local path
+  for path in "${DIST_OVERLAY_PATHS[@]}"; do
+    copy_dist_overlay_path "$path"
+  done
+}
+
+build_dist_only_candidate_image() {
+  require_command pnpm
+  validate_dist_only_base
+
+  log "Building production JS/CSS artifacts locally"
+  (cd "$ROOT_DIR" && pnpm build:production)
+  create_dist_overlay_context
+
+  local remote_context="/tmp/agency-hub-dist-overlay-${APP_SOURCE_REVISION//[^A-Za-z0-9_.-]/-}"
+  local remote_context_escaped
+  remote_context_escaped="$(printf '%q' "$remote_context")"
+
+  log "Uploading dist-only build context to ${REMOTE}:${remote_context}"
+  tar -C "$DIST_CONTEXT_DIR" -cf - . | ssh "${SSH_ARGS[@]}" "$REMOTE" \
+    "bash -lc $(printf '%q' "set -euo pipefail; rm -rf ${remote_context_escaped}; mkdir -p ${remote_context_escaped}; tar -xf - -C ${remote_context_escaped}")" \
+    >/dev/null
+
+  log "Building ${IMAGE_CANDIDATE_TAG} on ${REMOTE} from current production image"
+  run_remote "set -euo pipefail; docker tag $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$DIST_BASE_TAG"); docker build --platform=$(printf '%q' "$BUILD_PLATFORM") --build-arg APP_DEPENDENCY_CHECKSUM=$(printf '%q' "$APP_DEPENDENCY_CHECKSUM") --build-arg APP_SOURCE_REVISION=$(printf '%q' "$APP_SOURCE_REVISION") -t $(printf '%q' "$IMAGE_CANDIDATE_TAG") ${remote_context_escaped}; rm -rf ${remote_context_escaped}"
+}
+
+build_candidate_image() {
+  APP_DEPENDENCY_CHECKSUM="$(calculate_dependency_checksum)"
+  APP_SOURCE_REVISION="$(calculate_source_revision)"
+  log "Build metadata: revision=${APP_SOURCE_REVISION}, dependency_checksum=${APP_DEPENDENCY_CHECKSUM}"
+
+  case "$BUILD_MODE" in
+    full)
+      build_full_candidate_image
+      load_candidate_image
+      ;;
+    dist-only)
+      build_dist_only_candidate_image
+      ;;
+    auto)
+      if build_full_candidate_image; then
+        load_candidate_image
+      else
+        log "Full Docker build failed before release sync; attempting dist-only fallback"
+        build_dist_only_candidate_image
+      fi
+      ;;
+  esac
+}
+
 require_command docker
 require_command ssh
 require_command tar
 require_command curl
 require_command mktemp
+require_command shasum
+require_command git
+require_command cp
 
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -466,11 +739,7 @@ run_remote "set -euo pipefail; docker version >/dev/null"
 capture_remote_rollback_image
 capture_remote_release_files
 
-log "Building ${IMAGE_CANDIDATE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
-docker build --platform="${BUILD_PLATFORM}" -t "$IMAGE_CANDIDATE_TAG" "$ROOT_DIR"
-
-log "Loading ${IMAGE_CANDIDATE_TAG} on ${REMOTE}"
-docker save "$IMAGE_CANDIDATE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
+build_candidate_image
 
 log "Syncing release files to ${REMOTE}:${APP_DIR}"
 tar -C "$ROOT_DIR" -cf - "${REMOTE_RELEASE_FILES[@]}" | ssh "${SSH_ARGS[@]}" "$REMOTE" \

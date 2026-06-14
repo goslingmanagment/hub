@@ -1,6 +1,9 @@
 ARG BUILDPLATFORM
+ARG NODE_BASE_IMAGE=node:22-bookworm-slim
+ARG APP_DEPENDENCY_CHECKSUM=unknown
+ARG APP_SOURCE_REVISION=unknown
 
-FROM node:22-bookworm-slim AS target-base
+FROM ${NODE_BASE_IMAGE} AS target-base
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -22,7 +25,7 @@ COPY packages/shared/package.json ./packages/shared/package.json
 RUN pnpm install --prod --frozen-lockfile --filter @agency_hub_core/runtime...
 RUN pnpm rebuild --pending --filter @agency_hub_core/runtime...
 
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS build
+FROM --platform=$BUILDPLATFORM ${NODE_BASE_IMAGE} AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -40,7 +43,13 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm rebuild --pending
 RUN pnpm build:production
 
-FROM node:22-bookworm-slim AS runtime
+FROM ${NODE_BASE_IMAGE} AS runtime
+
+ARG APP_DEPENDENCY_CHECKSUM=unknown
+ARG APP_SOURCE_REVISION=unknown
+
+LABEL agency-hub.dependency-checksum="${APP_DEPENDENCY_CHECKSUM}"
+LABEL agency-hub.source-revision="${APP_SOURCE_REVISION}"
 
 ENV NODE_ENV=production
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
