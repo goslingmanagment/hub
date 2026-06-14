@@ -1401,6 +1401,7 @@ export async function buildApiServer(appContext: AppContext) {
     }
     const syncSnapshot = await getSyncStatusSnapshot(appContext, {
       pageIds,
+      includeMonitorMetrics: false,
     });
     const syncByPageId = new Map(syncSnapshot.pages.map((page) => [page.pageId, page.syncUx]));
     const overallSyncUx = buildOverallSyncUx(syncSnapshot.pages.map((page) => page.syncUx));

@@ -164,7 +164,7 @@ export async function listConnectionStatuses(
     }),
     input?.syncUxByPageId
       ? Promise.resolve(null)
-      : getSyncStatusSnapshot(app, { pageIds: allPageIds }),
+      : getSyncStatusSnapshot(app, { pageIds: allPageIds, includeMonitorMetrics: false }),
   ]);
   const runsByPageId = new Map(latestRuns.map((r) => [r.platformAccountId, r]));
   const syncByPageId = input?.syncUxByPageId ?? new Map(

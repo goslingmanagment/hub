@@ -11,9 +11,16 @@ const syncMonitorMocks = vi.hoisted(() => ({
   getSyncMonitorSnapshot: vi.fn(),
 }));
 
+const syncStatusMocks = vi.hoisted(() => ({
+  getSyncStatusSnapshot: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/services/sync-monitor.ts", () => ({
   getSyncMonitorSnapshot: syncMonitorMocks.getSyncMonitorSnapshot,
+}));
+vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
+  getSyncStatusSnapshot: syncStatusMocks.getSyncStatusSnapshot,
 }));
 
 import { listConnectionStatuses } from "../apps/runtime/src/services/connections.ts";
@@ -77,5 +84,64 @@ describe("connections service", () => {
         syncUx,
       }),
     ]);
+  });
+
+  it("uses compact sync summaries when precomputed summaries are not supplied", async () => {
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    dbMocks.getLatestSyncRunPerPage.mockResolvedValue([]);
+
+    const syncUx = {
+      state: "healthy" as const,
+      label: "Up to date",
+      headline: "Up to date",
+      detail: "All page syncs are current.",
+      progressLabel: null,
+      nextRetryAt: null,
+      updatedAt: now.toISOString(),
+      requiresAction: false,
+    };
+    const app = { db: {} } as never;
+
+    syncStatusMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: now.toISOString(),
+      recentCounters: {
+        failedRuns: 0,
+        http429s: 0,
+        http5xxs: 0,
+      },
+      pages: [{
+        pageId: 7,
+        syncUx,
+      }],
+    });
+
+    const result = await listConnectionStatuses(app, {
+      pages: [{
+        id: 7,
+        label: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        username: "lana_page",
+        displayName: "Lana",
+        lastLightSyncAt: now,
+        lastFollowerSyncAt: now,
+        ofapiAccountId: null,
+        ofapiAuthStatus: null,
+        ofapiAuthChangedAt: null,
+        subscriberCount: 10,
+        followerCount: 20,
+        hasCredentials: true,
+        proxyUrl: null,
+        egressKey: "direct",
+        proxyHasAuth: false,
+      }],
+    });
+
+    expect(syncStatusMocks.getSyncStatusSnapshot).toHaveBeenCalledWith(app, {
+      pageIds: [7],
+      includeMonitorMetrics: false,
+    });
+    expect(result[0]?.syncUx).toBe(syncUx);
   });
 });

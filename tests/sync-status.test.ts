@@ -194,6 +194,32 @@ describe("sync status service", () => {
     });
   });
 
+  it("skips monitor aggregate rows when compact metrics are disabled", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }),
+      buildTaskRow({ stream: "followers" }),
+      buildTaskRow({ stream: "transactions" }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      includeMonitorMetrics: false,
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(dbMocks.listSyncMonitorStreamRows).not.toHaveBeenCalled();
+    expect(snapshot.recentCounters).toEqual({
+      failedRuns: 0,
+      http429s: 0,
+      http5xxs: 0,
+    });
+    expect(snapshot.pages[0]?.syncUx).toEqual(expect.objectContaining({
+      state: expect.any(String),
+    }));
+  });
+
   it("does not report message history as up_to_date while backlog remains", async () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{

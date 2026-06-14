@@ -1343,10 +1343,12 @@ export async function getSyncStatusSnapshot(
   input?: {
     pageIds?: number[];
     pageLabel?: string;
+    includeMonitorMetrics?: boolean;
     now?: Date;
   },
 ): Promise<SyncStatusSnapshot> {
   const now = input?.now ?? new Date();
+  const includeMonitorMetrics = input?.includeMonitorMetrics ?? true;
   const allVisiblePages = await listVisiblePages(app.db);
   const scopedPages = (() => {
     const pageIds = input?.pageIds ? new Set(input.pageIds) : null;
@@ -1380,11 +1382,13 @@ export async function getSyncStatusSnapshot(
 
   const [taskRows, monitorRows] = await Promise.all([
     listPageSyncStates(app.db),
-    listSyncMonitorStreamRows(app.db, {
-      pageIds: scopedPageIds,
-      windowStart: new Date(now.getTime() - 24 * 60 * 60 * 1000),
-      streams: [...getSyncStreamsForPlatform("fansly")],
-    }),
+    includeMonitorMetrics
+      ? listSyncMonitorStreamRows(app.db, {
+        pageIds: scopedPageIds,
+        windowStart: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+        streams: [...getSyncStreamsForPlatform("fansly")],
+      })
+      : Promise.resolve([] as SyncMonitorStreamRow[]),
   ]);
 
   const ofapiDmIngestPageIds = isOfapiDmProjectionEnabled(app.config)
