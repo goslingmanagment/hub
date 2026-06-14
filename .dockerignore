@@ -2,6 +2,7 @@ node_modules
 .pnpm-store
 .git
 .DS_Store
+._*
 .env
 .env.*
 !.env.example

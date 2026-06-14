@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const MODULE_RELATIVE_MIGRATIONS_DIR = fileURLToPath(
   new URL("../migrations", import.meta.url),
 );
+const MIGRATION_FILENAME_PATTERN = /^[0-9]{4}_[a-z0-9][a-z0-9_-]*\.sql$/;
 
 function isFallbackableMigrationsError(error: unknown) {
   if (error instanceof Error && error.message.startsWith("No SQL migrations were found in ")) {
@@ -16,14 +17,24 @@ function isFallbackableMigrationsError(error: unknown) {
 
 async function listMigrationFiles(migrationsDir: string) {
   const files = (await readdir(migrationsDir))
-    .filter((file) => file.endsWith(".sql") && !file.startsWith("."))
+    .filter((file) => file.endsWith(".sql") && !file.startsWith("."));
+  const invalidFiles = files.filter((file) => !MIGRATION_FILENAME_PATTERN.test(file));
+
+  if (invalidFiles.length > 0) {
+    throw new Error(
+      `Invalid SQL migration filename(s) in ${migrationsDir}: ${invalidFiles.join(", ")}. `
+        + "Expected names to match /^[0-9]{4}_[a-z0-9][a-z0-9_-]*\\.sql$/",
+    );
+  }
+
+  const validFiles = files
     .sort();
 
-  if (files.length === 0) {
+  if (validFiles.length === 0) {
     throw new Error(`No SQL migrations were found in ${migrationsDir}`);
   }
 
-  return files;
+  return validFiles;
 }
 
 export async function resolveMigrationFiles(input?: {

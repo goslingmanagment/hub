@@ -79,6 +79,97 @@ describe("compose config", () => {
     expect(text).toContain('read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN"');
   });
 
+  it("deploy-production.sh defaults to full builds without dist-only fallback", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const buildCandidate = getShellFunction(text, "build_candidate_image");
+    const fullBranch = buildCandidate?.match(/full\)([\s\S]*?);;\n    dist-only\)/)?.[1] ?? "";
+
+    expect(text).toContain('BUILD_MODE="${DEPLOY_BUILD_MODE:-full}"');
+    expect(text).toContain("--mode <mode>          Build mode: full, dist-only, or auto. Default: full");
+    expect(text).not.toContain('BUILD_MODE="${DEPLOY_BUILD_MODE:-auto}"');
+    expect(fullBranch).toContain("build_full_candidate_image");
+    expect(fullBranch).toContain("load_candidate_image");
+    expect(fullBranch).not.toContain("build_dist_only_candidate_image");
+    expect(buildCandidate).toContain("because --mode auto was set");
+  });
+
+  it("deploy-production.sh uses local and remote deploy locks with metadata cleanup", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const localLock = getShellFunction(text, "acquire_local_deploy_lock");
+    const remoteLock = getShellFunction(text, "acquire_remote_deploy_lock");
+    const cleanup = getShellFunction(text, "cleanup_deploy");
+
+    expect(text).toContain('REMOTE_DEPLOY_LOCK_DIR="${APP_DIR%/}/.deploy.lock"');
+    expect(localLock).toContain('mkdir "$LOCAL_DEPLOY_LOCK_DIR"');
+    expect(localLock).toContain("agency-hub-deploy-production-${root_hash}.lock");
+    expect(localLock).toContain("candidate_tag");
+    expect(localLock).toContain("only after confirming no deploy is active");
+    expect(remoteLock).toContain("mkdir ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}");
+    expect(remoteLock).toContain("source_revision");
+    expect(remoteLock).toContain("dependency_checksum");
+    expect(remoteLock).toContain("remove only after confirming no deploy is active");
+    expect(cleanup).toContain("release_remote_deploy_lock");
+    expect(cleanup).toContain('rm -rf "$LOCAL_DEPLOY_LOCK_DIR"');
+    expect(text).toContain("trap cleanup_deploy EXIT");
+  });
+
+  it("deploy-production.sh derives candidate, dist-base, and rollback tags per deploy run", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const initializer = getShellFunction(text, "initialize_deploy_metadata_and_tags");
+
+    expect(initializer).toContain("DEPLOY_RUN_ID=");
+    expect(initializer).toContain('IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate-${source_tag_component}-${DEPLOY_RUN_ID}"');
+    expect(initializer).toContain('DIST_BASE_TAG="${IMAGE_TAG}-dist-base-${source_tag_component}-${DEPLOY_RUN_ID}"');
+    expect(initializer).toContain('ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback-${source_tag_component}-${DEPLOY_RUN_ID}"');
+    expect(text).not.toContain('IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate"');
+    expect(text).not.toContain('DIST_BASE_TAG="${IMAGE_TAG}-dist-base"');
+  });
+
+  it("deploy-production.sh validates cached Node base architecture for the build platform", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const ensureBase = getShellFunction(text, "ensure_node_base_cache");
+
+    expect(ensureBase).toContain('docker image inspect "$NODE_BASE_CACHE_IMAGE"');
+    expect(ensureBase).toContain('docker run --rm --platform="${BUILD_PLATFORM}" "$NODE_BASE_CACHE_IMAGE" node -p "process.platform + \'/\' + process.arch"');
+    expect(ensureBase).toContain("linux/x64");
+    expect(ensureBase).toContain("failed ${BUILD_PLATFORM} runtime validation");
+    expect(ensureBase).toContain('docker pull --platform="${BUILD_PLATFORM}" "$NODE_BASE_IMAGE"');
+  });
+
+  it("deploy-production.sh runs migration preflight before building candidate images", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const preflight = getShellFunction(text, "preflight_migration_files");
+    const mainStart = text.indexOf('ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"');
+    const preflightCallIndex = text.indexOf("preflight_migration_files", mainStart);
+    const buildCallIndex = text.indexOf("build_candidate_image", preflightCallIndex);
+
+    expect(preflight).toContain("packages/db/migrations");
+    expect(preflight).toContain("-name '.*.sql'");
+    expect(preflight).toContain("hidden SQL migration files are not allowed");
+    expect(preflight).toContain("^[0-9]{4}_[a-z0-9][a-z0-9_-]*\\.sql$");
+    expect(preflightCallIndex).toBeGreaterThan(mainStart);
+    expect(buildCallIndex).toBeGreaterThan(preflightCallIndex);
+  });
+
+  it("deploy-production.sh verifies running API and worker image labels after health checks", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const verifier = getShellFunction(text, "verify_service_image_labels");
+    const workerHealthIndex = text.indexOf("wait_for_worker_health || fail");
+    const labelCheckIndex = text.indexOf("verify_post_deploy_image_labels", workerHealthIndex);
+
+    expect(verifier).toContain("agency-hub.source-revision");
+    expect(verifier).toContain("agency-hub.dependency-checksum");
+    expect(verifier).toContain("APP_SOURCE_REVISION");
+    expect(verifier).toContain("APP_DEPENDENCY_CHECKSUM");
+    expect(labelCheckIndex).toBeGreaterThan(workerHealthIndex);
+  });
+
+  it(".dockerignore excludes AppleDouble metadata files", async () => {
+    const dockerignore = await readComposeFile(".dockerignore");
+
+    expect(dockerignore.split(/\r?\n/)).toContain("._*");
+  });
+
   it("deploy-production.sh fails loudly when schema baseline capture breaks", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const schemaCapture = getShellFunction(text, "capture_remote_schema_migrations");

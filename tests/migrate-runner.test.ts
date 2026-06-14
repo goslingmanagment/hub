@@ -118,6 +118,33 @@ describe("runMigrations", () => {
     }
   });
 
+  it.each([
+    "0034-foo.sql",
+    "0034_Foo.sql",
+    "0034foo.sql",
+  ])("fails loudly for malformed visible migration filename %s", async (filename) => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-invalid-"));
+    const db = {
+      query: vi.fn(async () => ({
+        rowCount: 0,
+        rows: [],
+      })),
+    };
+
+    try {
+      await writeFile(path.join(tempDir, filename), "select 1;\n");
+
+      await expect(runMigrations({
+        db: db as never,
+        migrationsDir: tempDir,
+      })).rejects.toThrow(
+        `Invalid SQL migration filename(s) in ${tempDir}: ${filename}`,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to module-relative migrations when cwd has no packages/db/migrations", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-fallback-"));
     const originalCwd = process.cwd();

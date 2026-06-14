@@ -14,7 +14,7 @@ Usage:
 Options:
   --app-dir <path>       Remote release directory. Default: /opt/agency-hub
   --image <tag>          Docker image tag. Default: agency_hub_core/runtime:production
-  --mode <mode>          Build mode: auto, full, or dist-only. Default: auto
+  --mode <mode>          Build mode: full, dist-only, or auto. Default: full
   --node-base-image <tag>
                         Node base image used to seed the local Docker cache.
                         Default: node:22-bookworm-slim
@@ -73,7 +73,7 @@ require_command() {
 REMOTE="${DEPLOY_REMOTE:-}"
 APP_DIR="${DEPLOY_APP_DIR:-/opt/agency-hub}"
 IMAGE_TAG="${DEPLOY_IMAGE_TAG:-agency_hub_core/runtime:production}"
-BUILD_MODE="${DEPLOY_BUILD_MODE:-auto}"
+BUILD_MODE="${DEPLOY_BUILD_MODE:-full}"
 NODE_BASE_IMAGE="${DEPLOY_NODE_BASE_IMAGE:-node:22-bookworm-slim}"
 NODE_BASE_CACHE_IMAGE="${DEPLOY_NODE_BASE_CACHE_IMAGE:-agency_hub_core/node:22-bookworm-slim}"
 ALLOW_UNLABELED_DIST_BASE="${DEPLOY_ALLOW_UNLABELED_DIST_BASE:-0}"
@@ -204,14 +204,22 @@ if [[ -n "$IDENTITY_FILE" ]]; then
 fi
 
 STACK_RECREATED=0
-ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback"
-IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate"
-DIST_BASE_TAG="${IMAGE_TAG}-dist-base"
+APP_DEPENDENCY_CHECKSUM=""
+APP_SOURCE_REVISION=""
+DEPLOY_RUN_ID=""
+ROLLBACK_IMAGE_TAG=""
+IMAGE_CANDIDATE_TAG=""
+DIST_BASE_TAG=""
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
 ROLLBACK_RELEASE_FILES_RESTORED=0
 SCHEMA_BASELINE_CAPTURED=0
 ROLLBACK_COMPOSE_RECREATE_FAILED=0
+LOCAL_DEPLOY_LOCK_DIR=""
+LOCAL_DEPLOY_LOCK_ACQUIRED=0
+REMOTE_DEPLOY_LOCK_DIR="${APP_DIR%/}/.deploy.lock"
+REMOTE_DEPLOY_LOCK_DIR_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR")"
+REMOTE_DEPLOY_LOCK_ACQUIRED=0
 ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0013_backfill_egress_rate_limit_scope_key.sql"
   "0014_repair_light_trusted_sync_states.sql"
@@ -266,6 +274,176 @@ DIST_OVERLAY_PATHS=(
 run_remote() {
   local command="$1"
   ssh "${SSH_ARGS[@]}" "$REMOTE" "bash -lc $(printf '%q' "$command")"
+}
+
+sanitize_tag_component() {
+  local value="$1"
+  local sanitized="${value//[^[:alnum:]_.-]/-}"
+  if [[ -z "$sanitized" ]]; then
+    sanitized="unknown"
+  fi
+  printf '%s' "$sanitized"
+}
+
+initialize_deploy_metadata_and_tags() {
+  APP_DEPENDENCY_CHECKSUM="$(calculate_dependency_checksum)"
+  APP_SOURCE_REVISION="$(calculate_source_revision)"
+  DEPLOY_RUN_ID="$(sanitize_tag_component "$(date -u +%Y%m%dT%H%M%SZ)-$$")"
+
+  local source_tag_component
+  source_tag_component="$(sanitize_tag_component "$APP_SOURCE_REVISION")"
+
+  IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate-${source_tag_component}-${DEPLOY_RUN_ID}"
+  DIST_BASE_TAG="${IMAGE_TAG}-dist-base-${source_tag_component}-${DEPLOY_RUN_ID}"
+  ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback-${source_tag_component}-${DEPLOY_RUN_ID}"
+
+  log "Build metadata: revision=${APP_SOURCE_REVISION}, dependency_checksum=${APP_DEPENDENCY_CHECKSUM}, run_id=${DEPLOY_RUN_ID}"
+  log "Deploy image tags: candidate=${IMAGE_CANDIDATE_TAG}, rollback=${ROLLBACK_IMAGE_TAG}, dist_base=${DIST_BASE_TAG}"
+}
+
+acquire_local_deploy_lock() {
+  local root_hash
+  root_hash="$(printf '%s' "$ROOT_DIR" | shasum -a 256 | awk '{print substr($1, 1, 16)}')"
+  LOCAL_DEPLOY_LOCK_DIR="${TMPDIR:-/tmp}/agency-hub-deploy-production-${root_hash}.lock"
+
+  if mkdir "$LOCAL_DEPLOY_LOCK_DIR" 2>/dev/null; then
+    LOCAL_DEPLOY_LOCK_ACQUIRED=1
+    {
+      printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf 'local_pid=%s\n' "$$"
+      printf 'root_dir=%s\n' "$ROOT_DIR"
+      printf 'remote=%s\n' "$REMOTE"
+      printf 'app_dir=%s\n' "$APP_DIR"
+      printf 'source_revision=%s\n' "$APP_SOURCE_REVISION"
+      printf 'dependency_checksum=%s\n' "$APP_DEPENDENCY_CHECKSUM"
+      printf 'run_id=%s\n' "$DEPLOY_RUN_ID"
+      printf 'candidate_tag=%s\n' "$IMAGE_CANDIDATE_TAG"
+    } >"${LOCAL_DEPLOY_LOCK_DIR}/metadata"
+    printf '%s\n' "$DEPLOY_RUN_ID" >"${LOCAL_DEPLOY_LOCK_DIR}/owner"
+    log "Acquired local deploy lock ${LOCAL_DEPLOY_LOCK_DIR}"
+    return 0
+  fi
+
+  log "Another local production deploy appears to be running; lock exists at ${LOCAL_DEPLOY_LOCK_DIR}"
+  if [[ -f "${LOCAL_DEPLOY_LOCK_DIR}/metadata" ]]; then
+    log "Existing local lock metadata:"
+    while IFS= read -r line; do
+      log "  ${line}"
+    done <"${LOCAL_DEPLOY_LOCK_DIR}/metadata"
+  fi
+  fail "Local deploy lock exists. Remove ${LOCAL_DEPLOY_LOCK_DIR} only after confirming no deploy is active."
+}
+
+release_remote_deploy_lock() {
+  [[ "${REMOTE_DEPLOY_LOCK_ACQUIRED:-0}" == "1" ]] || return 0
+  run_remote "set -euo pipefail; if [[ -d ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} ]]; then if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner ]] && [[ \"\$(cat ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner)\" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then rm -rf ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}; else printf '[deploy] remote lock owner changed; leaving %s in place\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2; exit 1; fi; fi"
+  REMOTE_DEPLOY_LOCK_ACQUIRED=0
+}
+
+cleanup_deploy() {
+  local exit_status=$?
+
+  if [[ "${REMOTE_DEPLOY_LOCK_ACQUIRED:-0}" == "1" ]]; then
+    release_remote_deploy_lock || log "Unable to release remote deploy lock ${REMOTE_DEPLOY_LOCK_DIR}"
+  fi
+
+  if [[ "${LOCAL_DEPLOY_LOCK_ACQUIRED:-0}" == "1" && -n "${LOCAL_DEPLOY_LOCK_DIR:-}" ]]; then
+    local local_lock_owner=""
+    if [[ -f "${LOCAL_DEPLOY_LOCK_DIR}/owner" ]]; then
+      IFS= read -r local_lock_owner <"${LOCAL_DEPLOY_LOCK_DIR}/owner" || true
+    fi
+    if [[ "$local_lock_owner" == "$DEPLOY_RUN_ID" ]]; then
+      rm -rf "$LOCAL_DEPLOY_LOCK_DIR" || log "Unable to release local deploy lock ${LOCAL_DEPLOY_LOCK_DIR}"
+    else
+      log "Local lock owner changed; leaving ${LOCAL_DEPLOY_LOCK_DIR} in place"
+    fi
+    LOCAL_DEPLOY_LOCK_ACQUIRED=0
+  fi
+
+  if [[ -n "${TEMP_DIR:-}" ]]; then
+    rm -rf "$TEMP_DIR"
+  fi
+
+  return "$exit_status"
+}
+
+acquire_remote_deploy_lock() {
+  local remote_command
+  remote_command=$(cat <<EOF
+set -euo pipefail
+mkdir -p ${REMOTE_APP_DIR_ESCAPED}
+if mkdir ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} 2>/dev/null; then
+  {
+    printf 'started_at_utc=%s\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
+    printf 'remote_user=%s\n' "\$(id -un 2>/dev/null || printf unknown)"
+    printf 'remote_host=%s\n' "\$(hostname 2>/dev/null || printf unknown)"
+    printf 'remote_pid=%s\n' "\$\$"
+    printf 'local_pid=%s\n' $(printf '%q' "$$")
+    printf 'local_root=%s\n' $(printf '%q' "$ROOT_DIR")
+    printf 'remote_target=%s\n' $(printf '%q' "$REMOTE")
+    printf 'app_dir=%s\n' $(printf '%q' "$APP_DIR")
+    printf 'source_revision=%s\n' $(printf '%q' "$APP_SOURCE_REVISION")
+    printf 'dependency_checksum=%s\n' $(printf '%q' "$APP_DEPENDENCY_CHECKSUM")
+    printf 'run_id=%s\n' $(printf '%q' "$DEPLOY_RUN_ID")
+    printf 'candidate_tag=%s\n' $(printf '%q' "$IMAGE_CANDIDATE_TAG")
+    printf 'rollback_tag=%s\n' $(printf '%q' "$ROLLBACK_IMAGE_TAG")
+  } > ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata
+  printf '%s\n' $(printf '%q' "$DEPLOY_RUN_ID") > ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner
+  exit 0
+fi
+printf '[deploy] error: another deploy is running; remote lock exists: %s\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2
+if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata ]]; then
+  printf '[deploy] existing remote lock metadata:\n' >&2
+  while IFS= read -r line; do printf '[deploy]   %s\n' "\$line" >&2; done < ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata
+fi
+printf '[deploy] inspect with: ssh %s %s\n' $(printf '%q' "$REMOTE") $(printf '%q' "ls -la ${REMOTE_DEPLOY_LOCK_DIR}; cat ${REMOTE_DEPLOY_LOCK_DIR}/metadata") >&2
+printf '[deploy] remove only after confirming no deploy is active: rm -rf %s\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2
+exit 73
+EOF
+)
+
+  if run_remote "$remote_command"; then
+    REMOTE_DEPLOY_LOCK_ACQUIRED=1
+    log "Acquired remote deploy lock ${REMOTE}:${REMOTE_DEPLOY_LOCK_DIR}"
+    return 0
+  fi
+
+  fail "Remote deploy lock exists at ${REMOTE}:${REMOTE_DEPLOY_LOCK_DIR}. Inspect it and remove only after confirming no deploy is active."
+}
+
+preflight_migration_files() {
+  local migrations_dir="${ROOT_DIR}/packages/db/migrations"
+  [[ -d "$migrations_dir" ]] || fail "Migration directory is missing: ${migrations_dir}"
+
+  local hidden_files=()
+  local invalid_files=()
+  local file
+  local name
+
+  while IFS= read -r -d '' file; do
+    hidden_files+=("${file##*/}")
+  done < <(find "$migrations_dir" -maxdepth 1 -type f -name '.*.sql' -print0)
+
+  while IFS= read -r -d '' file; do
+    name="${file##*/}"
+    if [[ ! "$name" =~ ^[0-9]{4}_[a-z0-9][a-z0-9_-]*\.sql$ ]]; then
+      invalid_files+=("$name")
+    fi
+  done < <(find "$migrations_dir" -maxdepth 1 -type f -name '*.sql' ! -name '.*.sql' -print0)
+
+  if (( ${#hidden_files[@]} > 0 )); then
+    printf '[deploy] hidden SQL migration files are not allowed in %s:\n' "$migrations_dir" >&2
+    printf '[deploy]   %s\n' "${hidden_files[@]}" >&2
+    fail "Remove hidden SQL migration metadata files before deploying"
+  fi
+
+  if (( ${#invalid_files[@]} > 0 )); then
+    printf '[deploy] invalid SQL migration filenames in %s:\n' "$migrations_dir" >&2
+    printf '[deploy]   %s\n' "${invalid_files[@]}" >&2
+    fail "Migration filenames must match ^[0-9]{4}_[a-z0-9][a-z0-9_-]*\\.sql$"
+  fi
+
+  log "Migration filename preflight passed"
 }
 
 remote_release_file_args() {
@@ -537,6 +715,38 @@ wait_for_worker_health() {
   return 1
 }
 
+verify_service_image_labels() {
+  local service="$1"
+  local service_escaped
+  local output
+  local revision
+  local checksum
+  service_escaped="$(printf '%q' "$service")"
+
+  output="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; container_id=\$(${REMOTE_COMPOSE} ps -q ${service_escaped} 2>/dev/null || true); [[ -n \"\$container_id\" ]]; image_id=\$(docker inspect -f '{{.Image}}' \"\$container_id\"); docker image inspect -f '{{ index .Config.Labels \"agency-hub.source-revision\" }}|{{ index .Config.Labels \"agency-hub.dependency-checksum\" }}' \"\$image_id\"")" \
+    || fail "Unable to inspect running ${service} image labels"
+
+  revision="${output%%|*}"
+  checksum="${output#*|}"
+  if [[ "$revision" == "<no value>" ]]; then
+    revision=""
+  fi
+  if [[ "$checksum" == "<no value>" ]]; then
+    checksum=""
+  fi
+
+  [[ "$revision" == "$APP_SOURCE_REVISION" ]] \
+    || fail "Running ${service} image source revision label mismatch: expected ${APP_SOURCE_REVISION}, got ${revision:-missing}"
+  [[ "$checksum" == "$APP_DEPENDENCY_CHECKSUM" ]] \
+    || fail "Running ${service} image dependency checksum label mismatch: expected ${APP_DEPENDENCY_CHECKSUM}, got ${checksum:-missing}"
+}
+
+verify_post_deploy_image_labels() {
+  log "Verifying running image labels"
+  verify_service_image_labels api
+  verify_service_image_labels worker
+}
+
 calculate_dependency_checksum() {
   (
     cd "$ROOT_DIR"
@@ -563,8 +773,20 @@ calculate_source_revision() {
 
 ensure_node_base_cache() {
   if docker image inspect "$NODE_BASE_CACHE_IMAGE" >/dev/null 2>&1; then
-    log "Using cached Node base image ${NODE_BASE_CACHE_IMAGE}"
-    return 0
+    local cached_runtime
+    if cached_runtime="$(docker run --rm --platform="${BUILD_PLATFORM}" "$NODE_BASE_CACHE_IMAGE" node -p "process.platform + '/' + process.arch" 2>/dev/null)" \
+      && [[ "$cached_runtime" == "linux/x64" ]]; then
+      log "Using cached Node base image ${NODE_BASE_CACHE_IMAGE} for ${BUILD_PLATFORM}"
+      return 0
+    fi
+
+    if [[ -n "${cached_runtime:-}" ]]; then
+      log "Cached Node base image ${NODE_BASE_CACHE_IMAGE} is invalid for ${BUILD_PLATFORM}: expected linux/x64, got ${cached_runtime}"
+    else
+      log "Cached Node base image ${NODE_BASE_CACHE_IMAGE} failed ${BUILD_PLATFORM} runtime validation"
+    fi
+  else
+    log "Node base cache ${NODE_BASE_CACHE_IMAGE} is not present locally"
   fi
 
   local attempt
@@ -574,13 +796,20 @@ ensure_node_base_cache() {
       if [[ "$NODE_BASE_IMAGE" != "$NODE_BASE_CACHE_IMAGE" ]]; then
         docker tag "$NODE_BASE_IMAGE" "$NODE_BASE_CACHE_IMAGE"
       fi
-      log "Cached Node base image as ${NODE_BASE_CACHE_IMAGE}"
-      return 0
+
+      local refreshed_runtime
+      if refreshed_runtime="$(docker run --rm --platform="${BUILD_PLATFORM}" "$NODE_BASE_CACHE_IMAGE" node -p "process.platform + '/' + process.arch" 2>/dev/null)" \
+        && [[ "$refreshed_runtime" == "linux/x64" ]]; then
+        log "Cached Node base image as ${NODE_BASE_CACHE_IMAGE} for ${BUILD_PLATFORM}"
+        return 0
+      fi
+
+      log "Pulled Node base image did not validate for ${BUILD_PLATFORM}; got ${refreshed_runtime:-unknown}"
     fi
     sleep $((attempt * 5))
   done
 
-  log "Unable to pull ${NODE_BASE_IMAGE}, and ${NODE_BASE_CACHE_IMAGE} is not cached locally"
+  log "Unable to pull and validate ${NODE_BASE_IMAGE} for ${BUILD_PLATFORM}"
   return 1
 }
 
@@ -689,7 +918,7 @@ build_dist_only_candidate_image() {
   (cd "$ROOT_DIR" && pnpm build:production)
   create_dist_overlay_context
 
-  local remote_context="/tmp/agency-hub-dist-overlay-${APP_SOURCE_REVISION//[^A-Za-z0-9_.-]/-}"
+  local remote_context="/tmp/agency-hub-dist-overlay-${DEPLOY_RUN_ID}"
   local remote_context_escaped
   remote_context_escaped="$(printf '%q' "$remote_context")"
 
@@ -703,24 +932,20 @@ build_dist_only_candidate_image() {
 }
 
 build_candidate_image() {
-  APP_DEPENDENCY_CHECKSUM="$(calculate_dependency_checksum)"
-  APP_SOURCE_REVISION="$(calculate_source_revision)"
-  log "Build metadata: revision=${APP_SOURCE_REVISION}, dependency_checksum=${APP_DEPENDENCY_CHECKSUM}"
-
   case "$BUILD_MODE" in
     full)
-      build_full_candidate_image
-      load_candidate_image
+      build_full_candidate_image || fail "Full Docker build failed"
+      load_candidate_image || fail "Unable to load candidate image on remote"
       ;;
     dist-only)
-      build_dist_only_candidate_image
+      build_dist_only_candidate_image || fail "Dist-only candidate image build failed"
       ;;
     auto)
       if build_full_candidate_image; then
-        load_candidate_image
+        load_candidate_image || fail "Unable to load candidate image on remote"
       else
-        log "Full Docker build failed before release sync; attempting dist-only fallback"
-        build_dist_only_candidate_image
+        log "Full Docker build failed before release sync; attempting dist-only fallback because --mode auto was set"
+        build_dist_only_candidate_image || fail "Dist-only candidate image build failed"
       fi
       ;;
   esac
@@ -735,9 +960,11 @@ require_command shasum
 require_command git
 require_command cp
 require_command find
+require_command awk
+require_command date
 
 TEMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TEMP_DIR"' EXIT
+trap cleanup_deploy EXIT
 
 HEALTH_FILE="${TEMP_DIR}/health.json"
 SYNC_FILE="${TEMP_DIR}/sync.json"
@@ -745,6 +972,11 @@ DASHBOARD_FILE="${TEMP_DIR}/dashboard.html"
 SCHEMA_BEFORE_FILE="${TEMP_DIR}/schema-before.txt"
 SCHEMA_AFTER_FILE="${TEMP_DIR}/schema-after.txt"
 ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"
+
+initialize_deploy_metadata_and_tags
+acquire_local_deploy_lock
+preflight_migration_files
+acquire_remote_deploy_lock
 
 log "Validating remote Docker access"
 run_remote "set -euo pipefail; docker version >/dev/null"
@@ -785,6 +1017,8 @@ wait_for_api_health "$HEALTH_FILE" || fail "API health never reached 200 at ${VE
 
 log "Waiting for the worker container healthcheck"
 wait_for_worker_health || fail "Worker container never reached a healthy state"
+
+verify_post_deploy_image_labels
 
 if [[ -n "$SYNC_MONITORING_TOKEN" ]]; then
   log "Verifying sync health endpoint"
