@@ -516,7 +516,8 @@ CAP METER ───────────────────────�
 
 ## 13. Data model additions (Drizzle + migrations)
 
-All net-new tables; v1 tables untouched. Generate with `pnpm db:generate` / apply with `pnpm db:migrate`.
+All net-new tables; v1 tables untouched. Add hand-written numbered SQL in
+`packages/db/migrations` and apply with `pnpm db:migrate`.
 
 ```
 workboard_state (

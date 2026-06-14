@@ -1,6 +1,6 @@
 // Deterministic property/boundary sweep over the REAL money converters.
-// Imports the actual source (zero-dependency module) by absolute path via tsx.
-// Run: node --import tsx/esm /tmp/agency-audit/money-prop-test.ts
+// Imports the actual source (zero-dependency module) by repo-relative path via tsx.
+// Run from repo root: node --import tsx/esm tests/audit-artifacts/money-prop-test.ts
 import {
   toMills,
   millsToDecimalString,
@@ -9,7 +9,7 @@ import {
   sumMills,
   calculateNetMillsFromGross,
   calculateGrossMillsFromNet,
-} from "/Users/dmitriy/code/core/packages/shared/src/money.ts";
+} from "../../packages/shared/src/money.ts";
 
 // Replica of the PRIVATE reporting.ts:100 millsToRoundedCents (half-up round),
 // to contrast against the truncating formatUsdFromMills (money.ts:28).
