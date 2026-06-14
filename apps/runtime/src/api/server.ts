@@ -177,6 +177,7 @@ import {
 } from "../services/fan-profiles.ts";
 import { getSyncMonitorRecentRequests, getSyncMonitorSnapshot } from "../services/sync-monitor.ts";
 import { getSyncStatusSnapshot } from "../services/sync-status.ts";
+import { getSyncStatusSummarySnapshot } from "../services/sync-summary.ts";
 import {
   getPageMessagesSyncBlock,
   getPageSyncBlocks,
@@ -1399,9 +1400,8 @@ export async function buildApiServer(appContext: AppContext) {
     for (const p of pages) {
       modelSet.set(p.modelSlug, { slug: p.modelSlug, name: p.modelName });
     }
-    const syncSnapshot = await getSyncStatusSnapshot(appContext, {
+    const syncSnapshot = await getSyncStatusSummarySnapshot(appContext, {
       pageIds,
-      includeMonitorMetrics: false,
     });
     const syncByPageId = new Map(syncSnapshot.pages.map((page) => [page.pageId, page.syncUx]));
     const overallSyncUx = buildOverallSyncUx(syncSnapshot.pages.map((page) => page.syncUx));

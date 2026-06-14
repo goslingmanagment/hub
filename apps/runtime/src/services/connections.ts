@@ -23,7 +23,7 @@ import { removeProxy, resolveStoredProxyConfig, resolveStoredProxyEgressKey, sav
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
-import { getSyncStatusSnapshot } from "./sync-status.ts";
+import { getSyncStatusSummarySnapshot } from "./sync-summary.ts";
 
 export type ConnectionStatus =
   | "active"
@@ -164,7 +164,7 @@ export async function listConnectionStatuses(
     }),
     input?.syncUxByPageId
       ? Promise.resolve(null)
-      : getSyncStatusSnapshot(app, { pageIds: allPageIds, includeMonitorMetrics: false }),
+      : getSyncStatusSummarySnapshot(app, { pageIds: allPageIds }),
   ]);
   const runsByPageId = new Map(latestRuns.map((r) => [r.platformAccountId, r]));
   const syncByPageId = input?.syncUxByPageId ?? new Map(

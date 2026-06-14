@@ -12,15 +12,15 @@ const syncMonitorMocks = vi.hoisted(() => ({
 }));
 
 const syncStatusMocks = vi.hoisted(() => ({
-  getSyncStatusSnapshot: vi.fn(),
+  getSyncStatusSummarySnapshot: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/services/sync-monitor.ts", () => ({
   getSyncMonitorSnapshot: syncMonitorMocks.getSyncMonitorSnapshot,
 }));
-vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
-  getSyncStatusSnapshot: syncStatusMocks.getSyncStatusSnapshot,
+vi.mock("../apps/runtime/src/services/sync-summary.ts", () => ({
+  getSyncStatusSummarySnapshot: syncStatusMocks.getSyncStatusSummarySnapshot,
 }));
 
 import { listConnectionStatuses } from "../apps/runtime/src/services/connections.ts";
@@ -102,13 +102,8 @@ describe("connections service", () => {
     };
     const app = { db: {} } as never;
 
-    syncStatusMocks.getSyncStatusSnapshot.mockResolvedValue({
+    syncStatusMocks.getSyncStatusSummarySnapshot.mockResolvedValue({
       generatedAt: now.toISOString(),
-      recentCounters: {
-        failedRuns: 0,
-        http429s: 0,
-        http5xxs: 0,
-      },
       pages: [{
         pageId: 7,
         syncUx,
@@ -138,9 +133,8 @@ describe("connections service", () => {
       }],
     });
 
-    expect(syncStatusMocks.getSyncStatusSnapshot).toHaveBeenCalledWith(app, {
+    expect(syncStatusMocks.getSyncStatusSummarySnapshot).toHaveBeenCalledWith(app, {
       pageIds: [7],
-      includeMonitorMetrics: false,
     });
     expect(result[0]?.syncUx).toBe(syncUx);
   });
