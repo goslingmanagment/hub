@@ -8145,10 +8145,10 @@ describe("api integration", () => {
           return "";
         })
         .filter((statement) => statement.length > 0);
-      const syncMonitorStatements = statements.filter((statement) =>
-        statement.includes("page_streams as (") && statement.includes("provider_rate_limits as ("));
+      const fullMonitorStatements = statements.filter((statement) =>
+        /\bpage_streams\b/.test(statement) && /\bprovider_rate_limits\b/.test(statement));
 
-      expect(syncMonitorStatements).toHaveLength(1);
+      expect(fullMonitorStatements).toHaveLength(0);
     } finally {
       querySpy.mockRestore();
     }

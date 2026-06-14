@@ -8,8 +8,8 @@
   "dependencies": {
     "dotenv": "^17.2.3",
     "pino": "^9.9.0",
-    "socks": "^2.8.7",
-    "undici": "^7.16.0",
+    "socks": "^2.8.9",
+    "undici": "^7.27.2",
     "zod": "^4.1.5"
   }
 }

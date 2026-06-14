@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.30.3",
+  "pnpm": {
+    "overrides": {
+      "fast-uri": "3.1.2",
+      "yaml": "2.8.3",
+      "brace-expansion@^2.0.0": "2.0.3",
+      "brace-expansion@^5.0.0": "5.0.6"
+    }
+  },
   "scripts": {
     "api": "node --import tsx/esm apps/runtime/src/api.ts",
     "api:watch": "node --import tsx/esm --watch apps/runtime/src/api.ts",
