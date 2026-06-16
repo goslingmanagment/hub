@@ -13,6 +13,8 @@ import type { ConfigDescriptor, ConfigOverrideValue, RunningSnapshot, RunningVal
 import { CONFIG_DESCRIPTORS, RUNNING_SCHEMA_VERSION } from "@agency_hub_core/shared";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
 
+import { LIVE_CONFIG_KEYS } from "./effective-config.ts";
+
 // Display order for the grouped view; unknown subsystems fall to the end.
 const SUBSYSTEM_ORDER = ["Core", "Security", "Sync", "Fansly", "OFAPI", "Telegram", "Workboard"];
 
@@ -99,8 +101,12 @@ function buildItem(
     // read-site). With no override the value is env-sourced and nothing is pending.
     source,
     desired,
+    overrideVersion: override ? override.version : null,
     pendingApply,
     drift,
+    // Wired to take effect at runtime now (Stage B1): only these editable keys are
+    // PATCHable and applied without a restart.
+    live: LIVE_CONFIG_KEYS.has(descriptor.key),
     running,
   };
 }

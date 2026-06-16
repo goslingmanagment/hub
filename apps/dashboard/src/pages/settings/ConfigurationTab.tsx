@@ -1,6 +1,8 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 import type { ConfigItem } from "@agency_hub_core/contracts";
-import { useAdminConfig } from "@/api/adminConfig";
+import { useAdminConfig, useClearConfig, useUpdateConfig } from "@/api/adminConfig";
+import { ApiError } from "@/api/client";
 
 function formatScalar(value: string | number | boolean | null): string {
   if (value === null) return "—";
@@ -85,7 +87,129 @@ function RunningCell({ item }: { item: ConfigItem }) {
   return <span className="font-mono text-text-primary">{formatScalar(item.running[0]!.value)}</span>;
 }
 
+function seedValue(item: ConfigItem): string {
+  if (item.desired !== null && item.desired !== undefined) return String(item.desired);
+  const running = item.running[0]?.value;
+  if (running !== null && running !== undefined) return String(running);
+  return item.default;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : "Save failed.";
+}
+
+function ConfigEditor({ item }: { item: ConfigItem }) {
+  const update = useUpdateConfig();
+  const clear = useClearConfig();
+  const [input, setInput] = useState(() => seedValue(item));
+  // Two-click confirm gate for cost/destructive keys: first Save arms it, second sends.
+  const [armed, setArmed] = useState(false);
+
+  const needsConfirm = Boolean(item.costWarning) || item.destructive;
+  const seeded = seedValue(item);
+  const dirty = input.trim() !== seeded && input.trim() !== "";
+  const pending = update.isPending || clear.isPending;
+  const error = update.error ?? clear.error;
+  const isConflict = error instanceof ApiError && error.status === 409;
+
+  function save() {
+    update.mutate({
+      patches: [
+        {
+          key: item.key,
+          value: Number(input),
+          expectedVersion: item.overrideVersion ?? 0,
+        },
+      ],
+    });
+    setArmed(false);
+  }
+
+  function onSaveClick() {
+    if (needsConfirm && !armed) {
+      setArmed(true);
+      return;
+    }
+    save();
+  }
+
+  function revert() {
+    clear.mutate({ key: item.key, expectedVersion: item.overrideVersion ?? undefined });
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <input
+          type="number"
+          value={input}
+          disabled={pending}
+          onChange={(e) => {
+            setInput(e.target.value);
+            setArmed(false);
+          }}
+          className="w-24 rounded border border-border bg-card px-1.5 py-0.5 text-xs font-mono text-text-primary disabled:opacity-50"
+        />
+        <button
+          type="button"
+          onClick={onSaveClick}
+          disabled={pending || !dirty}
+          className={`rounded px-2 py-0.5 text-xs font-medium text-white transition-colors disabled:opacity-40 ${
+            armed ? "bg-danger hover:opacity-90" : "bg-accent hover:opacity-90"
+          }`}
+        >
+          {armed ? "Confirm" : "Save"}
+        </button>
+        {armed && (
+          <button
+            type="button"
+            onClick={() => setArmed(false)}
+            disabled={pending}
+            className="rounded border border-border bg-card px-2 py-0.5 text-xs text-text-secondary hover:bg-hover disabled:opacity-40"
+          >
+            Cancel
+          </button>
+        )}
+        {item.source === "override" && (
+          <button
+            type="button"
+            onClick={revert}
+            disabled={pending}
+            className="rounded border border-border bg-card px-2 py-0.5 text-xs text-text-secondary hover:bg-hover disabled:opacity-40"
+          >
+            Revert to env
+          </button>
+        )}
+        {item.pendingApply && (
+          <Badge
+            tone="bg-amber-500/15 text-amber-600"
+            title="Saved — can take up to ~60s (one heartbeat) to reflect across processes"
+          >
+            applying…
+          </Badge>
+        )}
+      </div>
+      {armed && needsConfirm && (
+        <div className="text-[11px] text-amber-600">
+          {item.destructive
+            ? "Destructive: lowering/clearing this drops data irreversibly. "
+            : ""}
+          {item.costWarning ?? ""} Click Confirm to apply.
+        </div>
+      )}
+      {error && (
+        <div className="text-[11px] text-red-600">
+          {isConflict
+            ? "Changed elsewhere — values were refreshed, review and retry."
+            : errorMessage(error)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingRow({ item }: { item: ConfigItem }) {
+  const isEditable = item.live === true && item.editability === "editable";
   const runningDiffersFromDefault =
     item.running.length > 0
     && !item.secret
@@ -107,7 +231,7 @@ function SettingRow({ item }: { item: ConfigItem }) {
           {item.default}
         </span>
       </td>
-      <td className="py-2">
+      <td className="py-2 pr-4">
         <div className="flex flex-wrap items-center gap-1">
           <Badge tone={EDITABILITY_TONE[item.editability] ?? "bg-zinc-500/15 text-zinc-500"}>
             {EDITABILITY_LABEL[item.editability] ?? item.editability}
@@ -135,6 +259,9 @@ function SettingRow({ item }: { item: ConfigItem }) {
           )}
         </div>
       </td>
+      <td className="py-2">
+        {isEditable ? <ConfigEditor key={item.overrideVersion ?? "env"} item={item} /> : null}
+      </td>
     </tr>
   );
 }
@@ -152,8 +279,9 @@ export function ConfigurationTab() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-text-muted">
-        Effective runtime configuration as reported by each live process. Read-only — values are set via
-        environment variables and apply after a deploy. Secrets show only set/unset state.
+        Effective runtime configuration as reported by each live process. Editable, live keys can be
+        overridden here and apply without a restart (up to ~60s to propagate across processes); all other
+        values are set via environment variables and apply after a deploy. Secrets show only set/unset state.
       </p>
 
       {data.roleStatuses.some((role) => role.status !== "active") && (
@@ -206,7 +334,8 @@ export function ConfigurationTab() {
                 <th className="py-1.5 pr-4 font-medium">Setting</th>
                 <th className="py-1.5 pr-4 font-medium">Running</th>
                 <th className="py-1.5 pr-4 font-medium">Default</th>
-                <th className="py-1.5 font-medium">Status</th>
+                <th className="py-1.5 pr-4 font-medium">Status</th>
+                <th className="py-1.5 font-medium">Edit</th>
               </tr>
             </thead>
             <tbody>

@@ -1,5 +1,6 @@
 import type { AppContext } from "../bootstrap.ts";
 import { listConnectionStatuses } from "./connections.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
 import { getSyncStatusSnapshot } from "./sync-status.ts";
 
 type ServiceHealthStatus = "ok" | "degraded";
@@ -94,7 +95,9 @@ export async function getPublicSyncHealth(
   },
 ) {
   const now = input?.now ?? new Date();
-  const [connections, snapshot] = await Promise.all([
+  // One effective-config snapshot for both live health thresholds read below, so the
+  // reported `running` values match exactly what this check consumes (no field skew).
+  const [connections, snapshot, effective] = await Promise.all([
     listConnectionStatuses(app, {
       pageIds: input?.pageIds,
     }),
@@ -102,6 +105,7 @@ export async function getPublicSyncHealth(
       now,
       pageIds: input?.pageIds,
     }),
+    loadEffectiveConfig(app.db, app.config),
   ]);
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
@@ -112,8 +116,8 @@ export async function getPublicSyncHealth(
     ...snapshotPagesById.keys(),
   ]);
   const thresholds = {
-    lightMaxAgeMinutes: app.config.healthSyncLightMaxAgeMinutes,
-    followerMaxAgeMinutes: app.config.healthSyncFollowerMaxAgeMinutes,
+    lightMaxAgeMinutes: effective.healthSyncLightMaxAgeMinutes,
+    followerMaxAgeMinutes: effective.healthSyncFollowerMaxAgeMinutes,
   };
 
   const pages = Array.from(allPageIds, (pageId) => {

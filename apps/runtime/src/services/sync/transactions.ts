@@ -532,6 +532,8 @@ async function syncTransactionsIncremental(
     pageLabel: string;
     platformAccountId: number;
     commissionRate: number;
+    transactionLookbackDays?: number;
+    transactionRescanCapDays?: number;
     requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;
@@ -541,6 +543,10 @@ async function syncTransactionsIncremental(
   checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
   existingState: FanslyTransactionIncrementalState | null,
 ): Promise<FanslyTransactionSyncResult> {
+  // Live effective windowing, with a boot-config fallback for callers (tests) that
+  // do not thread the values. Resolved once so all three reads below agree.
+  const transactionLookbackDays = input.transactionLookbackDays ?? app.config.transactionLookbackDays;
+  const transactionRescanCapDays = input.transactionRescanCapDays ?? app.config.transactionRescanCapDays;
   let state: FanslyTransactionIncrementalState;
 
   if (existingState) {
@@ -550,13 +556,13 @@ async function syncTransactionsIncremental(
     const lookbackStart = checkpoint?.cursorTimestamp
       ? new Date(
         checkpoint.cursorTimestamp.getTime() -
-          app.config.transactionLookbackDays * DAY_MS,
+          transactionLookbackDays * DAY_MS,
       )
       : null;
     const earliestRescanStart = lookbackStart && oldestPendingAt
       ? (oldestPendingAt < lookbackStart ? oldestPendingAt : lookbackStart)
       : (lookbackStart ?? oldestPendingAt);
-    const rescanCapStart = new Date(Date.now() - app.config.transactionRescanCapDays * DAY_MS);
+    const rescanCapStart = new Date(Date.now() - transactionRescanCapDays * DAY_MS);
     const after = earliestRescanStart && earliestRescanStart < rescanCapStart
       ? rescanCapStart
       : earliestRescanStart;
@@ -611,7 +617,7 @@ async function syncTransactionsIncremental(
   const incrementalCursorTimestamp = resolveFanslyIncrementalCursorTimestamp(
     checkpoint,
     state,
-    app.config.transactionLookbackDays,
+    transactionLookbackDays,
   );
   if (state.cursorTimestamp === null && incrementalCursorTimestamp) {
     state = {
@@ -1428,6 +1434,11 @@ export async function syncTransactions(
     pageLabel: string;
     platformAccountId: number;
     commissionRate: number;
+    // Live effective windowing (Stage B1). Resolved once per chunk by the executor
+    // and threaded down so the whole chunk uses one window; omitted callers fall back
+    // to the boot config so existing call sites are unaffected.
+    transactionLookbackDays?: number;
+    transactionRescanCapDays?: number;
     requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;

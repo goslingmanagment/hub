@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,8 @@ import {
 import {
   CatalogModelNotFoundError,
   CatalogPageNotFoundError,
+  clearConfigOverride,
+  ConfigOverrideVersionConflictError,
   countDistinctFansForPages,
   createFanNote,
   createModel,
@@ -22,6 +24,7 @@ import {
   deletePageByLabel,
   DuplicateModelSlugError,
   DuplicatePageLabelError,
+  setConfigOverridesAtomic,
   findPlatformFan,
   getLatestSyncRunPerPage,
   getRevenueBreakdownForScope,
@@ -49,6 +52,7 @@ import {
   createProxyRequestDispatcher,
   buildProxyEgressKey,
   encryptJson,
+  getDescriptor,
   millsToNumber,
   normalizeProxyConfig,
   redactSensitiveText,
@@ -57,6 +61,7 @@ import {
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
   toMills,
+  validateConfigOverride,
   type Period,
   type Platform,
 } from "@agency_hub_core/shared";
@@ -99,6 +104,7 @@ import {
 } from "../services/auth.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../services/ai-usage.ts";
 import { buildConfigView } from "../services/app-config-service.ts";
+import { LIVE_CONFIG_KEYS } from "../services/effective-config.ts";
 import { listConnectionStatuses, updatePageCredentials } from "../services/connections.ts";
 import {
   AppError,
@@ -2756,6 +2762,99 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
 
     return buildConfigView(appContext.db);
+  });
+
+  // Reject any key that is not a wired live (editable + reload) override. The same
+  // gate guards PATCH and DELETE so an override can never be written for a key the
+  // runtime would not actually apply.
+  function assertLiveEditableReloadKey(key: string) {
+    if (!LIVE_CONFIG_KEYS.has(key)) {
+      throw new BadRequestError(`Config key is not runtime-editable: ${key}`);
+    }
+    const descriptor = getDescriptor(key);
+    if (!descriptor) {
+      throw new BadRequestError(`Unknown config key: ${key}`);
+    }
+    if (descriptor.editability !== "editable") {
+      throw new BadRequestError(`Config key is not editable: ${key}`);
+    }
+    if (descriptor.applyMode !== "reload") {
+      throw new BadRequestError(`Config key does not apply at runtime: ${key}`);
+    }
+  }
+
+  // DELETE may clear ANY editable override — even one no longer in the live set — so a
+  // stuck override row is always removable; PATCH stays live-only.
+  function assertEditableKey(key: string) {
+    const descriptor = getDescriptor(key);
+    if (!descriptor) {
+      throw new BadRequestError(`Unknown config key: ${key}`);
+    }
+    if (descriptor.editability !== "editable") {
+      throw new BadRequestError(`Config key is not editable: ${key}`);
+    }
+  }
+
+  server.patch("/api/v1/admin/config", {
+    schema: routeSchemas.adminConfigUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { patches, note } = request.body;
+    // Validate every key/value up front so a bad entry rejects the whole patch before
+    // anything is written. Persist the CLAMPED value so processes and UI agree.
+    const validatedPatches = patches.map((patch) => {
+      assertLiveEditableReloadKey(patch.key);
+      const validated = validateConfigOverride(patch.key, patch.value);
+      if (!validated.ok) {
+        throw new BadRequestError(validated.error);
+      }
+      return { key: patch.key, value: validated.value, expectedVersion: patch.expectedVersion };
+    });
+
+    try {
+      // One transaction, all-or-nothing: a conflict on any key rolls back every key.
+      const results = await setConfigOverridesAtomic(appContext.db, {
+        patches: validatedPatches,
+        userId: principal.user.id,
+        note,
+        groupId: randomUUID(),
+      });
+      return { results };
+    } catch (error) {
+      if (error instanceof ConfigOverrideVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+  });
+
+  server.delete("/api/v1/admin/config/:key", {
+    schema: routeSchemas.adminConfigClear,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { key } = request.params;
+    assertEditableKey(key);
+
+    try {
+      await clearConfigOverride(appContext.db, {
+        key,
+        expectedVersion: request.query.expectedVersion,
+        userId: principal.user.id,
+        note: request.query.note,
+        groupId: randomUUID(),
+      });
+    } catch (error) {
+      if (error instanceof ConfigOverrideVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+
+    return { ok: true as const, key };
   });
 
   server.patch("/api/v1/admin/notifications/settings", {

@@ -2984,8 +2984,14 @@ export const configItemSchema = z.object({
   // each live process's actual value and drift flags cross-instance disagreement.
   source: z.enum(["env", "override"]),
   desired: configValueScalar,
+  // Current version of the override row (null when env-sourced); the editor sends it
+  // back as expectedVersion for optimistic-concurrency.
+  overrideVersion: z.number().int().nullable(),
   pendingApply: z.boolean(),
   drift: z.boolean(),
+  // True when this editable key is wired to take effect at runtime now (Stage B1).
+  // Only `live` editable keys can be PATCHed and actually applied without a restart.
+  live: z.boolean(),
   running: z.array(configRunningValueSchema),
 });
 
@@ -3016,6 +3022,52 @@ export const configViewResponseSchema = z.object({
       items: z.array(configItemSchema),
     }),
   ),
+});
+
+// --- Configuration surface (Stage B1: editable, owner-only) ---
+// A single override value is one of the three scalar kinds an editable descriptor
+// can hold; the server re-validates and clamps it against the registry.
+const configOverrideValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+
+export const configUpdateBodySchema = z.object({
+  patches: z
+    .array(
+      z.object({
+        key: z.string(),
+        value: configOverrideValueSchema,
+        // Optimistic concurrency: when present it must match the row's current
+        // version (0 for a brand-new key) or the write is a 409 conflict.
+        expectedVersion: z.number().int().min(0).optional(),
+      }),
+    )
+    .min(1),
+  note: z.string().optional(),
+});
+
+export const configUpdateResponseSchema = z.object({
+  // The CLAMPED, stored value per key so the UI can correct an out-of-range entry.
+  results: z.array(
+    z.object({
+      key: z.string(),
+      value: configOverrideValueSchema,
+      version: z.number().int(),
+    }),
+  ),
+});
+
+export const configClearParamsSchema = z.object({
+  key: z.string(),
+});
+
+// Query params (not a body) so DELETE needs no request body — both fields optional.
+export const configClearQuerySchema = z.object({
+  expectedVersion: z.coerce.number().int().min(0).optional(),
+  note: z.string().optional(),
+});
+
+export const configClearResponseSchema = z.object({
+  ok: z.literal(true),
+  key: z.string(),
 });
 
 export const routeSchemas = {
@@ -4413,7 +4465,7 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
-  // --- Configuration (owner-only, read-only) ---
+  // --- Configuration (owner-only) ---
   adminConfig: {
     tags: ["admin"],
     summary: "Read effective runtime configuration across processes",
@@ -4422,6 +4474,33 @@ export const routeSchemas = {
       200: configViewResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+    },
+  },
+  adminConfigUpdate: {
+    tags: ["admin"],
+    summary: "Set runtime config overrides for live (editable, reload) keys",
+    security: cookieOnlySecurity,
+    body: configUpdateBodySchema,
+    response: {
+      200: configUpdateResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminConfigClear: {
+    tags: ["admin"],
+    summary: "Clear a runtime config override (revert to env)",
+    security: cookieOnlySecurity,
+    params: configClearParamsSchema,
+    querystring: configClearQuerySchema,
+    response: {
+      200: configClearResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
     },
   },
 } as const;
@@ -4558,6 +4637,10 @@ export type VerifyPageResponse = z.infer<typeof verifyPageResponseSchema>;
 export type DeletedResponse = z.infer<typeof deletedResponseSchema>;
 export type ConfigViewResponse = z.infer<typeof configViewResponseSchema>;
 export type ConfigItem = z.infer<typeof configItemSchema>;
+export type ConfigUpdateBody = z.infer<typeof configUpdateBodySchema>;
+export type ConfigUpdateResponse = z.infer<typeof configUpdateResponseSchema>;
+export type ConfigClearQuery = z.infer<typeof configClearQuerySchema>;
+export type ConfigClearResponse = z.infer<typeof configClearResponseSchema>;
 export type NotificationsSettingsResponse = z.infer<typeof notificationsSettingsResponseSchema>;
 export type NotificationsSettingsUpdateBody = z.infer<typeof notificationsSettingsUpdateBodySchema>;
 export type NotificationsTestMessageResponse = z.infer<typeof notificationsTestMessageResponseSchema>;

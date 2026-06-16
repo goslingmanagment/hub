@@ -8,6 +8,7 @@ import {
 import { buildRunningSnapshot } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
 
 export type RuntimeRole = "api" | "worker";
 
@@ -39,12 +40,18 @@ export function startRuntimeHeartbeat(
 
   const beat = async () => {
     try {
+      // Report the EFFECTIVE config this process actually consumes: loadEffectiveConfig
+      // overlays only wired live (editable + reload) overrides, so `running` matches the
+      // read-sites and pendingApply clears once every instance has applied. Restart/
+      // non-live keys are untouched, so they keep reporting boot env (pendingApply stays
+      // true for them until a real restart) — which is the honest answer.
+      const effectiveConfig = await loadEffectiveConfig(app.db, app.config);
       await upsertInstanceHeartbeat(app.db, {
         role,
         instanceId,
         startedAt,
         imageTag,
-        running: buildRunningSnapshot(app.config),
+        running: buildRunningSnapshot(effectiveConfig),
       });
       // Idempotent across instances; whichever process runs it first wins.
       await reapStaleInstances(app.db).catch(() => undefined);
