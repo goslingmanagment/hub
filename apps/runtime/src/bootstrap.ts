@@ -14,6 +14,7 @@ import type {
   FanslySubscriber,
 } from "@agency_hub_core/fansly";
 import {
+  checkSyncConcurrencyInvariant,
   createLogger,
   loadConfig,
   resolveFanslyDefaultDelayEnvSource,
@@ -95,10 +96,12 @@ export async function createAppContext(): Promise<AppContext> {
     );
   }
 
-  if (config.syncPageExecutorConcurrency > 1 && !config.syncSharedRateLimitEnabled) {
-    throw new Error(
-      "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true",
-    );
+  const syncConcurrencyInvariantError = checkSyncConcurrencyInvariant({
+    pageExecutorConcurrency: config.syncPageExecutorConcurrency,
+    sharedRateLimitEnabled: config.syncSharedRateLimitEnabled,
+  });
+  if (syncConcurrencyInvariantError) {
+    throw new Error(syncConcurrencyInvariantError);
   }
 
   const pool = createPool(config.databaseUrl);

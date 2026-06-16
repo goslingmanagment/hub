@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildRunningSnapshot } from "@agency_hub_core/shared";
-import type { RuntimeInstanceRow } from "@agency_hub_core/db";
+import type { ConfigOverrideRecord, RuntimeInstanceRow } from "@agency_hub_core/db";
 
 import { assembleConfigView } from "../apps/runtime/src/services/app-config-service.ts";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
@@ -91,5 +91,84 @@ describe("assembleConfigView", () => {
     const view = assembleConfigView([row("api", "a1", API_CONFIG, FRESH)], NOW);
     expect(roleStatus(view, "api")).toBe("active");
     expect(roleStatus(view, "worker")).toBe("missing");
+  });
+});
+
+describe("assembleConfigView overlay (Stage B0)", () => {
+  // An active process running the env value (500) so we can prove pendingApply
+  // reflects override-vs-running rather than override-vs-nothing.
+  const RUNNING = { ofapiDmDailyCreditBudget: 500 };
+
+  it("populates desired/source/pendingApply for an editable override that differs from running", () => {
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["ofapiDmDailyCreditBudget", { value: 750, version: 1 }],
+    ]);
+    const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, overrides);
+
+    const budget = item(view, "ofapiDmDailyCreditBudget");
+    expect(budget.source).toBe("override");
+    expect(budget.desired).toBe(750);
+    expect(budget.pendingApply).toBe(true);
+  });
+
+  it("leaves env defaults when no override is present", () => {
+    const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, new Map());
+    const budget = item(view, "ofapiDmDailyCreditBudget");
+    expect(budget.source).toBe("env");
+    expect(budget.desired).toBeNull();
+    expect(budget.pendingApply).toBe(false);
+  });
+
+  it("ignores an override for a non-editable key", () => {
+    // ofapiDmProjectionEnabled is 'staged' — the overlay must not surface it.
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["ofapiDmProjectionEnabled", { value: true, version: 1 }],
+    ]);
+    const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, overrides);
+    const flag = item(view, "ofapiDmProjectionEnabled");
+    expect(flag.source).toBe("env");
+    expect(flag.desired).toBeNull();
+    expect(flag.pendingApply).toBe(false);
+  });
+
+  it("does not flag pendingApply when the override matches the running value", () => {
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["ofapiDmDailyCreditBudget", { value: 500, version: 1 }],
+    ]);
+    const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, overrides);
+    const budget = item(view, "ofapiDmDailyCreditBudget");
+    expect(budget.source).toBe("override");
+    expect(budget.desired).toBe(500);
+    expect(budget.pendingApply).toBe(false);
+  });
+
+  it("stays pending under partial apply (api applied, worker not)", () => {
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["ofapiDmDailyCreditBudget", { value: 750, version: 1 }],
+    ]);
+    const view = assembleConfigView(
+      [
+        row("api", "a1", { ofapiDmDailyCreditBudget: 750 }, FRESH),
+        row("worker", "w1", { ofapiDmDailyCreditBudget: 500 }, FRESH),
+      ],
+      NOW,
+      overrides,
+    );
+    expect(item(view, "ofapiDmDailyCreditBudget").pendingApply).toBe(true);
+  });
+
+  it("clears pendingApply only once every active instance runs the override", () => {
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["ofapiDmDailyCreditBudget", { value: 750, version: 1 }],
+    ]);
+    const view = assembleConfigView(
+      [
+        row("api", "a1", { ofapiDmDailyCreditBudget: 750 }, FRESH),
+        row("worker", "w1", { ofapiDmDailyCreditBudget: 750 }, FRESH),
+      ],
+      NOW,
+      overrides,
+    );
+    expect(item(view, "ofapiDmDailyCreditBudget").pendingApply).toBe(false);
   });
 });

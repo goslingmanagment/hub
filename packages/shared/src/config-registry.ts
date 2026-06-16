@@ -38,6 +38,10 @@ export type ConfigKind =
  *  prescribed order (Stage C); editable = safe operational knob (Stage B). */
 export type ConfigEditability = "never" | "staged" | "editable";
 
+/** A scalar config override as stored in the overlay table. Editable descriptors are
+ *  only ever boolean/number/string, so the override value is one of those three. */
+export type ConfigOverrideValue = string | number | boolean;
+
 /** reload = a change is re-read at the next work cycle (no restart); restart = the
  *  value is captured at boot, so it only applies after the process restarts. */
 export type ConfigApplyMode = "reload" | "restart";

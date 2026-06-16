@@ -7,9 +7,9 @@
 // when ACTIVE instances disagree — on the value for plain settings, and on the
 // set/unset state for secrets/complex values (where the value itself stays masked).
 
-import type { Database, RuntimeInstanceRow } from "@agency_hub_core/db";
-import { INSTANCE_STALE_TTL_MS, listAllInstances } from "@agency_hub_core/db";
-import type { ConfigDescriptor, RunningSnapshot, RunningValue } from "@agency_hub_core/shared";
+import type { ConfigOverrideRecord, Database, RuntimeInstanceRow } from "@agency_hub_core/db";
+import { getConfigOverrides, INSTANCE_STALE_TTL_MS, listAllInstances } from "@agency_hub_core/db";
+import type { ConfigDescriptor, ConfigOverrideValue, RunningSnapshot, RunningValue } from "@agency_hub_core/shared";
 import { CONFIG_DESCRIPTORS, RUNNING_SCHEMA_VERSION } from "@agency_hub_core/shared";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
 
@@ -28,7 +28,11 @@ function readRunning(row: RuntimeInstanceRow, key: string): RunningValue | undef
   return snap.values?.[key];
 }
 
-function buildItem(descriptor: ConfigDescriptor, activeInstances: RuntimeInstanceRow[]): ConfigItem {
+function buildItem(
+  descriptor: ConfigDescriptor,
+  activeInstances: RuntimeInstanceRow[],
+  overrides: Map<string, ConfigOverrideRecord>,
+): ConfigItem {
   const running: ConfigItem["running"] = [];
   const scalarValues: string[] = [];
   const states: string[] = [];
@@ -57,6 +61,20 @@ function buildItem(descriptor: ConfigDescriptor, activeInstances: RuntimeInstanc
 
   const drift = new Set(scalarValues).size > 1 || new Set(states).size > 1;
 
+  // An override only counts when the key is actually editable — a stray row for a
+  // non-editable key (should never exist, but fail closed) is ignored here.
+  const override = descriptor.editability === "editable" ? overrides.get(descriptor.key) : undefined;
+  const desired: ConfigOverrideValue | null = override ? override.value : null;
+  const source: "env" | "override" = override ? "override" : "env";
+  // Pending until EVERY active instance reports the override value — if api has
+  // applied it but worker has not, it is still partially applied, not done. Also
+  // pending when no process is reporting one to compare to. (B0 wires no read-site,
+  // so this is effectively always true while an override differs from env.)
+  const pendingApply =
+    override != null &&
+    (running.length === 0 ||
+      running.some((entry) => entry.masked || entry.value !== override.value));
+
   return {
     key: descriptor.key,
     envName: descriptor.envName,
@@ -75,20 +93,25 @@ function buildItem(descriptor: ConfigDescriptor, activeInstances: RuntimeInstanc
     stagedGroup: descriptor.stagedGroup ?? null,
     stagedOrder: descriptor.stagedOrder ?? null,
     requires: descriptor.requires ?? [],
-    // Stage A has no overlay: every value is env-sourced, nothing is pending.
-    source: "env",
-    desired: null,
-    pendingApply: false,
+    // Effective-overlay metadata: when an editable override exists, `desired` is its
+    // value and `source` is "override"; `pendingApply` flags that the override has
+    // not yet reached the running processes (always true in B0, which wires no
+    // read-site). With no override the value is env-sourced and nothing is pending.
+    source,
+    desired,
+    pendingApply,
     drift,
     running,
   };
 }
 
-/** Pure assembly of the view from raw rows + a clock, so the active/stale/drift
- *  logic is unit-testable without a database. */
+/** Pure assembly of the view from raw rows + a clock (+ the override overlay), so
+ *  the active/stale/drift/overlay logic is unit-testable without a database. The
+ *  overrides map defaults to empty, matching the no-overlay Stage A behavior. */
 export function assembleConfigView(
   rows: RuntimeInstanceRow[],
   nowMs: number,
+  overrides: Map<string, ConfigOverrideRecord> = new Map(),
 ): ConfigViewResponse {
   const staleCutoff = nowMs - INSTANCE_STALE_TTL_MS;
   const classified = rows.map((row) => ({
@@ -109,7 +132,9 @@ export function assembleConfigView(
         : ("missing" as const),
   }));
 
-  const items = CONFIG_DESCRIPTORS.map((descriptor) => buildItem(descriptor, activeInstances));
+  const items = CONFIG_DESCRIPTORS.map((descriptor) =>
+    buildItem(descriptor, activeInstances, overrides),
+  );
   const bySubsystem = new Map<string, ConfigItem[]>();
   for (const item of items) {
     const bucket = bySubsystem.get(item.subsystem) ?? [];
@@ -140,6 +165,6 @@ export function assembleConfigView(
 }
 
 export async function buildConfigView(db: Database): Promise<ConfigViewResponse> {
-  const rows = await listAllInstances(db);
-  return assembleConfigView(rows, Date.now());
+  const [rows, overrides] = await Promise.all([listAllInstances(db), getConfigOverrides(db)]);
+  return assembleConfigView(rows, Date.now(), overrides);
 }
