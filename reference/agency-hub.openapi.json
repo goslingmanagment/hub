@@ -40401,6 +40401,426 @@
         }
       }
     },
+    "/api/v1/admin/config": {
+      "get": {
+        "summary": "Read effective runtime configuration across processes",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "roleStatuses": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "role": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "stale",
+                              "missing"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "role",
+                          "status"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "instances": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "role": {
+                            "type": "string"
+                          },
+                          "instanceId": {
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "type": "string"
+                          },
+                          "lastSeenAt": {
+                            "type": "string"
+                          },
+                          "imageTag": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "stale"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "role",
+                          "instanceId",
+                          "startedAt",
+                          "lastSeenAt",
+                          "imageTag",
+                          "status"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "subsystems": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "subsystem": {
+                            "type": "string"
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string"
+                                },
+                                "envName": {
+                                  "type": "string"
+                                },
+                                "configField": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "boolean",
+                                    "number",
+                                    "string",
+                                    "url",
+                                    "secret",
+                                    "derived",
+                                    "alias",
+                                    "complex"
+                                  ]
+                                },
+                                "subsystem": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string"
+                                },
+                                "default": {
+                                  "type": "string"
+                                },
+                                "editability": {
+                                  "type": "string",
+                                  "enum": [
+                                    "never",
+                                    "staged",
+                                    "editable"
+                                  ]
+                                },
+                                "applyMode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "reload",
+                                    "restart"
+                                  ]
+                                },
+                                "comparable": {
+                                  "type": "boolean"
+                                },
+                                "secret": {
+                                  "type": "boolean"
+                                },
+                                "note": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "costWarning": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "destructive": {
+                                  "type": "boolean"
+                                },
+                                "stagedGroup": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "stagedOrder": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "requires": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "source": {
+                                  "type": "string",
+                                  "enum": [
+                                    "env",
+                                    "override"
+                                  ]
+                                },
+                                "desired": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "pendingApply": {
+                                  "type": "boolean"
+                                },
+                                "drift": {
+                                  "type": "boolean"
+                                },
+                                "running": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "role": {
+                                        "type": "string"
+                                      },
+                                      "instanceId": {
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "anyOf": [
+                                          {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "number"
+                                              },
+                                              {
+                                                "type": "boolean"
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "masked": {
+                                        "type": "boolean"
+                                      },
+                                      "state": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "set",
+                                              "unset"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "lastSeenAt": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "role",
+                                      "instanceId",
+                                      "value",
+                                      "masked",
+                                      "state",
+                                      "lastSeenAt"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "envName",
+                                "configField",
+                                "kind",
+                                "subsystem",
+                                "label",
+                                "default",
+                                "editability",
+                                "applyMode",
+                                "comparable",
+                                "secret",
+                                "note",
+                                "costWarning",
+                                "destructive",
+                                "stagedGroup",
+                                "stagedOrder",
+                                "requires",
+                                "source",
+                                "desired",
+                                "pendingApply",
+                                "drift",
+                                "running"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "subsystem",
+                          "items"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "roleStatuses",
+                    "instances",
+                    "subsystems"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/notifications/test": {
       "post": {
         "summary": "Send a test Telegram message",

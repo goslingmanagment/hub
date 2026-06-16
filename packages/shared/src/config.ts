@@ -141,6 +141,13 @@ const envSchema = z.object({
   WB_CLOSING_LLM_DAILY_CAP_MAX: z.coerce.number().int().positive().default(400),
 });
 
+// Machine-readable list of every env var the schema understands. Exported so the
+// config registry (config-registry.ts) can be parity-tested against the schema
+// without reaching into Zod internals (see config-registry parity test).
+export const ENV_CONFIG_KEYS = Object.keys(envSchema.shape) as Array<
+  keyof typeof envSchema.shape
+>;
+
 export interface AppConfig {
   databaseUrl: string;
   encryptionKey: Buffer;
@@ -238,11 +245,18 @@ export function resolveFanslyDefaultDelayEnvSource(env: NodeJS.ProcessEnv = proc
   return null;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  loadDotEnv({
-    processEnv: env,
-    quiet: process.env.DOTENV_CONFIG_QUIET === "true",
-  });
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { loadDotEnv?: boolean } = {},
+): AppConfig {
+  // Callers that pass an explicit env (tests, the registry parity check) can opt
+  // out of merging the ambient .env file so the result is hermetic.
+  if (options.loadDotEnv !== false) {
+    loadDotEnv({
+      processEnv: env,
+      quiet: process.env.DOTENV_CONFIG_QUIET === "true",
+    });
+  }
 
   const parsed = envSchema.parse(env);
   const encryptionKey = parseEncryptionKey(parsed.APP_ENCRYPTION_KEY, "APP_ENCRYPTION_KEY");

@@ -1,4 +1,5 @@
 export * from "./config.ts";
+export * from "./config-registry.ts";
 export * from "./crypto.ts";
 export * from "./dm-text.ts";
 export * from "./fans.ts";

@@ -98,6 +98,7 @@ import {
   type AuthPrincipal,
 } from "../services/auth.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../services/ai-usage.ts";
+import { buildConfigView } from "../services/app-config-service.ts";
 import { listConnectionStatuses, updatePageCredentials } from "../services/connections.ts";
 import {
   AppError,
@@ -2746,6 +2747,15 @@ export async function buildApiServer(appContext: AppContext) {
     });
     const latest = await getLatestDeliveryAttempt(appContext.db);
     return buildNotificationsSettingsResponse(settings, latest);
+  });
+
+  server.get("/api/v1/admin/config", {
+    schema: routeSchemas.adminConfig,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    return buildConfigView(appContext.db);
   });
 
   server.patch("/api/v1/admin/notifications/settings", {

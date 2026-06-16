@@ -2949,6 +2949,75 @@ const dashboardOrMonitoringTokenSecurity: Array<Record<string, string[]>> = [
   { monitoringTokenAuth: [] },
 ];
 
+// --- Configuration surface (Stage A: read-only) ---
+const configValueScalar = z.union([z.string(), z.number(), z.boolean()]).nullable();
+
+export const configRunningValueSchema = z.object({
+  role: z.string(),
+  instanceId: z.string(),
+  value: configValueScalar,
+  masked: z.boolean(),
+  state: z.enum(["set", "unset"]).nullable(),
+  lastSeenAt: isoTimestamp,
+});
+
+export const configItemSchema = z.object({
+  key: z.string(),
+  envName: z.string(),
+  configField: z.string().nullable(),
+  kind: z.enum(["boolean", "number", "string", "url", "secret", "derived", "alias", "complex"]),
+  subsystem: z.string(),
+  label: z.string(),
+  default: z.string(),
+  editability: z.enum(["never", "staged", "editable"]),
+  applyMode: z.enum(["reload", "restart"]),
+  comparable: z.boolean(),
+  secret: z.boolean(),
+  note: z.string().nullable(),
+  costWarning: z.string().nullable(),
+  destructive: z.boolean(),
+  stagedGroup: z.string().nullable(),
+  stagedOrder: z.number().int().nullable(),
+  requires: z.array(z.string()),
+  // Effective-state fields. In Stage A there is no overlay, so source is always
+  // "env", desired is null and pendingApply is false; the running array carries
+  // each live process's actual value and drift flags cross-instance disagreement.
+  source: z.enum(["env", "override"]),
+  desired: configValueScalar,
+  pendingApply: z.boolean(),
+  drift: z.boolean(),
+  running: z.array(configRunningValueSchema),
+});
+
+export const configInstanceSchema = z.object({
+  role: z.string(),
+  instanceId: z.string(),
+  startedAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
+  imageTag: z.string().nullable(),
+  status: z.enum(["active", "stale"]),
+});
+
+// Per expected role (plus any unexpected observed role): whether a live process is
+// reporting. "stale" = a row exists but is past the heartbeat window; "missing" =
+// no row at all. Surfaces a stopped process instead of silently dropping it.
+export const configRoleStatusSchema = z.object({
+  role: z.string(),
+  status: z.enum(["active", "stale", "missing"]),
+});
+
+export const configViewResponseSchema = z.object({
+  generatedAt: isoTimestamp,
+  roleStatuses: z.array(configRoleStatusSchema),
+  instances: z.array(configInstanceSchema),
+  subsystems: z.array(
+    z.object({
+      subsystem: z.string(),
+      items: z.array(configItemSchema),
+    }),
+  ),
+});
+
 export const routeSchemas = {
   health: {
     tags: ["system"],
@@ -4344,6 +4413,17 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  // --- Configuration (owner-only, read-only) ---
+  adminConfig: {
+    tags: ["admin"],
+    summary: "Read effective runtime configuration across processes",
+    security: cookieOnlySecurity,
+    response: {
+      200: configViewResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type RouteSchemas = typeof routeSchemas;
@@ -4476,6 +4556,8 @@ export type UpdateCredentialsBody = z.infer<typeof updateCredentialsBodySchema>;
 export type UpdateCredentialsResponse = z.infer<typeof updateCredentialsResponseSchema>;
 export type VerifyPageResponse = z.infer<typeof verifyPageResponseSchema>;
 export type DeletedResponse = z.infer<typeof deletedResponseSchema>;
+export type ConfigViewResponse = z.infer<typeof configViewResponseSchema>;
+export type ConfigItem = z.infer<typeof configItemSchema>;
 export type NotificationsSettingsResponse = z.infer<typeof notificationsSettingsResponseSchema>;
 export type NotificationsSettingsUpdateBody = z.infer<typeof notificationsSettingsUpdateBodySchema>;
 export type NotificationsTestMessageResponse = z.infer<typeof notificationsTestMessageResponseSchema>;

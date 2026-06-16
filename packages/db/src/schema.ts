@@ -19,6 +19,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { aiUsageFeatures, fanFlagTypes, userRoles } from "@agency_hub_core/shared";
+import type { RunningSnapshot } from "@agency_hub_core/shared";
 
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
 export const syncRunOutcomeEnum = pgEnum("sync_run_outcome", [
@@ -1816,5 +1817,30 @@ export const ofapiWebhookEvents = pgTable(
     replayIdx: index("ofapi_webhook_events_replay_idx")
       .on(table.platformAccountId, table.fanoutSeq)
       .where(sql`${table.fanoutSeq} is not null`),
+  }),
+);
+
+// Heartbeat table for the in-dashboard Configuration surface. Each running process
+// (api, worker) upserts a row carrying the sanitized config values it is actually
+// using (RunningSnapshot from the config registry), so the page can show per-instance
+// running values and detect drift between the api and worker containers. No secret
+// values are ever stored here — only set/unset state. Stale rows (last_seen_at past
+// the TTL) are reaped; instance_id makes the PK survive multiple processes per role.
+export const runtimeInstances = pgTable(
+  "runtime_instances",
+  {
+    role: text("role").notNull(),
+    instanceId: text("instance_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    imageTag: text("image_tag"),
+    running: jsonb("running").$type<RunningSnapshot>().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "runtime_instances_pkey",
+      columns: [table.role, table.instanceId],
+    }),
+    lastSeenIdx: index("runtime_instances_last_seen_idx").on(table.lastSeenAt),
   }),
 );
