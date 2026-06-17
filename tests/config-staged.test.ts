@@ -283,11 +283,28 @@ describe("validateStagedTransition", () => {
     }
   });
 
-  it("allows enabling dmSync when its prerequisite dmProjection is running-on", () => {
+  it("allows enabling dmSync when its prerequisite dmProjection is running-on AND desired-on", () => {
     const result = transition([{ key: "ofapiDmSyncEnabled", desired: true }], {
       running: { ofapiDmProjectionEnabled: "on" },
+      desiredOn: ["ofapiDmProjectionEnabled"],
     });
     expect(result).toEqual({ ok: true });
+  });
+
+  it("rejects enabling a dependent when its prerequisite is running-on but desired-off (reverted, not yet restarted)", () => {
+    // The orphan window the fix closes: dmProjection was reverted/disabled in the DB (desired
+    // off) but the un-restarted fleet still reports it running-on. Enabling dmSync against it
+    // would persist a dependent-on/prereq-off desired graph, so it must be rejected even though
+    // runningState(dmProjection) === 'on'.
+    const result = transition([{ key: "ofapiDmSyncEnabled", desired: true }], {
+      running: { ofapiDmProjectionEnabled: "on" },
+      // desiredOn intentionally omitted → dmProjection desired-off.
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("ofapiDmProjectionEnabled");
+      expect(result.error).toMatch(/not desired-on|disabled|reverted/);
+    }
   });
 
   it("rejects enabling a #50 flag while the #49 chain is not all running", () => {

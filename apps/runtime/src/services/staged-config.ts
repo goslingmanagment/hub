@@ -56,9 +56,12 @@ function transitiveDependents(key: string): string[] {
  *   2. Compute the RESULTING desired graph: a flag is desired-on after this patch if its
  *      patch sets it true, or (when not in the patch) its current desired baseline
  *      (`baselineDesiredOn` — the DB override boolean, else env) is on.
- *   3. ENABLE (desired true): every key in the transitive `requires` chain must be
- *      RUNNING-on (`runningState === 'on'`) — not merely desired. Enabling a prerequisite
- *      in the SAME patch does NOT satisfy it (it is not running yet) → reject.
+ *   3. ENABLE (desired true): every key in the transitive `requires` chain must be BOTH
+ *      desired-on after this patch AND RUNNING-on (`runningState === 'on'`). A prerequisite
+ *      that is desired-off but still running (just reverted/disabled, not yet restarted) does
+ *      NOT satisfy it → reject (else the dependent is persisted against a prerequisite that is
+ *      being removed — an orphaned dependent-on/prereq-off desired graph). Enabling a
+ *      prerequisite in the SAME patch does NOT satisfy it either (not running yet) → reject.
  *   4. DISABLE (desired false): no key that transitively requires it may remain desired-on
  *      after this patch. Disabling a dependent + its prerequisite together in one patch is
  *      allowed (validated on the resulting graph, not one entry at a time).
@@ -97,10 +100,21 @@ export function validateStagedTransition(
 
   for (const patch of patches) {
     if (patch.desired) {
-      // Rule 3 (ENABLE): every transitive prerequisite must be RUNNING-on now. A prereq
-      // being enabled in this same patch does not count — it is not running yet.
+      // Rule 3 (ENABLE): every transitive prerequisite must be BOTH desired-on after this
+      // patch AND RUNNING-on now. Desired-on alone is not enough (it may not be applied yet);
+      // running-on alone is not enough either — a prerequisite that has just been
+      // reverted/disabled (desired-off) is still running until the fleet restarts, and
+      // enabling a dependent against it would persist an orphaned dependent-on/prereq-off
+      // desired graph. A prereq being enabled in this same patch does not count (not running).
       for (const prereq of transitiveRequires(patch.key)) {
-        if (runningState(prereq) === "on") continue;
+        const prereqDesired = desiredOn(prereq);
+        if (runningState(prereq) === "on" && prereqDesired) continue;
+        if (runningState(prereq) === "on" && !prereqDesired) {
+          return {
+            ok: false,
+            error: `Cannot enable ${patch.key}: prerequisite ${prereq} is running but is being disabled/reverted (not desired-on) — keep ${prereq} enabled first`,
+          };
+        }
         if (patchByKey.get(prereq) === true) {
           return {
             ok: false,

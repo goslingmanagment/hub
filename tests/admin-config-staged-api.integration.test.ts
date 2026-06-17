@@ -59,6 +59,17 @@ async function seedRunningFlags(flags: Partial<AppConfig>) {
   }
 }
 
+/** Rebuild the server with dmProjection desired-on via env (no override row) — the realistic
+ *  state for enabling dmSync: the prerequisite was deployed and is running. Lets the staged
+ *  enable be genuinely valid (desired-on + running-on) without coupling the test to an
+ *  override version, so both concurrent payloads keep expectedVersion: 0. */
+async function rebuildServerWithProjectionEnv() {
+  await server?.close();
+  appContext = createTestAppContext(testDb!, { ofapiDmProjectionEnabled: true });
+  server = await buildApiServer(appContext);
+  await server.ready();
+}
+
 describe("admin config staged api (Stage C)", () => {
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();
@@ -405,8 +416,10 @@ describe("admin config staged api (Stage C)", () => {
       context.skip();
       return;
     }
+    // dmProjection desired-on via env (no override row) + running-on across the fleet, so the
+    // dmSync enable is genuinely valid against the baseline and both payloads keep version 0.
+    await rebuildServerWithProjectionEnv();
     const cookie = await loginCookie("dima", "owner-secret");
-    // dmProjection running-on across the fleet so dmSync can be enabled.
     await seedRunningFlags({ ofapiDmProjectionEnabled: true });
 
     // Fire two staged commits CONCURRENTLY that, if their read-validate-write interleaved,
@@ -454,5 +467,48 @@ describe("admin config staged api (Stage C)", () => {
       ? overrides.get("ofapiDmProjectionEnabled")?.value === true
       : true; // no override row → env baseline (running-on here)
     expect(dmSyncOn && !dmProjectionOn).toBe(false);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects enabling a dependent after its prerequisite was disabled but is still running (B1, desired-off/running-on)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // dmProjection desired-on via env + running-on across the fleet.
+    await rebuildServerWithProjectionEnv();
+    const cookie = await loginCookie("dima", "owner-secret");
+    await seedRunningFlags({ ofapiDmProjectionEnabled: true });
+
+    // Disable dmProjection (desired-off) — allowed because dmSync is not yet desired-on. The
+    // un-restarted fleet keeps reporting dmProjection running-on (it is a boot flag).
+    const disable = await server!.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config/staged",
+      headers: { cookie },
+      payload: {
+        patches: [{ key: "ofapiDmProjectionEnabled", desired: false, expectedVersion: 0 }],
+        ack: true,
+      },
+    });
+    expect(disable.statusCode).toBe(200);
+
+    // Enabling dmSync MUST be rejected now: dmProjection is running-on but desired-off, so
+    // enabling would persist an orphaned dependent-on/prereq-off graph. (Before the fix this
+    // wrongly succeeded because Rule 3 only checked running-state.)
+    const enable = await server!.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config/staged",
+      headers: { cookie },
+      payload: {
+        patches: [{ key: "ofapiDmSyncEnabled", desired: true, expectedVersion: 0 }],
+        ack: true,
+      },
+    });
+    expect(enable.statusCode).toBe(400);
+    expect((enable.json() as { message: string }).message).toContain("ofapiDmProjectionEnabled");
+
+    // The orphan was never persisted.
+    const overrides = await getConfigOverrides(testDb.db);
+    expect(overrides.get("ofapiDmSyncEnabled")).toBeUndefined();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
