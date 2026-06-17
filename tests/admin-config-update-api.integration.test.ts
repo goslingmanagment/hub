@@ -328,15 +328,18 @@ describe("admin config update api (Stage B1)", () => {
       payload: { patches: [{ key: "transactionLookbackDays", value: 14 }] },
     });
 
-    // The heartbeat snapshot is built from loadEffectiveConfig — exactly what the
-    // process now consumes — so running == override and pendingApply clears.
+    // The heartbeat snapshot is built from loadEffectiveConfig — exactly what the process now
+    // consumes — so running == override. Both expected roles (api + worker) must report it for
+    // pendingApply to clear (role-complete: a single role reporting can't clear it).
     const effective = await loadEffectiveConfig(appContext.db, appContext.config);
-    await upsertInstanceHeartbeat(appContext.db, {
-      role: "worker",
-      instanceId: "worker-1",
-      startedAt: new Date(),
-      running: buildRunningSnapshot(effective),
-    });
+    for (const role of ["api", "worker"]) {
+      await upsertInstanceHeartbeat(appContext.db, {
+        role,
+        instanceId: `${role}-1`,
+        startedAt: new Date(),
+        running: buildRunningSnapshot(effective),
+      });
+    }
 
     const view = (await server
       .inject({ method: "GET", url: "/api/v1/admin/config", headers: { cookie } })

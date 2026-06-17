@@ -148,15 +148,36 @@ describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
     expect(budget.pendingApply).toBe(false);
   });
 
-  it("does not flag pendingApply when the override matches the running value", () => {
+  it("does not flag pendingApply when the override matches the running value across all roles", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
       ["transactionLookbackDays", { value: 7, version: 1 }],
     ]);
-    const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, overrides);
+    // Both expected roles active and matching → not pending (role-complete; see M1 below).
+    const view = assembleConfigView(
+      [row("api", "a1", RUNNING, FRESH), row("worker", "w1", RUNNING, FRESH)],
+      NOW,
+      overrides,
+    );
     const lookback = item(view, "transactionLookbackDays");
     expect(lookback.source).toBe("override");
     expect(lookback.desired).toBe(7);
     expect(lookback.pendingApply).toBe(false);
+  });
+
+  it("stays pending when an expected role is absent, even if the active api matches (M1, role-complete)", () => {
+    // Only api is active and already reports the override value; the worker — which also
+    // consumes it — has no active instance. pendingApply must stay true so the staged
+    // 'pending restart' banner / 'applying…' badge does not wrongly clear during a worker
+    // outage or rolling deploy. (runningState stays fail-closed 'unknown' alongside this.)
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["transactionLookbackDays", { value: 14, version: 1 }],
+    ]);
+    const view = assembleConfigView(
+      [row("api", "a1", { transactionLookbackDays: 14 }, FRESH)],
+      NOW,
+      overrides,
+    );
+    expect(item(view, "transactionLookbackDays").pendingApply).toBe(true);
   });
 
   it("stays pending under partial apply (api applied, worker not)", () => {

@@ -166,12 +166,18 @@ function buildItem(
   const override = overridable ? overrides.get(descriptor.key) : undefined;
   const desired: ConfigOverrideValue | null = override ? override.value : null;
   const source: "env" | "override" = override ? "override" : "env";
-  // Pending until EVERY active instance reports the override value. An unknown
+  // Pending until EVERY expected role reports the override value. An unknown
   // (mismatched-snapshot) instance counts as not-applied, as does a masked entry or a
-  // value that still differs. Also pending when no process is reporting at all.
+  // value that still differs. Also pending when no process is reporting at all, OR when an
+  // EXPECTED role (api/worker) has no active instance — role-complete like getRunningFlagState,
+  // so a single api heartbeat can't clear pendingApply while the worker (which also consumes
+  // the value) is down/stale.
+  const activeRoles = new Set(activeInstances.map((instance) => instance.role));
+  const missingExpectedRole = EXPECTED_ROLES.some((role) => !activeRoles.has(role));
   const pendingApply =
     override != null &&
     (running.length === 0 ||
+      missingExpectedRole ||
       hasUnknown ||
       running.some((entry) => entry.masked || entry.state === "unknown" || entry.value !== override.value));
 
