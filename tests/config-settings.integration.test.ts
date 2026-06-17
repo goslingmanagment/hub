@@ -146,19 +146,22 @@ describe("config_settings repository (Stage B0)", () => {
       return;
     }
 
+    // Use a runtimeApply:'live' key so the override actually surfaces in the view.
+    // ofapiDmDailyCreditBudget is 'none' (not overridable), so its override is intentionally
+    // NOT surfaced (source stays 'env') — the unit suite covers that 'none' case separately.
     await setConfigOverride(testDb.db, {
-      key: "ofapiDmDailyCreditBudget",
-      value: 750,
+      key: "transactionLookbackDays",
+      value: 14,
       userId,
       groupId: randomUUID(),
     });
 
     const view = await buildConfigView(testDb.db);
-    const budget = viewItem(view, "ofapiDmDailyCreditBudget");
-    expect(budget.source).toBe("override");
-    expect(budget.desired).toBe(750);
+    const lookback = viewItem(view, "transactionLookbackDays");
+    expect(lookback.source).toBe("override");
+    expect(lookback.desired).toBe(14);
     // No active instance is reporting a value, so the override is pending.
-    expect(budget.pendingApply).toBe(true);
+    expect(lookback.pendingApply).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("clears an override and writes a clearing audit row", async (context) => {
