@@ -134,7 +134,17 @@ describe("admin config staged api (Stage C)", () => {
       return;
     }
     const cookie = await loginCookie("dima", "owner-secret");
-    // Both api + worker report dmProjection running-on.
+    // dmSync's prerequisite must be BOTH desired-on (override) and running-on (B1): stage
+    // dmProjection on, then report it running across the fleet.
+    await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config/staged",
+      headers: { cookie },
+      payload: {
+        patches: [{ key: "ofapiDmProjectionEnabled", desired: true, expectedVersion: 0 }],
+        ack: true,
+      },
+    });
     await seedRunningFlags({ ofapiDmProjectionEnabled: true });
 
     const response = await server.inject({
@@ -213,7 +223,18 @@ describe("admin config staged api (Stage C)", () => {
       return;
     }
     const cookie = await loginCookie("dima", "owner-secret");
-    // dmProjection running-on across the fleet; stage dmSync on (it depends on dmProjection).
+    // Stage dmProjection on (desired-on override, version 1) + running-on, then stage dmSync on
+    // (it depends on dmProjection, which must now be desired-on AND running-on to enable). The
+    // env baseline for dmProjection stays OFF, so reverting it (desired:null) is a disable.
+    await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config/staged",
+      headers: { cookie },
+      payload: {
+        patches: [{ key: "ofapiDmProjectionEnabled", desired: true, expectedVersion: 0 }],
+        ack: true,
+      },
+    });
     await seedRunningFlags({ ofapiDmProjectionEnabled: true });
     await server.inject({
       method: "PATCH",
@@ -226,13 +247,14 @@ describe("admin config staged api (Stage C)", () => {
     });
 
     // Reverting dmProjection to env (env-off) is validated as a disable; dmSync is still
-    // desired-on (override) → rejected, and dmProjection is untouched.
+    // desired-on (override) → rejected, and dmProjection is untouched. expectedVersion 1
+    // because dmProjection now has an override row at version 1.
     const revert = await server.inject({
       method: "PATCH",
       url: "/api/v1/admin/config/staged",
       headers: { cookie },
       payload: {
-        patches: [{ key: "ofapiDmProjectionEnabled", desired: null, expectedVersion: 0 }],
+        patches: [{ key: "ofapiDmProjectionEnabled", desired: null, expectedVersion: 1 }],
         ack: true,
       },
     });
