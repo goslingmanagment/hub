@@ -62,6 +62,10 @@ const bootstrapMocks = vi.hoisted(() => {
       telegramChatId: null,
       telegramEnabled: false,
       telegramReportHourUtc: 9,
+      // Staged boot flags default off (mirrors loadConfig) so the fallback-normalization test
+      // can override them to an invalid env-only graph.
+      ofapiDmProjectionEnabled: false,
+      ofapiDmSyncEnabled: false,
     })),
     onlyFansAdapter,
     OnlyFansAdapter: vi.fn(() => onlyFansAdapter),
@@ -187,6 +191,32 @@ describe("bootstrap", () => {
     );
 
     expect(bootstrapMocks.createPool).not.toHaveBeenCalled();
+  });
+
+  it("normalizes an invalid env-only staged graph when the override read fails at boot", async () => {
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
+    // The override read throws (a transient DB blip) → the fallback path runs.
+    bootstrapMocks.getConfigOverrides.mockRejectedValueOnce(new Error("db blip"));
+    // Env itself is an invalid staged graph: dmSync ON while its prerequisite dmProjection is OFF.
+    bootstrapMocks.loadConfig.mockReturnValueOnce({
+      ...bootstrapMocks.loadConfig(),
+      ofapiDmProjectionEnabled: false,
+      ofapiDmSyncEnabled: true,
+    });
+    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+
+    const app = await createAppContext();
+
+    // The fallback still normalizes: dmSync is forced OFF because its prerequisite is off, and
+    // the skip is surfaced — boot never starts the invalid graph even though the read failed.
+    expect(app.config.ofapiDmSyncEnabled).toBe(false);
+    expect(app.bootSkipped?.map((s) => s.key)).toContain("ofapiDmSyncEnabled");
+    expect(bootstrapMocks.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      "boot override read failed; normalizing env config without overrides",
+    );
+
+    await app.close();
   });
 });
 

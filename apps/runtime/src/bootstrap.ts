@@ -140,7 +140,14 @@ export async function createAppContext(): Promise<AppContext> {
       config = applied.config;
       bootSkipped = applied.skipped;
     } catch (err) {
-      logger.warn({ err }, "boot override apply failed; using env config");
+      // A DB read failure must not wedge boot — but it also must not skip the staged
+      // requires-graph normalization. applyBootOverrides with NO overrides is pure (no I/O)
+      // and still forces any invalid env-only dependent=on/prereq=off graph OFF, so boot can
+      // never start an invalid graph even when the override read fails (e.g. a transient blip).
+      logger.warn({ err }, "boot override read failed; normalizing env config without overrides");
+      const applied = applyBootOverrides(rawConfig, new Map());
+      config = applied.config;
+      bootSkipped = applied.skipped;
     }
 
     const adapter = new FanslyAdapter({
