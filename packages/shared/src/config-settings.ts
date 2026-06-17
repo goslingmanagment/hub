@@ -253,13 +253,16 @@ export function applyBootOverrides(
     applied.push({ key: descriptor.key, value: validated.value, field });
   }
 
-  // A stray override for a key that is not a boot descriptor (e.g. a live/none key)
-  // is ignored with a reason so the operator can see it was not applied here.
+  // Flag only genuinely non-applicable override rows so the operator sees a row that was
+  // ignored at boot. A LIVE override is applied via the runtime overlay (loadEffectiveConfig),
+  // not at boot — it is NOT "rejected", so it must NOT be reported here (else every live edit
+  // shows a false "Override rejected at boot" after a restart). Boot keys are handled above;
+  // that leaves only unknown keys and runtimeApply:'none' rows (which the API cannot create —
+  // a genuinely stray, hand-inserted row worth surfacing).
   for (const key of overrides.keys()) {
     const descriptor = getDescriptor(key);
-    if (!descriptor || descriptor.runtimeApply !== "boot") {
-      skipped.push({ key, reason: `Config key is not staged (boot-applied): ${key}` });
-    }
+    if (descriptor && descriptor.runtimeApply !== "none") continue;
+    skipped.push({ key, reason: `Config key is not overridable via the DB overlay: ${key}` });
   }
 
   // Fail-safe ordered-requires normalization on the MERGED graph: boot never applies an

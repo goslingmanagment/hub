@@ -102,6 +102,16 @@ describe("applyBootOverrides", () => {
     expect(result.skipped.map((s) => s.key)).toContain("logLevel");
   });
 
+  it("does NOT report a live (runtime-overlay) override as boot-skipped", () => {
+    // transactionLookbackDays is runtimeApply:'live' — applied via the overlay, not at boot.
+    // It must never appear in `skipped` (which the dashboard renders as "rejected at boot").
+    const config = baseConfig();
+    const result = applyBootOverrides(config, overrides([["transactionLookbackDays", 14]]));
+    expect(result.config).toBe(config); // a live key is never boot-applied
+    expect(result.skipped).toEqual([]);
+    expect(result.skipped.map((s) => s.key)).not.toContain("transactionLookbackDays");
+  });
+
   it("skips an invalid (non-boolean) value for a boot key with a reason, never throwing", () => {
     const config = baseConfig();
     const result = applyBootOverrides(config, overrides([["ofapiDmProjectionEnabled", "yes"]]));
