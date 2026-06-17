@@ -3057,6 +3057,11 @@ export const configViewResponseSchema = z.object({
 // can hold; the server re-validates and clamps it against the registry.
 const configOverrideValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 
+// Audit notes are operator-supplied free text persisted into config_audit_log (append-only,
+// one row per key in a patch). Bound them so a write can't persist megabyte-sized notes into
+// the audit trail (mirrors the audit P-3 cap on the login fields).
+const CONFIG_NOTE_MAX_LEN = 1024;
+
 export const configUpdateBodySchema = z.object({
   patches: z
     .array(
@@ -3064,12 +3069,14 @@ export const configUpdateBodySchema = z.object({
         key: z.string(),
         value: configOverrideValueSchema,
         // Optimistic concurrency: when present it must match the row's current
-        // version (0 for a brand-new key) or the write is a 409 conflict.
+        // version (0 for a brand-new key) or the write is a 409 conflict. Intentionally
+        // OPTIONAL on the live path (opt-in, last-write-wins for owner-only low-stakes knobs);
+        // the staged path makes it MANDATORY since staged flips are higher-stakes.
         expectedVersion: z.number().int().min(0).optional(),
       }),
     )
     .min(1),
-  note: z.string().optional(),
+  note: z.string().max(CONFIG_NOTE_MAX_LEN).optional(),
 });
 
 export const configUpdateResponseSchema = z.object({
@@ -3090,7 +3097,7 @@ export const configClearParamsSchema = z.object({
 // Query params (not a body) so DELETE needs no request body — both fields optional.
 export const configClearQuerySchema = z.object({
   expectedVersion: z.coerce.number().int().min(0).optional(),
-  note: z.string().optional(),
+  note: z.string().max(CONFIG_NOTE_MAX_LEN).optional(),
 });
 
 export const configClearResponseSchema = z.object({
@@ -3119,7 +3126,7 @@ export const configStagedBodySchema = z.object({
       }),
     )
     .min(1),
-  note: z.string().optional(),
+  note: z.string().max(CONFIG_NOTE_MAX_LEN).optional(),
   // Must be true; the handler rejects ack:false (400) and stores it in the audit note.
   ack: z.boolean(),
 });

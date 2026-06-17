@@ -20,6 +20,13 @@ describe("validateConfigOverride", () => {
     expect(result).toEqual({ ok: true, value: 45 });
   });
 
+  it("clamps a cost-warned live window key to its upper bound (transactionRescanCapDays max 365)", () => {
+    // L2: raise-expands-work keys carry a max so a live PATCH can't set an unbounded backfill
+    // window. 1_000_000 clamps down to the descriptor max.
+    expect(validateConfigOverride("transactionRescanCapDays", 1_000_000)).toEqual({ ok: true, value: 365 });
+    expect(validateConfigOverride("transactionLookbackDays", 1_000_000)).toEqual({ ok: true, value: 365 });
+  });
+
   it("rejects a non-finite number", () => {
     expect(validateConfigOverride("sessionTtlDays", Number.NaN).ok).toBe(false);
     expect(validateConfigOverride("sessionTtlDays", Number.POSITIVE_INFINITY).ok).toBe(false);

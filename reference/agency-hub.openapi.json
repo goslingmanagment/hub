@@ -40926,7 +40926,8 @@
                     }
                   },
                   "note": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -41131,7 +41132,8 @@
           },
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 1024
             },
             "in": "query",
             "name": "note",
@@ -41343,7 +41345,8 @@
                     }
                   },
                   "note": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 1024
                   },
                   "ack": {
                     "type": "boolean"

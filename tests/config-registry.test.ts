@@ -123,6 +123,21 @@ describe("config registry", () => {
     expect(req("onlyFansTopSpendersEnabled")).toEqual(["ofapiPresenceProjectionEnabled"]);
   });
 
+  it("only boot descriptors declare `requires`, and every requires target is an existing boot key", () => {
+    // Guards the boot-only filter in transitiveDependents (staged-config.ts): if a non-boot
+    // key ever declared a `requires` on a boot key, the disable rule would silently skip it
+    // (fail-open). Pin the invariant so that can't slip in.
+    for (const descriptor of CONFIG_DESCRIPTORS) {
+      if ((descriptor.requires?.length ?? 0) === 0) continue;
+      expect(descriptor.runtimeApply, `${descriptor.key} declares requires but is not 'boot'`).toBe("boot");
+      for (const target of descriptor.requires!) {
+        const dep = getDescriptor(target);
+        expect(dep, `${descriptor.key} requires unknown key ${target}`).toBeDefined();
+        expect(dep!.runtimeApply, `${descriptor.key} requires non-boot key ${target}`).toBe("boot");
+      }
+    }
+  });
+
   it("orders the #50 staged group ledger(1)→ping(2)→audience(3)→presence(4)→topSpenders(5)", () => {
     const order = (key: string) => getDescriptor(key)!.stagedOrder;
     expect(order("ofapiDmProjectionEnabled")).toBe(1);
