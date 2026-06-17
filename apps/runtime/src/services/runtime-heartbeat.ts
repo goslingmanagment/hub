@@ -51,7 +51,9 @@ export function startRuntimeHeartbeat(
         instanceId,
         startedAt,
         imageTag,
-        running: buildRunningSnapshot(effectiveConfig),
+        // app.config already has the boot ('boot') overrides baked in, so values are
+        // correct; attach the boot-skipped list so the view can surface ignored overrides.
+        running: buildRunningSnapshot(effectiveConfig, app.bootSkipped),
       });
       // Idempotent across instances; whichever process runs it first wins.
       await reapStaleInstances(app.db).catch(() => undefined);

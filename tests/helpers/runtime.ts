@@ -50,11 +50,7 @@ export function createTestAppContext(
     encryptionKeysByVersion.set(encryptionKeyVersion, encryptionKey);
   }
 
-  return {
-    db: testDb.db,
-    pool: testDb.pool,
-    logger: overrides?.logger ?? testDb.logger,
-    config: {
+  const config = {
       databaseUrl: overrides?.databaseUrl ?? "",
       encryptionKey,
       encryptionKeyVersion,
@@ -105,7 +101,15 @@ export function createTestAppContext(
       ofapiAudienceSweepIntervalMinutes: overrides?.ofapiAudienceSweepIntervalMinutes ?? 1440,
       ofapiPresenceProjectionEnabled: overrides?.ofapiPresenceProjectionEnabled ?? false,
       onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
-    },
+    } as AppContext["config"];
+
+  return {
+    db: testDb.db,
+    pool: testDb.pool,
+    logger: overrides?.logger ?? testDb.logger,
+    config,
+    // Tests apply no boot overrides, so the raw env baseline equals the effective config.
+    rawConfig: config,
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as AppContext["onlyFansAdapter"]),
     ofapi: overrides?.ofapi,

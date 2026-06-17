@@ -23,6 +23,8 @@ const bootstrapMocks = vi.hoisted(() => {
   return {
     adapter,
     assertRuntimeSchemaReady: vi.fn(),
+    // No boot overrides in the DB → applyBootOverrides is a no-op (config === env).
+    getConfigOverrides: vi.fn(async () => new Map()),
     createDb: vi.fn(() => db),
     createLogger: vi.fn(() => logger),
     createPool: vi.fn(() => pool),
@@ -72,6 +74,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
   return {
     ...actual,
     assertRuntimeSchemaReady: bootstrapMocks.assertRuntimeSchemaReady,
+    getConfigOverrides: bootstrapMocks.getConfigOverrides,
     createDb: bootstrapMocks.createDb,
     createPool: bootstrapMocks.createPool,
   };
@@ -130,6 +133,9 @@ describe("bootstrap", () => {
     });
     expect(app.db).toBe(bootstrapMocks.db);
     expect(app.adapter).toBe(bootstrapMocks.adapter);
+    // No boot overrides in the DB → nothing skipped, config is the env config.
+    expect(bootstrapMocks.getConfigOverrides).toHaveBeenCalledWith(bootstrapMocks.db);
+    expect(app.bootSkipped).toEqual([]);
     const onlyFansCloseSpy = vi.spyOn(app.onlyFansAdapter, "close");
 
     await app.close();

@@ -416,4 +416,28 @@ describe("admin config update api (Stage B1)", () => {
     });
     expect(response.statusCode).toBe(400);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects DELETE for a staged (boot) key with 400, leaving the override in place", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    // ofapiDmProjectionEnabled is editability 'staged' — the generic DELETE must not clear
+    // it (that would bypass the staged endpoint's expectedVersion + ack + order rules).
+    // Seed an override and prove DELETE rejects it and leaves the row.
+    await setConfigOverride(testDb.db, {
+      key: "ofapiDmProjectionEnabled",
+      value: true,
+      userId: null,
+      groupId: randomUUID(),
+    });
+    const response = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/config/ofapiDmProjectionEnabled",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(400);
+    expect((await getConfigOverrides(testDb.db)).has("ofapiDmProjectionEnabled")).toBe(true);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

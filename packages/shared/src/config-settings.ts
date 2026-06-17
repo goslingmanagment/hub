@@ -8,8 +8,9 @@
 // worker, the API handlers, and tests resolve the effective config identically.
 
 import type { AppConfig } from "./config.ts";
-import type { ConfigOverrideValue } from "./config-registry.ts";
-import { CONFIG_DESCRIPTORS, getDescriptor } from "./config-registry.ts";
+import { checkPublicProfileResolutionInvariant, checkSyncConcurrencyInvariant } from "./config.ts";
+import type { ConfigOverrideValue, SkippedOverride } from "./config-registry.ts";
+import { CONFIG_DESCRIPTORS, getDescriptor, transitiveRequires } from "./config-registry.ts";
 
 export type ValidateConfigOverrideResult =
   | { ok: true; value: ConfigOverrideValue }
@@ -142,4 +143,189 @@ export function resolveEffectiveConfig(
   }
 
   return { values };
+}
+
+export type ValidateStagedOverrideResult =
+  | { ok: true; value: boolean }
+  | { ok: false; error: string };
+
+/** PURE server-side validation of a single STAGED (boot-applied) override. A staged
+ *  flag flip is only legal for a key whose wiring is `runtimeApply === 'boot'` and
+ *  whose value is a boolean. Fail-closed for unknown keys, non-boot keys (live/none),
+ *  and non-boolean values. The later staged-rollout endpoint runs every flip through
+ *  this gate before persisting it; applyBootOverrides reuses it at process start. */
+export function validateStagedOverride(key: string, value: unknown): ValidateStagedOverrideResult {
+  const descriptor = getDescriptor(key);
+  if (!descriptor) {
+    return { ok: false, error: `Unknown config key: ${key}` };
+  }
+  if (descriptor.runtimeApply !== "boot") {
+    return { ok: false, error: `Config key is not staged (boot-applied): ${key}` };
+  }
+  if (typeof value !== "boolean") {
+    return { ok: false, error: `${key} expects a boolean` };
+  }
+  return { ok: true, value };
+}
+
+/** Minimal shape of a stored override map entry, declared locally so this module
+ *  never imports @agency_hub_core/db (which would create a db↔shared cycle). The db
+ *  ConfigOverrideRecord is assignable to this. */
+export interface BootOverrideInput {
+  value: unknown;
+  version?: number;
+}
+
+export interface ApplyBootOverridesResult {
+  config: AppConfig;
+  skipped: SkippedOverride[];
+}
+
+/** Read the boot-applied invariants off a (candidate) merged config and return the
+ *  first violation message, or null. Generic/defensive: none of today's 8 boot keys
+ *  participate, but a future boot flag that feeds one of these fields would. */
+function checkBootInvariants(config: AppConfig): string | null {
+  const publicProfileError = checkPublicProfileResolutionInvariant({
+    resolutionEnabled: config.onlyFansPublicProfileResolutionEnabled === true,
+    allowDirect: config.onlyFansPublicProfileAllowDirect === true,
+    hasProxy: config.onlyFansPublicProfileProxy != null,
+  });
+  if (publicProfileError) return publicProfileError;
+
+  return checkSyncConcurrencyInvariant({
+    pageExecutorConcurrency: config.syncPageExecutorConcurrency,
+    sharedRateLimitEnabled: config.syncSharedRateLimitEnabled,
+  });
+}
+
+/** PURE boot-time apply of the staged (`runtimeApply === 'boot'`) overrides onto the
+ *  env-loaded config, called once in createAppContext. For each boot descriptor with
+ *  an override it validates the value (boolean) and tentatively writes it onto a clone;
+ *  an invalid value (or a stray override for a key that is not a boot key) is skipped
+ *  with a reason and never throws. It then ALWAYS (even with zero overrides) (1) normalizes
+ *  the staged REQUIRES GRAPH on the merged config — any boot flag left ON while a transitive
+ *  prerequisite is OFF is forced to FALSE (NOT reverted to env, since the env value can
+ *  itself be the invalid `true`) and recorded as skipped (fail-safe: boot never starts a
+ *  dependent=on/prereq=off graph, however that state arose — a stale override, a hand-edited
+ *  row, OR the env config itself) — then (2) re-checks the boot invariants on the FINAL
+ *  merged config; if a candidate broke one, the offending keys are reverted to env (recorded
+ *  as skipped) and the invariants re-checked, so a bad combination can never produce a config
+ *  that loadConfig itself would have rejected. Returns the original `config` object (unchanged
+ *  identity) when nothing changed (zero overrides over an already-valid env graph).
+ *
+ *  No @agency_hub_core/db import: the override map is the local {@link BootOverrideInput}
+ *  shape, so this stays in the cycle-free shared layer. */
+export function applyBootOverrides(
+  config: AppConfig,
+  overrides: Map<string, BootOverrideInput>,
+): ApplyBootOverridesResult {
+  const skipped: SkippedOverride[] = [];
+
+  // Candidate (key, validated boolean, configField) tuples that passed value validation.
+  // Tracked only so a later invariant revert names the overridden keys it backs out.
+  const applied: Array<{ key: string; value: boolean; field: string }> = [];
+  // We ALWAYS materialize a working clone and run the requires-graph normalization over
+  // it, even with zero overrides: the env config itself can be an invalid staged graph
+  // (e.g. OFAPI_DM_SYNC_ENABLED=true while OFAPI_DM_PROJECTION_ENABLED=false), and boot
+  // must never start a dependent=on/prereq=off combination. The NET change (the final
+  // merged value vs the original env value, per field) is computed at the end, so a key
+  // that was flipped on then forced back off to its env value counts as no change and we
+  // return the original `config` identity unchanged (matching the zero-override case).
+  const merged: AppConfig = { ...config };
+
+  for (const descriptor of CONFIG_DESCRIPTORS) {
+    if (descriptor.runtimeApply !== "boot") continue;
+    const override = overrides.get(descriptor.key);
+    if (override === undefined) continue;
+
+    const validated = validateStagedOverride(descriptor.key, override.value);
+    if (!validated.ok) {
+      skipped.push({ key: descriptor.key, reason: validated.error });
+      continue;
+    }
+    if (descriptor.configField == null) {
+      skipped.push({ key: descriptor.key, reason: `Config key has no field: ${descriptor.key}` });
+      continue;
+    }
+
+    const field = descriptor.configField as string;
+    (merged as unknown as Record<string, unknown>)[field] = validated.value;
+    applied.push({ key: descriptor.key, value: validated.value, field });
+  }
+
+  // A stray override for a key that is not a boot descriptor (e.g. a live/none key)
+  // is ignored with a reason so the operator can see it was not applied here.
+  for (const key of overrides.keys()) {
+    const descriptor = getDescriptor(key);
+    if (!descriptor || descriptor.runtimeApply !== "boot") {
+      skipped.push({ key, reason: `Config key is not staged (boot-applied): ${key}` });
+    }
+  }
+
+  // Fail-safe ordered-requires normalization on the MERGED graph: boot never applies an
+  // invalid dependent=on / prerequisite=off combination regardless of how that state got
+  // there — a stale override, a hand-edited row, a bad import, OR the env config itself.
+  // For every boot key that is ON in merged, every key in its transitive `requires` must
+  // also be ON in merged. A dependent that is ON while a prerequisite is OFF is forced to
+  // FALSE (NOT its env value — env may itself be the invalid `true`), the reason recorded,
+  // then we re-check until the graph is consistent. The loop is bounded by the boot-
+  // descriptor count: each pass forces ≥1 ON dependent off and never turns a key back on,
+  // so it converges. Pure walk over CONFIG_DESCRIPTORS — no runtime imports.
+  const bootDescriptors = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot" && d.configField != null);
+  const mergedBootOn = (key: string): boolean => {
+    const descriptor = getDescriptor(key);
+    const field = descriptor?.configField as string | undefined;
+    if (field == null) return false;
+    return (merged as unknown as Record<string, unknown>)[field] === true;
+  };
+
+  for (let pass = 0; pass < bootDescriptors.length + 1; pass += 1) {
+    let forcedThisPass = false;
+    for (const descriptor of bootDescriptors) {
+      const field = descriptor.configField as string;
+      if (!mergedBootOn(descriptor.key)) continue;
+      const offPrereq = transitiveRequires(descriptor.key).find((prereq) => !mergedBootOn(prereq));
+      if (offPrereq === undefined) continue;
+      // Dependent is on while a prerequisite is off — force the dependent OFF (not env,
+      // which can itself be the invalid `true`).
+      (merged as unknown as Record<string, unknown>)[field] = false;
+      skipped.push({ key: descriptor.key, reason: `prerequisite ${offPrereq} is off` });
+      // Drop it from the applied set so the identity/invariant bookkeeping stays accurate.
+      const idx = applied.findIndex((candidate) => candidate.key === descriptor.key);
+      if (idx !== -1) applied.splice(idx, 1);
+      forcedThisPass = true;
+    }
+    if (!forcedThisPass) break;
+  }
+
+  const envSource = config as unknown as Record<string, unknown>;
+
+  // Validate the merged invariants; revert the involved overridden keys to env and
+  // re-check until clean. Because the current boot keys touch independent boolean
+  // fields, one pass per offending key converges; the loop is bounded by `applied`.
+  let invariantError = checkBootInvariants(merged);
+  while (invariantError != null && applied.length > 0) {
+    // Revert every candidate that participated in this apply pass: defensive and
+    // simple — re-applying them would re-trigger the same violation.
+    for (const candidate of applied) {
+      (merged as unknown as Record<string, unknown>)[candidate.field] = envSource[candidate.field];
+      skipped.push({ key: candidate.key, reason: invariantError });
+    }
+    applied.length = 0;
+    invariantError = checkBootInvariants(merged);
+  }
+
+  // Net change: did any boot field end up DIFFERENT from its original env value? A key that
+  // was flipped on then forced/reverted back to its env value is not a net change. When
+  // nothing changed (zero overrides over an already-valid env graph, or every applied
+  // candidate was undone), hand back the original `config` identity unchanged.
+  const mutated = bootDescriptors.some((descriptor) => {
+    const field = descriptor.configField as string;
+    return (merged as unknown as Record<string, unknown>)[field] !== envSource[field];
+  });
+  if (!mutated) {
+    return { config, skipped };
+  }
+
+  return { config: merged, skipped };
 }

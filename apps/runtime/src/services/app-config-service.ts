@@ -9,39 +9,135 @@
 
 import type { ConfigOverrideRecord, Database, RuntimeInstanceRow } from "@agency_hub_core/db";
 import { getConfigOverrides, INSTANCE_STALE_TTL_MS, listAllInstances } from "@agency_hub_core/db";
-import type { ConfigDescriptor, ConfigOverrideValue, RunningSnapshot, RunningValue } from "@agency_hub_core/shared";
+import type { ConfigDescriptor, ConfigOverrideValue, RunningSnapshot, RunningValue, SkippedOverride } from "@agency_hub_core/shared";
 import { CONFIG_DESCRIPTORS, RUNNING_SCHEMA_VERSION } from "@agency_hub_core/shared";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
-
-import { LIVE_CONFIG_KEYS } from "./effective-config.ts";
 
 // Display order for the grouped view; unknown subsystems fall to the end.
 const SUBSYSTEM_ORDER = ["Core", "Security", "Sync", "Fansly", "OFAPI", "Telegram", "Workboard"];
 
 // Roles we always expect a live process for, so a missing one is flagged even when
-// it has never reported (no row at all).
-const EXPECTED_ROLES = ["api", "worker"];
+// it has never reported (no row at all). Exported so the staged gate (getRunningFlagState)
+// can require an active instance of EVERY expected role before treating a flag as 'on'.
+export const EXPECTED_ROLES = ["api", "worker"] as const;
 
-function readRunning(row: RuntimeInstanceRow, key: string): RunningValue | undefined {
+// Marker for a row written under an older/mismatched snapshot shape: we can't trust its
+// value, but (unlike Stage A's silent drop) we surface the instance as state "unknown"
+// so a not-yet-redeployed process shows as "unknown (stale snapshot)" and counts as
+// not-applied for pendingApply, instead of vanishing.
+const SCHEMA_MISMATCH = Symbol("schema-mismatch");
+
+function readRunning(row: RuntimeInstanceRow, key: string): RunningValue | typeof SCHEMA_MISMATCH | undefined {
   const snap = row.running as RunningSnapshot | null;
-  // A row written by a not-yet-redeployed process under an older snapshot shape is
-  // ignored rather than misread (prevents false drift across a rolling deploy).
-  if (!snap || snap.schemaVersion !== RUNNING_SCHEMA_VERSION) return undefined;
+  if (!snap || snap.schemaVersion !== RUNNING_SCHEMA_VERSION) return SCHEMA_MISMATCH;
   return snap.values?.[key];
+}
+
+/** The APPLIED (running) truth for a boolean flag across every ACTIVE instance, used to
+ *  gate ordered staged enables (a prerequisite must be running, not merely desired).
+ *  Returns:
+ *   - 'on'  — EVERY expected role (api, worker) has ≥1 active instance, AND every active
+ *             instance (all roles) reports the key as boolean `true`, with none
+ *             schema-mismatched or missing the key.
+ *   - 'unknown' — there are no active instances, an EXPECTED ROLE has no active instance
+ *             (a vanished worker must not let the next step unlock), or any active instance
+ *             reports under a mismatched snapshot shape or does not report the key at all
+ *             (we cannot prove the prerequisite is live, so a dependent enable is blocked).
+ *   - 'off' — present across all expected roles but at least one active instance reports
+ *             the key as not-true.
+ *  Mirrors the readRunning / SCHEMA_MISMATCH handling the read-only view uses, so the
+ *  gate agrees with what each process actually consumes. */
+export function getRunningFlagState(
+  activeInstances: RuntimeInstanceRow[],
+  key: string,
+): "on" | "off" | "unknown" {
+  if (activeInstances.length === 0) return "unknown";
+
+  // Fail-closed when any expected role has no active instance: a missing worker (or api)
+  // means we cannot prove the prerequisite is live everywhere it runs.
+  const activeRoles = new Set(activeInstances.map((instance) => instance.role));
+  for (const role of EXPECTED_ROLES) {
+    if (!activeRoles.has(role)) return "unknown";
+  }
+
+  let allOn = true;
+  for (const instance of activeInstances) {
+    const value = readRunning(instance, key);
+    // A mismatched snapshot or a missing key means we cannot trust this instance's
+    // applied value for the flag — treat the whole fleet as unknown (fail-closed).
+    if (value === SCHEMA_MISMATCH || value === undefined) return "unknown";
+    if (value.value !== true) allOn = false;
+  }
+
+  return allOn ? "on" : "off";
+}
+
+/** The APPLIED truth for a NON-boot key across active instances, summarized for the
+ *  server-computed `runningState`. Boot keys use the stricter getRunningFlagState (which
+ *  is role-complete + fail-closed); a non-boot key has no ordered-enable gate, so this is a
+ *  best-effort summary of what the fleet reports: "on" when every active instance reports
+ *  the key as boolean `true`, "off" when at least one reports a non-true (boolean) value,
+ *  and "unknown" when no active instance reports a usable boolean (no fleet, a masked/non-
+ *  boolean value, a stale snapshot, or the key missing from the snapshot). Mirrors the
+ *  readRunning / SCHEMA_MISMATCH handling so it agrees with what each process consumes. */
+function summarizeNonBootRunningState(
+  activeInstances: RuntimeInstanceRow[],
+  key: string,
+): "on" | "off" | "unknown" {
+  let sawBoolean = false;
+  let allOn = true;
+  for (const instance of activeInstances) {
+    const value = readRunning(instance, key);
+    if (value === SCHEMA_MISMATCH || value === undefined) continue;
+    if (value.masked || typeof value.value !== "boolean") continue;
+    sawBoolean = true;
+    if (value.value !== true) allOn = false;
+  }
+  if (!sawBoolean) return "unknown";
+  return allOn ? "on" : "off";
+}
+
+/** The boot-apply overrides an instance reported as skipped, or [] for an older
+ *  (mismatched-shape) snapshot that carries no skip data. */
+function readSkippedOverrides(row: RuntimeInstanceRow): SkippedOverride[] {
+  const snap = row.running as RunningSnapshot | null;
+  if (!snap || snap.schemaVersion !== RUNNING_SCHEMA_VERSION) return [];
+  return (snap.skippedOverrides ?? []).map((entry) => ({ key: entry.key, reason: entry.reason }));
 }
 
 function buildItem(
   descriptor: ConfigDescriptor,
   activeInstances: RuntimeInstanceRow[],
   overrides: Map<string, ConfigOverrideRecord>,
+  // The PRE-boot-apply env config (rawConfig), the env baseline for desiredEffective. An
+  // empty record (the no-baseline default) yields env-undefined → null for boolean keys.
+  envBaseline: Record<string, unknown>,
 ): ConfigItem {
   const running: ConfigItem["running"] = [];
   const scalarValues: string[] = [];
   const states: string[] = [];
+  // Tracks whether any active instance reported under a mismatched snapshot shape, so
+  // pendingApply can never clear while a process's value is unknown.
+  let hasUnknown = false;
 
   for (const instance of activeInstances) {
     const value = readRunning(instance, descriptor.key);
-    if (!value) continue;
+    if (value === undefined) continue;
+
+    if (value === SCHEMA_MISMATCH) {
+      // Surface the instance as "unknown" rather than dropping it; its value is not
+      // comparable, so it does not feed drift, but it does block pendingApply.
+      hasUnknown = true;
+      running.push({
+        role: instance.role,
+        instanceId: instance.instanceId,
+        value: null,
+        masked: false,
+        state: "unknown",
+        lastSeenAt: instance.lastSeenAt.toISOString(),
+      });
+      continue;
+    }
 
     running.push({
       role: instance.role,
@@ -63,19 +159,43 @@ function buildItem(
 
   const drift = new Set(scalarValues).size > 1 || new Set(states).size > 1;
 
-  // An override only counts when the key is actually editable — a stray row for a
-  // non-editable key (should never exist, but fail closed) is ignored here.
-  const override = descriptor.editability === "editable" ? overrides.get(descriptor.key) : undefined;
+  // Surface an override for any key wired to the DB overlay — live (runtime) OR boot
+  // (staged, applies after restart) — so a boot override shows desired/source/version/
+  // pendingApply. A 'none' key never carries one (fail-closed against a stray row).
+  const overridable = descriptor.runtimeApply === "live" || descriptor.runtimeApply === "boot";
+  const override = overridable ? overrides.get(descriptor.key) : undefined;
   const desired: ConfigOverrideValue | null = override ? override.value : null;
   const source: "env" | "override" = override ? "override" : "env";
-  // Pending until EVERY active instance reports the override value — if api has
-  // applied it but worker has not, it is still partially applied, not done. Also
-  // pending when no process is reporting one to compare to. (B0 wires no read-site,
-  // so this is effectively always true while an override differs from env.)
+  // Pending until EVERY active instance reports the override value. An unknown
+  // (mismatched-snapshot) instance counts as not-applied, as does a masked entry or a
+  // value that still differs. Also pending when no process is reporting at all.
   const pendingApply =
     override != null &&
     (running.length === 0 ||
-      running.some((entry) => entry.masked || entry.value !== override.value));
+      hasUnknown ||
+      running.some((entry) => entry.masked || entry.state === "unknown" || entry.value !== override.value));
+
+  // SERVER-computed APPLIED truth (the staged UI's lock/Enable-Disable source). Boot keys
+  // use the strict role-complete, fail-closed getRunningFlagState; non-boot keys get a
+  // best-effort fleet summary.
+  const runningState =
+    descriptor.runtimeApply === "boot"
+      ? getRunningFlagState(activeInstances, descriptor.key)
+      : summarizeNonBootRunningState(activeInstances, descriptor.key);
+
+  // SERVER-computed desired baseline: the override boolean when one exists, else the env
+  // (rawConfig) boolean; null for any key with no boolean meaning here. For a boot key the
+  // override is always a boolean; this also covers a boolean non-boot key with an override.
+  let desiredEffective: boolean | null;
+  if (override != null && typeof override.value === "boolean") {
+    desiredEffective = override.value;
+  } else if (override == null) {
+    const envValue = envBaseline[descriptor.key];
+    desiredEffective = typeof envValue === "boolean" ? envValue : null;
+  } else {
+    // A non-boolean override (e.g. a numeric live key) has no boolean desired meaning.
+    desiredEffective = null;
+  }
 
   return {
     key: descriptor.key,
@@ -86,7 +206,7 @@ function buildItem(
     label: descriptor.label,
     default: descriptor.default,
     editability: descriptor.editability,
-    applyMode: descriptor.applyMode,
+    runtimeApply: descriptor.runtimeApply,
     comparable: descriptor.comparable,
     secret: descriptor.kind === "secret",
     note: descriptor.note ?? null,
@@ -101,23 +221,28 @@ function buildItem(
     // read-site). With no override the value is env-sourced and nothing is pending.
     source,
     desired,
+    runningState,
+    desiredEffective,
     overrideVersion: override ? override.version : null,
     pendingApply,
     drift,
-    // Wired to take effect at runtime now (Stage B1): only these editable keys are
-    // PATCHable and applied without a restart.
-    live: LIVE_CONFIG_KEYS.has(descriptor.key),
+    // Wired to take effect at runtime now (Stage B1): only `runtimeApply === 'live'`
+    // keys are PATCHable and applied without a restart.
+    live: descriptor.runtimeApply === "live",
     running,
   };
 }
 
 /** Pure assembly of the view from raw rows + a clock (+ the override overlay), so
  *  the active/stale/drift/overlay logic is unit-testable without a database. The
- *  overrides map defaults to empty, matching the no-overlay Stage A behavior. */
+ *  overrides map defaults to empty, matching the no-overlay Stage A behavior. The
+ *  `envBaseline` is the PRE-boot-apply env config (rawConfig) used for desiredEffective;
+ *  it defaults to {} so a key with no override resolves desiredEffective to null. */
 export function assembleConfigView(
   rows: RuntimeInstanceRow[],
   nowMs: number,
   overrides: Map<string, ConfigOverrideRecord> = new Map(),
+  envBaseline: Record<string, unknown> = {},
 ): ConfigViewResponse {
   const staleCutoff = nowMs - INSTANCE_STALE_TTL_MS;
   const classified = rows.map((row) => ({
@@ -139,7 +264,7 @@ export function assembleConfigView(
   }));
 
   const items = CONFIG_DESCRIPTORS.map((descriptor) =>
-    buildItem(descriptor, activeInstances, overrides),
+    buildItem(descriptor, activeInstances, overrides, envBaseline),
   );
   const bySubsystem = new Map<string, ConfigItem[]>();
   for (const item of items) {
@@ -162,6 +287,9 @@ export function assembleConfigView(
       lastSeenAt: entry.row.lastSeenAt.toISOString(),
       imageTag: entry.row.imageTag ?? null,
       status: entry.status,
+      // Boot-apply overrides this instance rejected at start (empty for a clean boot or
+      // an older snapshot shape).
+      skippedOverrides: readSkippedOverrides(entry.row),
     })),
     subsystems: orderedSubsystems.map((subsystem) => ({
       subsystem,
@@ -170,7 +298,13 @@ export function assembleConfigView(
   };
 }
 
-export async function buildConfigView(db: Database): Promise<ConfigViewResponse> {
+export async function buildConfigView(
+  db: Database,
+  // The PRE-boot-apply env config (rawConfig), threaded so desiredEffective uses the env
+  // baseline for keys with no override. Defaults to {} (env-undefined → null) when a caller
+  // (a test, codegen) has no baseline to pass.
+  envBaseline: Record<string, unknown> = {},
+): Promise<ConfigViewResponse> {
   const [rows, overrides] = await Promise.all([listAllInstances(db), getConfigOverrides(db)]);
-  return assembleConfigView(rows, Date.now(), overrides);
+  return assembleConfigView(rows, Date.now(), overrides, envBaseline);
 }

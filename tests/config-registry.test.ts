@@ -4,6 +4,7 @@ import {
   buildRunningSnapshot,
   CONFIG_DESCRIPTORS,
   ENV_CONFIG_KEYS,
+  getDescriptor,
   loadConfig,
 } from "@agency_hub_core/shared";
 
@@ -65,6 +66,73 @@ describe("config registry", () => {
       }
     }
     expect(mismatches).toEqual([]);
+  });
+
+  // Allowlist guard for the Stage C wiring class. Exactly these 8 keys are wired to the
+  // live runtime overlay; exactly these 8 staged flags are boot-applied; everything else
+  // is 'none' (not overridable via the DB). A new 'live'/'boot' key must update this set
+  // deliberately — it can't slip in unnoticed.
+  const LIVE_KEYS = [
+    "ofapiCreditAlertThreshold",
+    "ofapiWebhookSilenceThresholdMinutes",
+    "ofapiBurnAlertCreditsPerHour",
+    "healthSyncLightMaxAgeMinutes",
+    "healthSyncFollowerMaxAgeMinutes",
+    "transactionLookbackDays",
+    "transactionRescanCapDays",
+    "ofapiDmReconcileIntervalMinutes",
+  ];
+  const BOOT_KEYS = [
+    "ofapiDmProjectionEnabled",
+    "ofapiDmSyncEnabled",
+    "ofapiAccountHealthEnabled",
+    "ofapiCreditLedgerEnabled",
+    "ofapiBalancePingEnabled",
+    "ofapiAudienceSyncEnabled",
+    "ofapiPresenceProjectionEnabled",
+    "onlyFansTopSpendersEnabled",
+  ];
+
+  it("wires exactly the eight live keys, the eight boot keys, and nothing else", () => {
+    const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
+    const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
+    const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);
+
+    expect(new Set(live)).toEqual(new Set(LIVE_KEYS));
+    expect(new Set(boot)).toEqual(new Set(BOOT_KEYS));
+    // No key carries an unexpected wiring class, and no overlap between the sets.
+    expect(live.length).toBe(LIVE_KEYS.length);
+    expect(boot.length).toBe(BOOT_KEYS.length);
+    expect(none.length).toBe(CONFIG_DESCRIPTORS.length - LIVE_KEYS.length - BOOT_KEYS.length);
+    for (const key of [...LIVE_KEYS, ...BOOT_KEYS]) {
+      expect(none, `${key} must not be 'none'`).not.toContain(key);
+    }
+  });
+
+  it("declares the staged dependency chain in #49→#50 enable order", () => {
+    const req = (key: string) => getDescriptor(key)!.requires ?? [];
+    expect(req("ofapiDmProjectionEnabled")).toEqual([]);
+    expect(req("ofapiDmSyncEnabled")).toEqual(["ofapiDmProjectionEnabled"]);
+    expect(req("ofapiAccountHealthEnabled")).toEqual(["ofapiDmSyncEnabled"]);
+    expect(req("ofapiCreditLedgerEnabled")).toEqual(["ofapiAccountHealthEnabled"]);
+    // One-way: ledger does NOT require ping (ping is an optional branch).
+    expect(req("ofapiBalancePingEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
+    expect(req("ofapiCreditLedgerEnabled")).not.toContain("ofapiBalancePingEnabled");
+    expect(req("ofapiAudienceSyncEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
+    expect(req("ofapiPresenceProjectionEnabled")).toEqual(["ofapiAudienceSyncEnabled"]);
+    expect(req("onlyFansTopSpendersEnabled")).toEqual(["ofapiPresenceProjectionEnabled"]);
+  });
+
+  it("orders the #50 staged group ledger(1)→ping(2)→audience(3)→presence(4)→topSpenders(5)", () => {
+    const order = (key: string) => getDescriptor(key)!.stagedOrder;
+    expect(order("ofapiDmProjectionEnabled")).toBe(1);
+    expect(order("ofapiDmSyncEnabled")).toBe(2);
+    expect(order("ofapiAccountHealthEnabled")).toBe(3);
+    expect(order("ofapiCreditLedgerEnabled")).toBe(1);
+    expect(order("ofapiBalancePingEnabled")).toBe(2);
+    expect(order("ofapiAudienceSyncEnabled")).toBe(3);
+    expect(order("ofapiPresenceProjectionEnabled")).toBe(4);
+    expect(order("onlyFansTopSpendersEnabled")).toBe(5);
   });
 
   it("masks secrets and complex values in the running snapshot", () => {

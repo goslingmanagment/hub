@@ -40480,6 +40480,25 @@
                               "active",
                               "stale"
                             ]
+                          },
+                          "skippedOverrides": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "reason"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -40488,7 +40507,8 @@
                           "startedAt",
                           "lastSeenAt",
                           "imageTag",
-                          "status"
+                          "status",
+                          "skippedOverrides"
                         ],
                         "additionalProperties": false
                       }
@@ -40552,11 +40572,12 @@
                                     "editable"
                                   ]
                                 },
-                                "applyMode": {
+                                "runtimeApply": {
                                   "type": "string",
                                   "enum": [
-                                    "reload",
-                                    "restart"
+                                    "live",
+                                    "boot",
+                                    "none"
                                   ]
                                 },
                                 "comparable": {
@@ -40643,6 +40664,24 @@
                                     }
                                   ]
                                 },
+                                "runningState": {
+                                  "type": "string",
+                                  "enum": [
+                                    "on",
+                                    "off",
+                                    "unknown"
+                                  ]
+                                },
+                                "desiredEffective": {
+                                  "anyOf": [
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "overrideVersion": {
                                   "anyOf": [
                                     {
@@ -40704,7 +40743,8 @@
                                             "type": "string",
                                             "enum": [
                                               "set",
-                                              "unset"
+                                              "unset",
+                                              "unknown"
                                             ]
                                           },
                                           {
@@ -40737,7 +40777,7 @@
                                 "label",
                                 "default",
                                 "editability",
-                                "applyMode",
+                                "runtimeApply",
                                 "comparable",
                                 "secret",
                                 "note",
@@ -40748,6 +40788,8 @@
                                 "requires",
                                 "source",
                                 "desired",
+                                "runningState",
+                                "desiredEffective",
                                 "overrideVersion",
                                 "pendingApply",
                                 "drift",
@@ -41130,6 +41172,246 @@
                   "required": [
                     "ok",
                     "key"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/config/staged": {
+      "patch": {
+        "summary": "Flip staged-rollout (boot-applied) config flags in the prescribed order",
+        "tags": [
+          "admin"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "patches": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "desired": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "expectedVersion": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "desired",
+                        "expectedVersion"
+                      ]
+                    }
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "ack": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "patches",
+                  "ack"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "version": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "value",
+                          "version"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "results"
                   ],
                   "additionalProperties": false
                 }

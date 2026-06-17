@@ -12372,6 +12372,10 @@ export interface paths {
                                 imageTag: string | null;
                                 /** @enum {string} */
                                 status: "active" | "stale";
+                                skippedOverrides: {
+                                    key: string;
+                                    reason: string;
+                                }[];
                             }[];
                             subsystems: {
                                 subsystem: string;
@@ -12387,7 +12391,7 @@ export interface paths {
                                     /** @enum {string} */
                                     editability: "never" | "staged" | "editable";
                                     /** @enum {string} */
-                                    applyMode: "reload" | "restart";
+                                    runtimeApply: "live" | "boot" | "none";
                                     comparable: boolean;
                                     secret: boolean;
                                     note: string | null;
@@ -12399,6 +12403,9 @@ export interface paths {
                                     /** @enum {string} */
                                     source: "env" | "override";
                                     desired: (string | number | boolean) | null;
+                                    /** @enum {string} */
+                                    runningState: "on" | "off" | "unknown";
+                                    desiredEffective: boolean | null;
                                     overrideVersion: number | null;
                                     pendingApply: boolean;
                                     drift: boolean;
@@ -12408,7 +12415,7 @@ export interface paths {
                                         instanceId: string;
                                         value: (string | number | boolean) | null;
                                         masked: boolean;
-                                        state: ("set" | "unset") | null;
+                                        state: ("set" | "unset" | "unknown") | null;
                                         lastSeenAt: string;
                                     }[];
                                 }[];
@@ -12636,6 +12643,112 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/config/staged": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Flip staged-rollout (boot-applied) config flags in the prescribed order */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        patches: {
+                            key: string;
+                            desired: boolean | null;
+                            expectedVersion: number;
+                        }[];
+                        note?: string;
+                        ack: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            results: {
+                                key: string;
+                                value: boolean | null;
+                                version: number | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/api/v1/admin/notifications/test": {

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildRunningSnapshot } from "@agency_hub_core/shared";
 import type { ConfigOverrideRecord, RuntimeInstanceRow } from "@agency_hub_core/db";
 
-import { assembleConfigView } from "../apps/runtime/src/services/app-config-service.ts";
+import { assembleConfigView, getRunningFlagState } from "../apps/runtime/src/services/app-config-service.ts";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
 
 const NOW = new Date("2026-06-16T12:00:00.000Z").getTime();
@@ -94,81 +94,266 @@ describe("assembleConfigView", () => {
   });
 });
 
-describe("assembleConfigView overlay (Stage B0)", () => {
-  // An active process running the env value (500) so we can prove pendingApply
-  // reflects override-vs-running rather than override-vs-nothing.
-  const RUNNING = { ofapiDmDailyCreditBudget: 500 };
+describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
+  // transactionLookbackDays is a runtimeApply:'live' editable key (env default 7), so the
+  // overlay surfaces an override and pendingApply reflects override-vs-running.
+  const RUNNING = { transactionLookbackDays: 7 };
 
-  it("populates desired/source/pendingApply for an editable override that differs from running", () => {
+  it("populates desired/source/pendingApply for a live override that differs from running", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["ofapiDmDailyCreditBudget", { value: 750, version: 1 }],
+      ["transactionLookbackDays", { value: 14, version: 1 }],
     ]);
     const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, overrides);
 
-    const budget = item(view, "ofapiDmDailyCreditBudget");
-    expect(budget.source).toBe("override");
-    expect(budget.desired).toBe(750);
-    expect(budget.pendingApply).toBe(true);
+    const lookback = item(view, "transactionLookbackDays");
+    expect(lookback.source).toBe("override");
+    expect(lookback.desired).toBe(14);
+    expect(lookback.pendingApply).toBe(true);
   });
 
   it("leaves env defaults when no override is present", () => {
     const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, new Map());
+    const lookback = item(view, "transactionLookbackDays");
+    expect(lookback.source).toBe("env");
+    expect(lookback.desired).toBeNull();
+    expect(lookback.pendingApply).toBe(false);
+  });
+
+  it("surfaces a boot (staged) override so it shows desired/source/pendingApply", () => {
+    // ofapiDmProjectionEnabled is runtimeApply 'boot' — overridable, applies after restart.
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["ofapiDmProjectionEnabled", { value: true, version: 1 }],
+    ]);
+    const view = assembleConfigView(
+      [row("api", "a1", { ofapiDmProjectionEnabled: false }, FRESH)],
+      NOW,
+      overrides,
+    );
+    const flag = item(view, "ofapiDmProjectionEnabled");
+    expect(flag.source).toBe("override");
+    expect(flag.desired).toBe(true);
+    // The running process still reports false (boot override needs a restart), so pending.
+    expect(flag.pendingApply).toBe(true);
+  });
+
+  it("ignores an override for a runtimeApply:'none' key", () => {
+    // ofapiDmDailyCreditBudget is editable but runtimeApply 'none' — not overridable.
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["ofapiDmDailyCreditBudget", { value: 750, version: 1 }],
+    ]);
+    const view = assembleConfigView([row("api", "a1", { ofapiDmDailyCreditBudget: 500 }, FRESH)], NOW, overrides);
     const budget = item(view, "ofapiDmDailyCreditBudget");
     expect(budget.source).toBe("env");
     expect(budget.desired).toBeNull();
     expect(budget.pendingApply).toBe(false);
   });
 
-  it("ignores an override for a non-editable key", () => {
-    // ofapiDmProjectionEnabled is 'staged' — the overlay must not surface it.
-    const overrides = new Map<string, ConfigOverrideRecord>([
-      ["ofapiDmProjectionEnabled", { value: true, version: 1 }],
-    ]);
-    const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, overrides);
-    const flag = item(view, "ofapiDmProjectionEnabled");
-    expect(flag.source).toBe("env");
-    expect(flag.desired).toBeNull();
-    expect(flag.pendingApply).toBe(false);
-  });
-
   it("does not flag pendingApply when the override matches the running value", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["ofapiDmDailyCreditBudget", { value: 500, version: 1 }],
+      ["transactionLookbackDays", { value: 7, version: 1 }],
     ]);
     const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, overrides);
-    const budget = item(view, "ofapiDmDailyCreditBudget");
-    expect(budget.source).toBe("override");
-    expect(budget.desired).toBe(500);
-    expect(budget.pendingApply).toBe(false);
+    const lookback = item(view, "transactionLookbackDays");
+    expect(lookback.source).toBe("override");
+    expect(lookback.desired).toBe(7);
+    expect(lookback.pendingApply).toBe(false);
   });
 
   it("stays pending under partial apply (api applied, worker not)", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["ofapiDmDailyCreditBudget", { value: 750, version: 1 }],
+      ["transactionLookbackDays", { value: 14, version: 1 }],
     ]);
     const view = assembleConfigView(
       [
-        row("api", "a1", { ofapiDmDailyCreditBudget: 750 }, FRESH),
-        row("worker", "w1", { ofapiDmDailyCreditBudget: 500 }, FRESH),
+        row("api", "a1", { transactionLookbackDays: 14 }, FRESH),
+        row("worker", "w1", { transactionLookbackDays: 7 }, FRESH),
       ],
       NOW,
       overrides,
     );
-    expect(item(view, "ofapiDmDailyCreditBudget").pendingApply).toBe(true);
+    expect(item(view, "transactionLookbackDays").pendingApply).toBe(true);
   });
 
   it("clears pendingApply only once every active instance runs the override", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["ofapiDmDailyCreditBudget", { value: 750, version: 1 }],
+      ["transactionLookbackDays", { value: 14, version: 1 }],
     ]);
     const view = assembleConfigView(
       [
-        row("api", "a1", { ofapiDmDailyCreditBudget: 750 }, FRESH),
-        row("worker", "w1", { ofapiDmDailyCreditBudget: 750 }, FRESH),
+        row("api", "a1", { transactionLookbackDays: 14 }, FRESH),
+        row("worker", "w1", { transactionLookbackDays: 14 }, FRESH),
       ],
       NOW,
       overrides,
     );
-    expect(item(view, "ofapiDmDailyCreditBudget").pendingApply).toBe(false);
+    expect(item(view, "transactionLookbackDays").pendingApply).toBe(false);
+  });
+});
+
+describe("assembleConfigView server-computed runningState + desiredEffective (Stage C / M3)", () => {
+  it("boot key runningState='on' only when both expected roles report true (role-complete)", () => {
+    const view = assembleConfigView(
+      [
+        row("api", "a1", { ofapiDmProjectionEnabled: true }, FRESH),
+        row("worker", "w1", { ofapiDmProjectionEnabled: true }, FRESH),
+      ],
+      NOW,
+    );
+    expect(item(view, "ofapiDmProjectionEnabled").runningState).toBe("on");
+  });
+
+  it("boot key runningState='unknown' (fail-closed) when an expected role is missing", () => {
+    // Only api reports; worker is absent → cannot prove the flag is live everywhere.
+    const view = assembleConfigView([row("api", "a1", { ofapiDmProjectionEnabled: true }, FRESH)], NOW);
+    expect(item(view, "ofapiDmProjectionEnabled").runningState).toBe("unknown");
+  });
+
+  it("boot key runningState='off' when any active instance reports non-true", () => {
+    const view = assembleConfigView(
+      [
+        row("api", "a1", { ofapiDmProjectionEnabled: true }, FRESH),
+        row("worker", "w1", { ofapiDmProjectionEnabled: false }, FRESH),
+      ],
+      NOW,
+    );
+    expect(item(view, "ofapiDmProjectionEnabled").runningState).toBe("off");
+  });
+
+  it("desiredEffective is the override boolean when an override exists", () => {
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["ofapiDmProjectionEnabled", { value: true, version: 1 }],
+    ]);
+    const view = assembleConfigView(
+      [row("api", "a1", { ofapiDmProjectionEnabled: false }, FRESH)],
+      NOW,
+      overrides,
+    );
+    expect(item(view, "ofapiDmProjectionEnabled").desiredEffective).toBe(true);
+  });
+
+  it("desiredEffective falls back to the env baseline when no override exists", () => {
+    // No override → desiredEffective reads the threaded env baseline (env-on here).
+    const view = assembleConfigView(
+      [row("api", "a1", { ofapiDmProjectionEnabled: true }, FRESH)],
+      NOW,
+      new Map(),
+      { ofapiDmProjectionEnabled: true },
+    );
+    expect(item(view, "ofapiDmProjectionEnabled").desiredEffective).toBe(true);
+  });
+
+  it("desiredEffective is null for a non-boolean key (no env baseline meaning)", () => {
+    // transactionLookbackDays is a number → no boolean desired meaning.
+    const view = assembleConfigView([row("api", "a1", { transactionLookbackDays: 7 }, FRESH)], NOW);
+    expect(item(view, "transactionLookbackDays").desiredEffective).toBeNull();
+  });
+
+  it("desiredEffective is null when the env baseline is unset (default {} baseline)", () => {
+    const view = assembleConfigView([row("api", "a1", { ofapiDmProjectionEnabled: true }, FRESH)], NOW);
+    expect(item(view, "ofapiDmProjectionEnabled").desiredEffective).toBeNull();
+  });
+});
+
+describe("assembleConfigView schema-mismatch (unknown) handling", () => {
+  // A row whose snapshot was written under an older schema version: not silently
+  // dropped, surfaced as state "unknown" and counted as not-applied for pendingApply.
+  function staleSnapshotRow(role: string, instanceId: string, lastSeenAt: Date): RuntimeInstanceRow {
+    return {
+      role,
+      instanceId,
+      startedAt: new Date(NOW - 60_000),
+      lastSeenAt,
+      imageTag: null,
+      // Force a version mismatch (RUNNING_SCHEMA_VERSION is current; 1 is older).
+      running: { schemaVersion: 1, values: { transactionLookbackDays: { value: 14 } } } as never,
+    };
+  }
+
+  it("surfaces a mismatched-snapshot instance as state 'unknown' instead of dropping it", () => {
+    const view = assembleConfigView([staleSnapshotRow("worker", "w1", FRESH)], NOW);
+    const lookback = item(view, "transactionLookbackDays");
+    expect(lookback.running).toHaveLength(1);
+    expect(lookback.running[0]!.state).toBe("unknown");
+    expect(lookback.running[0]!.value).toBeNull();
+    // An unknown instance is not comparable, so no false drift.
+    expect(lookback.drift).toBe(false);
+  });
+
+  it("keeps pendingApply true while any instance reports an unknown (stale) value", () => {
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["transactionLookbackDays", { value: 14, version: 1 }],
+    ]);
+    const view = assembleConfigView(
+      [
+        row("api", "a1", { transactionLookbackDays: 14 }, FRESH),
+        staleSnapshotRow("worker", "w1", FRESH),
+      ],
+      NOW,
+      overrides,
+    );
+    // api applied the override, but worker's snapshot is unknown → still pending.
+    expect(item(view, "transactionLookbackDays").pendingApply).toBe(true);
+  });
+});
+
+describe("assembleConfigView skippedOverrides", () => {
+  function rowWithSkips(
+    role: string,
+    instanceId: string,
+    skipped: Array<{ key: string; reason: string }>,
+  ): RuntimeInstanceRow {
+    return {
+      role,
+      instanceId,
+      startedAt: new Date(NOW - 60_000),
+      lastSeenAt: FRESH,
+      imageTag: null,
+      running: buildRunningSnapshot({ transactionLookbackDays: 7 } as never, skipped),
+    };
+  }
+
+  it("surfaces each instance's boot-skipped overrides on the instance entry", () => {
+    const view = assembleConfigView(
+      [rowWithSkips("worker", "w1", [{ key: "ofapiDmSyncEnabled", reason: "bad value" }])],
+      NOW,
+    );
+    const worker = view.instances.find((i) => i.role === "worker")!;
+    expect(worker.skippedOverrides).toEqual([{ key: "ofapiDmSyncEnabled", reason: "bad value" }]);
+  });
+
+  it("reports an empty skip list for a clean boot", () => {
+    const view = assembleConfigView([rowWithSkips("api", "a1", [])], NOW);
+    expect(view.instances.find((i) => i.role === "api")!.skippedOverrides).toEqual([]);
+  });
+});
+
+describe("getRunningFlagState", () => {
+  const KEY = "ofapiDmProjectionEnabled";
+
+  it("returns 'unknown' when there are no active instances", () => {
+    expect(getRunningFlagState([], KEY)).toBe("unknown");
+  });
+
+  it("returns 'unknown' when an EXPECTED role (worker) has no active instance", () => {
+    // Only api reports the flag true; worker is missing → a vanished worker must NOT let a
+    // dependent step unlock, so the gate is 'unknown' (fail-closed), not 'on'.
+    const rows = [row("api", "a1", { [KEY]: true }, FRESH)];
+    expect(getRunningFlagState(rows, KEY)).toBe("unknown");
+  });
+
+  it("returns 'on' only when BOTH expected roles are active and every instance reports true", () => {
+    const rows = [
+      row("api", "a1", { [KEY]: true }, FRESH),
+      row("worker", "w1", { [KEY]: true }, FRESH),
+    ];
+    expect(getRunningFlagState(rows, KEY)).toBe("on");
+  });
+
+  it("returns 'off' when all expected roles are present but one instance reports not-true", () => {
+    const rows = [
+      row("api", "a1", { [KEY]: true }, FRESH),
+      row("worker", "w1", { [KEY]: false }, FRESH),
+    ];
+    expect(getRunningFlagState(rows, KEY)).toBe("off");
   });
 });

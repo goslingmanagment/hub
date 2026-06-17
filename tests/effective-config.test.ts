@@ -22,10 +22,10 @@ function baseConfig(): AppConfig {
     transactionLookbackDays: 7,
     transactionRescanCapDays: 30,
     ofapiDmReconcileIntervalMinutes: 360,
-    // A restart-mode editable key (must never be overlaid) and a staged key.
+    // A runtimeApply:'none' editable key (must never be overlaid) and a boot/staged key.
     logLevel: "info",
     ofapiDmProjectionEnabled: false,
-    // A non-live editable reload key (must never be overlaid here).
+    // A runtimeApply:'none' editable key (must never be overlaid by the live overlay).
     ofapiDmDailyCreditBudget: 500,
     encryptionKey: Buffer.alloc(0),
   } as unknown as AppConfig;
@@ -70,12 +70,12 @@ describe("applyEffectiveOverrides", () => {
     expect(merged.healthSyncLightMaxAgeMinutes).toBe(1);
   });
 
-  it("ignores a restart-mode editable key (logLevel)", () => {
+  it("ignores a runtimeApply:'none' editable key (logLevel)", () => {
     const merged = applyEffectiveOverrides(baseConfig(), overrides([["logLevel", "debug"]]));
     expect(merged.logLevel).toBe("info");
   });
 
-  it("ignores a staged (non-editable) key", () => {
+  it("ignores a staged (runtimeApply:'boot') key", () => {
     const merged = applyEffectiveOverrides(
       baseConfig(),
       overrides([["ofapiDmProjectionEnabled", true]]),
@@ -83,8 +83,8 @@ describe("applyEffectiveOverrides", () => {
     expect(merged.ofapiDmProjectionEnabled).toBe(false);
   });
 
-  it("ignores an editable+reload key that is NOT in the live set", () => {
-    // ofapiDmDailyCreditBudget is editable + reload but unwired this batch.
+  it("ignores an editable key that is NOT in the live set (runtimeApply:'none')", () => {
+    // ofapiDmDailyCreditBudget is editable but not wired to the live overlay.
     const merged = applyEffectiveOverrides(
       baseConfig(),
       overrides([["ofapiDmDailyCreditBudget", 999]]),
@@ -102,12 +102,12 @@ describe("applyEffectiveOverrides", () => {
 });
 
 describe("LIVE_CONFIG_KEYS", () => {
-  it("are all editable + reload in the registry", () => {
+  it("are all editable + runtimeApply 'live' in the registry", () => {
     for (const key of LIVE_CONFIG_KEYS) {
       const descriptor = getDescriptor(key);
       expect(descriptor, `descriptor for ${key}`).toBeDefined();
       expect(descriptor!.editability, key).toBe("editable");
-      expect(descriptor!.applyMode, key).toBe("reload");
+      expect(descriptor!.runtimeApply, key).toBe("live");
     }
   });
 

@@ -2957,8 +2957,19 @@ export const configRunningValueSchema = z.object({
   instanceId: z.string(),
   value: configValueScalar,
   masked: z.boolean(),
-  state: z.enum(["set", "unset"]).nullable(),
+  // "unknown" = this instance reported under an older/mismatched snapshot shape, so its
+  // value can't be trusted; the row is surfaced (not silently dropped) and counts as
+  // not-yet-applied for pendingApply.
+  state: z.enum(["set", "unset", "unknown"]).nullable(),
   lastSeenAt: isoTimestamp,
+});
+
+// A boot-apply override an instance rejected at start (invalid value / not a boot key /
+// would break a merged invariant). Surfaced per instance so an ignored override is
+// visible rather than silent.
+export const configSkippedOverrideSchema = z.object({
+  key: z.string(),
+  reason: z.string(),
 });
 
 export const configItemSchema = z.object({
@@ -2970,7 +2981,10 @@ export const configItemSchema = z.object({
   label: z.string(),
   default: z.string(),
   editability: z.enum(["never", "staged", "editable"]),
-  applyMode: z.enum(["reload", "restart"]),
+  // Authoritative wiring class (replaces applyMode): 'live' = wired to the runtime
+  // overlay (no restart); 'boot' = applied at process start (needs restart); 'none' =
+  // not overridable via the DB (env-only / read-only). Orthogonal to `editability`.
+  runtimeApply: z.enum(["live", "boot", "none"]),
   comparable: z.boolean(),
   secret: z.boolean(),
   note: z.string().nullable(),
@@ -2984,6 +2998,17 @@ export const configItemSchema = z.object({
   // each live process's actual value and drift flags cross-instance disagreement.
   source: z.enum(["env", "override"]),
   desired: configValueScalar,
+  // SERVER-computed APPLIED truth (Stage C) — the single source for the staged UI's
+  // lock/Enable-Disable decision, so the client never reconstructs it. For a boot key it is
+  // getRunningFlagState (role-complete + fail-closed: every expected role must have an active
+  // instance and report the key true to read "on", else "off"; "unknown" when it can't be
+  // proven, e.g. no fleet / a missing role / a stale snapshot). For a non-boot key it summarizes
+  // the active instances' reported values (all-true → "on", any non-true → "off", none → "unknown").
+  runningState: z.enum(["on", "off", "unknown"]),
+  // SERVER-computed desired baseline (Stage C): the override boolean when one exists, else the
+  // env (rawConfig) boolean; null for keys with no boolean meaning (non-boolean / non-overridable).
+  // The staged UI's Enable/Disable + dependent locks read THIS, never a client recomputation.
+  desiredEffective: z.boolean().nullable(),
   // Current version of the override row (null when env-sourced); the editor sends it
   // back as expectedVersion for optimistic-concurrency.
   overrideVersion: z.number().int().nullable(),
@@ -3002,6 +3027,9 @@ export const configInstanceSchema = z.object({
   lastSeenAt: isoTimestamp,
   imageTag: z.string().nullable(),
   status: z.enum(["active", "stale"]),
+  // Boot-apply overrides this instance rejected at start. Empty for a clean boot, and
+  // empty for an instance reporting an older snapshot shape (no skip data available).
+  skippedOverrides: z.array(configSkippedOverrideSchema),
 });
 
 // Per expected role (plus any unexpected observed role): whether a live process is
@@ -3068,6 +3096,43 @@ export const configClearQuerySchema = z.object({
 export const configClearResponseSchema = z.object({
   ok: z.literal(true),
   key: z.string(),
+});
+
+// --- Staged-rollout flips (Stage C: boot-applied flag set, owner-only) ---
+// A staged flip writes an explicit boolean override for a `runtimeApply === 'boot'`
+// key in the prescribed enable order, OR reverts it to env (`desired: null` → clears the
+// override row). Unlike the live PATCH, expectedVersion is MANDATORY (a staged flip is
+// always version-checked: 0 means "no row yet"), and an explicit `ack` records the
+// operator's acknowledgement that the flag only takes effect after a restart — persisted
+// into the audit note, not just the UI.
+export const configStagedBodySchema = z.object({
+  patches: z
+    .array(
+      z.object({
+        key: z.string(),
+        // boolean = set the desired value; null = revert to env (clear the override). A
+        // null patch is validated as the env baseline boolean but applied as a clear.
+        desired: z.boolean().nullable(),
+        // Required (not optional): staged flips are always version-checked. 0 = the
+        // override row is absent; a mismatch is a 409 conflict.
+        expectedVersion: z.number().int().min(0),
+      }),
+    )
+    .min(1),
+  note: z.string().optional(),
+  // Must be true; the handler rejects ack:false (400) and stores it in the audit note.
+  ack: z.boolean(),
+});
+
+export const configStagedResponseSchema = z.object({
+  results: z.array(
+    z.object({
+      key: z.string(),
+      // boolean for an upsert; null for a cleared key (reverted to env).
+      value: z.boolean().nullable(),
+      version: z.number().int().nullable(),
+    }),
+  ),
 });
 
 export const routeSchemas = {
@@ -4503,6 +4568,19 @@ export const routeSchemas = {
       409: errorResponseSchema,
     },
   },
+  adminConfigStaged: {
+    tags: ["admin"],
+    summary: "Flip staged-rollout (boot-applied) config flags in the prescribed order",
+    security: cookieOnlySecurity,
+    body: configStagedBodySchema,
+    response: {
+      200: configStagedResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type RouteSchemas = typeof routeSchemas;
@@ -4641,6 +4719,8 @@ export type ConfigUpdateBody = z.infer<typeof configUpdateBodySchema>;
 export type ConfigUpdateResponse = z.infer<typeof configUpdateResponseSchema>;
 export type ConfigClearQuery = z.infer<typeof configClearQuerySchema>;
 export type ConfigClearResponse = z.infer<typeof configClearResponseSchema>;
+export type ConfigStagedBody = z.infer<typeof configStagedBodySchema>;
+export type ConfigStagedResponse = z.infer<typeof configStagedResponseSchema>;
 export type NotificationsSettingsResponse = z.infer<typeof notificationsSettingsResponseSchema>;
 export type NotificationsSettingsUpdateBody = z.infer<typeof notificationsSettingsUpdateBodySchema>;
 export type NotificationsTestMessageResponse = z.infer<typeof notificationsTestMessageResponseSchema>;

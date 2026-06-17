@@ -74,11 +74,12 @@ export interface SetConfigOverrideInput {
   groupId: string;
 }
 
-export interface AtomicConfigPatch {
-  key: string;
-  value: ConfigOverrideValue;
-  expectedVersion?: number;
-}
+/** One key in an atomic patch: either an UPSERT (`value`) or a CLEAR (`clear: true`, which
+ *  deletes the row and reverts to env). Both forms carry the optional optimistic-lock
+ *  `expectedVersion` and share the FOR-UPDATE/version-check discipline in one transaction. */
+export type AtomicConfigPatch =
+  | { key: string; value: ConfigOverrideValue; clear?: false; expectedVersion?: number }
+  | { key: string; clear: true; value?: undefined; expectedVersion?: number };
 
 export interface SetConfigOverridesInput {
   patches: AtomicConfigPatch[];
@@ -91,58 +92,66 @@ export interface SetConfigOverridesInput {
 
 /** Apply one or more overrides + their audit rows in a SINGLE transaction, all-or-
  *  nothing: if any key conflicts (stale expectedVersion) or loses a brand-new-key
- *  insert race, the whole patch rolls back and nothing is persisted. Each existing
- *  row is locked with SELECT ... FOR UPDATE in a deterministic (sorted) key order so
- *  two overlapping atomic patches cannot deadlock; a serialized writer then re-reads
- *  the bumped version and fails its own expectedVersion check. Version bumps current
- *  + 1 (or 1 for a new key). Returns {key,value,version} in the caller's patch order. */
+ *  insert race, the whole patch rolls back and nothing is persisted. This is the LIVE
+ *  PATCH path; behavior is exactly the extracted {@link applyConfigPatchesInTx} wrapped in
+ *  its own `db.transaction` (no advisory lock — the staged commit path takes that). */
 export async function setConfigOverridesAtomic(
   db: Database,
   input: SetConfigOverridesInput,
-): Promise<Array<{ key: string; value: ConfigOverrideValue; version: number }>> {
+): Promise<Array<{ key: string; value: ConfigOverrideValue | null; version: number | null }>> {
+  return db.transaction(async (tx) => applyConfigPatchesInTx(tx as unknown as Database, input));
+}
+
+/** The per-key FOR-UPDATE / version-check / upsert-or-clear / audit apply loop, WITHOUT a
+ *  transaction wrapper. Callers MUST run it inside their own transaction (`tx`): the live
+ *  PATCH wraps it via {@link setConfigOverridesAtomic}; the staged commit path wraps it in a
+ *  single advisory-locked transaction so the read-validate-write is serialized against other
+ *  staged mutations. Each existing row is locked with SELECT ... FOR UPDATE in a deterministic
+ *  (sorted) key order so two overlapping patches cannot deadlock; a serialized writer then
+ *  re-reads the bumped version and fails its own expectedVersion check. An upsert bumps
+ *  current + 1 (or 1 for a new key); a clear deletes the row and reports version null. Returns
+ *  {key,value,version} in the caller's patch order (value/version null for a cleared key). */
+export async function applyConfigPatchesInTx(
+  tx: Database,
+  input: SetConfigOverridesInput,
+): Promise<Array<{ key: string; value: ConfigOverrideValue | null; version: number | null }>> {
   const scopeType = input.scopeType ?? DEFAULT_SCOPE_TYPE;
   const scopeId = input.scopeId ?? DEFAULT_SCOPE_ID;
   // Defense-in-depth: a duplicate key within one patch would double-bump / double-audit.
   const keys = input.patches.map((patch) => patch.key);
   if (new Set(keys).size !== keys.length) {
-    throw new Error("setConfigOverridesAtomic: duplicate key in one patch");
+    throw new Error("applyConfigPatchesInTx: duplicate key in one patch");
   }
   // Lock rows in a stable key order so two overlapping multi-key patches can't deadlock.
   const ordered = [...input.patches].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
-  return db.transaction(async (tx) => {
-    const database = tx as unknown as Database;
-    const byKey = new Map<string, { key: string; value: ConfigOverrideValue; version: number }>();
+  const database = tx;
+  const byKey = new Map<string, { key: string; value: ConfigOverrideValue | null; version: number | null }>();
 
-    for (const patch of ordered) {
-      const [current] = await database
-        .select({ value: configSettings.value, version: configSettings.version })
-        .from(configSettings)
-        .where(
-          and(
-            eq(configSettings.scopeType, scopeType),
-            eq(configSettings.scopeId, scopeId),
-            eq(configSettings.key, patch.key),
-          ),
-        )
-        .for("update");
+  for (const patch of ordered) {
+    const [current] = await database
+      .select({ value: configSettings.value, version: configSettings.version })
+      .from(configSettings)
+      .where(
+        and(
+          eq(configSettings.scopeType, scopeType),
+          eq(configSettings.scopeId, scopeId),
+          eq(configSettings.key, patch.key),
+        ),
+      )
+      .for("update");
 
-      const currentVersion = current?.version ?? null;
-      if (patch.expectedVersion != null && patch.expectedVersion !== (currentVersion ?? 0)) {
-        throw new ConfigOverrideVersionConflictError(patch.key, patch.expectedVersion, currentVersion);
-      }
+    const currentVersion = current?.version ?? null;
+    if (patch.expectedVersion != null && patch.expectedVersion !== (currentVersion ?? 0)) {
+      throw new ConfigOverrideVersionConflictError(patch.key, patch.expectedVersion, currentVersion);
+    }
 
-      const newVersion = (currentVersion ?? 0) + 1;
-
+    if (patch.clear === true) {
+      // CLEAR: delete the row we observed under the lock (no-op when absent), audit a
+      // null new_value / new_version. Mirrors clearConfigOverride, in the shared txn.
       if (current) {
         await database
-          .update(configSettings)
-          .set({
-            value: patch.value,
-            version: newVersion,
-            updatedByUserId: input.userId,
-            updatedAt: new Date(),
-          })
+          .delete(configSettings)
           .where(
             and(
               eq(configSettings.scopeType, scopeType),
@@ -150,24 +159,6 @@ export async function setConfigOverridesAtomic(
               eq(configSettings.key, patch.key),
             ),
           );
-      } else {
-        try {
-          await database.insert(configSettings).values({
-            scopeType,
-            scopeId,
-            key: patch.key,
-            value: patch.value,
-            version: newVersion,
-            updatedByUserId: input.userId,
-            updatedAt: new Date(),
-          });
-        } catch (error) {
-          if (hasErrorCode(error, "23505")) {
-            // A concurrent insert of the same brand-new key won the race.
-            throw new ConfigOverrideVersionConflictError(patch.key, patch.expectedVersion ?? 0, null);
-          }
-          throw error;
-        }
       }
 
       await database.insert(configAuditLog).values({
@@ -177,17 +168,71 @@ export async function setConfigOverridesAtomic(
         scopeId,
         key: patch.key,
         oldValue: current?.value ?? null,
-        newValue: patch.value,
+        newValue: null,
         oldVersion: currentVersion,
-        newVersion,
+        newVersion: null,
         note: input.note ?? null,
       });
 
-      byKey.set(patch.key, { key: patch.key, value: patch.value, version: newVersion });
+      byKey.set(patch.key, { key: patch.key, value: null, version: null });
+      continue;
     }
 
-    return input.patches.map((patch) => byKey.get(patch.key)!);
-  });
+    const newVersion = (currentVersion ?? 0) + 1;
+
+    if (current) {
+      await database
+        .update(configSettings)
+        .set({
+          value: patch.value,
+          version: newVersion,
+          updatedByUserId: input.userId,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(configSettings.scopeType, scopeType),
+            eq(configSettings.scopeId, scopeId),
+            eq(configSettings.key, patch.key),
+          ),
+        );
+    } else {
+      try {
+        await database.insert(configSettings).values({
+          scopeType,
+          scopeId,
+          key: patch.key,
+          value: patch.value,
+          version: newVersion,
+          updatedByUserId: input.userId,
+          updatedAt: new Date(),
+        });
+      } catch (error) {
+        if (hasErrorCode(error, "23505")) {
+          // A concurrent insert of the same brand-new key won the race.
+          throw new ConfigOverrideVersionConflictError(patch.key, patch.expectedVersion ?? 0, null);
+        }
+        throw error;
+      }
+    }
+
+    await database.insert(configAuditLog).values({
+      groupId: input.groupId,
+      userId: input.userId,
+      scopeType,
+      scopeId,
+      key: patch.key,
+      oldValue: current?.value ?? null,
+      newValue: patch.value,
+      oldVersion: currentVersion,
+      newVersion,
+      note: input.note ?? null,
+    });
+
+    byKey.set(patch.key, { key: patch.key, value: patch.value, version: newVersion });
+  }
+
+  return input.patches.map((patch) => byKey.get(patch.key)!);
 }
 
 /** Single-key convenience wrapper over setConfigOverridesAtomic. */
@@ -203,7 +248,8 @@ export async function setConfigOverride(
     note: input.note,
     groupId: input.groupId,
   });
-  return result!;
+  // This wrapper only ever sends an upsert (never a clear), so value/version are non-null.
+  return result! as { key: string; value: ConfigOverrideValue; version: number };
 }
 
 export interface ClearConfigOverrideInput {

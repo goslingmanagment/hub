@@ -9,6 +9,7 @@ import {
   getConfigOverrides,
   listConfigAudit,
   setConfigOverride,
+  setConfigOverridesAtomic,
 } from "@agency_hub_core/db";
 
 import { buildConfigView } from "../apps/runtime/src/services/app-config-service.ts";
@@ -254,5 +255,67 @@ describe("config_settings repository (Stage B0)", () => {
     const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
     expect(rejected).toHaveLength(1);
     expect(rejected[0]!.reason).toBeInstanceOf(ConfigOverrideVersionConflictError);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("setConfigOverridesAtomic applies a mixed set + clear patch in one transaction", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Seed two override rows; one will be re-set (upsert), the other cleared, atomically.
+    await setConfigOverride(testDb.db, { key: "ofapiDmDailyCreditBudget", value: 500, userId, groupId: randomUUID() });
+    await setConfigOverride(testDb.db, { key: "ofapiCreditFloor", value: 200, userId, groupId: randomUUID() });
+
+    const groupId = randomUUID();
+    const results = await setConfigOverridesAtomic(testDb.db, {
+      patches: [
+        { key: "ofapiDmDailyCreditBudget", value: 750, expectedVersion: 1 },
+        { key: "ofapiCreditFloor", clear: true, expectedVersion: 1 },
+      ],
+      userId,
+      groupId,
+    });
+    // The cleared key reports value null / version null; the upsert reports the bumped row.
+    expect(results).toEqual([
+      { key: "ofapiDmDailyCreditBudget", value: 750, version: 2 },
+      { key: "ofapiCreditFloor", value: null, version: null },
+    ]);
+
+    const overrides = await getConfigOverrides(testDb.db);
+    expect(overrides.get("ofapiDmDailyCreditBudget")).toEqual({ value: 750, version: 2 });
+    expect(overrides.has("ofapiCreditFloor")).toBe(false);
+
+    // The cleared key's audit row carries the old value and a null new value/version.
+    const clearedAudit = await listConfigAudit(testDb.db, { key: "ofapiCreditFloor" });
+    expect(clearedAudit[0]!.oldValue).toBe(200);
+    expect(clearedAudit[0]!.newValue).toBeNull();
+    expect(clearedAudit[0]!.newVersion).toBeNull();
+    expect(clearedAudit[0]!.groupId).toBe(groupId);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("setConfigOverridesAtomic rolls back the whole mixed patch when the clear conflicts", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await setConfigOverride(testDb.db, { key: "ofapiDmDailyCreditBudget", value: 500, userId, groupId: randomUUID() });
+    await setConfigOverride(testDb.db, { key: "ofapiCreditFloor", value: 200, userId, groupId: randomUUID() });
+
+    await expect(
+      setConfigOverridesAtomic(testDb.db, {
+        patches: [
+          { key: "ofapiDmDailyCreditBudget", value: 750, expectedVersion: 1 },
+          // Stale expectedVersion on the clear → the whole patch rolls back.
+          { key: "ofapiCreditFloor", clear: true, expectedVersion: 99 },
+        ],
+        userId,
+        groupId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(ConfigOverrideVersionConflictError);
+
+    // Neither key changed: the upsert rolled back with the conflicting clear.
+    const overrides = await getConfigOverrides(testDb.db);
+    expect(overrides.get("ofapiDmDailyCreditBudget")).toEqual({ value: 500, version: 1 });
+    expect(overrides.get("ofapiCreditFloor")).toEqual({ value: 200, version: 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
