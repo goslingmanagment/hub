@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildRunningSnapshot } from "@agency_hub_core/shared";
+import { buildRunningSnapshot, RUNNING_SCHEMA_VERSION } from "@agency_hub_core/shared";
 import type { ConfigOverrideRecord, RuntimeInstanceRow } from "@agency_hub_core/db";
 
 import { assembleConfigView, getRunningFlagState } from "../apps/runtime/src/services/app-config-service.ts";
@@ -298,6 +298,38 @@ describe("assembleConfigView schema-mismatch (unknown) handling", () => {
     expect(lookback.running[0]!.value).toBeNull();
     // An unknown instance is not comparable, so no false drift.
     expect(lookback.drift).toBe(false);
+  });
+
+  it("treats a current-schema active instance that omits a key as unknown (keeps pendingApply true)", () => {
+    // A current-RUNNING_SCHEMA_VERSION snapshot that simply OMITS the key — e.g. an older build
+    // on the same schema version that predates it, mid rolling deploy. The omitting instance must
+    // surface as 'unknown' and keep pendingApply true, not be silently dropped (which would let
+    // the override read as fully applied while an active instance never reported it).
+    function currentSchemaMissingKeyRow(role: string, instanceId: string): RuntimeInstanceRow {
+      return {
+        role,
+        instanceId,
+        startedAt: new Date(NOW - 60_000),
+        lastSeenAt: FRESH,
+        imageTag: null,
+        running: { schemaVersion: RUNNING_SCHEMA_VERSION, values: {} } as never,
+      };
+    }
+    const overrides = new Map<string, ConfigOverrideRecord>([
+      ["transactionLookbackDays", { value: 14, version: 1 }],
+    ]);
+    const view = assembleConfigView(
+      [
+        row("api", "a1", { transactionLookbackDays: 14 }, FRESH),
+        currentSchemaMissingKeyRow("worker", "w1"),
+      ],
+      NOW,
+      overrides,
+    );
+    const lookback = item(view, "transactionLookbackDays");
+    // api matches the override, but the worker omitted it → unknown → still pending.
+    expect(lookback.running.find((entry) => entry.role === "worker")?.state).toBe("unknown");
+    expect(lookback.pendingApply).toBe(true);
   });
 
   it("keeps pendingApply true while any instance reports an unknown (stale) value", () => {
