@@ -108,7 +108,31 @@ describe("startRuntimeHeartbeat", () => {
     expect(h.removeInstance).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ role: "api", timeoutMs: 1 }),
-      "runtime heartbeat stop timed out; leaving instance row for TTL cleanup",
+      "runtime heartbeat stop timed out waiting for in-flight beat; leaving instance row for TTL cleanup",
+    );
+  });
+
+  it("does not hang shutdown forever when removing the instance row never settles", async () => {
+    const logger = { warn: vi.fn() };
+    const app = ({ db: {}, config: {}, bootSkipped: [], logger }) as never;
+
+    const { startRuntimeHeartbeat } = await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+    const hb = startRuntimeHeartbeat(app, "api", { stopTimeoutMs: 1 });
+
+    await vi.waitFor(() => expect(h.calls).toContain("upsert:start"));
+    h.getReleaseUpsert()!();
+    await vi.waitFor(() => expect(h.calls).toContain("reap"));
+    await Promise.resolve();
+
+    h.removeInstance.mockImplementationOnce(
+      () => new Promise<never>(() => undefined),
+    );
+    await hb.stop();
+
+    expect(h.removeInstance).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "api", timeoutMs: 1 }),
+      "runtime heartbeat stop timed out removing instance row; leaving instance row for TTL cleanup",
     );
   });
 });

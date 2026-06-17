@@ -22,10 +22,11 @@ export interface RuntimeHeartbeat {
   stop(): Promise<void>;
 }
 
-async function waitForInFlightBeat(
+async function waitForShutdownStep(
   promise: Promise<void>,
   timeoutMs: number,
 ): Promise<"settled" | "timed-out"> {
+  const settled = promise.then(() => "settled" as const, () => "settled" as const);
   if (timeoutMs <= 0) return "timed-out";
 
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -35,13 +36,14 @@ async function waitForInFlightBeat(
   });
 
   try {
-    return await Promise.race([
-      promise.then(() => "settled" as const, () => "settled" as const),
-      timeout,
-    ]);
+    return await Promise.race([settled, timeout]);
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function remainingStopMs(deadlineMs: number): number {
+  return Math.max(0, deadlineMs - Date.now());
 }
 
 /** Publishes a heartbeat row for this process carrying the sanitized config values
@@ -114,20 +116,30 @@ export function startRuntimeHeartbeat(
     async stop() {
       stopped = true;
       clearInterval(timer);
+      const deadlineMs = Date.now() + stopTimeoutMs;
       // Prefer removeInstance after the beat settles: its `stopped` check skips an upsert that
       // has not started yet, and a finished upsert cannot resurrect a removed row. If the beat
       // never settles, return so process shutdown can continue; the stale-row TTL will clean up.
       if (inFlight) {
-        const state = await waitForInFlightBeat(inFlight, stopTimeoutMs);
+        const state = await waitForShutdownStep(inFlight, remainingStopMs(deadlineMs));
         if (state === "timed-out") {
           app.logger.warn(
             { role, instanceId, timeoutMs: stopTimeoutMs },
-            "runtime heartbeat stop timed out; leaving instance row for TTL cleanup",
+            "runtime heartbeat stop timed out waiting for in-flight beat; leaving instance row for TTL cleanup",
           );
           return;
         }
       }
-      await removeInstance(app.db, role, instanceId).catch(() => undefined);
+      const removeTimeoutMs = remainingStopMs(deadlineMs);
+      const removed = removeTimeoutMs > 0
+        ? await waitForShutdownStep(removeInstance(app.db, role, instanceId), removeTimeoutMs)
+        : "timed-out";
+      if (removed === "timed-out") {
+        app.logger.warn(
+          { role, instanceId, timeoutMs: stopTimeoutMs },
+          "runtime heartbeat stop timed out removing instance row; leaving instance row for TTL cleanup",
+        );
+      }
     },
   };
 }
