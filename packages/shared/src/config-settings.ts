@@ -83,6 +83,19 @@ export function validateConfigOverride(
   }
 }
 
+/** The descriptor `costWarning` for each of `keys` that carries one, keyed by config key.
+ *  Folded into the audit note server-side at write time so the cost warning that applied is
+ *  durable evidence derived from the registry — never trusting (or depending on) the UI to
+ *  send it. The live edit path has no ack gate, so this is its only durable cost record. */
+export function collectCostWarnings(keys: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of keys) {
+    const descriptor = getDescriptor(key);
+    if (descriptor?.costWarning) out[key] = descriptor.costWarning;
+  }
+  return out;
+}
+
 export interface EffectiveConfigValue {
   value: string | number | boolean | null;
   source: "env" | "override";
@@ -208,10 +221,16 @@ function checkBootInvariants(config: AppConfig): string | null {
  *  itself be the invalid `true`) and recorded as skipped (fail-safe: boot never starts a
  *  dependent=on/prereq=off graph, however that state arose — a stale override, a hand-edited
  *  row, OR the env config itself) — then (2) re-checks the boot invariants on the FINAL
- *  merged config; if a candidate broke one, the offending keys are reverted to env (recorded
- *  as skipped) and the invariants re-checked, so a bad combination can never produce a config
- *  that loadConfig itself would have rejected. Returns the original `config` object (unchanged
- *  identity) when nothing changed (zero overrides over an already-valid env graph).
+ *  merged config; if an APPLIED override broke one, the offending keys are reverted to env
+ *  (recorded as skipped) and the invariants re-checked. This invariant-revert pass only fires
+ *  when there are applied overrides (`applied.length > 0`): with zero overrides it is a no-op,
+ *  which is sound because loadConfig already validated the env invariants before this runs AND
+ *  no current boot key feeds checkBootInvariants (the boot set and the invariant-input fields
+ *  are disjoint — pinned by the config-registry integrity test). So the env can't reach this
+ *  point violating an invariant it didn't already reject at load. (If a future boot key is
+ *  wired into checkBootInvariants, drop the `applied.length > 0` guard and re-normalize the
+ *  requires graph after reverting.) Returns the original `config` object (unchanged identity)
+ *  when nothing changed (zero overrides over an already-valid env graph).
  *
  *  No @agency_hub_core/db import: the override map is the local {@link BootOverrideInput}
  *  shape, so this stays in the cycle-free shared layer. */
@@ -306,6 +325,11 @@ export function applyBootOverrides(
   // Validate the merged invariants; revert the involved overridden keys to env and
   // re-check until clean. Because the current boot keys touch independent boolean
   // fields, one pass per offending key converges; the loop is bounded by `applied`.
+  // The `applied.length > 0` guard is intentional: with no applied overrides there is
+  // nothing to revert, and the env was already invariant-validated by loadConfig (and no
+  // boot key feeds checkBootInvariants — see the docstring), so `merged` cannot violate an
+  // invariant here. A future boot key wired into an invariant would need this guard dropped
+  // plus a re-normalization of the requires graph after the revert.
   let invariantError = checkBootInvariants(merged);
   while (invariantError != null && applied.length > 0) {
     // Revert every candidate that participated in this apply pass: defensive and

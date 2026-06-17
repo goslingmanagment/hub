@@ -164,4 +164,31 @@ describe("config registry", () => {
     // Real secret material must never appear anywhere in the serialized snapshot.
     expect(JSON.stringify(snapshot)).not.toContain("leak");
   });
+
+  it("keeps every credential/secret-bearing field masked (kind secret|complex)", () => {
+    // Inverse of the "never editable" guard: buildRunningSnapshot masks by KIND (an allowlist —
+    // only secret/complex are reduced to set/unset; every other kind serializes its real value).
+    // So a credential-bearing field that is mis-kinded (boolean/number/string/url) would leak its
+    // real value into the heartbeat row and the config view. Pin the known sensitive keys to
+    // secret|complex so a future change can't silently downgrade one.
+    const SENSITIVE_KEYS = [
+      "databaseUrl",
+      "encryptionKey",
+      "encryptionKeyRing",
+      "healthSyncMonitoringToken",
+      "telegramBotToken",
+      "telegramChatId",
+      "ofapiApiKey",
+      "anthropicApiKey",
+      "onlyFansPublicProfileProxy",
+    ];
+    for (const key of SENSITIVE_KEYS) {
+      const descriptor = getDescriptor(key);
+      expect(descriptor, `${key} descriptor missing`).toBeDefined();
+      expect(
+        ["secret", "complex"],
+        `${key} must be masked (secret|complex) but is '${descriptor!.kind}'`,
+      ).toContain(descriptor!.kind);
+    }
+  });
 });

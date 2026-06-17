@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AppConfig } from "@agency_hub_core/shared";
-import { resolveEffectiveConfig, validateConfigOverride } from "@agency_hub_core/shared";
+import { collectCostWarnings, resolveEffectiveConfig, validateConfigOverride } from "@agency_hub_core/shared";
 
 describe("validateConfigOverride", () => {
   it("clamps a number to the descriptor min", () => {
@@ -130,5 +130,27 @@ describe("resolveEffectiveConfig", () => {
   it("accepts a plain-object override map", () => {
     const resolved = resolveEffectiveConfig(baseConfig, { logLevel: "warn" });
     expect(resolved.values.logLevel).toEqual({ value: "warn", source: "override" });
+  });
+});
+
+describe("collectCostWarnings", () => {
+  it("returns the descriptor costWarning for keys that carry one, keyed by config key", () => {
+    const result = collectCostWarnings([
+      "ofapiBurnAlertCreditsPerHour",
+      "transactionLookbackDays", // a live key with no costWarning
+      "ofapiCreditAlertThreshold",
+    ]);
+    expect(Object.keys(result).sort()).toEqual(
+      ["ofapiBurnAlertCreditsPerHour", "ofapiCreditAlertThreshold"].sort(),
+    );
+    expect(result.ofapiBurnAlertCreditsPerHour).toMatch(/alarm/i);
+  });
+
+  it("ignores unknown keys and keys without a costWarning", () => {
+    expect(collectCostWarnings(["logLevel", "nopeNotAKey", "sessionTtlDays"])).toEqual({});
+  });
+
+  it("returns an empty object for no keys", () => {
+    expect(collectCostWarnings([])).toEqual({});
   });
 });

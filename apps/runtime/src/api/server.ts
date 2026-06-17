@@ -52,6 +52,7 @@ import {
   createProxyRequestDispatcher,
   buildProxyEgressKey,
   encryptJson,
+  collectCostWarnings,
   getDescriptor,
   millsToNumber,
   normalizeProxyConfig,
@@ -2829,12 +2830,23 @@ export async function buildApiServer(appContext: AppContext) {
       return { key: patch.key, value: validated.value, expectedVersion: patch.expectedVersion };
     });
 
+    // Fold the patched keys' descriptor costWarnings into the audit note so the warning that
+    // applied is durable evidence. The live path has no ack gate (unlike staged), so this is
+    // its only durable cost record; derived from the registry server-side, never the client.
+    const costWarnings = collectCostWarnings(validatedPatches.map((patch) => patch.key));
+    const auditNote =
+      Object.keys(costWarnings).length > 0
+        ? `${note ? `${note} ` : ""}[cost-warnings] ${Object.entries(costWarnings)
+            .map(([key, warning]) => `${key}: ${warning}`)
+            .join("; ")}`
+        : note;
+
     try {
       // One transaction, all-or-nothing: a conflict on any key rolls back every key.
       const results = await setConfigOverridesAtomic(appContext.db, {
         patches: validatedPatches,
         userId: principal.user.id,
-        note,
+        note: auditNote,
         groupId: randomUUID(),
       });
       // The live PATCH only ever sends upserts (never a clear), so every result carries a
@@ -2921,7 +2933,13 @@ export async function buildApiServer(appContext: AppContext) {
 
     // Structured audit note: the ack + operator note travel with every audit row so the
     // acknowledgement is durable evidence, not merely a UI affordance.
-    const auditNote = JSON.stringify({ ack: true, note: note ?? null });
+    const auditNote = JSON.stringify({
+      ack: true,
+      note: note ?? null,
+      // Registry-derived cost warnings for the flipped keys, so the warning that applied is
+      // durable evidence alongside the ack (never trusting the client to send it).
+      costWarnings: collectCostWarnings(patches.map((patch) => patch.key)),
+    });
 
     try {
       // BLOCKER 1: the read-validate-write is delegated to one advisory-locked transaction
