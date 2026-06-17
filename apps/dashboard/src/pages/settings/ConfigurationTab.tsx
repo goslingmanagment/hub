@@ -102,8 +102,9 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
   const update = useUpdateConfig();
   const clear = useClearConfig();
   const [input, setInput] = useState(() => seedValue(item));
-  // Two-click confirm gate for cost/destructive keys: first Save arms it, second sends.
-  const [armed, setArmed] = useState(false);
+  // Two-click confirm gate for cost/destructive keys. Save AND revert both change the
+  // live value, so both pass through it; the state tracks which action is armed.
+  const [confirm, setConfirm] = useState<null | "save" | "revert">(null);
 
   const needsConfirm = Boolean(item.costWarning) || item.destructive;
   const seeded = seedValue(item);
@@ -114,27 +115,30 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
 
   function save() {
     update.mutate({
-      patches: [
-        {
-          key: item.key,
-          value: Number(input),
-          expectedVersion: item.overrideVersion ?? 0,
-        },
-      ],
+      patches: [{ key: item.key, value: Number(input), expectedVersion: item.overrideVersion ?? 0 }],
     });
-    setArmed(false);
+    setConfirm(null);
+  }
+
+  function revert() {
+    clear.mutate({ key: item.key, expectedVersion: item.overrideVersion ?? undefined });
+    setConfirm(null);
   }
 
   function onSaveClick() {
-    if (needsConfirm && !armed) {
-      setArmed(true);
+    if (needsConfirm && confirm !== "save") {
+      setConfirm("save");
       return;
     }
     save();
   }
 
-  function revert() {
-    clear.mutate({ key: item.key, expectedVersion: item.overrideVersion ?? undefined });
+  function onRevertClick() {
+    if (needsConfirm && confirm !== "revert") {
+      setConfirm("revert");
+      return;
+    }
+    revert();
   }
 
   return (
@@ -142,11 +146,12 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
       <div className="flex flex-wrap items-center gap-1.5">
         <input
           type="number"
+          aria-label={`${item.label} value`}
           value={input}
           disabled={pending}
           onChange={(e) => {
             setInput(e.target.value);
-            setArmed(false);
+            setConfirm(null);
           }}
           className="w-24 rounded border border-border bg-card px-1.5 py-0.5 text-xs font-mono text-text-primary disabled:opacity-50"
         />
@@ -155,29 +160,33 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
           onClick={onSaveClick}
           disabled={pending || !dirty}
           className={`rounded px-2 py-0.5 text-xs font-medium text-white transition-colors disabled:opacity-40 ${
-            armed ? "bg-danger hover:opacity-90" : "bg-accent hover:opacity-90"
+            confirm === "save" ? "bg-danger hover:opacity-90" : "bg-accent hover:opacity-90"
           }`}
         >
-          {armed ? "Confirm" : "Save"}
+          {confirm === "save" ? "Confirm" : "Save"}
         </button>
-        {armed && (
+        {item.source === "override" && (
           <button
             type="button"
-            onClick={() => setArmed(false)}
+            onClick={onRevertClick}
+            disabled={pending}
+            className={`rounded px-2 py-0.5 text-xs disabled:opacity-40 ${
+              confirm === "revert"
+                ? "bg-danger text-white hover:opacity-90"
+                : "border border-border bg-card text-text-secondary hover:bg-hover"
+            }`}
+          >
+            {confirm === "revert" ? "Confirm revert" : "Revert to env"}
+          </button>
+        )}
+        {confirm !== null && (
+          <button
+            type="button"
+            onClick={() => setConfirm(null)}
             disabled={pending}
             className="rounded border border-border bg-card px-2 py-0.5 text-xs text-text-secondary hover:bg-hover disabled:opacity-40"
           >
             Cancel
-          </button>
-        )}
-        {item.source === "override" && (
-          <button
-            type="button"
-            onClick={revert}
-            disabled={pending}
-            className="rounded border border-border bg-card px-2 py-0.5 text-xs text-text-secondary hover:bg-hover disabled:opacity-40"
-          >
-            Revert to env
           </button>
         )}
         {item.pendingApply && (
@@ -189,12 +198,11 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
           </Badge>
         )}
       </div>
-      {armed && needsConfirm && (
+      {confirm !== null && needsConfirm && (
         <div className="text-[11px] text-amber-600">
-          {item.destructive
-            ? "Destructive: lowering/clearing this drops data irreversibly. "
-            : ""}
-          {item.costWarning ?? ""} Click Confirm to apply.
+          {item.destructive ? "Destructive: lowering/clearing this drops data irreversibly. " : ""}
+          {item.costWarning ?? ""}{" "}
+          {confirm === "revert" ? "Revert to the env default?" : "Click Confirm to apply."}
         </div>
       )}
       {error && (
@@ -209,7 +217,10 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
 }
 
 function SettingRow({ item }: { item: ConfigItem }) {
-  const isEditable = item.live === true && item.editability === "editable";
+  // Only numeric live keys get an inline editor today (all 8 live keys are numbers).
+  // A future non-numeric live key stays read-only until it gets a proper editor,
+  // which keeps the Number()-based editor honest.
+  const isEditable = item.live === true && item.editability === "editable" && item.kind === "number";
   const runningDiffersFromDefault =
     item.running.length > 0
     && !item.secret
@@ -260,7 +271,9 @@ function SettingRow({ item }: { item: ConfigItem }) {
         </div>
       </td>
       <td className="py-2">
-        {isEditable ? <ConfigEditor key={item.overrideVersion ?? "env"} item={item} /> : null}
+        {isEditable ? (
+          <ConfigEditor key={`${item.overrideVersion ?? "env"}:${seedValue(item)}`} item={item} />
+        ) : null}
       </td>
     </tr>
   );

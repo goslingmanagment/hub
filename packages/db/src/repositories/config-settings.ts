@@ -102,6 +102,11 @@ export async function setConfigOverridesAtomic(
 ): Promise<Array<{ key: string; value: ConfigOverrideValue; version: number }>> {
   const scopeType = input.scopeType ?? DEFAULT_SCOPE_TYPE;
   const scopeId = input.scopeId ?? DEFAULT_SCOPE_ID;
+  // Defense-in-depth: a duplicate key within one patch would double-bump / double-audit.
+  const keys = input.patches.map((patch) => patch.key);
+  if (new Set(keys).size !== keys.length) {
+    throw new Error("setConfigOverridesAtomic: duplicate key in one patch");
+  }
   // Lock rows in a stable key order so two overlapping multi-key patches can't deadlock.
   const ordered = [...input.patches].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 

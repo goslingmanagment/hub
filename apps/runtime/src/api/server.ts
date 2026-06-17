@@ -2802,6 +2802,12 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
 
     const { patches, note } = request.body;
+    // A key may appear at most once per patch — duplicates would double-audit / double-
+    // bump the version (or self-conflict) inside the atomic apply.
+    const keys = patches.map((patch) => patch.key);
+    if (new Set(keys).size !== keys.length) {
+      throw new BadRequestError("A patch may not set the same key twice");
+    }
     // Validate every key/value up front so a bad entry rejects the whole patch before
     // anything is written. Persist the CLAMPED value so processes and UI agree.
     const validatedPatches = patches.map((patch) => {

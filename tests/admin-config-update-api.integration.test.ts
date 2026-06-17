@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getConfigOverrides, listConfigAudit, upsertInstanceHeartbeat } from "@agency_hub_core/db";
+import { randomUUID } from "node:crypto";
+
+import { getConfigOverrides, listConfigAudit, setConfigOverride, upsertInstanceHeartbeat } from "@agency_hub_core/db";
 import { buildRunningSnapshot } from "@agency_hub_core/shared";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
 
@@ -146,6 +148,27 @@ describe("admin config update api (Stage B1)", () => {
     // The brand-new key was NOT created, and the existing key is untouched.
     expect(overrides.has("ofapiCreditAlertThreshold")).toBe(false);
     expect(overrides.get("transactionLookbackDays")?.value).toBe(14);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects a patch that sets the same key twice (400, nothing written)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config",
+      headers: { cookie },
+      payload: {
+        patches: [
+          { key: "transactionLookbackDays", value: 14 },
+          { key: "transactionLookbackDays", value: 21 },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect((await getConfigOverrides(testDb.db)).has("transactionLookbackDays")).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rejects a non-live editable+reload key (400)", async (context) => {
@@ -358,14 +381,25 @@ describe("admin config update api (Stage B1)", () => {
     }
     const cookie = await loginCookie("dima", "owner-secret");
     // ofapiDmDailyCreditBudget is editable + reload but not wired live; PATCH rejects
-    // it, but a stuck override must always be clearable. No row exists here, so this is
-    // a no-op clear that still returns 200 (and audits intent).
+    // it, so seed a stuck override directly and prove DELETE can still remove it.
+    await setConfigOverride(testDb.db, {
+      key: "ofapiDmDailyCreditBudget",
+      value: 999,
+      userId: null,
+      groupId: randomUUID(),
+    });
+    expect((await getConfigOverrides(testDb.db)).has("ofapiDmDailyCreditBudget")).toBe(true);
+
     const response = await server.inject({
       method: "DELETE",
       url: "/api/v1/admin/config/ofapiDmDailyCreditBudget",
       headers: { cookie },
     });
     expect(response.statusCode).toBe(200);
+    expect((await getConfigOverrides(testDb.db)).has("ofapiDmDailyCreditBudget")).toBe(false);
+    const audit = await listConfigAudit(testDb.db, { key: "ofapiDmDailyCreditBudget" });
+    expect(audit[0]!.newValue).toBeNull();
+    expect(audit[0]!.oldValue).toBe(999);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rejects DELETE for a non-editable key with 400", async (context) => {
