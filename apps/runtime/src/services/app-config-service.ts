@@ -122,11 +122,14 @@ function buildItem(
 
   for (const instance of activeInstances) {
     const value = readRunning(instance, descriptor.key);
-    if (value === undefined) continue;
 
-    if (value === SCHEMA_MISMATCH) {
-      // Surface the instance as "unknown" rather than dropping it; its value is not
-      // comparable, so it does not feed drift, but it does block pendingApply.
+    // A mismatched snapshot shape (SCHEMA_MISMATCH) OR a current-schema snapshot that simply
+    // omits this key (undefined — e.g. an older build on the SAME RUNNING_SCHEMA_VERSION that
+    // predates the key, mid rolling deploy) is not a trustworthy value. Surface the instance as
+    // "unknown" rather than dropping it: it does not feed drift, but it DOES keep pendingApply
+    // true (fail-closed), so an override can't read as fully applied while an active instance
+    // never reported it.
+    if (value === SCHEMA_MISMATCH || value === undefined) {
       hasUnknown = true;
       running.push({
         role: instance.role,

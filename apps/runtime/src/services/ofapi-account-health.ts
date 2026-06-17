@@ -153,6 +153,13 @@ export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Da
           });
         }
       }
+    } else {
+      // Threshold disabled (<= 0): the low-credit alert is off, so clear any already-open
+      // incident instead of leaving it falsely open after an operator zeroes the threshold.
+      await resolveOfapiGlobalIncident(app, {
+        kind: "ofapi_low_credit",
+        recoveredAt: now,
+      });
     }
 
     const mappedPages = await listOfapiMappedPages(app.db);

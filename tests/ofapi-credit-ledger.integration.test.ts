@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +11,7 @@ import {
   insertOfapiWebhookEvent,
   listNotificationIncidents,
   recordOfapiCreditSpend,
+  setConfigOverride,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
 
@@ -359,6 +361,36 @@ describe("ofapi credit ledger integration", () => {
     expect(await listNotificationIncidents(appContext.db, { status: "open" })).toHaveLength(0);
     const resolved = await listNotificationIncidents(appContext.db, { status: "resolved" });
     expect(resolved).toHaveLength(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("resolves an open burn-rate incident when the burn threshold is disabled (set to 0)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Open the burn incident: default threshold 300/h, 400 spent in the trailing hour.
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chat_messages",
+      credits: 400,
+      balanceAfter: 20_000,
+      occurredAt: new Date(Date.now() - 5 * 60 * 1000),
+    });
+    await runOfapiCreditBurnMonitor(appContext);
+    expect(await listNotificationIncidents(appContext.db, { status: "open" })).toHaveLength(1);
+
+    // Operator disables the burn alert by zeroing the threshold (live override). The disabled
+    // alert must resolve the open incident, not leave it falsely open.
+    await setConfigOverride(appContext.db, {
+      key: "ofapiBurnAlertCreditsPerHour",
+      value: 0,
+      userId: null,
+      groupId: randomUUID(),
+    });
+    await runOfapiCreditBurnMonitor(appContext);
+
+    expect(await listNotificationIncidents(appContext.db, { status: "open" })).toHaveLength(0);
+    expect(await listNotificationIncidents(appContext.db, { status: "resolved" })).toHaveLength(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("anchors reconciliation with the optional balance ping", async (context) => {
