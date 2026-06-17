@@ -90,4 +90,25 @@ describe("startRuntimeHeartbeat", () => {
     expect(h.upsertInstanceHeartbeat).not.toHaveBeenCalled();
     expect(h.removeInstance).toHaveBeenCalledTimes(1);
   });
+
+  it("does not hang shutdown forever when an in-flight beat never settles", async () => {
+    h.loadEffectiveConfig.mockImplementationOnce(
+      () => new Promise<never>(() => undefined),
+    );
+    const logger = { warn: vi.fn() };
+    const app = ({ db: {}, config: {}, bootSkipped: [], logger }) as never;
+
+    const { startRuntimeHeartbeat } = await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+    const hb = startRuntimeHeartbeat(app, "api", { stopTimeoutMs: 1 });
+
+    await vi.waitFor(() => expect(h.loadEffectiveConfig).toHaveBeenCalledTimes(1));
+    await hb.stop();
+
+    expect(h.upsertInstanceHeartbeat).not.toHaveBeenCalled();
+    expect(h.removeInstance).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "api", timeoutMs: 1 }),
+      "runtime heartbeat stop timed out; leaving instance row for TTL cleanup",
+    );
+  });
 });

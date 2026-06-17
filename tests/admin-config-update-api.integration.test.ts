@@ -113,6 +113,8 @@ describe("admin config update api (Stage B1)", () => {
     const auditA = await listConfigAudit(testDb.db, { key: "transactionLookbackDays" });
     const auditB = await listConfigAudit(testDb.db, { key: "ofapiCreditAlertThreshold" });
     expect(auditA[0]!.groupId).toBe(auditB[0]!.groupId);
+    expect(auditB[0]!.note).toContain("tuning [cost-warnings]");
+    expect(auditB[0]!.note).toContain("ofapiCreditAlertThreshold: Lowering silences the early low-credit warning.");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rolls the WHOLE multi-key patch back when one key conflicts", async (context) => {

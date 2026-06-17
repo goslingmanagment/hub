@@ -15,10 +15,33 @@ export type RuntimeRole = "api" | "worker";
 /** How often each process refreshes its heartbeat row. The staleness TTL on the
  *  repository side (INSTANCE_STALE_TTL_MS) is a small multiple of this. */
 export const HEARTBEAT_INTERVAL_MS = 60_000;
+export const HEARTBEAT_STOP_TIMEOUT_MS = 5_000;
 
 export interface RuntimeHeartbeat {
   readonly instanceId: string;
   stop(): Promise<void>;
+}
+
+async function waitForInFlightBeat(
+  promise: Promise<void>,
+  timeoutMs: number,
+): Promise<"settled" | "timed-out"> {
+  if (timeoutMs <= 0) return "timed-out";
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<"timed-out">((resolve) => {
+    timer = setTimeout(() => resolve("timed-out"), timeoutMs);
+    timer.unref?.();
+  });
+
+  try {
+    return await Promise.race([
+      promise.then(() => "settled" as const, () => "settled" as const),
+      timeout,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Publishes a heartbeat row for this process carrying the sanitized config values
@@ -32,11 +55,12 @@ export interface RuntimeHeartbeat {
 export function startRuntimeHeartbeat(
   app: AppContext,
   role: RuntimeRole,
-  options: { startedAt?: Date } = {},
+  options: { startedAt?: Date; stopTimeoutMs?: number } = {},
 ): RuntimeHeartbeat {
   const instanceId = randomUUID();
   const startedAt = options.startedAt ?? new Date();
   const imageTag = process.env.IMAGE_TAG ?? process.env.GIT_SHA ?? null;
+  const stopTimeoutMs = options.stopTimeoutMs ?? HEARTBEAT_STOP_TIMEOUT_MS;
 
   // `stopped` flips on shutdown so an in-flight beat skips its upsert; `inFlight` serializes
   // beats (a slow beat must not overlap the next tick) and lets stop() await the active beat
@@ -90,9 +114,19 @@ export function startRuntimeHeartbeat(
     async stop() {
       stopped = true;
       clearInterval(timer);
-      // Let any in-flight beat finish (its `stopped` check skips the upsert if it hasn't
-      // reached it yet) so removeInstance always runs LAST — no zombie row survives shutdown.
-      if (inFlight) await inFlight.catch(() => undefined);
+      // Prefer removeInstance after the beat settles: its `stopped` check skips an upsert that
+      // has not started yet, and a finished upsert cannot resurrect a removed row. If the beat
+      // never settles, return so process shutdown can continue; the stale-row TTL will clean up.
+      if (inFlight) {
+        const state = await waitForInFlightBeat(inFlight, stopTimeoutMs);
+        if (state === "timed-out") {
+          app.logger.warn(
+            { role, instanceId, timeoutMs: stopTimeoutMs },
+            "runtime heartbeat stop timed out; leaving instance row for TTL cleanup",
+          );
+          return;
+        }
+      }
       await removeInstance(app.db, role, instanceId).catch(() => undefined);
     },
   };

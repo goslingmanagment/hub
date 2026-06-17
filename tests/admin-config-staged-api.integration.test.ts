@@ -158,6 +158,14 @@ describe("admin config staged api (Stage C)", () => {
     });
     expect(response.statusCode).toBe(200);
     expect((await getConfigOverrides(testDb.db)).get("ofapiDmSyncEnabled")?.value).toBe(true);
+
+    const audit = await listConfigAudit(testDb.db, { key: "ofapiDmSyncEnabled" });
+    const parsed = JSON.parse(audit[0]!.note ?? "{}") as {
+      ack: boolean;
+      note: string | null;
+      costWarnings?: Record<string, string>;
+    };
+    expect(parsed.costWarnings?.ofapiDmSyncEnabled).toContain("REST bootstrap/reconcile spends real OFAPI credits.");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rejects an order violation (dmSync before dmProjection running) with 400, nothing written", async (context) => {
