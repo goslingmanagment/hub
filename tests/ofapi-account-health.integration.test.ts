@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -8,6 +8,7 @@ import {
   findPageById,
   listNotificationIncidents,
   recordOfapiCreditUsage,
+  setConfigOverride,
   setPageOfapiAccountId,
   upsertOfapiWebhookConfig,
 } from "@agency_hub_core/db";
@@ -249,6 +250,32 @@ describe("OFAPI account health monitor", () => {
     await runOfapiAccountHealthMonitor(appContext);
     open = await listIncidents("open");
     expect(open.map((incident) => incident.kind)).not.toContain("ofapi_low_credit");
+  });
+
+  it("resolves an open low-credit incident when the alert threshold is disabled (set to 0)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await seedMappedPage();
+    // Open the incident: default threshold 1000, balance 500 (< threshold).
+    await recordOfapiCreditUsage(appContext.db, { creditsUsed: 1, balance: 500 });
+    await runOfapiAccountHealthMonitor(appContext);
+    expect((await listIncidents("open")).map((incident) => incident.kind)).toContain("ofapi_low_credit");
+
+    // Operator disables the alert by zeroing the threshold (live override). The disabled alert
+    // must clear the open incident, not leave it falsely open.
+    await setConfigOverride(appContext.db, {
+      key: "ofapiCreditAlertThreshold",
+      value: 0,
+      userId: null,
+      groupId: randomUUID(),
+    });
+    await runOfapiAccountHealthMonitor(appContext);
+
+    expect((await listIncidents("open")).map((incident) => incident.kind)).not.toContain("ofapi_low_credit");
+    expect((await listIncidents("resolved")).map((incident) => incident.kind)).toContain("ofapi_low_credit");
   });
 
   it("alerts on webhook silence while mapped pages exist and resolves on fresh events", async (context) => {

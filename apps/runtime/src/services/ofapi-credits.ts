@@ -349,6 +349,12 @@ export async function runOfapiCreditBurnMonitor(app: AppContext, now = new Date(
     const effective = await loadEffectiveConfig(app.db, app.config);
     const threshold = effective.ofapiBurnAlertCreditsPerHour ?? DEFAULT_BURN_ALERT_CREDITS_PER_HOUR;
     if (threshold <= 0) {
+      // Disabled: resolve any already-open burn-rate incident before skipping, so zeroing the
+      // threshold turns the alert off cleanly instead of leaving a stale incident open.
+      await resolveOfapiGlobalIncident(app, {
+        kind: "ofapi_burn_rate",
+        recoveredAt: now,
+      });
       return;
     }
 
