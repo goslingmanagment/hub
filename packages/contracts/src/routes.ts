@@ -2949,6 +2949,199 @@ const dashboardOrMonitoringTokenSecurity: Array<Record<string, string[]>> = [
   { monitoringTokenAuth: [] },
 ];
 
+// --- Configuration surface (Stage A: read-only) ---
+const configValueScalar = z.union([z.string(), z.number(), z.boolean()]).nullable();
+
+export const configRunningValueSchema = z.object({
+  role: z.string(),
+  instanceId: z.string(),
+  value: configValueScalar,
+  masked: z.boolean(),
+  // "unknown" = this instance reported under an older/mismatched snapshot shape, so its
+  // value can't be trusted; the row is surfaced (not silently dropped) and counts as
+  // not-yet-applied for pendingApply.
+  state: z.enum(["set", "unset", "unknown"]).nullable(),
+  lastSeenAt: isoTimestamp,
+});
+
+// A boot-apply override an instance rejected at start (invalid value / not a boot key /
+// would break a merged invariant). Surfaced per instance so an ignored override is
+// visible rather than silent.
+export const configSkippedOverrideSchema = z.object({
+  key: z.string(),
+  reason: z.string(),
+});
+
+export const configItemSchema = z.object({
+  key: z.string(),
+  envName: z.string(),
+  configField: z.string().nullable(),
+  kind: z.enum(["boolean", "number", "string", "url", "secret", "derived", "alias", "complex"]),
+  subsystem: z.string(),
+  label: z.string(),
+  default: z.string(),
+  editability: z.enum(["never", "staged", "editable"]),
+  // Authoritative wiring class (replaces applyMode): 'live' = wired to the runtime
+  // overlay (no restart); 'boot' = applied at process start (needs restart); 'none' =
+  // not overridable via the DB (env-only / read-only). Orthogonal to `editability`.
+  runtimeApply: z.enum(["live", "boot", "none"]),
+  comparable: z.boolean(),
+  secret: z.boolean(),
+  note: z.string().nullable(),
+  costWarning: z.string().nullable(),
+  destructive: z.boolean(),
+  stagedGroup: z.string().nullable(),
+  stagedOrder: z.number().int().nullable(),
+  requires: z.array(z.string()),
+  // Effective-state fields. In Stage A there is no overlay, so source is always
+  // "env", desired is null and pendingApply is false; the running array carries
+  // each live process's actual value and drift flags cross-instance disagreement.
+  source: z.enum(["env", "override"]),
+  desired: configValueScalar,
+  // SERVER-computed APPLIED truth (Stage C) — the single source for the staged UI's
+  // lock/Enable-Disable decision, so the client never reconstructs it. For a boot key it is
+  // getRunningFlagState (role-complete + fail-closed: every expected role must have an active
+  // instance and report the key true to read "on", else "off"; "unknown" when it can't be
+  // proven, e.g. no fleet / a missing role / a stale snapshot). For a non-boot key it summarizes
+  // the active instances' reported values (all-true → "on", any non-true → "off", none → "unknown").
+  runningState: z.enum(["on", "off", "unknown"]),
+  // SERVER-computed desired baseline (Stage C): the override boolean when one exists, else the
+  // env (rawConfig) boolean; null for keys with no boolean meaning (non-boolean / non-overridable).
+  // The staged UI's Enable/Disable + dependent locks read THIS, never a client recomputation.
+  desiredEffective: z.boolean().nullable(),
+  // Current version of the override row (null when env-sourced); the editor sends it
+  // back as expectedVersion for optimistic-concurrency.
+  overrideVersion: z.number().int().nullable(),
+  pendingApply: z.boolean(),
+  drift: z.boolean(),
+  // True when this editable key is wired to take effect at runtime now (Stage B1).
+  // Only `live` editable keys can be PATCHed and actually applied without a restart.
+  live: z.boolean(),
+  running: z.array(configRunningValueSchema),
+});
+
+export const configInstanceSchema = z.object({
+  role: z.string(),
+  instanceId: z.string(),
+  startedAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
+  imageTag: z.string().nullable(),
+  status: z.enum(["active", "stale"]),
+  // Boot-apply overrides this instance rejected at start. Empty for a clean boot, and
+  // empty for an instance reporting an older snapshot shape (no skip data available).
+  skippedOverrides: z.array(configSkippedOverrideSchema),
+});
+
+// Per expected role (plus any unexpected observed role): whether a live process is
+// reporting. "stale" = a row exists but is past the heartbeat window; "missing" =
+// no row at all. Surfaces a stopped process instead of silently dropping it.
+export const configRoleStatusSchema = z.object({
+  role: z.string(),
+  status: z.enum(["active", "stale", "missing"]),
+});
+
+export const configViewResponseSchema = z.object({
+  generatedAt: isoTimestamp,
+  roleStatuses: z.array(configRoleStatusSchema),
+  instances: z.array(configInstanceSchema),
+  subsystems: z.array(
+    z.object({
+      subsystem: z.string(),
+      items: z.array(configItemSchema),
+    }),
+  ),
+});
+
+// --- Configuration surface (Stage B1: editable, owner-only) ---
+// A single override value is one of the three scalar kinds an editable descriptor
+// can hold; the server re-validates and clamps it against the registry.
+const configOverrideValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+
+// Audit notes are operator-supplied free text persisted into config_audit_log (append-only,
+// one row per key in a patch). Bound them so a write can't persist megabyte-sized notes into
+// the audit trail (mirrors the audit P-3 cap on the login fields).
+const CONFIG_NOTE_MAX_LEN = 1024;
+
+export const configUpdateBodySchema = z.object({
+  patches: z
+    .array(
+      z.object({
+        key: z.string(),
+        value: configOverrideValueSchema,
+        // Optimistic concurrency: when present it must match the row's current
+        // version (0 for a brand-new key) or the write is a 409 conflict. Intentionally
+        // OPTIONAL on the live path (opt-in, last-write-wins for owner-only low-stakes knobs);
+        // the staged path makes it MANDATORY since staged flips are higher-stakes.
+        expectedVersion: z.number().int().min(0).optional(),
+      }),
+    )
+    .min(1),
+  note: z.string().max(CONFIG_NOTE_MAX_LEN).optional(),
+});
+
+export const configUpdateResponseSchema = z.object({
+  // The CLAMPED, stored value per key so the UI can correct an out-of-range entry.
+  results: z.array(
+    z.object({
+      key: z.string(),
+      value: configOverrideValueSchema,
+      version: z.number().int(),
+    }),
+  ),
+});
+
+export const configClearParamsSchema = z.object({
+  key: z.string(),
+});
+
+// Query params (not a body) so DELETE needs no request body — both fields optional.
+export const configClearQuerySchema = z.object({
+  expectedVersion: z.coerce.number().int().min(0).optional(),
+  note: z.string().max(CONFIG_NOTE_MAX_LEN).optional(),
+});
+
+export const configClearResponseSchema = z.object({
+  ok: z.literal(true),
+  key: z.string(),
+});
+
+// --- Staged-rollout flips (Stage C: boot-applied flag set, owner-only) ---
+// A staged flip writes an explicit boolean override for a `runtimeApply === 'boot'`
+// key in the prescribed enable order, OR reverts it to env (`desired: null` → clears the
+// override row). Unlike the live PATCH, expectedVersion is MANDATORY (a staged flip is
+// always version-checked: 0 means "no row yet"), and an explicit `ack` records the
+// operator's acknowledgement that the flag only takes effect after a restart — persisted
+// into the audit note, not just the UI.
+export const configStagedBodySchema = z.object({
+  patches: z
+    .array(
+      z.object({
+        key: z.string(),
+        // boolean = set the desired value; null = revert to env (clear the override). A
+        // null patch is validated as the env baseline boolean but applied as a clear.
+        desired: z.boolean().nullable(),
+        // Required (not optional): staged flips are always version-checked. 0 = the
+        // override row is absent; a mismatch is a 409 conflict.
+        expectedVersion: z.number().int().min(0),
+      }),
+    )
+    .min(1),
+  note: z.string().max(CONFIG_NOTE_MAX_LEN).optional(),
+  // Must be true; the handler rejects ack:false (400) and stores it in the audit note.
+  ack: z.boolean(),
+});
+
+export const configStagedResponseSchema = z.object({
+  results: z.array(
+    z.object({
+      key: z.string(),
+      // boolean for an upsert; null for a cleared key (reverted to env).
+      value: z.boolean().nullable(),
+      version: z.number().int().nullable(),
+    }),
+  ),
+});
+
 export const routeSchemas = {
   health: {
     tags: ["system"],
@@ -4344,6 +4537,57 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  // --- Configuration (owner-only) ---
+  adminConfig: {
+    tags: ["admin"],
+    summary: "Read effective runtime configuration across processes",
+    security: cookieOnlySecurity,
+    response: {
+      200: configViewResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminConfigUpdate: {
+    tags: ["admin"],
+    summary: "Set runtime config overrides for live (editable, reload) keys",
+    security: cookieOnlySecurity,
+    body: configUpdateBodySchema,
+    response: {
+      200: configUpdateResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminConfigClear: {
+    tags: ["admin"],
+    summary: "Clear a runtime config override (revert to env)",
+    security: cookieOnlySecurity,
+    params: configClearParamsSchema,
+    querystring: configClearQuerySchema,
+    response: {
+      200: configClearResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminConfigStaged: {
+    tags: ["admin"],
+    summary: "Flip staged-rollout (boot-applied) config flags in the prescribed order",
+    security: cookieOnlySecurity,
+    body: configStagedBodySchema,
+    response: {
+      200: configStagedResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type RouteSchemas = typeof routeSchemas;
@@ -4476,6 +4720,14 @@ export type UpdateCredentialsBody = z.infer<typeof updateCredentialsBodySchema>;
 export type UpdateCredentialsResponse = z.infer<typeof updateCredentialsResponseSchema>;
 export type VerifyPageResponse = z.infer<typeof verifyPageResponseSchema>;
 export type DeletedResponse = z.infer<typeof deletedResponseSchema>;
+export type ConfigViewResponse = z.infer<typeof configViewResponseSchema>;
+export type ConfigItem = z.infer<typeof configItemSchema>;
+export type ConfigUpdateBody = z.infer<typeof configUpdateBodySchema>;
+export type ConfigUpdateResponse = z.infer<typeof configUpdateResponseSchema>;
+export type ConfigClearQuery = z.infer<typeof configClearQuerySchema>;
+export type ConfigClearResponse = z.infer<typeof configClearResponseSchema>;
+export type ConfigStagedBody = z.infer<typeof configStagedBodySchema>;
+export type ConfigStagedResponse = z.infer<typeof configStagedResponseSchema>;
 export type NotificationsSettingsResponse = z.infer<typeof notificationsSettingsResponseSchema>;
 export type NotificationsSettingsUpdateBody = z.infer<typeof notificationsSettingsUpdateBodySchema>;
 export type NotificationsTestMessageResponse = z.infer<typeof notificationsTestMessageResponseSchema>;

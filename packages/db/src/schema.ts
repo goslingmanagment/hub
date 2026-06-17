@@ -16,9 +16,11 @@ import {
   timestamp,
   unique,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { aiUsageFeatures, fanFlagTypes, userRoles } from "@agency_hub_core/shared";
+import type { ConfigOverrideValue, RunningSnapshot } from "@agency_hub_core/shared";
 
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
 export const syncRunOutcomeEnum = pgEnum("sync_run_outcome", [
@@ -1816,5 +1818,88 @@ export const ofapiWebhookEvents = pgTable(
     replayIdx: index("ofapi_webhook_events_replay_idx")
       .on(table.platformAccountId, table.fanoutSeq)
       .where(sql`${table.fanoutSeq} is not null`),
+  }),
+);
+
+// Heartbeat table for the in-dashboard Configuration surface. Each running process
+// (api, worker) upserts a row carrying the sanitized config values it is actually
+// using (RunningSnapshot from the config registry), so the page can show per-instance
+// running values and detect drift between the api and worker containers. No secret
+// values are ever stored here — only set/unset state. Stale rows (last_seen_at past
+// the TTL) are reaped; instance_id makes the PK survive multiple processes per role.
+export const runtimeInstances = pgTable(
+  "runtime_instances",
+  {
+    role: text("role").notNull(),
+    instanceId: text("instance_id").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    imageTag: text("image_tag"),
+    running: jsonb("running").$type<RunningSnapshot>().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "runtime_instances_pkey",
+      columns: [table.role, table.instanceId],
+    }),
+    lastSeenIdx: index("runtime_instances_last_seen_idx").on(table.lastSeenAt),
+  }),
+);
+
+// Per-key override overlay for the in-dashboard Configuration surface (Stage B0).
+// Only the editable knobs in the descriptor registry are ever written here; the
+// value is validated/clamped server-side before it lands. Scope columns are
+// future-proofed for per-page overrides, but only the global scope (scope_type
+// 'global', scope_id 0) is used today. scope_id is NOT NULL (0 = global) so the
+// uniqueness constraint is reliable — Postgres treats NULLs as distinct.
+export const configSettings = pgTable(
+  "config_settings",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    scopeType: text("scope_type").notNull().default("global"),
+    scopeId: bigint("scope_id", { mode: "number" }).notNull().default(0),
+    key: text("key").notNull(),
+    value: jsonb("value").$type<ConfigOverrideValue>().notNull(),
+    version: integer("version").notNull().default(1),
+    updatedByUserId: bigint("updated_by_user_id", { mode: "number" }).references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    scopeKeyUniq: unique("config_settings_scope_key_uniq").on(
+      table.scopeType,
+      table.scopeId,
+      table.key,
+    ),
+  }),
+);
+
+// Append-only audit trail for config overrides. One multi-key patch shares a
+// group_id; each row records the per-key old/new value and version so any change
+// is reconstructible. A clear (revert to env) is recorded with new_value /
+// new_version null.
+export const configAuditLog = pgTable(
+  "config_audit_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    groupId: uuid("group_id").notNull(),
+    changedAt: timestamp("changed_at", { withTimezone: true }).defaultNow().notNull(),
+    userId: bigint("user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    scopeType: text("scope_type").notNull(),
+    scopeId: bigint("scope_id", { mode: "number" }).notNull(),
+    key: text("key").notNull(),
+    oldValue: jsonb("old_value").$type<ConfigOverrideValue>(),
+    newValue: jsonb("new_value").$type<ConfigOverrideValue>(),
+    oldVersion: integer("old_version"),
+    newVersion: integer("new_version"),
+    note: text("note"),
+  },
+  (table) => ({
+    changedAtIdx: index("config_audit_log_changed_at_idx").on(table.changedAt),
+    groupIdx: index("config_audit_log_group_idx").on(table.groupId),
   }),
 );

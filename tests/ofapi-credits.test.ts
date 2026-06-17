@@ -218,10 +218,14 @@ describe("planOfapiCreditReconciliation", () => {
 describe("OFAPI single-gate invariant (D1)", () => {
   // Every OFAPI HTTP call must live in services/ofapi.ts so the client's
   // onCreditSpend sink sees all spend. The env-schema default in config.ts is
-  // the only other place the host may appear.
+  // the only other place the host may appear. config-registry.ts references the
+  // OFAPI_BASE_URL env-var NAME as descriptor metadata only — it deliberately does
+  // not contain the host literal, so the spend-tap host stays pinned to the two
+  // files above.
   const ALLOWED_FILES = new Set([
     "apps/runtime/src/services/ofapi.ts",
     "packages/shared/src/config.ts",
+    "packages/shared/src/config-registry.ts",
   ]);
 
   it("keeps OFAPI_BASE_URL / app.onlyfansapi.com references inside the client and config", () => {

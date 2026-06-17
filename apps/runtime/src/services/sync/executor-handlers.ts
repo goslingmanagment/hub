@@ -70,6 +70,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { loadEffectiveConfig } from "../effective-config.ts";
 import {
   resolvePageContextById,
   type ResolvedPageContext,
@@ -1509,11 +1510,20 @@ export async function executeTransactionsChunk(
 ) {
   await input.telemetry.recordPhaseStarted("transactions");
 
+  // Resolve the live transaction windowing config ONCE per chunk and thread both
+  // scalars into the sync entry points, so every read-site in this chunk
+  // (transactions.ts + onlyfans-transactions.ts) sees one consistent window.
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const transactionLookbackDays = effective.transactionLookbackDays;
+  const transactionRescanCapDays = effective.transactionRescanCapDays;
+
   if (input.pageContext.platform === "fansly") {
     const result = await syncTransactions(app, {
       pageLabel: input.pageContext.page.label,
       platformAccountId: input.pageContext.page.id,
       commissionRate: input.pageContext.page.commissionRate,
+      transactionLookbackDays,
+      transactionRescanCapDays,
       requestContext: {
         session: input.pageContext.session,
         proxy: input.pageContext.proxy,
@@ -1553,6 +1563,8 @@ export async function executeTransactionsChunk(
     pageMetadata: input.pageContext.page.metadata,
     commissionRate: input.pageContext.page.commissionRate,
     rescanStart: transactionsStart,
+    transactionLookbackDays,
+    transactionRescanCapDays,
     requestContext: buildOnlyFansRequestContext(app, input),
     syncRunId: input.syncRunId,
     telemetry: input.telemetry,

@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,8 @@ import {
 import {
   CatalogModelNotFoundError,
   CatalogPageNotFoundError,
+  clearConfigOverride,
+  ConfigOverrideVersionConflictError,
   countDistinctFansForPages,
   createFanNote,
   createModel,
@@ -22,6 +24,7 @@ import {
   deletePageByLabel,
   DuplicateModelSlugError,
   DuplicatePageLabelError,
+  setConfigOverridesAtomic,
   findPlatformFan,
   getLatestSyncRunPerPage,
   getRevenueBreakdownForScope,
@@ -49,6 +52,7 @@ import {
   createProxyRequestDispatcher,
   buildProxyEgressKey,
   encryptJson,
+  getDescriptor,
   millsToNumber,
   normalizeProxyConfig,
   redactSensitiveText,
@@ -57,6 +61,9 @@ import {
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
   toMills,
+  validateConfigOverride,
+  validateStagedOverride,
+  type ConfigOverrideValue,
   type Period,
   type Platform,
 } from "@agency_hub_core/shared";
@@ -98,6 +105,9 @@ import {
   type AuthPrincipal,
 } from "../services/auth.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../services/ai-usage.ts";
+import { buildConfigView } from "../services/app-config-service.ts";
+import { LIVE_CONFIG_KEYS } from "../services/effective-config.ts";
+import { commitStagedConfigChange } from "../services/staged-config.ts";
 import { listConnectionStatuses, updatePageCredentials } from "../services/connections.ts";
 import {
   AppError,
@@ -2746,6 +2756,201 @@ export async function buildApiServer(appContext: AppContext) {
     });
     const latest = await getLatestDeliveryAttempt(appContext.db);
     return buildNotificationsSettingsResponse(settings, latest);
+  });
+
+  server.get("/api/v1/admin/config", {
+    schema: routeSchemas.adminConfig,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    // Thread the PRE-boot-apply env config so desiredEffective uses the env baseline for
+    // keys with no override (falls back to the boot-applied config for legacy contexts).
+    const envBaseline = (appContext.rawConfig ?? appContext.config) as unknown as Record<string, unknown>;
+    return buildConfigView(appContext.db, envBaseline);
+  });
+
+  // PATCH (the live editing path) rejects any key that is not wired to the runtime
+  // overlay (`runtimeApply === 'live'`), so an override can never be written for a key
+  // the runtime would not actually apply without a restart. Still required to be
+  // `editable` (the policy class) — staged/boot flags use the separate staged endpoint.
+  function assertLiveEditableReloadKey(key: string) {
+    if (!LIVE_CONFIG_KEYS.has(key)) {
+      throw new BadRequestError(`Config key is not runtime-editable: ${key}`);
+    }
+    const descriptor = getDescriptor(key);
+    if (!descriptor) {
+      throw new BadRequestError(`Unknown config key: ${key}`);
+    }
+    if (descriptor.editability !== "editable") {
+      throw new BadRequestError(`Config key is not editable: ${key}`);
+    }
+    if (descriptor.runtimeApply !== "live") {
+      throw new BadRequestError(`Config key does not apply at runtime: ${key}`);
+    }
+  }
+
+  // DELETE clears ONLY an `editability === 'editable'` override (a stuck editable knob —
+  // including a non-live editable tunable like ofapiDmDailyCreditBudget). It rejects
+  // 'staged' and 'never' keys: a staged (boot) flag is reverted to env exclusively via the
+  // staged endpoint (`desired: null`), which enforces the mandatory expectedVersion + ack
+  // and the order/disable rules — the generic DELETE would bypass all of that.
+  function assertClearableKey(key: string) {
+    const descriptor = getDescriptor(key);
+    if (!descriptor) {
+      throw new BadRequestError(`Unknown config key: ${key}`);
+    }
+    if (descriptor.editability !== "editable") {
+      throw new BadRequestError(`Config key is not editable: ${key}`);
+    }
+  }
+
+  server.patch("/api/v1/admin/config", {
+    schema: routeSchemas.adminConfigUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { patches, note } = request.body;
+    // A key may appear at most once per patch — duplicates would double-audit / double-
+    // bump the version (or self-conflict) inside the atomic apply.
+    const keys = patches.map((patch) => patch.key);
+    if (new Set(keys).size !== keys.length) {
+      throw new BadRequestError("A patch may not set the same key twice");
+    }
+    // Validate every key/value up front so a bad entry rejects the whole patch before
+    // anything is written. Persist the CLAMPED value so processes and UI agree.
+    const validatedPatches = patches.map((patch) => {
+      assertLiveEditableReloadKey(patch.key);
+      const validated = validateConfigOverride(patch.key, patch.value);
+      if (!validated.ok) {
+        throw new BadRequestError(validated.error);
+      }
+      return { key: patch.key, value: validated.value, expectedVersion: patch.expectedVersion };
+    });
+
+    try {
+      // One transaction, all-or-nothing: a conflict on any key rolls back every key.
+      const results = await setConfigOverridesAtomic(appContext.db, {
+        patches: validatedPatches,
+        userId: principal.user.id,
+        note,
+        groupId: randomUUID(),
+      });
+      // The live PATCH only ever sends upserts (never a clear), so every result carries a
+      // non-null value/version — narrow the atomic writer's (now nullable) shape back.
+      return {
+        results: results as Array<{ key: string; value: ConfigOverrideValue; version: number }>,
+      };
+    } catch (error) {
+      if (error instanceof ConfigOverrideVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+  });
+
+  server.delete("/api/v1/admin/config/:key", {
+    schema: routeSchemas.adminConfigClear,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { key } = request.params;
+    assertClearableKey(key);
+
+    try {
+      await clearConfigOverride(appContext.db, {
+        key,
+        expectedVersion: request.query.expectedVersion,
+        userId: principal.user.id,
+        note: request.query.note,
+        groupId: randomUUID(),
+      });
+    } catch (error) {
+      if (error instanceof ConfigOverrideVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+
+    return { ok: true as const, key };
+  });
+
+  // Staged-rollout flips (Stage C): write explicit boolean overrides for the boot-applied
+  // flag set in the prescribed enable order. These take effect only after a restart
+  // (applyBootOverrides at process start). The ordered enable/disable rules are checked
+  // against the APPLIED (running) state, so a prerequisite must be restarted/applied
+  // before the next step unlocks. expectedVersion is mandatory and the operator's `ack`
+  // is recorded in the audit note so the acknowledgement is auditable, not just UI.
+  server.patch("/api/v1/admin/config/staged", {
+    schema: routeSchemas.adminConfigStaged,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { patches, note, ack } = request.body;
+    if (ack !== true) {
+      throw new BadRequestError("acknowledgement required: staged flips take effect only after a restart");
+    }
+    // A key may appear at most once per patch — duplicates would double-audit / double-
+    // bump (or self-conflict) in the atomic apply, and confuse the order graph.
+    const keys = patches.map((patch) => patch.key);
+    if (new Set(keys).size !== keys.length) {
+      throw new BadRequestError("A patch may not set the same key twice");
+    }
+
+    // The desired-graph baseline is the CURRENT DB desired state, NOT the boot-applied
+    // config (which is stale relative to later staged writes that have not been deployed).
+    // A `desired: null` patch reverts the key to env (clears the override). It is VALIDATED
+    // as if setting the key to its current env baseline boolean (so reverting an env-off key
+    // runs the disable-dependent rule), but APPLIED as a clear (the row is deleted).
+    const rawConfig = (appContext.rawConfig ?? appContext.config) as unknown as Record<string, unknown>;
+    const resolvedDesired = (patch: { key: string; desired: boolean | null }): boolean =>
+      patch.desired === null ? rawConfig[patch.key] === true : patch.desired;
+
+    // Per-key value/wiring gate: every key must be a boot (staged) descriptor. A boolean
+    // patch is validated as-is; a null (clear) patch is validated as its env baseline
+    // boolean. Reject the whole patch on the first bad entry before any read/write (400).
+    for (const patch of patches) {
+      const validated = validateStagedOverride(patch.key, resolvedDesired(patch));
+      if (!validated.ok) {
+        throw new BadRequestError(validated.error);
+      }
+    }
+
+    // Structured audit note: the ack + operator note travel with every audit row so the
+    // acknowledgement is durable evidence, not merely a UI affordance.
+    const auditNote = JSON.stringify({ ack: true, note: note ?? null });
+
+    try {
+      // BLOCKER 1: the read-validate-write is delegated to one advisory-locked transaction
+      // (commitStagedConfigChange). It re-reads the baseline + running snapshot INSIDE the
+      // lock, runs the order gate (validateStagedTransition) against that serialized
+      // snapshot, then applies the patches — so two concurrent staged commits on different
+      // keys can never both pass validation and persist an invalid graph. A transition
+      // failure throws BadRequestError (400); a version conflict surfaces as 409 below.
+      const results = await commitStagedConfigChange(appContext.db, {
+        patches: patches.map((patch) => ({
+          key: patch.key,
+          desired: patch.desired,
+          expectedVersion: patch.expectedVersion,
+        })),
+        resolvedDesired,
+        rawConfig,
+        userId: principal.user.id,
+        note: auditNote,
+        groupId: randomUUID(),
+      });
+      // The atomic writer returns ConfigOverrideValue (boolean for an upsert; null for a
+      // cleared key, which reverts to env).
+      return { results: results.map((result) => ({ ...result, value: result.value as boolean | null })) };
+    } catch (error) {
+      if (error instanceof ConfigOverrideVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
   });
 
   server.patch("/api/v1/admin/notifications/settings", {

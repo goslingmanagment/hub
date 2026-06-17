@@ -14,6 +14,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   notifyOfapiAuthIncident,
   notifyOfapiGlobalIncident,
@@ -130,7 +131,10 @@ export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Da
   }
 
   try {
-    const creditAlertThreshold = app.config.ofapiCreditAlertThreshold ??
+    // One effective-config snapshot covers both live keys read here, so the credit
+    // threshold and webhook-silence threshold can never read from a half-applied mix.
+    const effective = await loadEffectiveConfig(app.db, app.config);
+    const creditAlertThreshold = effective.ofapiCreditAlertThreshold ??
       DEFAULT_CREDIT_ALERT_THRESHOLD;
     if (creditAlertThreshold > 0) {
       const credit = await getOfapiCreditState(app.db, now);
@@ -155,7 +159,7 @@ export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Da
     if (mappedPages.length > 0) {
       const thresholdMs = Math.max(
         1,
-        app.config.ofapiWebhookSilenceThresholdMinutes ?? DEFAULT_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
+        effective.ofapiWebhookSilenceThresholdMinutes ?? DEFAULT_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
       ) * 60 * 1000;
       const latestEventAt = await getLatestOfapiWebhookEventReceivedAt(app.db);
       // No journal rows at all (fresh install or past retention) gives no

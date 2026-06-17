@@ -23,6 +23,7 @@ import {
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
@@ -342,12 +343,15 @@ export async function runOfapiCreditBurnMonitor(app: AppContext, now = new Date(
     return;
   }
 
-  const threshold = app.config.ofapiBurnAlertCreditsPerHour ?? DEFAULT_BURN_ALERT_CREDITS_PER_HOUR;
-  if (threshold <= 0) {
-    return;
-  }
-
   try {
+    // Inside the try so an override DB-read failure follows the same log/continue
+    // path as the rest of the monitor instead of escaping.
+    const effective = await loadEffectiveConfig(app.db, app.config);
+    const threshold = effective.ofapiBurnAlertCreditsPerHour ?? DEFAULT_BURN_ALERT_CREDITS_PER_HOUR;
+    if (threshold <= 0) {
+      return;
+    }
+
     const spentLastHour = await sumOfapiCreditsSpentSince(app.db, {
       since: new Date(now.getTime() - 60 * 60 * 1000),
     });

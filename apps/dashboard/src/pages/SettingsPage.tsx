@@ -5,6 +5,7 @@ import { SyncTab } from "./settings/SyncTab.js";
 import { ModelsTab } from "./settings/ModelsTab.js";
 import { PagesTab } from "./settings/PagesTab.js";
 import { UsersTab } from "./settings/UsersTab.js";
+import { ConfigurationTab } from "./settings/ConfigurationTab.js";
 
 const tabs: { key: SettingsTab; label: string }[] = [
   { key: "credentials", label: "Credentials" },
@@ -12,6 +13,7 @@ const tabs: { key: SettingsTab; label: string }[] = [
   { key: "models", label: "Models" },
   { key: "pages", label: "Pages" },
   { key: "users", label: "Users" },
+  { key: "configuration", label: "Configuration" },
 ];
 
 export function SettingsPage() {
@@ -50,6 +52,7 @@ export function SettingsPage() {
       {activeTab === "models" && <ModelsTab />}
       {activeTab === "pages" && <PagesTab />}
       {activeTab === "users" && <UsersTab />}
+      {activeTab === "configuration" && <ConfigurationTab />}
     </div>
   );
 }

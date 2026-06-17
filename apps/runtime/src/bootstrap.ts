@@ -1,4 +1,4 @@
-import { assertRuntimeSchemaReady, createDb, createPool, type Database } from "@agency_hub_core/db";
+import { assertRuntimeSchemaReady, createDb, createPool, getConfigOverrides, type Database } from "@agency_hub_core/db";
 import { FanslyAdapter } from "@agency_hub_core/fansly";
 import { OnlyFansAdapter } from "@agency_hub_core/onlyfans";
 import type {
@@ -14,9 +14,12 @@ import type {
   FanslySubscriber,
 } from "@agency_hub_core/fansly";
 import {
+  applyBootOverrides,
+  checkSyncConcurrencyInvariant,
   createLogger,
   loadConfig,
   resolveFanslyDefaultDelayEnvSource,
+  type SkippedOverride,
 } from "@agency_hub_core/shared";
 
 import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
@@ -67,7 +70,21 @@ export type AdapterLike = ProviderAdapter<
 };
 
 export interface AppContext {
+  /** The env config with the staged ('boot') DB overrides applied (see
+   *  applyBootOverrides). Equal to the raw env config when there are no boot overrides. */
   config: ReturnType<typeof loadConfig>;
+  /** The PRE-boot-apply env config (raw `loadConfig()`), before any DB override merge.
+   *  The staged validator uses this as the env baseline so the desired-graph it checks is
+   *  built from the current DB overrides over the raw env — never the stale boot-applied
+   *  `config`. Optional so existing AppContext literals (tests, codegen) need not provide
+   *  it; createAppContext always populates it. */
+  rawConfig?: ReturnType<typeof loadConfig>;
+  /** Boot-apply overrides that were rejected at start (invalid value / not a boot key /
+   *  merged-invariant violation). The heartbeat publishes these in its snapshot so the
+   *  dashboard can surface an ignored override per instance. Empty for a clean boot.
+   *  Optional so existing AppContext literals (tests, codegen) need not provide it;
+   *  createAppContext always populates it, so production behavior is exact. */
+  bootSkipped?: SkippedOverride[];
   logger: ReturnType<typeof createLogger>;
   pool: ReturnType<typeof createPool>;
   db: Database;
@@ -81,8 +98,10 @@ export interface AppContext {
 }
 
 export async function createAppContext(): Promise<AppContext> {
-  const config = loadConfig();
-  const logger = createLogger(config.logLevel);
+  // Env config. loadConfig runs its own boot invariants on the env values here. The
+  // logger is built from the env logLevel (runtimeApply: 'none', never boot-applied).
+  const rawConfig = loadConfig();
+  const logger = createLogger(rawConfig.logLevel);
 
   const deprecatedFanslyDelayAlias = resolveFanslyDefaultDelayEnvSource(process.env);
   if (
@@ -95,17 +114,42 @@ export async function createAppContext(): Promise<AppContext> {
     );
   }
 
-  if (config.syncPageExecutorConcurrency > 1 && !config.syncSharedRateLimitEnabled) {
-    throw new Error(
-      "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true",
-    );
+  const syncConcurrencyInvariantError = checkSyncConcurrencyInvariant({
+    pageExecutorConcurrency: rawConfig.syncPageExecutorConcurrency,
+    sharedRateLimitEnabled: rawConfig.syncSharedRateLimitEnabled,
+  });
+  if (syncConcurrencyInvariantError) {
+    throw new Error(syncConcurrencyInvariantError);
   }
 
-  const pool = createPool(config.databaseUrl);
+  const pool = createPool(rawConfig.databaseUrl);
   try {
     await assertRuntimeSchemaReady(pool);
 
     const db = createDb(pool);
+
+    // Apply the staged ('boot') DB overrides onto the env config exactly once, before
+    // anything reads config (adapters/OFAPI client/sink). A read or apply failure is
+    // non-fatal: log and fall back to the env config so a DB hiccup can't wedge boot.
+    // With no boot overrides in the DB this is a no-op and config === rawConfig.
+    let bootSkipped: SkippedOverride[] = [];
+    let config = rawConfig;
+    try {
+      const overrides = await getConfigOverrides(db);
+      const applied = applyBootOverrides(rawConfig, overrides);
+      config = applied.config;
+      bootSkipped = applied.skipped;
+    } catch (err) {
+      // A DB read failure must not wedge boot — but it also must not skip the staged
+      // requires-graph normalization. applyBootOverrides with NO overrides is pure (no I/O)
+      // and still forces any invalid env-only dependent=on/prereq=off graph OFF, so boot can
+      // never start an invalid graph even when the override read fails (e.g. a transient blip).
+      logger.warn({ err }, "boot override read failed; normalizing env config without overrides");
+      const applied = applyBootOverrides(rawConfig, new Map());
+      config = applied.config;
+      bootSkipped = applied.skipped;
+    }
+
     const adapter = new FanslyAdapter({
       baseUrl: config.fanslyBaseUrl,
       globalDelayMs: config.fanslyDefaultDelayMs,
@@ -126,6 +170,8 @@ export async function createAppContext(): Promise<AppContext> {
 
     return {
       config,
+      rawConfig,
+      bootSkipped,
       logger,
       pool,
       db,

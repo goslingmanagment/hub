@@ -141,6 +141,13 @@ const envSchema = z.object({
   WB_CLOSING_LLM_DAILY_CAP_MAX: z.coerce.number().int().positive().default(400),
 });
 
+// Machine-readable list of every env var the schema understands. Exported so the
+// config registry (config-registry.ts) can be parity-tested against the schema
+// without reaching into Zod internals (see config-registry parity test).
+export const ENV_CONFIG_KEYS = Object.keys(envSchema.shape) as Array<
+  keyof typeof envSchema.shape
+>;
+
 export interface AppConfig {
   databaseUrl: string;
   encryptionKey: Buffer;
@@ -238,11 +245,49 @@ export function resolveFanslyDefaultDelayEnvSource(env: NodeJS.ProcessEnv = proc
   return null;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  loadDotEnv({
-    processEnv: env,
-    quiet: process.env.DOTENV_CONFIG_QUIET === "true",
-  });
+/** Public-profile resolution may only be enabled when there is a way to reach
+ *  OnlyFans safely: a configured proxy OR an explicit allow-direct. This is an OR
+ *  the registry's simple `requires` AND-list can't express, so it lives here as a
+ *  pure precondition shared by boot (loadConfig) and, in Stage B/C, the editing
+ *  PATCH. Returns the exact boot error message when violated, else null. */
+export function checkPublicProfileResolutionInvariant(input: {
+  resolutionEnabled: boolean;
+  allowDirect: boolean;
+  hasProxy: boolean;
+}): string | null {
+  if (input.resolutionEnabled && !input.allowDirect && !input.hasProxy) {
+    return "ONLYFANS_PUBLIC_PROFILE_PROXY_URL or ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT=true is required when ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED=true";
+  }
+  return null;
+}
+
+/** Concurrency > 1 is only safe when the shared rate limiter is on (the limiter is
+ *  what keeps simultaneous workers from hammering an upstream past its budget). The
+ *  boot check in bootstrap.ts throws on this; exposed here as a pure validator so the
+ *  Stage B/C PATCH can reject the same combination before applying an override.
+ *  Returns the boot error message when violated, else null. */
+export function checkSyncConcurrencyInvariant(input: {
+  pageExecutorConcurrency: number;
+  sharedRateLimitEnabled: boolean;
+}): string | null {
+  if (input.pageExecutorConcurrency > 1 && !input.sharedRateLimitEnabled) {
+    return "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true";
+  }
+  return null;
+}
+
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { loadDotEnv?: boolean } = {},
+): AppConfig {
+  // Callers that pass an explicit env (tests, the registry parity check) can opt
+  // out of merging the ambient .env file so the result is hermetic.
+  if (options.loadDotEnv !== false) {
+    loadDotEnv({
+      processEnv: env,
+      quiet: process.env.DOTENV_CONFIG_QUIET === "true",
+    });
+  }
 
   const parsed = envSchema.parse(env);
   const encryptionKey = parseEncryptionKey(parsed.APP_ENCRYPTION_KEY, "APP_ENCRYPTION_KEY");
@@ -260,14 +305,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const onlyFansPublicProfileProxy = parseOnlyFansPublicProfileProxy(
     parsed.ONLYFANS_PUBLIC_PROFILE_PROXY_URL,
   );
-  if (
-    parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED &&
-    !parsed.ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT &&
-    !onlyFansPublicProfileProxy
-  ) {
-    throw new Error(
-      "ONLYFANS_PUBLIC_PROFILE_PROXY_URL or ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT=true is required when ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED=true",
-    );
+  const publicProfileInvariantError = checkPublicProfileResolutionInvariant({
+    resolutionEnabled: parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED,
+    allowDirect: parsed.ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT,
+    hasProxy: Boolean(onlyFansPublicProfileProxy),
+  });
+  if (publicProfileInvariantError) {
+    throw new Error(publicProfileInvariantError);
   }
   const telegramBotToken = parsed.TELEGRAM_BOT_TOKEN ?? null;
   const telegramChatId = parsed.TELEGRAM_CHAT_ID ?? null;

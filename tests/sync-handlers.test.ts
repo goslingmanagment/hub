@@ -8,6 +8,9 @@ import {
 } from "@agency_hub_core/shared";
 
 const dbMocks = vi.hoisted(() => ({
+  // The transactions executor now resolves live effective config (one read per
+  // chunk); these chunk tests use a bare db so stub it to "no overrides".
+  getConfigOverrides: vi.fn(async () => new Map()),
   countRecentTerminalDmMessageConversationFailureStreak: vi.fn(),
   countActivePageFollows: vi.fn(),
   deactivatePageFollowsByGeneration: vi.fn(),

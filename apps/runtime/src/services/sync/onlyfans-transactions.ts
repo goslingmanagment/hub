@@ -726,6 +726,8 @@ async function syncOnlyFansTransactionsIncremental(
     platformAccountIdValue: string;
     commissionRate: number;
     rescanStart?: Date | null;
+    transactionLookbackDays?: number;
+    transactionRescanCapDays?: number;
     requestContext: Parameters<AppContext["onlyFansAdapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;
@@ -734,18 +736,21 @@ async function syncOnlyFansTransactionsIncremental(
   checkpoint: Awaited<ReturnType<typeof getCheckpoint>>,
   existingState: ParsedOnlyFansIncrementalResumeState | null,
 ): Promise<OnlyFansTransactionSyncResult> {
+  // Live effective windowing, with a boot-config fallback for callers that omit it.
+  const transactionLookbackDays = input.transactionLookbackDays ?? app.config.transactionLookbackDays;
+  const transactionRescanCapDays = input.transactionRescanCapDays ?? app.config.transactionRescanCapDays;
   const oldestPendingAt = await getOldestPendingTransactionAt(app.db, input.platformAccountId);
   const lookbackStart = checkpoint?.cursorTimestamp
     ? new Date(
       checkpoint.cursorTimestamp.getTime() -
-        app.config.transactionLookbackDays * DAY_MS,
+        transactionLookbackDays * DAY_MS,
     )
     : null;
   const earliestRescanStart = lookbackStart && oldestPendingAt
     ? (oldestPendingAt < lookbackStart ? oldestPendingAt : lookbackStart)
     : (lookbackStart ?? oldestPendingAt);
   const rescanCapStart = startOfBusinessDay(
-    new Date(Date.now() - app.config.transactionRescanCapDays * DAY_MS),
+    new Date(Date.now() - transactionRescanCapDays * DAY_MS),
     UTC_TIME_ZONE,
   );
   let state: OnlyFansIncrementalResumeState;
@@ -1352,6 +1357,8 @@ async function syncOnlyFansTransactionsBackfill(
     pageMetadata: Record<string, unknown>;
     commissionRate: number;
     rescanStart?: Date | null;
+    transactionLookbackDays?: number;
+    transactionRescanCapDays?: number;
     requestContext: Parameters<AppContext["onlyFansAdapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;
@@ -1930,7 +1937,10 @@ async function syncOnlyFansTransactionsBackfill(
     await persistOnlyFansBackfillLowerBound(
       app,
       input.platformAccountId,
-      bufferOnlyFansBackfillLowerBound(oldestSeenAt, app.config.transactionLookbackDays),
+      bufferOnlyFansBackfillLowerBound(
+        oldestSeenAt,
+        input.transactionLookbackDays ?? app.config.transactionLookbackDays,
+      ),
     );
   }
 
@@ -1992,6 +2002,10 @@ export async function syncOnlyFansTransactions(
     pageMetadata: Record<string, unknown>;
     commissionRate: number;
     rescanStart?: Date | null;
+    // Live effective windowing (Stage B1), resolved once per chunk by the executor.
+    // Omitted callers (tests) fall back to the boot config at the read-site.
+    transactionLookbackDays?: number;
+    transactionRescanCapDays?: number;
     requestContext: Parameters<AppContext["onlyFansAdapter"]["getTransactionsPage"]>[0];
     syncRunId: number;
     telemetry: SyncRunTelemetry;

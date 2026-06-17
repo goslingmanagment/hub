@@ -13,6 +13,12 @@ vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
   getSyncStatusSnapshot: healthMocks.getSyncStatusSnapshot,
 }));
 
+// getPublicSyncHealth now resolves live effective config; with no db overlay here it
+// is the boot config, so stub it to return the passed config unchanged.
+vi.mock("../apps/runtime/src/services/effective-config.ts", () => ({
+  loadEffectiveConfig: vi.fn(async (_db: unknown, config: unknown) => config),
+}));
+
 import { getPublicSyncHealth, getSystemHealth } from "../apps/runtime/src/services/health.ts";
 
 describe("health service", () => {

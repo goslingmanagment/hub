@@ -36,6 +36,7 @@ import {
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { loadEffectiveConfig } from "../effective-config.ts";
 import { isOfapiCreditLedgerEnabled } from "../ofapi-credits.ts";
 import { asRecord, idToString } from "../ofapi-payloads.ts";
 import type { OfapiClient, OfapiListPage, OfapiRequestContext } from "../ofapi.ts";
@@ -513,9 +514,10 @@ export async function executeOfapiDmConversationsChunk(
   let state = parseOfapiDmConversationCursorState(checkpoint?.state) ??
     emptyOfapiDmConversationCursorState();
   const guard = createOfapiRestGuard(app);
+  const effective = await loadEffectiveConfig(app.db, app.config);
   const reconcileIntervalMs = Math.max(
     1,
-    app.config.ofapiDmReconcileIntervalMinutes ?? DEFAULT_RECONCILE_INTERVAL_MINUTES,
+    effective.ofapiDmReconcileIntervalMinutes ?? DEFAULT_RECONCILE_INTERVAL_MINUTES,
   ) * 60 * 1000;
 
   const bootstrapping = state.bootstrapCompletedAt === null;

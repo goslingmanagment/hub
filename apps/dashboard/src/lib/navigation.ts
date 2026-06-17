@@ -5,7 +5,7 @@ export interface FanProfileNavigationState {
   fanLabel?: string;
 }
 
-export type SettingsTab = "credentials" | "sync" | "models" | "pages" | "users";
+export type SettingsTab = "credentials" | "sync" | "models" | "pages" | "users" | "configuration";
 
 const SETTINGS_TABS = new Set<SettingsTab>([
   "credentials",
@@ -13,6 +13,7 @@ const SETTINGS_TABS = new Set<SettingsTab>([
   "models",
   "pages",
   "users",
+  "configuration",
 ]);
 
 export function buildPageRoute(pageLabel: string) {
