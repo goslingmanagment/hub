@@ -10,6 +10,8 @@ import {
 } from "@/api/adminConfig";
 import { ApiError } from "@/api/client";
 import { ModalShell } from "@/components/shared/ModalShell";
+import { Tooltip } from "@/components/shared/Tooltip";
+import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
 
 // The 3 staged flags that drive a sync stream: after a restart their paused Sync blocks
 // must be manually resumed on the Sync tab (no resume-all button by design).
@@ -77,38 +79,60 @@ function Badge({
   );
 }
 
-const EDITABILITY_TONE: Record<string, string> = {
-  never: "bg-zinc-500/15 text-zinc-500",
-  staged: "bg-amber-500/15 text-amber-600",
-  editable: "bg-sky-500/15 text-sky-600",
+const ROLE_STATUS_RU: Record<string, string> = {
+  active: "активен",
+  stale: "устарел",
+  down: "недоступен",
+  offline: "недоступен",
+  missing: "нет данных",
 };
 
-const EDITABILITY_LABEL: Record<string, string> = {
-  never: "ops-only",
-  staged: "staged",
-  editable: "editable",
-};
+// One honest status per row, collapsing the editability × runtimeApply matrix into the
+// single thing the user needs: can I change this here, or not? An "editable" key whose
+// runtimeApply is "none" (a tunable not yet wired to the live overlay) reads as read-only —
+// NOT as an inviting "editable", which the old two-badge combo wrongly implied.
+//
+// `rail` is the page's signature device: a left accent border that quietly highlights the
+// rows you can act on (blue = live, amber = staged) and stays invisible on read-only rows,
+// so the eye lands on what's actionable. `chip` says the same in words for color-blind users.
+function primaryStatus(item: ConfigItem): {
+  label: string;
+  title: string;
+  rail: string;
+  chip: string;
+} {
+  if (item.editability === "staged") {
+    return {
+      label: "поэтапно",
+      title: "Включается поэтапно — управление в разделе «Поэтапная раскатка» ниже",
+      rail: "border-l-amber-500/60",
+      chip: "border-amber-500/40 text-amber-600",
+    };
+  }
+  if (item.runtimeApply === "live") {
+    return {
+      label: "можно менять",
+      title: "Можно изменить здесь; применяется на лету (~60с), перезапуск не нужен",
+      rail: "border-l-sky-500/70",
+      chip: "border-sky-500/40 text-sky-600",
+    };
+  }
+  return {
+    label: "только чтение",
+    title: "Здесь не редактируется; задаётся администратором через переменные окружения",
+    rail: "border-l-transparent",
+    chip: "border-border text-text-muted",
+  };
+}
 
-// Wiring class (runtimeApply): 'live' applies without a restart; 'boot' is captured at
-// process start; 'none' is not overridable via the DB at all (env-only / read-only) —
-// it must NOT read as "restart"/"live".
-const RUNTIME_APPLY_LABEL: Record<string, string> = {
-  live: "live",
-  boot: "applies after restart",
-  none: "env only",
-};
-
-const RUNTIME_APPLY_TONE: Record<string, string> = {
-  live: "bg-emerald-500/15 text-emerald-600",
-  boot: "bg-orange-500/15 text-orange-600",
-  none: "bg-zinc-500/15 text-zinc-500",
-};
-
-const RUNTIME_APPLY_TITLE: Record<string, string> = {
-  live: "Applies live (no restart)",
-  boot: "Captured at boot — applies after restart",
-  none: "Not overridable here — env-only / read-only",
-};
+// Sort within a subsystem so the few actionable (live-editable) rows surface to the top,
+// then staged flags, then plain read-only, then secrets — without losing subsystem grouping.
+function rowRank(item: ConfigItem): number {
+  if (item.runtimeApply === "live") return 0;
+  if (item.editability === "staged") return 1;
+  if (item.secret) return 3;
+  return 2;
+}
 
 function RunningCell({ item }: { item: ConfigItem }) {
   if (item.running.length === 0) {
@@ -168,7 +192,7 @@ function seedValue(item: ConfigItem): string {
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : "Save failed.";
+  return err instanceof Error ? err.message : "Не удалось сохранить.";
 }
 
 function ConfigEditor({ item }: { item: ConfigItem }) {
@@ -236,7 +260,7 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
             confirm === "save" ? "bg-danger hover:opacity-90" : "bg-accent hover:opacity-90"
           }`}
         >
-          {confirm === "save" ? "Confirm" : "Save"}
+          {confirm === "save" ? "Подтвердить" : "Сохранить"}
         </button>
         {item.source === "override" && (
           <button
@@ -249,7 +273,7 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
                 : "border border-border bg-card text-text-secondary hover:bg-hover"
             }`}
           >
-            {confirm === "revert" ? "Confirm revert" : "Revert to env"}
+            {confirm === "revert" ? "Подтвердить сброс" : "Сбросить"}
           </button>
         )}
         {confirm !== null && (
@@ -259,33 +283,75 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
             disabled={pending}
             className="rounded border border-border bg-card px-2 py-0.5 text-xs text-text-secondary hover:bg-hover disabled:opacity-40"
           >
-            Cancel
+            Отмена
           </button>
         )}
         {item.pendingApply && (
           <Badge
             tone="bg-amber-500/15 text-amber-600"
-            title="Saved — can take up to ~60s (one heartbeat) to reflect across processes"
+            title="Сохранено — может занять до ~60с (один сигнал), чтобы примениться во всех процессах"
           >
-            applying…
+            применяется…
           </Badge>
         )}
       </div>
       {confirm !== null && needsConfirm && (
         <div className="text-[11px] text-amber-600">
-          {item.destructive ? "Destructive: lowering/clearing this drops data irreversibly. " : ""}
+          {item.destructive ? "Необратимо: снижение или очистка безвозвратно удалит данные. " : ""}
           {item.costWarning ?? ""}{" "}
-          {confirm === "revert" ? "Revert to the env default?" : "Click Confirm to apply."}
+          {confirm === "revert" ? "Сбросить к значению по умолчанию?" : "Нажмите «Подтвердить», чтобы применить."}
         </div>
       )}
       {error && (
         <div className="text-[11px] text-red-600">
           {isConflict
-            ? "Changed elsewhere — values were refreshed, review and retry."
+            ? "Изменено в другом месте — значения обновлены, проверьте и повторите."
             : errorMessage(error)}
         </div>
       )}
     </div>
+  );
+}
+
+function InfoIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      width="13"
+      height="13"
+      fill="currentColor"
+      aria-hidden="true"
+      className="inline-block align-[-1px]"
+    >
+      <path d="M10 1.6a8.4 8.4 0 100 16.8 8.4 8.4 0 000-16.8zm0 1.5a6.9 6.9 0 110 13.8 6.9 6.9 0 010-13.8zM10 5.2a1.05 1.05 0 110 2.1 1.05 1.05 0 010-2.1zM9.1 8.7h1.8v6H9.1z" />
+    </svg>
+  );
+}
+
+// Shared label block: the (untranslated) English name with an optional ⓘ that reveals the
+// detailed Russian explanation on hover/focus, then the env var, the short Russian summary,
+// and any technical note. Used by both the table rows and the staged-flag rows.
+function SettingLabel({ item }: { item: ConfigItem }) {
+  const copy = CONFIG_COPY_RU[item.key];
+  return (
+    <>
+      <div className="flex items-center gap-1">
+        <span className="text-sm font-medium text-text-primary">{item.label}</span>
+        {copy?.long && (
+          <Tooltip content={copy.long} focusable>
+            <span
+              aria-label={`Подробное описание: ${item.label}`}
+              className="cursor-help text-text-muted transition-colors hover:text-text-secondary"
+            >
+              <InfoIcon />
+            </span>
+          </Tooltip>
+        )}
+      </div>
+      <div className="font-mono text-[11px] text-text-muted">{item.envName}</div>
+      {copy?.short && <div className="mt-0.5 text-[12px] text-text-secondary">{copy.short}</div>}
+      {item.note && <div className="mt-0.5 text-[11px] text-text-muted">{item.note}</div>}
+    </>
   );
 }
 
@@ -299,56 +365,52 @@ function SettingRow({ item }: { item: ConfigItem }) {
     && !item.secret
     && !item.running[0]?.masked
     && formatScalar(item.running[0]!.value) !== item.default;
+  const status = primaryStatus(item);
 
   return (
-    <tr className="border-b border-border/60 last:border-0 align-top">
-      <td className="py-2 pr-4">
-        <div className="text-sm font-medium text-text-primary">{item.label}</div>
-        <div className="font-mono text-[11px] text-text-muted">{item.envName}</div>
-        {item.note && <div className="mt-0.5 text-[11px] text-text-muted">{item.note}</div>}
-      </td>
-      <td className="py-2 pr-4 text-sm">
+    <div
+      className={`grid grid-cols-1 gap-y-2 border-l-2 ${status.rail} py-3.5 pl-4 pr-3 sm:grid-cols-[minmax(0,1fr)_104px_minmax(168px,auto)] sm:items-start sm:gap-x-5`}
+    >
+      <div className="min-w-0">
+        <SettingLabel item={item} />
+      </div>
+      <div className="text-sm sm:pt-0.5">
         <RunningCell item={item} />
-      </td>
-      <td className="py-2 pr-4 text-sm">
-        <span className={runningDiffersFromDefault ? "font-mono text-text-secondary" : "font-mono text-text-muted"}>
-          {item.default}
-        </span>
-      </td>
-      <td className="py-2 pr-4">
-        <div className="flex flex-wrap items-center gap-1">
-          <Badge tone={EDITABILITY_TONE[item.editability] ?? "bg-zinc-500/15 text-zinc-500"}>
-            {EDITABILITY_LABEL[item.editability] ?? item.editability}
-          </Badge>
-          <Badge
-            tone={RUNTIME_APPLY_TONE[item.runtimeApply] ?? "bg-zinc-500/15 text-zinc-500"}
-            title={RUNTIME_APPLY_TITLE[item.runtimeApply] ?? ""}
+        {runningDiffersFromDefault && (
+          <div className="mt-0.5 text-[11px] text-text-muted">
+            умолч. <span className="font-mono">{item.default}</span>
+          </div>
+        )}
+      </div>
+      <div className="flex flex-col items-start gap-2 sm:items-end">
+        <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
+          <span
+            title={status.title}
+            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${status.chip}`}
           >
-            {RUNTIME_APPLY_LABEL[item.runtimeApply] ?? item.runtimeApply}
-          </Badge>
+            {status.label}
+          </span>
           {item.drift && (
-            <Badge tone="bg-red-500/15 text-red-600" title="Live processes disagree on this value">
-              drift
+            <Badge tone="bg-red-500/15 text-red-600" title="Запущенные процессы сообщают разные значения">
+              рассинхрон
             </Badge>
           )}
           {item.costWarning && (
             <Badge tone="bg-amber-500/15 text-amber-600" title={item.costWarning}>
-              ⚠ cost
+              расходы
             </Badge>
           )}
           {item.destructive && (
-            <Badge tone="bg-red-500/15 text-red-600" title="Lowering/clearing this drops data irreversibly">
-              destructive
+            <Badge tone="bg-red-500/15 text-red-600" title="Снижение или очистка безвозвратно удаляет данные">
+              необратимо
             </Badge>
           )}
         </div>
-      </td>
-      <td className="py-2">
-        {isEditable ? (
+        {isEditable && (
           <ConfigEditor key={`${item.overrideVersion ?? "env"}:${seedValue(item)}`} item={item} />
-        ) : null}
-      </td>
-    </tr>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -528,7 +590,7 @@ function StagedConfirmModal({
         {error && (
           <div className="text-[12px] text-red-600">
             {isConflict
-              ? "Changed elsewhere — values were refreshed, review and retry."
+              ? "Изменено в другом месте — значения обновлены, проверьте и повторите."
               : errorMessage(error)}
           </div>
         )}
@@ -625,12 +687,10 @@ function StagedFlagRow({
   ];
 
   return (
-    <div className="flex flex-col gap-1.5 border-b border-border/60 py-3 last:border-0">
+    <div className="flex flex-col gap-1.5 border-b border-l-2 border-border/60 border-l-amber-500/50 py-3 pl-4 pr-4 last:border-b-0">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-sm font-medium text-text-primary">{item.label}</div>
-          <div className="font-mono text-[11px] text-text-muted">{item.envName}</div>
-          {item.note && <div className="mt-0.5 text-[11px] text-text-muted">{item.note}</div>}
+          <SettingLabel item={item} />
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
@@ -742,22 +802,28 @@ function StagedRolloutSection({ items }: { items: ConfigItem[] }) {
 
   return (
     <section>
-      <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-text-secondary">
-        Staged rollout
-      </h2>
-      <p className="mb-3 text-[12px] text-text-muted">
-        Boot-applied feature flags. Saving sets the desired value now; it takes effect on the next
-        restart/deploy. Each flag unlocks only once its prerequisite is running — enable in order.
-      </p>
+      <div className="mb-3">
+        <div className="flex items-baseline gap-2.5">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-text-secondary">
+            Поэтапная раскатка
+          </h2>
+          <span className="font-mono text-[11px] text-text-muted">{bootFlags.length}</span>
+        </div>
+        <p className="mt-1 max-w-3xl text-[13px] text-text-muted">
+          Флаги функций, применяемые при запуске. Сохранение задаёт нужное значение сейчас, а в силу
+          оно вступит после следующего перезапуска. Каждый флаг разблокируется, только когда работает
+          его предшественник — включайте по порядку.
+        </p>
+      </div>
       <div className="space-y-5">
         {groups.map(([group, flags]) => {
           const ordered = [...flags].sort((a, b) => (a.stagedOrder ?? 0) - (b.stagedOrder ?? 0));
           return (
-            <div key={group} className="rounded border border-border">
-              <div className="border-b border-border bg-hover px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-text-secondary">
+            <div key={group} className="overflow-hidden rounded-lg border border-border bg-card">
+              <div className="border-b border-border bg-hover px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-secondary">
                 {group}
               </div>
-              <div className="px-3">
+              <div>
                 {ordered.map((flag) => (
                   <StagedFlagRow key={flag.key} item={flag} items={itemMap} all={bootFlags} />
                 ))}
@@ -820,76 +886,82 @@ export function ConfigurationTab() {
 
   return (
     <div className="space-y-6">
-      <p className="text-sm text-text-muted">
-        Effective runtime configuration as reported by each live process. Editable, live keys can be
-        overridden here and apply without a restart (up to ~60s to propagate across processes); all other
-        values are set via environment variables and apply after a deploy. Secrets show only set/unset state.
+      <p className="max-w-3xl text-sm leading-relaxed text-text-muted">
+        Текущие рабочие настройки приложения — как их сообщает каждый запущенный процесс. Те, что
+        можно менять прямо здесь, снабжены полем ввода и применяются без перезапуска (до ~60 секунд на
+        распространение между процессами). Остальные задаёт администратор через переменные окружения,
+        и они вступают в силу после развёртывания. Секреты показывают только состояние: «задан» или
+        «не задан». Наведите на значок&nbsp;ⓘ у названия, чтобы увидеть подробное объяснение настройки.
       </p>
 
       {data.roleStatuses.some((role) => role.status !== "active") && (
         <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
           {data.roleStatuses
             .filter((role) => role.status !== "active")
-            .map((role) => `${role.role} is ${role.status}`)
+            .map((role) => `${role.role}: ${ROLE_STATUS_RU[role.status] ?? role.status}`)
             .join(" · ")}
-          {" — running values below reflect only the live process(es)."}
+          {" — значения ниже отражают только работающий(е) процесс(ы)."}
         </div>
       )}
 
       <StagedPendingBanner data={data} />
 
-      <div className="flex flex-wrap items-center gap-2">
-        {data.roleStatuses.map((role) => (
-          <span
-            key={`role:${role.role}`}
-            className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium ${
-              role.status === "active"
-                ? "bg-emerald-500/15 text-emerald-600"
-                : role.status === "stale"
-                  ? "bg-amber-500/15 text-amber-600"
-                  : "bg-red-500/15 text-red-600"
-            }`}
-          >
-            {role.role}: {role.status}
-          </span>
-        ))}
-        {data.instances.map((instance) => (
-          <span
-            key={`${instance.role}:${instance.instanceId}`}
-            className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs"
-          >
-            <span className={`h-1.5 w-1.5 rounded-full ${instance.status === "active" ? "bg-emerald-500" : "bg-amber-500"}`} />
-            <span className="font-medium text-text-primary">{instance.role}</span>
-            <span className="font-mono text-text-muted">{instance.instanceId.slice(0, 8)}</span>
-            <span className="text-text-muted">· seen {formatSeen(instance.lastSeenAt)}</span>
-            {instance.imageTag && <span className="text-text-muted">· {instance.imageTag}</span>}
-          </span>
-        ))}
+      <div className="rounded-lg border border-border bg-card px-4 py-3">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
+          Процессы
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {data.roleStatuses.map((role) => (
+            <span
+              key={`role:${role.role}`}
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium ${
+                role.status === "active"
+                  ? "bg-emerald-500/15 text-emerald-600"
+                  : role.status === "stale"
+                    ? "bg-amber-500/15 text-amber-600"
+                    : "bg-red-500/15 text-red-600"
+              }`}
+            >
+              {role.role}: {ROLE_STATUS_RU[role.status] ?? role.status}
+            </span>
+          ))}
+          {data.instances.map((instance) => (
+            <span
+              key={`${instance.role}:${instance.instanceId}`}
+              title={`${instance.role} · ${instance.instanceId}`}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs"
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${instance.status === "active" ? "bg-emerald-500" : "bg-amber-500"}`} />
+              <span className="font-medium text-text-primary">{instance.role}</span>
+              <span className="text-text-muted">· сигнал {formatSeen(instance.lastSeenAt)}</span>
+              {instance.imageTag && <span className="text-text-muted">· {instance.imageTag}</span>}
+            </span>
+          ))}
+        </div>
       </div>
 
-      {data.subsystems.map((group) => (
-        <section key={group.subsystem}>
-          <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-text-secondary">
-            {group.subsystem}
-          </h2>
-          <table className="w-full table-auto">
-            <thead>
-              <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-text-muted">
-                <th className="py-1.5 pr-4 font-medium">Setting</th>
-                <th className="py-1.5 pr-4 font-medium">Running</th>
-                <th className="py-1.5 pr-4 font-medium">Default</th>
-                <th className="py-1.5 pr-4 font-medium">Status</th>
-                <th className="py-1.5 font-medium">Edit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {group.items.map((item) => (
+      <div className="space-y-8">
+        {data.subsystems.map((group) => (
+          <section key={group.subsystem}>
+            <div className="mb-3">
+              <div className="flex items-baseline gap-2.5">
+                <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-text-secondary">
+                  {group.subsystem}
+                </h2>
+                <span className="font-mono text-[11px] text-text-muted">{group.items.length}</span>
+              </div>
+              {SUBSYSTEM_COPY_RU[group.subsystem] && (
+                <p className="mt-1 text-[13px] text-text-muted">{SUBSYSTEM_COPY_RU[group.subsystem]}</p>
+              )}
+            </div>
+            <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border bg-card">
+              {[...group.items].sort((a, b) => rowRank(a) - rowRank(b)).map((item) => (
                 <SettingRow key={item.key} item={item} />
               ))}
-            </tbody>
-          </table>
-        </section>
-      ))}
+            </div>
+          </section>
+        ))}
+      </div>
 
       <StagedRolloutSection items={data.subsystems.flatMap((group) => group.items)} />
     </div>
