@@ -533,6 +533,133 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ai/gateway/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stream a chatter AI generation through the core gateway
+         * @description Default-off ChatMuse gateway for desktop AI generations. The runtime route uses chatter API-key auth, validates the prompt-stream request contract, and must not reach provider network while the gateway flag is disabled.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        clientRequestId: string;
+                        /** @enum {string} */
+                        feature: "fast-reply" | "improve-draft" | "help-me" | "fan-summary" | "chat-review" | "scan" | "ping" | "hi-greeting";
+                        pageLabel: string;
+                        /** @enum {string} */
+                        platform: "fansly" | "onlyfans";
+                        platformUserId: string;
+                        conversationId?: string | null;
+                        model: string;
+                        /** @enum {string} */
+                        reasoningEffort: "off" | "low" | "medium" | "high" | "max";
+                        temperature?: number;
+                        maxTokens?: number;
+                        isRegeneration: boolean;
+                        prompt: {
+                            systemBlocks: {
+                                text: string;
+                                /** @enum {string} */
+                                cache: "1h" | "5m" | "none";
+                            }[];
+                            userBlocks: {
+                                text: string;
+                                /** @enum {string} */
+                                cache: "1h" | "5m" | "none";
+                            }[];
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pages": {
         parameters: {
             query?: never;

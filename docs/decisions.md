@@ -626,3 +626,9 @@ builder.
   may stream through runtime but must not be persisted in logs, diagnostics, audit, or the ledger.
 - **Rollback:** local desktop provider keys remain supported until the gateway is deployed,
   production-validated, and disabling the gateway flag demonstrably restores direct mode.
+
+**R4b runtime gate:** `CHATMUSE_AI_GATEWAY_ENABLED` is now a default-off, staged boot-applied flag
+and `POST /api/v1/ai/gateway/stream` exists as a chatter-key route. With the flag off it returns
+`503` before page lookup, quota reservation, provider network, or ledger writes. With the flag on,
+it verifies page assignment/platform and still returns `503` before provider execution until the
+next runtime slices add Anthropic streaming, quota reservation, and durable ledger rows.

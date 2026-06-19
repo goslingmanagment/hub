@@ -17,4 +17,10 @@ describe("route schema security", () => {
   it("documents logout as an idempotent cookie-clearing route", () => {
     expect((routeSchemas.logout as { security?: unknown }).security).toBeUndefined();
   });
+
+  it("marks desktop-facing AI gateway routes as bearer-only", () => {
+    const bearerOnlySecurity = [{ bearerAuth: [] }];
+
+    expect(routeSchemas.aiGatewayStream.security).toEqual(bearerOnlySecurity);
+  });
 });

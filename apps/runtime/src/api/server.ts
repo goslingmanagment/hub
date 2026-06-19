@@ -106,6 +106,7 @@ import {
   unassignPageFromUser,
   type AuthPrincipal,
 } from "../services/auth.ts";
+import { prepareAiGatewayStream } from "../services/ai-gateway.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../services/ai-usage.ts";
 import { buildConfigView } from "../services/app-config-service.ts";
 import { LIVE_CONFIG_KEYS } from "../services/effective-config.ts";
@@ -666,6 +667,14 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     return ingestAiUsageBatch(appContext, principal, request.body);
+  });
+
+  server.post("/api/v1/ai/gateway/stream", {
+    schema: routeSchemas.aiGatewayStream,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    return prepareAiGatewayStream(appContext, principal, request.body);
   });
 
   server.get("/api/v1/pages", {

@@ -1,6 +1,7 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4a contract only. No runtime route is implemented by this document.
+Status: R4b default-off runtime gate is implemented. Provider execution, quota ledger, and
+streaming are still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -22,9 +23,10 @@ later gateway version and must preserve the same feature and output contracts.
 - Response: `text/event-stream`.
 - Request schema: `aiGatewayStreamBodySchema` in `packages/contracts/src/routes.ts`.
 - Frame schema: each SSE `data:` payload is one `aiGatewayStreamFrameSchema` JSON object.
-- Runtime flag: default-off gateway flag required before the route can reach a provider. When the
-  flag is off or provider key custody is incomplete, return `503` before quota reservation or
-  provider network.
+- Runtime flag: `CHATMUSE_AI_GATEWAY_ENABLED`, default `false`, staged boot-applied. When the flag
+  is off, return `503` before quota reservation, page lookup, or provider network. While the runtime
+  provider implementation is still pending, enabling the flag authorizes only the page-scope check
+  and still returns `503` before any provider call or ledger write.
 
 ## Request
 
@@ -137,7 +139,7 @@ Removing local desktop LLM keys or forcing gateway mode is a later decision.
 Before runtime implementation:
 
 - keep the exported contract schemas and tests green;
-- add a default-off gateway flag and staged/runtime config copy;
+- add a default-off gateway flag and staged/runtime config copy; **done in R4b gate slice**;
 - choose the first provider path explicitly (Anthropic first; OpenRouter compatibility can follow);
 - add/extend ledger storage for provider response id, page id, provider, cost, quota, and outcome;
 - define cancellation semantics so desktop `ai:cancel` aborts the provider request;

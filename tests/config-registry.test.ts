@@ -96,10 +96,11 @@ describe("config registry", () => {
     "ofapiDesktopReadGatewayEnabled",
     "ofapiDesktopCommandOutboxEnabled",
     "ofapiDesktopCommandExecutionEnabled",
+    "chatMuseAiGatewayEnabled",
     "onlyFansTopSpendersEnabled",
   ];
 
-  it("wires exactly the eight live keys, the fourteen boot keys, and nothing else", () => {
+  it("wires exactly the eight live keys, the fifteen boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);
@@ -152,7 +153,7 @@ describe("config registry", () => {
     }
   });
 
-  it("orders #50, #51, #52, #54, #55, and the #56 command-execution slice", () => {
+  it("orders #26, #50, #51, #52, #54, #55, and the #56 command-execution slice", () => {
     const order = (key: string) => getDescriptor(key)!.stagedOrder;
     expect(order("ofapiDmProjectionEnabled")).toBe(1);
     expect(order("ofapiDmSyncEnabled")).toBe(2);
@@ -168,6 +169,7 @@ describe("config registry", () => {
     expect(order("ofapiDesktopReadGatewayEnabled")).toBe(1);
     expect(order("ofapiDesktopCommandOutboxEnabled")).toBe(1);
     expect(order("ofapiDesktopCommandExecutionEnabled")).toBe(1);
+    expect(order("chatMuseAiGatewayEnabled")).toBe(1);
   });
 
   it("masks secrets and complex values in the running snapshot", () => {

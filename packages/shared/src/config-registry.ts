@@ -22,6 +22,7 @@ export type ConfigSubsystem =
   | "Sync"
   | "OFAPI"
   | "Telegram"
+  | "ChatMuse"
   | "Workboard";
 
 export type ConfigKind =
@@ -185,6 +186,7 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   { key: "ofapiDesktopReadGatewayEnabled", envName: "OFAPI_DESKTOP_READ_GATEWAY_ENABLED", configField: "ofapiDesktopReadGatewayEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI desktop read gateway", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#54", stagedOrder: 1, requires: ["ofapiCreditLedgerEnabled"], costWarning: "Gateway reads spend real OFAPI credits.", note: "Read-only C6 custody slice. Desktop direct mode remains available until write commands and rollback are complete." },
   { key: "ofapiDesktopCommandOutboxEnabled", envName: "OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED", configField: "ofapiDesktopCommandOutboxEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI desktop command outbox", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#55", stagedOrder: 1, requires: ["ofapiDesktopReadGatewayEnabled"], note: "C6b intake/read/cancel only. Enabling does not execute commands or call OFAPI." },
   { key: "ofapiDesktopCommandExecutionEnabled", envName: "OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED", configField: "ofapiDesktopCommandExecutionEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI desktop command execution", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#56", stagedOrder: 1, requires: ["ofapiDesktopCommandOutboxEnabled"], costWarning: "Executes real OFAPI sends and spends credits.", note: "C6b2 text-send executor. Enable only for a controlled production test fan after the outbox rollout is healthy." },
+  { key: "chatMuseAiGatewayEnabled", envName: "CHATMUSE_AI_GATEWAY_ENABLED", configField: "chatMuseAiGatewayEnabled", kind: "boolean", subsystem: "ChatMuse", label: "ChatMuse AI gateway", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#26", stagedOrder: 1, costWarning: "Routes chatter AI generations through core provider keys and spend ledger.", note: "Default-off C6c/R4 gateway route. Local desktop provider keys remain the rollback path until production validation passes." },
 
   // ── Workboard ─────────────────────────────────────────────────────────────
   { key: "anthropicApiKey", envName: "ANTHROPIC_API_KEY", configField: "anthropicApiKey", kind: "secret", subsystem: "Workboard", label: "Anthropic API key", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "Also key-gates the closing LLM." },

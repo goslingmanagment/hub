@@ -3560,6 +3560,22 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  aiGatewayStream: {
+    tags: ["usage"],
+    summary: "Stream a chatter AI generation through the core gateway",
+    description: "Default-off ChatMuse gateway for desktop AI generations. The runtime route "
+      + "uses chatter API-key auth, validates the prompt-stream request contract, and must not "
+      + "reach provider network while the gateway flag is disabled.",
+    security: bearerOnlySecurity,
+    body: aiGatewayStreamBodySchema,
+    response: {
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
   ofapiWebhookReceive: {
     tags: ["ofapi"],
     summary: "Receive an OFAPI webhook delivery",

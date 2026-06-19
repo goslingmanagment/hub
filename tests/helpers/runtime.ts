@@ -42,6 +42,7 @@ export function createTestAppContext(
     ofapiDesktopReadGatewayEnabled?: boolean;
     ofapiDesktopCommandOutboxEnabled?: boolean;
     ofapiDesktopCommandExecutionEnabled?: boolean;
+    chatMuseAiGatewayEnabled?: boolean;
     onlyFansTopSpendersEnabled?: boolean;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
@@ -116,6 +117,7 @@ export function createTestAppContext(
         overrides?.ofapiDesktopCommandOutboxEnabled ?? false,
       ofapiDesktopCommandExecutionEnabled:
         overrides?.ofapiDesktopCommandExecutionEnabled ?? false,
+      chatMuseAiGatewayEnabled: overrides?.chatMuseAiGatewayEnabled ?? false,
       onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
     } as AppContext["config"];
 
