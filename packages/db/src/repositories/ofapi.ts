@@ -302,6 +302,86 @@ export async function listOfapiWebhookEventsForSpendProjection(
     .limit(input.limit);
 }
 
+export interface OfapiSpendProjectionTransactionIngestRow {
+  id: number;
+  pageId: number;
+  ofapiAccountId: string;
+  fanPlatformUserId: string;
+  transactionId: string;
+  occurredAt: Date;
+  category: "message" | "tip" | "subscription" | "post" | "stream" | "other";
+  grossAmountMills: bigint;
+  creatorNetAmountMills: bigint;
+  eventStatus: "pending" | "settled";
+  journalId: number;
+}
+
+/**
+ * Forward-only C3 apply candidates. Rows already represented in core
+ * transactions are intentionally skipped here; mismatches stay visible in the
+ * comparison endpoint until a human-reviewed repair path exists.
+ */
+export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
+  db: Database,
+  input: {
+    limit: number;
+  },
+): Promise<OfapiSpendProjectionTransactionIngestRow[]> {
+  const rows = await db
+    .select({
+      id: ofapiSpendProjectionEvents.id,
+      pageId: ofapiSpendProjectionEvents.pageId,
+      ofapiAccountId: ofapiSpendProjectionEvents.ofapiAccountId,
+      fanPlatformUserId: ofapiSpendProjectionEvents.fanPlatformUserId,
+      transactionId: ofapiSpendProjectionEvents.transactionId,
+      occurredAt: ofapiSpendProjectionEvents.occurredAt,
+      category: ofapiSpendProjectionEvents.category,
+      grossAmountMills: ofapiSpendProjectionEvents.grossAmountMills,
+      creatorNetAmountMills: ofapiSpendProjectionEvents.creatorNetAmountMills,
+      eventStatus: ofapiSpendProjectionEvents.eventStatus,
+      journalId: ofapiSpendProjectionEvents.journalId,
+    })
+    .from(ofapiSpendProjectionEvents)
+    .where(and(
+      eq(ofapiSpendProjectionEvents.sourceEventType, "transactions.new"),
+      eq(ofapiSpendProjectionEvents.projectionStatus, "projected"),
+      isNotNull(ofapiSpendProjectionEvents.fanPlatformUserId),
+      isNotNull(ofapiSpendProjectionEvents.transactionId),
+      isNotNull(ofapiSpendProjectionEvents.grossAmountMills),
+      isNotNull(ofapiSpendProjectionEvents.creatorNetAmountMills),
+      inArray(ofapiSpendProjectionEvents.category, [
+        "message",
+        "tip",
+        "subscription",
+        "post",
+        "stream",
+        "other",
+      ]),
+      inArray(ofapiSpendProjectionEvents.eventStatus, ["pending", "settled"]),
+      sql`not exists (
+        select 1 from ${transactions} tx
+        where tx.platform_account_id = ${ofapiSpendProjectionEvents.pageId}
+          and tx.transaction_id = ${ofapiSpendProjectionEvents.transactionId}
+      )`,
+    ))
+    .orderBy(asc(ofapiSpendProjectionEvents.occurredAt), asc(ofapiSpendProjectionEvents.id))
+    .limit(input.limit);
+
+  return rows.map((row) => ({
+    id: row.id,
+    pageId: row.pageId,
+    ofapiAccountId: row.ofapiAccountId,
+    fanPlatformUserId: row.fanPlatformUserId!,
+    transactionId: row.transactionId!,
+    occurredAt: row.occurredAt,
+    category: row.category as OfapiSpendProjectionTransactionIngestRow["category"],
+    grossAmountMills: row.grossAmountMills!,
+    creatorNetAmountMills: row.creatorNetAmountMills!,
+    eventStatus: row.eventStatus as OfapiSpendProjectionTransactionIngestRow["eventStatus"],
+    journalId: row.journalId,
+  }));
+}
+
 export type OfapiSpendProjectionComparisonStatus =
   | "matched"
   | "missing_in_core_truth"
@@ -394,7 +474,13 @@ const OFAPI_SPEND_COMPARISON_STATUS_SQL = sql`
       then 'amount_mismatch'
     when p.source_event_type = 'transactions.new'
       and p.projection_status = 'projected'
-      and t.transaction_state::text is distinct from p.event_status
+      and t.transaction_state::text is distinct from (
+        case p.event_status
+          when 'settled' then 'posted'
+          when 'pending' then 'pending'
+          else p.event_status
+        end
+      )
       then 'state_mismatch'
     when p.source_event_type = 'transactions.new'
       and p.projection_status = 'projected'

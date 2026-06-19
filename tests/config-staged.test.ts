@@ -8,7 +8,7 @@ import {
   type StagedPatchEntry,
 } from "../apps/runtime/src/services/staged-config.ts";
 
-// A minimal AppConfig with the fields applyBootOverrides reads/writes: the 9 boot
+// A minimal AppConfig with the fields applyBootOverrides reads/writes: the 10 boot
 // boolean flags plus the fields the generic merged-invariant check consults. Partial
 // cast keeps the test free of the full env schema.
 function baseConfig(): AppConfig {
@@ -21,6 +21,7 @@ function baseConfig(): AppConfig {
     ofapiAudienceSyncEnabled: false,
     ofapiPresenceProjectionEnabled: false,
     ofapiSpendProjectionShadowEnabled: false,
+    ofapiSpendTransactionIngestEnabled: false,
     onlyFansTopSpendersEnabled: false,
     // Invariant inputs (generic/defensive; no current boot key touches these).
     onlyFansPublicProfileResolutionEnabled: false,

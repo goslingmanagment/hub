@@ -1,6 +1,7 @@
 // Shadow-only spend projection from OFAPI webhook journal rows (ChatGoose C3).
-// This writes comparison rows only; it does not change transactions, revenue
-// rollups, owner dashboards, or desktop spend-sweep cadence.
+// By itself this writes comparison rows only. A separate boot flag may then
+// apply missing transaction rows from this projection into core truth; desktop
+// spend-sweep cadence remains unchanged until production comparison matches.
 
 import {
   getOfapiWebhookEventById,
@@ -16,6 +17,10 @@ import {
   notificationChatId,
   ofapiWebhookEnvelopeSchema,
 } from "./ofapi-payloads.ts";
+import {
+  applyOfapiSpendProjectionTransactions,
+  isOfapiSpendTransactionIngestEnabled,
+} from "./ofapi-spend-transaction-ingest.ts";
 import {
   mapOfapiWebhookToSpendProjectionEvent,
   OFAPI_TIPS_RECEIVED_BLOCKED_REASON,
@@ -280,6 +285,15 @@ export async function runOfapiSpendProjectionForSettledRow(
 
   try {
     await projectOfapiSpendEvent(app, fresh);
+    if (isOfapiSpendTransactionIngestEnabled(app.config)) {
+      const applied = await applyOfapiSpendProjectionTransactions(app);
+      if (applied > 0) {
+        app.logger.info(
+          { applied },
+          "OFAPI spend transaction ingest applied projected transactions",
+        );
+      }
+    }
   } catch (error) {
     app.logger.warn(
       { err: error, eventId: row.id, eventType: row.eventType },
@@ -300,6 +314,16 @@ export async function sweepOfapiSpendProjections(app: AppContext) {
 
   for (const row of rows) {
     await runOfapiSpendProjectionForSettledRow(app, row);
+  }
+
+  if (isOfapiSpendTransactionIngestEnabled(app.config)) {
+    const applied = await applyOfapiSpendProjectionTransactions(app);
+    if (applied > 0) {
+      app.logger.info(
+        { applied },
+        "OFAPI spend transaction ingest applied projected transactions",
+      );
+    }
   }
 
   return rows.length;

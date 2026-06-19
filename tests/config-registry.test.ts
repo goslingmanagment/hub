@@ -69,7 +69,7 @@ describe("config registry", () => {
   });
 
   // Allowlist guard for the Stage C wiring class. Exactly these 8 keys are wired to the
-  // live runtime overlay; exactly these 9 staged flags are boot-applied; everything else
+  // live runtime overlay; exactly these 10 staged flags are boot-applied; everything else
   // is 'none' (not overridable via the DB). A new 'live'/'boot' key must update this set
   // deliberately — it can't slip in unnoticed.
   const LIVE_KEYS = [
@@ -91,10 +91,11 @@ describe("config registry", () => {
     "ofapiAudienceSyncEnabled",
     "ofapiPresenceProjectionEnabled",
     "ofapiSpendProjectionShadowEnabled",
+    "ofapiSpendTransactionIngestEnabled",
     "onlyFansTopSpendersEnabled",
   ];
 
-  it("wires exactly the eight live keys, the nine boot keys, and nothing else", () => {
+  it("wires exactly the eight live keys, the ten boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);
@@ -122,6 +123,7 @@ describe("config registry", () => {
     expect(req("ofapiAudienceSyncEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
     expect(req("ofapiPresenceProjectionEnabled")).toEqual(["ofapiAudienceSyncEnabled"]);
     expect(req("ofapiSpendProjectionShadowEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
+    expect(req("ofapiSpendTransactionIngestEnabled")).toEqual(["ofapiSpendProjectionShadowEnabled"]);
     expect(req("onlyFansTopSpendersEnabled")).toEqual(["ofapiPresenceProjectionEnabled"]);
   });
 
@@ -140,7 +142,7 @@ describe("config registry", () => {
     }
   });
 
-  it("orders the #50 staged group ledger(1)→ping(2)→audience(3)→presence(4)→topSpenders(5) and #51 shadow(1)", () => {
+  it("orders the #50 staged group ledger(1)→ping(2)→audience(3)→presence(4)→topSpenders(5) and #51 shadow(1)→transactionIngest(2)", () => {
     const order = (key: string) => getDescriptor(key)!.stagedOrder;
     expect(order("ofapiDmProjectionEnabled")).toBe(1);
     expect(order("ofapiDmSyncEnabled")).toBe(2);
@@ -151,6 +153,7 @@ describe("config registry", () => {
     expect(order("ofapiPresenceProjectionEnabled")).toBe(4);
     expect(order("onlyFansTopSpendersEnabled")).toBe(5);
     expect(order("ofapiSpendProjectionShadowEnabled")).toBe(1);
+    expect(order("ofapiSpendTransactionIngestEnabled")).toBe(2);
   });
 
   it("masks secrets and complex values in the running snapshot", () => {
