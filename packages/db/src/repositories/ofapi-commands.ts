@@ -1,4 +1,13 @@
-import { and, eq, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  gte,
+  inArray,
+  lte,
+  lt,
+  sql,
+} from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { ofapiCommands } from "../schema.ts";
@@ -99,4 +108,141 @@ export async function cancelQueuedOfapiCommand(
     .returning();
 
   return updated ?? null;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  if ("code" in error && error.code === "23505") {
+    return true;
+  }
+  return "cause" in error && isUniqueViolation(error.cause);
+}
+
+/**
+ * Claims one queued row for its only vendor attempt. The partial unique lane
+ * index is the final concurrency authority; a competing lane claim returns null.
+ */
+export async function claimQueuedOfapiCommand(
+  db: Database,
+  input: { commandId: string; now: Date },
+) {
+  try {
+    const [claimed] = await db
+      .update(ofapiCommands)
+      .set({
+        state: "in_flight",
+        attemptCount: 1,
+        attemptStartedAt: input.now,
+        attemptFinishedAt: null,
+        lastErrorCode: null,
+        lastErrorClass: null,
+        verifierResult: null,
+        updatedAt: input.now,
+      })
+      .where(and(
+        eq(ofapiCommands.id, input.commandId),
+        eq(ofapiCommands.state, "queued"),
+        eq(ofapiCommands.attemptCount, 0),
+      ))
+      .returning();
+    return claimed ?? null;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function listQueuedOfapiCommandIds(
+  db: Database,
+  input: { limit: number },
+) {
+  return db
+    .select({ id: ofapiCommands.id })
+    .from(ofapiCommands)
+    .where(and(
+      eq(ofapiCommands.state, "queued"),
+      eq(ofapiCommands.attemptCount, 0),
+    ))
+    .orderBy(asc(ofapiCommands.createdAt))
+    .limit(input.limit);
+}
+
+export async function finalizeOfapiCommand(
+  db: Database,
+  input: {
+    commandId: string;
+    fromStates: Array<"in_flight" | "indeterminate">;
+    state: "confirmed" | "failed_retryable" | "failed_terminal" | "indeterminate";
+    now: Date;
+    lastErrorCode?: string | null;
+    lastErrorClass?: string | null;
+    verifierResult?: Record<string, unknown> | null;
+    platformMessageId?: string | null;
+  },
+) {
+  const [updated] = await db
+    .update(ofapiCommands)
+    .set({
+      state: input.state,
+      attemptFinishedAt: input.now,
+      lastErrorCode: input.lastErrorCode ?? null,
+      lastErrorClass: input.lastErrorClass ?? null,
+      verifierResult: input.verifierResult ?? null,
+      platformMessageId: input.platformMessageId ?? null,
+      updatedAt: input.now,
+    })
+    .where(and(
+      eq(ofapiCommands.id, input.commandId),
+      inArray(ofapiCommands.state, input.fromStates),
+    ))
+    .returning();
+
+  return updated ?? null;
+}
+
+export async function markStaleInFlightOfapiCommandsIndeterminate(
+  db: Database,
+  input: { startedBefore: Date; now: Date },
+) {
+  return db
+    .update(ofapiCommands)
+    .set({
+      state: "indeterminate",
+      attemptFinishedAt: input.now,
+      lastErrorCode: "worker_attempt_stale",
+      lastErrorClass: "indeterminate",
+      verifierResult: { source: "stale_recovery" },
+      updatedAt: input.now,
+    })
+    .where(and(
+      eq(ofapiCommands.state, "in_flight"),
+      lt(ofapiCommands.attemptStartedAt, input.startedBefore),
+    ))
+    .returning({ id: ofapiCommands.id });
+}
+
+export async function listOfapiCommandVerificationCandidates(
+  db: Database,
+  input: {
+    ofapiAccountId: string;
+    conversationId: string;
+    attemptStartedFrom: Date;
+    attemptStartedTo: Date;
+  },
+) {
+  return db
+    .select()
+    .from(ofapiCommands)
+    .where(and(
+      eq(ofapiCommands.ofapiAccountId, input.ofapiAccountId),
+      eq(ofapiCommands.conversationId, input.conversationId),
+      inArray(ofapiCommands.state, ["in_flight", "indeterminate"]),
+      gte(ofapiCommands.attemptStartedAt, input.attemptStartedFrom),
+      lte(ofapiCommands.attemptStartedAt, input.attemptStartedTo),
+    ))
+    .orderBy(asc(ofapiCommands.attemptStartedAt));
 }

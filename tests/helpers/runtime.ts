@@ -41,6 +41,7 @@ export function createTestAppContext(
     ofapiSpendTransactionIngestEnabled?: boolean;
     ofapiDesktopReadGatewayEnabled?: boolean;
     ofapiDesktopCommandOutboxEnabled?: boolean;
+    ofapiDesktopCommandExecutionEnabled?: boolean;
     onlyFansTopSpendersEnabled?: boolean;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
@@ -113,6 +114,8 @@ export function createTestAppContext(
       ofapiDesktopReadGatewayEnabled: overrides?.ofapiDesktopReadGatewayEnabled ?? false,
       ofapiDesktopCommandOutboxEnabled:
         overrides?.ofapiDesktopCommandOutboxEnabled ?? false,
+      ofapiDesktopCommandExecutionEnabled:
+        overrides?.ofapiDesktopCommandExecutionEnabled ?? false,
       onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
     } as AppContext["config"];
 

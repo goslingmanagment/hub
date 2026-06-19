@@ -69,7 +69,7 @@ describe("config registry", () => {
   });
 
   // Allowlist guard for the Stage C wiring class. Exactly these 8 keys are wired to the
-  // live runtime overlay; exactly these 10 staged flags are boot-applied; everything else
+  // live runtime overlay; exactly these staged flags are boot-applied; everything else
   // is 'none' (not overridable via the DB). A new 'live'/'boot' key must update this set
   // deliberately — it can't slip in unnoticed.
   const LIVE_KEYS = [
@@ -95,10 +95,11 @@ describe("config registry", () => {
     "ofapiSpendTransactionIngestEnabled",
     "ofapiDesktopReadGatewayEnabled",
     "ofapiDesktopCommandOutboxEnabled",
+    "ofapiDesktopCommandExecutionEnabled",
     "onlyFansTopSpendersEnabled",
   ];
 
-  it("wires exactly the eight live keys, the thirteen boot keys, and nothing else", () => {
+  it("wires exactly the eight live keys, the fourteen boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);
@@ -130,6 +131,9 @@ describe("config registry", () => {
     expect(req("ofapiSpendTransactionIngestEnabled")).toEqual(["ofapiSpendProjectionShadowEnabled"]);
     expect(req("ofapiDesktopReadGatewayEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
     expect(req("ofapiDesktopCommandOutboxEnabled")).toEqual(["ofapiDesktopReadGatewayEnabled"]);
+    expect(req("ofapiDesktopCommandExecutionEnabled")).toEqual([
+      "ofapiDesktopCommandOutboxEnabled",
+    ]);
     expect(req("onlyFansTopSpendersEnabled")).toEqual(["ofapiPresenceProjectionEnabled"]);
   });
 
@@ -148,7 +152,7 @@ describe("config registry", () => {
     }
   });
 
-  it("orders #50, #51, #52, #54, and the #55 command-outbox slice", () => {
+  it("orders #50, #51, #52, #54, #55, and the #56 command-execution slice", () => {
     const order = (key: string) => getDescriptor(key)!.stagedOrder;
     expect(order("ofapiDmProjectionEnabled")).toBe(1);
     expect(order("ofapiDmSyncEnabled")).toBe(2);
@@ -163,6 +167,7 @@ describe("config registry", () => {
     expect(order("ofapiDmColdArchiveEnabled")).toBe(1);
     expect(order("ofapiDesktopReadGatewayEnabled")).toBe(1);
     expect(order("ofapiDesktopCommandOutboxEnabled")).toBe(1);
+    expect(order("ofapiDesktopCommandExecutionEnabled")).toBe(1);
   });
 
   it("masks secrets and complex values in the running snapshot", () => {

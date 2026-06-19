@@ -1029,6 +1029,8 @@ export const ofapiCommands = pgTable(
     lastErrorClass: text("last_error_class"),
     verifierResult: jsonb("verifier_result").$type<Record<string, unknown>>(),
     platformMessageId: text("platform_message_id"),
+    attemptStartedAt: timestamp("attempt_started_at", { withTimezone: true }),
+    attemptFinishedAt: timestamp("attempt_finished_at", { withTimezone: true }),
     dedupeExpiresAt: timestamp("dedupe_expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -1044,6 +1046,12 @@ export const ofapiCommands = pgTable(
     pageLaneCreatedIdx: index("ofapi_commands_page_lane_created_idx")
       .on(table.pageId, table.conversationId, table.createdAt),
     dedupeExpiresIdx: index("ofapi_commands_dedupe_expires_idx").on(table.dedupeExpiresAt),
+    queuedCreatedIdx: index("ofapi_commands_queued_created_idx")
+      .on(table.createdAt)
+      .where(sql`${table.state} = 'queued'`),
+    verifierCandidateIdx: index("ofapi_commands_verifier_candidate_idx")
+      .on(table.ofapiAccountId, table.conversationId, table.attemptStartedAt)
+      .where(sql`${table.state} in ('in_flight', 'indeterminate')`),
     retryCommandFk: foreignKey({
       name: "ofapi_commands_retry_of_command_id_fk",
       columns: [table.retryOfCommandId],
@@ -1065,6 +1073,9 @@ export const ofapiCommands = pgTable(
     `),
     attemptNonnegativeCheck: check("ofapi_commands_attempt_count_nonnegative_check", sql`
       ${table.attemptCount} >= 0
+    `),
+    attemptMaxOneCheck: check("ofapi_commands_attempt_count_max_one_check", sql`
+      ${table.attemptCount} <= 1
     `),
     accountIdCheck: check("ofapi_commands_account_id_check", sql`
       ${table.ofapiAccountId} ~ '^acct_[A-Za-z0-9]+$'
