@@ -1031,6 +1031,7 @@ export const ofapiCommands = pgTable(
     platformMessageId: text("platform_message_id"),
     attemptStartedAt: timestamp("attempt_started_at", { withTimezone: true }),
     attemptFinishedAt: timestamp("attempt_finished_at", { withTimezone: true }),
+    payloadRedactedAt: timestamp("payload_redacted_at", { withTimezone: true }),
     dedupeExpiresAt: timestamp("dedupe_expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -1052,6 +1053,12 @@ export const ofapiCommands = pgTable(
     verifierCandidateIdx: index("ofapi_commands_verifier_candidate_idx")
       .on(table.ofapiAccountId, table.conversationId, table.attemptStartedAt)
       .where(sql`${table.state} in ('in_flight', 'indeterminate')`),
+    payloadRedactionIdx: index("ofapi_commands_payload_redaction_idx")
+      .on(table.updatedAt)
+      .where(sql`
+        ${table.payloadRedactedAt} is null
+        and ${table.state} in ('confirmed', 'failed_retryable', 'failed_terminal', 'cancelled')
+      `),
     retryCommandFk: foreignKey({
       name: "ofapi_commands_retry_of_command_id_fk",
       columns: [table.retryOfCommandId],

@@ -548,8 +548,8 @@ There is no generic path/method proxy.
   status endpoints. The purge/export policy is defined in
   `docs/ofapi-command-outbox-contract.md`: terminal rows must eventually tombstone payload text
   while retaining non-text audit metadata, and owner/admin exports must exclude command text.
-  Runtime purge/export implementation remains required before broad rollout; the first production
-  validation uses a harmless never-executed command and cancels it.
+  Runtime purge now redacts old terminal payloads from the minutely command sweep; raw payload
+  export remains out of scope.
 
 **Rollback:** disabling command intake rejects new commands while retaining existing audit rows.
 Disabling future execution parks queued commands and prevents new claims; it never changes a
@@ -602,7 +602,7 @@ Runtime heartbeats reported outbox enabled, execution disabled, and no skipped o
 chatter-key command validated create/read/cancel while staying `attempt_count=0`; no execute job,
 `ofapi_command_send_text` ledger row, payload-text log, or vendor send was observed.
 Non-live recovery UX and payload purge/export policy are now defined in the command contract; the
-runtime purge/export implementation, desktop transport UI, and controlled live send remain pending.
+runtime payload purge is implemented; desktop transport UI and controlled live send remain pending.
 
 ## ChatMuse AI Gateway Contract (2026-06-19)
 

@@ -1,7 +1,7 @@
 # OFAPI Desktop Command Outbox Contract
 
-Status: C6b1 intake/read/cancel and C6b2 default-off executor implemented and
-production-validated on 2026-06-19. Live execution remains blocked on the controlled-send gate.
+Status: C6b1 intake/read/cancel, C6b2 default-off executor, and terminal payload redaction
+implemented on 2026-06-19. Live execution remains blocked on the controlled-send gate.
 Decision owner: core Decision #55.
 
 ## Boundary
@@ -132,18 +132,18 @@ sources.
 
 The dedupe key is `(page_id, chatter_user_id, client_command_id)`. Canonical request hashing includes
 kind, account, conversation, payload, and retry lineage. Rows have a minimum 400-day dedupe horizon.
-No automatic command purge ships in the first execution slice.
+Payload text redaction does not shorten that horizon or change the stored `payload_hash`.
 
 ## Payload Retention, Purge, and Export Policy
 
-The command payload currently stores `payload.text` so a later executor can send it and the webhook
-verifier can compare normalized `messages.sent` text. That storage is runtime truth until a separate
-purge implementation ships.
+The command payload stores `payload.text` while the command may still execute or need recovery.
+The worker sweep now tombstones terminal command text after the recovery window while preserving
+non-text audit and dedupe fields.
 
 - Retain full payload only while the row may still need execution, webhook repair, explicit human
   recovery, or retry-context inspection.
-- After a command is terminal and outside the recovery/correlation window, purge implementation must
-  remove or tombstone `payload.text` while preserving non-text audit fields: command ids, page,
+- After a command is terminal and outside the recovery/correlation window, purge tombstones
+  `payload.text` while preserving non-text audit fields: command ids, page,
   chatter, account, conversation id, state, payload hash, retry lineage, attempt timestamps,
   bounded error code/class, verifier source, platform message id, and dedupe horizon.
 - `indeterminate` rows keep payload until a human recovery decision creates a retry, accepts the
@@ -153,9 +153,8 @@ purge implementation ships.
   text copied from verifier comparisons.
 - Raw command payload export is not part of C6b. If ever required for legal support, it needs a
   separate owner-approved governance decision with scope, ACL, audit trail, and retention limits.
-- Runtime purge/export implementation remains required before broad rollout or desktop write
-  transport switch. Until then, live execution can only be enabled for the explicit controlled-send
-  validation gate.
+- The first runtime implementation is purge-only: no owner/admin export includes raw command text.
+  Desktop write transport still requires the recovery UI and controlled live send validation.
 
 ## Production Validation
 
@@ -194,8 +193,8 @@ controlled test fan and a new rollout decision.
   one existing chatter credential and did not create an artificial second user/key solely for
   validation.
 
-The separately flagged executor is now implemented default-off. Controlled test-fan send,
-payload purge/export implementation, and desktop command transport/recovery UI remain pending.
+The separately flagged executor is now implemented default-off. Controlled test-fan send and
+desktop command transport/recovery UI remain pending.
 
 ## C6b2 Executor Contract
 
@@ -282,6 +281,8 @@ implementation exists, and command status/recovery UI is implemented.
   platform message id. Credit observations use operation `ofapi_command_send_text` with page
   attribution.
 - Command status responses expose nullable attempt start/finish timestamps, but no payload text.
+- The minutely command sweep also redacts old terminal command payload text while preserving
+  command state, payload hash, verifier metadata, platform message id, and retry lineage.
 - Post-settle `messages.sent` processing runs the conservative verifier before the existing
   best-effort projections. Verifier failure cannot block webhook settle/fanout.
 - The default execution flag remains off. No production send is performed by implementation or
