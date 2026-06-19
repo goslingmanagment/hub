@@ -288,9 +288,9 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
 - ✅ ChatMuse pre-P4 prerequisites: profile PUT auto-creates OnlyFans fans; AI-usage batch skips invalid events per-event (`invalidCount`)
 - 🟡 Admin UI for the OFAPI webhook flow (API-only today; register via `POST /api/v1/admin/ofapi/webhook`)
 - 🟡 AI proxy with streaming responses — R4a contract schemas/docs define the default-off
-  prompt-streaming gateway; R4b adds the default-off route/config gate. Quota enforcement, cost
-  ledger extension, provider execution, cancellation, production validation, and desktop switch
-  remain pending
+  prompt-streaming gateway; R4b adds the default-off route/config gate; R4c adds gateway ledger
+  storage/repository fields. Quota enforcement, provider execution, cancellation, production
+  validation, and desktop switch remain pending
 - Fan context injection: spending (page + total), notes, AI summary, subscription status, flags in one panel
 - Fan notes via the app: chatters create and read notes visible to others on the same page
 - AI-generated fan summaries from chat history; version history preserved

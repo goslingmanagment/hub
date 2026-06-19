@@ -632,3 +632,10 @@ and `POST /api/v1/ai/gateway/stream` exists as a chatter-key route. With the fla
 `503` before page lookup, quota reservation, provider network, or ledger writes. With the flag on,
 it verifies page assignment/platform and still returns `503` before provider execution until the
 next runtime slices add Anthropic streaming, quota reservation, and durable ledger rows.
+
+**R4c ledger storage:** migration `0040_ai_gateway_usage_ledger.sql` extends
+`ai_usage_events` with nullable gateway metadata (`page_id`, provider/provider response id,
+micro-USD cost, approximate-cost marker, quota decision, and terminal gateway outcome) while
+preserving the existing `(user_id, client_event_id)` idempotency key. Direct desktop
+`/api/v1/ai-usage/batch` events continue to store default cost `0` and null gateway fields.
+Runtime provider execution and quota enforcement remain pending and default-off.

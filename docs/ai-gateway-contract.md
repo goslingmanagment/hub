@@ -1,7 +1,7 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4b default-off runtime gate is implemented. Provider execution, quota ledger, and
-streaming are still pending.
+Status: R4c ledger storage is implemented after the R4b default-off runtime gate. Provider
+execution, quota enforcement, and streaming provider fanout are still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -99,15 +99,16 @@ Before provider network, core reserves quota for the `(chatter, page, feature)` 
 denial emits/returns a bounded `quota_exceeded` error and must not call the provider.
 
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
-clientRequestId)` for idempotency. The ledger must preserve:
+clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
+columns for this record:
 
-- chatter user id and page id;
+- chatter user id (`user_id`) and page id (`page_id`);
 - feature, model, provider, provider response id when available;
 - input, output, cache-write, and cache-read token counts;
-- integer micro-USD cost and whether pricing was approximate;
+- integer micro-USD cost (`cost_micro_usd`) and whether pricing was approximate;
 - cache-hit/cache-read markers;
-- quota decision and regeneration marker;
-- completed timestamp, duration, and terminal outcome.
+- quota decision (`quota_accepted`) and regeneration marker;
+- completed timestamp, duration, and terminal outcome (`gateway_outcome`).
 
 The existing `/api/v1/ai-usage/batch` endpoint remains during migration for direct desktop mode.
 When gateway mode is active for a request, desktop must not also submit a duplicate usage event for
@@ -142,6 +143,7 @@ Before runtime implementation:
 - add a default-off gateway flag and staged/runtime config copy; **done in R4b gate slice**;
 - choose the first provider path explicitly (Anthropic first; OpenRouter compatibility can follow);
 - add/extend ledger storage for provider response id, page id, provider, cost, quota, and outcome;
+  **done in R4c storage slice**;
 - define cancellation semantics so desktop `ai:cancel` aborts the provider request;
 - document the production validation command/API/log/DB evidence.
 

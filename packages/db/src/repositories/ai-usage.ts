@@ -6,15 +6,24 @@ import type { Database } from "../client.ts";
 import { aiUsageEvents, users } from "../schema.ts";
 
 type NumericValue = number | bigint | null | undefined;
+export type AiGatewayProvider = "anthropic" | "openrouter";
+export type AiGatewayOutcome = "completed" | "failed" | "cancelled" | "quota_denied";
 
 export interface InsertAiUsageEventInput {
   clientEventId: string;
   feature: AiUsageFeature;
   model: string;
+  pageId?: number | null;
+  provider?: AiGatewayProvider | null;
+  providerResponseId?: string | null;
   inputTokens: number;
   outputTokens: number;
   cacheWriteTokens: number;
   cacheReadTokens: number;
+  costMicroUsd?: number;
+  costApproximate?: boolean;
+  quotaAccepted?: boolean | null;
+  gatewayOutcome?: AiGatewayOutcome | null;
   conversationId?: string | null;
   durationMs?: number | null;
   isCacheHit: boolean;
@@ -117,10 +126,17 @@ export async function insertAiUsageEvents(
       clientEventId: event.clientEventId,
       feature: event.feature,
       model: event.model,
+      pageId: event.pageId ?? null,
+      provider: event.provider ?? null,
+      providerResponseId: event.providerResponseId ?? null,
       inputTokens: event.inputTokens,
       outputTokens: event.outputTokens,
       cacheWriteTokens: event.cacheWriteTokens,
       cacheReadTokens: event.cacheReadTokens,
+      costMicroUsd: event.costMicroUsd ?? 0,
+      costApproximate: event.costApproximate ?? false,
+      quotaAccepted: event.quotaAccepted ?? null,
+      gatewayOutcome: event.gatewayOutcome ?? null,
       conversationId: event.conversationId ?? null,
       durationMs: event.durationMs ?? null,
       isCacheHit: event.isCacheHit,

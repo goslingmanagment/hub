@@ -1430,13 +1430,24 @@ export const aiUsageEvents = pgTable(
     userId: bigint("user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
+    pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, {
+      onDelete: "set null",
+    }),
     clientEventId: text("client_event_id").notNull(),
     feature: aiUsageFeatureEnum("feature").notNull(),
     model: text("model").notNull(),
+    provider: text("provider").$type<"anthropic" | "openrouter">(),
+    providerResponseId: text("provider_response_id"),
     inputTokens: integer("input_tokens").notNull(),
     outputTokens: integer("output_tokens").notNull(),
     cacheWriteTokens: integer("cache_write_tokens").notNull(),
     cacheReadTokens: integer("cache_read_tokens").notNull(),
+    costMicroUsd: integer("cost_micro_usd").default(0).notNull(),
+    costApproximate: boolean("cost_approximate").default(false).notNull(),
+    quotaAccepted: boolean("quota_accepted"),
+    gatewayOutcome: text("gateway_outcome").$type<
+      "completed" | "failed" | "cancelled" | "quota_denied"
+    >(),
     conversationId: text("conversation_id"),
     durationMs: integer("duration_ms"),
     isCacheHit: boolean("is_cache_hit").default(false).notNull(),
@@ -1450,6 +1461,13 @@ export const aiUsageEvents = pgTable(
       table.userId,
       table.completedAt,
     ),
+    pageCompletedIdx: index("ai_usage_events_page_completed_idx").on(
+      table.pageId,
+      table.completedAt,
+    ),
+    providerResponseIdx: index("ai_usage_events_provider_response_idx")
+      .on(table.provider, table.providerResponseId)
+      .where(sql`${table.providerResponseId} is not null`),
     completedIdx: index("ai_usage_events_completed_idx").on(table.completedAt),
     inputNonnegative: check("ai_usage_events_input_tokens_nonnegative", sql`${table.inputTokens} >= 0`),
     outputNonnegative: check("ai_usage_events_output_tokens_nonnegative", sql`${table.outputTokens} >= 0`),
@@ -1461,10 +1479,25 @@ export const aiUsageEvents = pgTable(
       "ai_usage_events_cache_read_tokens_nonnegative",
       sql`${table.cacheReadTokens} >= 0`,
     ),
+    costNonnegative: check(
+      "ai_usage_events_cost_micro_usd_nonnegative",
+      sql`${table.costMicroUsd} >= 0`,
+    ),
     durationNonnegative: check(
       "ai_usage_events_duration_ms_nonnegative",
       sql`${table.durationMs} is null or ${table.durationMs} >= 0`,
     ),
+    providerCheck: check("ai_usage_events_provider_check", sql`
+      ${table.provider} is null or ${table.provider} in ('anthropic', 'openrouter')
+    `),
+    gatewayOutcomeCheck: check("ai_usage_events_gateway_outcome_check", sql`
+      ${table.gatewayOutcome} is null or ${table.gatewayOutcome} in (
+        'completed',
+        'failed',
+        'cancelled',
+        'quota_denied'
+      )
+    `),
   }),
 );
 
