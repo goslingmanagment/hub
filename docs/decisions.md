@@ -604,6 +604,12 @@ chatter-key command validated create/read/cancel while staying `attempt_count=0`
 Non-live recovery UX and payload purge/export policy are now defined in the command contract; the
 runtime payload purge is implemented; desktop transport UI and controlled live send remain pending.
 
+**Payload redaction rollout (2026-06-19):** revision `bbd42e844f36` deployed migration `0041`
+and the minutely sweep redaction path with execution still disabled. Production validation proved
+the new column/index, active API/worker flags (`outbox=true`, `execution=false`), zero command-send
+ledger rows, zero old terminal unredacted production rows, and a rollback-only redaction smoke that
+left no synthetic row behind.
+
 ## ChatMuse AI Gateway Contract (2026-06-19)
 
 **Decision #26 update:** The first ChatMuse AI gateway slice is a default-off, chatter-key,

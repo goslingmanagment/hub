@@ -308,3 +308,22 @@ implementation exists, and command status/recovery UI is implemented.
 This proves the deployed executor is present but inert while execution remains disabled. The live
 send gate remains blocked on a designated controlled test fan/conversation and explicit operator
 approval for one harmless message.
+
+### 2026-06-19 Payload Redaction Production Evidence
+
+- Canonical deploy revision: `bbd42e844f36`; API and worker both healthy on dependency checksum
+  `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`.
+- Migration `0041_ofapi_command_payload_redaction.sql` is applied
+  (`2026-06-19 22:24:36.221068+00`). Production schema contains
+  `ofapi_commands.payload_redacted_at` and `ofapi_commands_payload_redaction_idx`.
+- Active runtime heartbeats reported command outbox `true`, command execution `false`, AI gateway
+  `false`, Anthropic key `unset`, and `skippedOverrides=[]` on API and worker.
+- Production command table at validation time: 2 total rows, 0 redacted rows, 0 old terminal
+  unredacted rows beyond the seven-day window, 0 `in_flight`, and 0 `queued`.
+- `ofapi_credit_ledger` had 0 `ofapi_command_send_text` rows; no vendor send path was activated.
+- A rollback-only production DB smoke inserted a synthetic confirmed command, applied the redaction
+  update inside the transaction, proved `payload.text` became empty while `payload_hash` remained
+  intact, then rolled back; the synthetic row count after rollback was 0.
+- API/worker logs for the validation window contained no command-send operation and no validation
+  payload text. Public `/api/v1/health` was OK. `/api/v1/health/sync` stayed 503 due pre-existing
+  workload state (Fansly conversation catch-up and unverified OF pages), not this deploy.
