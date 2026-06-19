@@ -137,6 +137,7 @@ const envSchema = z.object({
   OFAPI_PRESENCE_PROJECTION_ENABLED: booleanSchema.default(false),
   OFAPI_SPEND_PROJECTION_SHADOW_ENABLED: booleanSchema.default(false),
   OFAPI_SPEND_TRANSACTION_INGEST_ENABLED: booleanSchema.default(false),
+  OFAPI_DESKTOP_READ_GATEWAY_ENABLED: booleanSchema.default(false),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
@@ -221,6 +222,7 @@ export interface AppConfig {
   ofapiPresenceProjectionEnabled?: boolean;
   ofapiSpendProjectionShadowEnabled?: boolean;
   ofapiSpendTransactionIngestEnabled?: boolean;
+  ofapiDesktopReadGatewayEnabled?: boolean;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   wbClosingLlmEnabled?: boolean;
@@ -392,6 +394,7 @@ export function loadConfig(
     ofapiPresenceProjectionEnabled: parsed.OFAPI_PRESENCE_PROJECTION_ENABLED,
     ofapiSpendProjectionShadowEnabled: parsed.OFAPI_SPEND_PROJECTION_SHADOW_ENABLED,
     ofapiSpendTransactionIngestEnabled: parsed.OFAPI_SPEND_TRANSACTION_INGEST_ENABLED,
+    ofapiDesktopReadGatewayEnabled: parsed.OFAPI_DESKTOP_READ_GATEWAY_ENABLED,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     // L2 only runs when explicitly enabled AND a key is present (safe by default).

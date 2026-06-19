@@ -224,6 +224,7 @@ import {
   getOfapiCreditsLedger,
   getOfapiCreditsSummary,
 } from "../services/ofapi-credit-report.ts";
+import { executeOfapiReadGatewayRequest } from "../services/ofapi-read-gateway.ts";
 import { getOfapiDmColdArchiveStatus } from "../services/ofapi-dm-archive.ts";
 import { getOfapiSpendComparison } from "../services/ofapi-spend-comparison.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
@@ -1374,6 +1375,28 @@ export async function buildApiServer(appContext: AppContext) {
     return getChatterOfapiCreditsSummary(appContext, {
       pageIds: principal.assignedPageIds,
     });
+  });
+
+  server.get("/api/v1/ofapi/read/*", {
+    schema: routeSchemas.ofapiReadGateway,
+    config: {
+      rateLimit: {
+        max: 120,
+        timeWindow: "1 minute",
+      },
+    },
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+
+    const response = await executeOfapiReadGatewayRequest(appContext, principal, {
+      rawPath: request.params["*"],
+      rawQuery: request.query as Record<string, unknown>,
+    });
+    for (const [name, value] of Object.entries(response.headers)) {
+      reply.header(name, value);
+    }
+    return reply.code(response.status as 200).send(response.body);
   });
 
   server.get("/api/v1/admin/ofapi/credits/summary", {

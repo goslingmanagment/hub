@@ -93,10 +93,11 @@ describe("config registry", () => {
     "ofapiPresenceProjectionEnabled",
     "ofapiSpendProjectionShadowEnabled",
     "ofapiSpendTransactionIngestEnabled",
+    "ofapiDesktopReadGatewayEnabled",
     "onlyFansTopSpendersEnabled",
   ];
 
-  it("wires exactly the eight live keys, the eleven boot keys, and nothing else", () => {
+  it("wires exactly the eight live keys, the twelve boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);
@@ -126,6 +127,7 @@ describe("config registry", () => {
     expect(req("ofapiPresenceProjectionEnabled")).toEqual(["ofapiAudienceSyncEnabled"]);
     expect(req("ofapiSpendProjectionShadowEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
     expect(req("ofapiSpendTransactionIngestEnabled")).toEqual(["ofapiSpendProjectionShadowEnabled"]);
+    expect(req("ofapiDesktopReadGatewayEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
     expect(req("onlyFansTopSpendersEnabled")).toEqual(["ofapiPresenceProjectionEnabled"]);
   });
 
@@ -144,7 +146,7 @@ describe("config registry", () => {
     }
   });
 
-  it("orders the #50 staged group ledger(1)→ping(2)→audience(3)→presence(4)→topSpenders(5), #51 shadow(1)→transactionIngest(2), and #52 coldArchive(1)", () => {
+  it("orders #50, #51, #52, and the #54 read-gateway slice", () => {
     const order = (key: string) => getDescriptor(key)!.stagedOrder;
     expect(order("ofapiDmProjectionEnabled")).toBe(1);
     expect(order("ofapiDmSyncEnabled")).toBe(2);
@@ -157,6 +159,7 @@ describe("config registry", () => {
     expect(order("ofapiSpendProjectionShadowEnabled")).toBe(1);
     expect(order("ofapiSpendTransactionIngestEnabled")).toBe(2);
     expect(order("ofapiDmColdArchiveEnabled")).toBe(1);
+    expect(order("ofapiDesktopReadGatewayEnabled")).toBe(1);
   });
 
   it("masks secrets and complex values in the running snapshot", () => {

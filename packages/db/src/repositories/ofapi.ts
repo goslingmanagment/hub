@@ -1673,6 +1673,8 @@ export interface OfapiMappedPageRow {
   label: string;
   platform: "fansly" | "onlyfans";
   username: string | null;
+  displayName: string | null;
+  metadata: Record<string, unknown>;
   ofapiAccountId: string;
   ofapiAuthStatus: string | null;
   ofapiAuthChangedAt: Date | null;
@@ -1685,6 +1687,8 @@ export async function listOfapiMappedPages(db: Database): Promise<OfapiMappedPag
       label: pages.label,
       platform: pages.platform,
       username: pages.username,
+      displayName: pages.displayName,
+      metadata: pages.metadata,
       ofapiAccountId: pages.ofapiAccountId,
       ofapiAuthStatus: pages.ofapiAuthStatus,
       ofapiAuthChangedAt: pages.ofapiAuthChangedAt,

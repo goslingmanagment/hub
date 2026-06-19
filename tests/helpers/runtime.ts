@@ -39,6 +39,7 @@ export function createTestAppContext(
     ofapiPresenceProjectionEnabled?: boolean;
     ofapiSpendProjectionShadowEnabled?: boolean;
     ofapiSpendTransactionIngestEnabled?: boolean;
+    ofapiDesktopReadGatewayEnabled?: boolean;
     onlyFansTopSpendersEnabled?: boolean;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
@@ -108,6 +109,7 @@ export function createTestAppContext(
       ofapiPresenceProjectionEnabled: overrides?.ofapiPresenceProjectionEnabled ?? false,
       ofapiSpendProjectionShadowEnabled: overrides?.ofapiSpendProjectionShadowEnabled ?? false,
       ofapiSpendTransactionIngestEnabled: overrides?.ofapiSpendTransactionIngestEnabled ?? false,
+      ofapiDesktopReadGatewayEnabled: overrides?.ofapiDesktopReadGatewayEnabled ?? false,
       onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
     } as AppContext["config"];
 

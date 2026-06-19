@@ -1,0 +1,421 @@
+import { listOfapiMappedPages } from "@agency_hub_core/db";
+
+import type { AppContext } from "../bootstrap.ts";
+import type { AuthPrincipal } from "./auth.ts";
+import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
+import { OfapiApiError } from "./ofapi.ts";
+import {
+  BadRequestError,
+  NotFoundError,
+  ServiceUnavailableError,
+} from "./errors.ts";
+
+type RawQuery = Record<string, unknown>;
+
+interface QueryRule {
+  parse(value: string, name: string): string;
+}
+
+interface ProxyRequest {
+  kind: "proxy";
+  accountId: string;
+  pathname: string;
+  query: Record<string, string>;
+  operation: string;
+  fallbackCredits: number;
+  fallbackEstimated: boolean;
+}
+
+export type OfapiReadGatewayRequest =
+  | { kind: "accounts" }
+  | { kind: "whoami" }
+  | ProxyRequest;
+
+export interface OfapiReadGatewayResponse {
+  status: number;
+  body: unknown;
+  headers: Record<string, string>;
+}
+
+function invalid(message: string): never {
+  throw new BadRequestError(`Invalid OFAPI read gateway request: ${message}`);
+}
+
+function decodeSegments(rawPath: string) {
+  const normalized = rawPath.replace(/^\/+|\/+$/g, "");
+  if (normalized.length === 0 || normalized.length > 1000) {
+    invalid("path is empty or too long");
+  }
+
+  return normalized.split("/").map((raw) => {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      return invalid("path contains invalid percent encoding");
+    }
+    if (
+      decoded.length === 0
+      || decoded.length > 200
+      || decoded.includes("/")
+      || decoded.includes("\\")
+      || decoded === "."
+      || decoded === ".."
+    ) {
+      return invalid("path contains an invalid segment");
+    }
+    return decoded;
+  });
+}
+
+function integerRule(min: number, max: number): QueryRule {
+  return {
+    parse(value, name) {
+      if (!/^\d+$/.test(value)) {
+        return invalid(`${name} must be an integer`);
+      }
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+        return invalid(`${name} is outside ${min}..${max}`);
+      }
+      return String(parsed);
+    },
+  };
+}
+
+function enumRule(values: readonly string[]): QueryRule {
+  const allowed = new Set(values);
+  return {
+    parse(value, name) {
+      if (!allowed.has(value)) {
+        return invalid(`${name} has an unsupported value`);
+      }
+      return value;
+    },
+  };
+}
+
+function textRule(maxLength: number, pattern?: RegExp): QueryRule {
+  return {
+    parse(value, name) {
+      if (value.length === 0 || value.length > maxLength || (pattern && !pattern.test(value))) {
+        return invalid(`${name} has an invalid value`);
+      }
+      return value;
+    },
+  };
+}
+
+const OFFSET = integerRule(0, 1_000_000);
+const LIMIT_100 = integerRule(1, 100);
+const NO_QUERY = {} satisfies Record<string, QueryRule>;
+
+function parseQuery(raw: RawQuery, rules: Record<string, QueryRule>) {
+  const parsed: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    const rule = rules[name];
+    if (!rule) {
+      invalid(`query parameter ${name} is not allowed`);
+    }
+    if (typeof value !== "string") {
+      invalid(`query parameter ${name} must appear exactly once`);
+    }
+    parsed[name] = rule.parse(value, name);
+  }
+  return parsed;
+}
+
+function proxy(
+  accountId: string,
+  segments: string[],
+  query: Record<string, string>,
+  operation: string,
+  fallbackCredits = 1,
+  fallbackEstimated = true,
+): ProxyRequest {
+  return {
+    kind: "proxy",
+    accountId,
+    pathname: `/${segments.map(encodeURIComponent).join("/")}`,
+    query,
+    operation,
+    fallbackCredits,
+    fallbackEstimated,
+  };
+}
+
+export function resolveOfapiReadGatewayRequest(
+  rawPath: string,
+  rawQuery: RawQuery,
+): OfapiReadGatewayRequest {
+  const segments = decodeSegments(rawPath);
+  if (segments.length === 1 && segments[0] === "accounts") {
+    parseQuery(rawQuery, NO_QUERY);
+    return { kind: "accounts" };
+  }
+  if (segments.length === 1 && segments[0] === "whoami") {
+    parseQuery(rawQuery, NO_QUERY);
+    return { kind: "whoami" };
+  }
+
+  const accountId = segments[0]!;
+  if (!/^acct_[A-Za-z0-9]+$/.test(accountId)) {
+    invalid("account id is not an OFAPI account id");
+  }
+
+  if (segments.length === 2 && segments[1] === "chats") {
+    return proxy(accountId, segments, parseQuery(rawQuery, {
+      limit: LIMIT_100,
+      offset: OFFSET,
+      order: enumRule(["recent", "old"]),
+      filter: enumRule(["pinned", "priority", "unread", "with_tips", "unread_with_tips"]),
+      query: textRule(200),
+      skip_users: enumRule(["all", "none"]),
+    }), "ofapi_gateway_chats");
+  }
+
+  if (
+    segments.length === 4
+    && segments[1] === "chats"
+    && segments[3] === "messages"
+  ) {
+    const query = parseQuery(rawQuery, {
+      limit: LIMIT_100,
+      order: enumRule(["asc", "desc"]),
+      first_id: textRule(100),
+      last_id: textRule(100),
+      skip_users: enumRule(["all", "none"]),
+    });
+    if (query.first_id && query.last_id) {
+      invalid("first_id and last_id are mutually exclusive");
+    }
+    if (query.first_id && query.order !== undefined && query.order !== "desc") {
+      invalid("first_id requires order=desc");
+    }
+    if (query.last_id && query.order !== undefined && query.order !== "asc") {
+      invalid("last_id requires order=asc");
+    }
+    return proxy(accountId, segments, query, "ofapi_gateway_chat_messages");
+  }
+
+  if (
+    segments.length === 5
+    && segments[1] === "chats"
+    && segments[3] === "messages"
+  ) {
+    return proxy(
+      accountId,
+      segments,
+      parseQuery(rawQuery, NO_QUERY),
+      "ofapi_gateway_chat_message",
+    );
+  }
+
+  if (
+    segments.length === 4
+    && segments[1] === "chats"
+    && segments[3] === "media"
+  ) {
+    return proxy(accountId, segments, parseQuery(rawQuery, {
+      type: enumRule(["photo", "gif", "video", "audio"]),
+      limit: LIMIT_100,
+      offset: OFFSET,
+      skip_users: enumRule(["all", "none"]),
+    }), "ofapi_gateway_chat_media");
+  }
+
+  if (segments.length === 3 && segments[1] === "users" && segments[2] === "list") {
+    return proxy(accountId, segments, parseQuery(rawQuery, {
+      ids: textRule(220, /^\d+(,\d+){0,9}$/),
+    }), "ofapi_gateway_users_list");
+  }
+
+  if (segments.length === 3 && segments[1] === "users") {
+    return proxy(
+      accountId,
+      segments,
+      parseQuery(rawQuery, NO_QUERY),
+      "ofapi_gateway_user",
+    );
+  }
+
+  if (segments.length === 2 && segments[1] === "transactions") {
+    return proxy(accountId, segments, parseQuery(rawQuery, {
+      limit: LIMIT_100,
+      type: enumRule(["subscribes", "tips", "post", "chat_messages", "stream"]),
+      marker: integerRule(0, Number.MAX_SAFE_INTEGER),
+      startDate: textRule(64, /^(?:-\d+days|\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?)$/),
+    }), "ofapi_gateway_transactions");
+  }
+
+  if (
+    segments.length === 3
+    && segments[1] === "fans"
+    && (segments[2] === "all" || segments[2] === "active")
+  ) {
+    return proxy(accountId, segments, parseQuery(rawQuery, {
+      limit: integerRule(1, 20),
+      offset: OFFSET,
+      query: textRule(200),
+    }), `ofapi_gateway_fans_${segments[2]}`);
+  }
+
+  if (segments.length === 2 && segments[1] === "user-lists") {
+    return proxy(accountId, segments, parseQuery(rawQuery, {
+      limit: LIMIT_100,
+      offset: OFFSET,
+    }), "ofapi_gateway_user_lists");
+  }
+
+  if (
+    segments.length === 4
+    && segments[1] === "user-lists"
+    && segments[3] === "users"
+  ) {
+    return proxy(accountId, segments, parseQuery(rawQuery, {
+      limit: LIMIT_100,
+      offset: OFFSET,
+    }), "ofapi_gateway_user_list_users");
+  }
+
+  if (segments.length === 3 && segments[1] === "media" && segments[2] === "vault") {
+    return proxy(accountId, segments, parseQuery(rawQuery, {
+      query: textRule(200),
+      field: enumRule(["recent", "most-liked", "highest-tips"]),
+      type: enumRule(["photo", "gif", "video", "audio"]),
+      list: textRule(100),
+      sort: enumRule(["asc", "desc"]),
+      limit: integerRule(10, 100),
+      offset: OFFSET,
+    }), "ofapi_gateway_vault_media");
+  }
+
+  if (
+    segments.length === 4
+    && segments[1] === "media"
+    && segments[2] === "vault"
+    && segments[3] === "lists"
+  ) {
+    return proxy(accountId, segments, parseQuery(rawQuery, {
+      query: textRule(200),
+      limit: LIMIT_100,
+      offset: OFFSET,
+    }), "ofapi_gateway_vault_lists");
+  }
+
+  if (segments.length === 4 && segments[1] === "media" && segments[2] === "vault") {
+    if (segments[3] === "delete-media") {
+      invalid("path is not in the read-only allowlist");
+    }
+    return proxy(
+      accountId,
+      segments,
+      parseQuery(rawQuery, NO_QUERY),
+      "ofapi_gateway_vault_media_item",
+    );
+  }
+
+  if (
+    segments.length === 5
+    && segments[1] === "media"
+    && segments[2] === "uploads"
+    && segments[4] === "status"
+  ) {
+    return proxy(
+      accountId,
+      segments,
+      parseQuery(rawQuery, NO_QUERY),
+      "ofapi_gateway_upload_status",
+      0,
+      false,
+    );
+  }
+
+  return invalid("path is not in the read-only allowlist");
+}
+
+function authenticatedFromStatus(status: string | null) {
+  if (status === null) {
+    return null;
+  }
+  return !ofapiAuthStatusNeedsAction(status);
+}
+
+function avatarFromMetadata(metadata: Record<string, unknown>) {
+  return typeof metadata.avatarUrl === "string" && metadata.avatarUrl.length > 0
+    ? metadata.avatarUrl
+    : null;
+}
+
+export async function executeOfapiReadGatewayRequest(
+  app: AppContext,
+  principal: AuthPrincipal,
+  input: {
+    rawPath: string;
+    rawQuery: RawQuery;
+  },
+): Promise<OfapiReadGatewayResponse> {
+  if (app.config.ofapiDesktopReadGatewayEnabled !== true) {
+    throw new ServiceUnavailableError("OFAPI desktop read gateway is disabled");
+  }
+  if (app.config.ofapiCreditLedgerEnabled !== true) {
+    throw new ServiceUnavailableError("OFAPI desktop read gateway requires the credit ledger");
+  }
+  if (!app.ofapi?.proxyRead) {
+    throw new ServiceUnavailableError("OFAPI client is not configured");
+  }
+
+  const request = resolveOfapiReadGatewayRequest(input.rawPath, input.rawQuery);
+  if (request.kind === "whoami") {
+    return {
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: {
+        api_key: { name: `Agency Hub chatter: ${principal.user.username}` },
+        team: { name: "Agency Hub", slug: "agency-hub" },
+      },
+    };
+  }
+
+  const pages = await listOfapiMappedPages(app.db);
+  const assigned = pages.filter((page) => principal.assignedPageIds.includes(page.id));
+
+  if (request.kind === "accounts") {
+    return {
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: assigned.map((page) => ({
+        id: page.ofapiAccountId,
+        is_authenticated: authenticatedFromStatus(page.ofapiAuthStatus),
+        authentication_progress: page.ofapiAuthStatus,
+        display_name: page.displayName ?? page.label,
+        onlyfans_username: page.username,
+        onlyfans_user_data: {
+          name: page.displayName ?? page.label,
+          username: page.username,
+          avatar: avatarFromMetadata(page.metadata),
+        },
+      })),
+    };
+  }
+
+  const page = assigned.find((candidate) => candidate.ofapiAccountId === request.accountId);
+  if (!page) {
+    throw new NotFoundError("OFAPI account is not assigned to this chatter");
+  }
+
+  try {
+    return await app.ofapi.proxyRead({ pageId: page.id }, {
+      operation: request.operation,
+      pathname: request.pathname,
+      query: request.query,
+      fallbackCredits: request.fallbackCredits,
+      fallbackEstimated: request.fallbackEstimated,
+    });
+  } catch (error) {
+    if (error instanceof OfapiApiError && error.status === null) {
+      throw new ServiceUnavailableError("OFAPI upstream is unavailable");
+    }
+    throw error;
+  }
+}

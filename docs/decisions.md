@@ -51,6 +51,7 @@
 | 46 | Revenue Classification | Shared classification metadata in `types.ts` with 4 reporting buckets (revenue, adjustment, unclassified, excluded) + `affectsFanLtv` flag; no DB schema change; query/service/API/CLI layers consume classification; `netEarningsMills = revenue + adjustments + unclassified`; `totalNetMills` kept as deprecated alias |
 | 47 | Dashboard Fan Navigation | Keep `fan` as an internal CRM/data model and API concept, but do not ship a standalone dashboard `Fans` section by default; only surface it when the UI delivers spend-ranked or CRM workflows that are clearly distinct from followers/subscribers |
 | 48 | OFAPI Real-Time Pipeline | OFAPI webhook receiver (raw-body HMAC, header-based dedupe, journal table) + pg-boss async processing + SSE fanout `GET /api/v1/events/stream` with `Last-Event-ID` replay; pages map to OFAPI accounts via `pages.ofapi_account_id`; ChatMuse profile PUT auto-creates OnlyFans fans |
+| 54 | OFAPI Desktop Read Gateway | Default-off chatter-key `GET /api/v1/ofapi/read/*` compatibility gateway with assigned-page ACL, strict path/query allowlist, central credit ledger, and no write/upload/send routes |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -478,3 +479,31 @@ detection still works if every journal row has been pruned.
 empty replay allowed a long-offline desktop to claim live freshness after skipping durable events.
 The 409 plus snapshot/tail protocol makes the gap explicit while preserving page ACLs, idempotent
 apply, and the existing polling fallback until desktop snapshot recovery is deployed.
+
+
+## OFAPI Desktop Read Gateway (2026-06-19)
+
+**Decision #54:** The first C6 custody slice is a default-off, read-only compatibility gateway at
+`GET /api/v1/ofapi/read/*`, enabled by `OFAPI_DESKTOP_READ_GATEWAY_ENABLED` only when the OFAPI
+credit ledger is enabled. The desktop's existing OFAPI client can use this prefix as its base URL:
+account-scoped GET paths and JSON response shapes remain unchanged, while the desktop sends its
+revocable chatter key to core instead of receiving the unscoped vendor key.
+
+- **Fail-closed allowlist:** only the desktop's current reads are accepted: chats/messages/chat
+  media, users/mass-list, transactions, fans, user lists, vault metadata/lists/items, and async
+  upload status. Every path segment and query name/value is validated and bounded before an OFAPI
+  request. There is no wildcard method proxy: POST/PUT/PATCH/DELETE, sends, unsends, likes,
+  mark-read, typing, and uploads are absent.
+- **ACL and account discovery:** `/accounts` is synthesized from the caller's current assigned
+  OFAPI-mapped pages, and `/whoami` is a sanitized core identity. Account-scoped reads return 404
+  unless the OFAPI account maps to an assigned page, avoiding account-existence disclosure.
+- **Spend and retry ownership:** the existing core OFAPI client remains the only vendor network
+  chokepoint and records every response under a bounded `ofapi_gateway_*` operation with page
+  attribution. Known-free upload-status polls record zero credits. Gateway reads make exactly one
+  upstream attempt and preserve response JSON, credit/rate headers, HTTP status, and Retry-After;
+  the desktop remains the idempotent-read retry authority during migration. Core-wide pacing and a
+  120 requests/minute gateway route limit bound request pressure.
+- **Rollout boundary:** this slice does not switch desktop production, remove the local OFAPI key,
+  or proxy any command. Direct desktop mode remains the rollback path until the command outbox,
+  indeterminate write handling, media uploads, production SLO/runbook, and explicit desktop
+  gateway switch are complete.

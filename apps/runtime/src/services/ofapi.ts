@@ -71,6 +71,12 @@ export interface OfapiListPage {
   meta: OfapiResponseMeta | null;
 }
 
+export interface OfapiRawResponse {
+  status: number;
+  body: unknown;
+  headers: Record<string, string>;
+}
+
 // One credit-spend report per response that reached the server (retry attempts
 // included — OFAPI charged each). Emitted by the client itself on BOTH request
 // paths, so callers cannot forget to account spend (D1).
@@ -161,6 +167,19 @@ export interface OfapiClient {
   // balance: GET /accounts carries no _meta per the OFAPI OpenAPI spec, so the
   // ping reads a minimal chats page instead (reconciliation anchor on quiet days).
   pingBalance(context: OfapiRequestContext, accountId: string): Promise<OfapiListPage>;
+  // Read-only desktop gateway path. The caller supplies an already validated
+  // pathname/query pair and a bounded operation name. Exactly one upstream
+  // attempt is made: desktop remains the retry authority during migration.
+  proxyRead?(
+    context: OfapiRequestContext,
+    input: {
+      operation: string;
+      pathname: string;
+      query: Record<string, string>;
+      fallbackCredits: number;
+      fallbackEstimated: boolean;
+    },
+  ): Promise<OfapiRawResponse>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -316,13 +335,24 @@ export function createOfapiClient(input: {
     requestId: string;
     pageId: number | null;
     attemptNumber: number;
+    fallbackCredits?: number;
+    fallbackEstimated?: boolean;
   }) {
     if (!onCreditSpend) {
       return;
     }
 
     const meta = parseResponseMeta(report.body);
-    const spend = resolveOfapiCreditSpend({ httpStatus: report.httpStatus, meta });
+    const spend = report.httpStatus >= 200
+      && report.httpStatus < 300
+      && meta?.creditsUsed == null
+      && report.fallbackCredits !== undefined
+      ? {
+        credits: report.fallbackCredits,
+        estimated: report.fallbackEstimated ?? true,
+        balanceAfter: meta?.creditBalance ?? null,
+      }
+      : resolveOfapiCreditSpend({ httpStatus: report.httpStatus, meta });
     if (!spend) {
       return;
     }
@@ -512,6 +542,84 @@ export function createOfapiClient(input: {
     });
   }
 
+  async function proxyReadRequest(
+    context: OfapiRequestContext,
+    options: {
+      operation: string;
+      pathname: string;
+      query: Record<string, string>;
+      fallbackCredits: number;
+      fallbackEstimated: boolean;
+    },
+  ): Promise<OfapiRawResponse> {
+    const query = new URLSearchParams(options.query);
+    const url = `${baseUrl}${options.pathname}${query.size > 0 ? `?${query.toString()}` : ""}`;
+    const requestId = `${options.operation}:${randomUUID()}`;
+    await waitForRequestSlot();
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${input.apiKey}`,
+          accept: "application/json",
+        },
+        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new OfapiApiError(
+        `OFAPI request failed: GET ${options.pathname}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        null,
+        null,
+      );
+    }
+
+    const text = await response.text();
+    let body: unknown = null;
+    if (text.length > 0) {
+      try {
+        body = JSON.parse(text) as unknown;
+      } catch {
+        body = text;
+      }
+    }
+
+    await reportCreditSpend({
+      operation: options.operation,
+      httpStatus: response.status,
+      body,
+      requestId,
+      pageId: context.pageId ?? null,
+      attemptNumber: 1,
+      fallbackCredits: options.fallbackCredits,
+      fallbackEstimated: options.fallbackEstimated,
+    });
+
+    const headers: Record<string, string> = {};
+    for (const name of [
+      "content-type",
+      "retry-after",
+      "x-ofapi-credits-used",
+      "x-ofapi-credits-balance",
+      "x-rate-limit-remaining-minute",
+      "x-rate-limit-limit-minute",
+    ]) {
+      const value = response.headers.get(name);
+      if (value !== null) {
+        headers[name] = value;
+      }
+    }
+
+    return {
+      status: response.status,
+      body,
+      headers,
+    };
+  }
+
   async function request(
     operation: string,
     method: string,
@@ -674,6 +782,9 @@ export function createOfapiClient(input: {
         cursorPresent: false,
         requestMetadata: { purpose: "balance_ping" },
       });
+    },
+    async proxyRead(context, options) {
+      return proxyReadRequest(context, options);
     },
   };
 }

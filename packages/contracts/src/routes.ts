@@ -3025,6 +3025,10 @@ export const ofapiCreditsChatterSummaryResponseSchema = z.object({
   limitations: z.array(z.string()),
 });
 
+const ofapiReadGatewayParamsSchema = z.object({
+  "*": z.string().min(1).max(1000),
+});
+
 export const adminOfapiCreditsDailyQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(90).default(30),
 });
@@ -3523,6 +3527,31 @@ export const routeSchemas = {
       200: ofapiCreditsChatterSummaryResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+    },
+  },
+  ofapiReadGateway: {
+    tags: ["ofapi"],
+    summary: "Read an allowlisted OFAPI resource through the core custody boundary",
+    description: "Chatter-key-only, page-scoped compatibility gateway mounted at "
+      + "`/api/v1/ofapi/read`. It preserves the desktop OFAPI GET paths and JSON "
+      + "shapes, but accepts only the documented desktop read allowlist. `/accounts` "
+      + "is synthesized from assigned core page mappings and `/whoami` is sanitized. "
+      + "No POST, DELETE, send, mark-read, typing, or upload operation is exposed.",
+    security: bearerOnlySecurity,
+    params: ofapiReadGatewayParamsSchema,
+    response: {
+      200: z.unknown(),
+      400: z.unknown(),
+      401: z.unknown(),
+      402: z.unknown(),
+      403: z.unknown(),
+      404: z.unknown(),
+      429: z.unknown(),
+      422: z.unknown(),
+      500: z.unknown(),
+      502: z.unknown(),
+      503: z.unknown(),
+      504: z.unknown(),
     },
   },
   adminOfapiCreditsSummary: {
