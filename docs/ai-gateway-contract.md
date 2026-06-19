@@ -1,8 +1,9 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4d quota preflight is implemented after the R4b default-off runtime gate and R4c ledger
-storage. Provider execution, atomic provider-attempt reservation, and streaming provider fanout are
-still pending.
+Status: R4f Anthropic request-building and usage normalization is implemented after the R4b
+default-off runtime gate, R4c ledger storage, R4d quota preflight, and R4e pricing utility.
+Provider execution, atomic provider-attempt reservation, cancellation wiring, and streaming
+provider fanout are still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -116,6 +117,15 @@ costs from input, output, cache-write, and cache-read tokens. Aggregate cache-wr
 5m/1h provider breakdown is recorded as approximate. Unsupported models fail closed instead of
 being silently underpriced.
 
+R4f adds the first Anthropic provider adapter groundwork without wiring the route to provider
+network. Core now builds the Anthropic Messages streaming request from the gateway body, preserving
+desktop-compatible prompt-cache markers (`5m` as provider-default ephemeral, `1h` explicit),
+feature temperatures, adaptive thinking caps, the no-temperature-with-thinking invariant, and the
+`claude-opus-4-8` no-sampling-params rule. `scan` is treated as the deep analysis/fan-summary
+tuning profile until desktop exposes a separate gateway operation contract. The same slice
+normalizes Anthropic usage into the terminal ledger cost shape, including 5m/1h cache-write
+breakdown when the provider supplies it.
+
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
 columns for this record:
@@ -164,6 +174,8 @@ Before runtime implementation:
   **done in R4c storage slice**;
 - add a ledger-backed daily quota preflight before provider execution; **done in R4d quota slice**;
 - add Anthropic gateway pricing for terminal ledger rows; **done in R4e pricing slice**;
+- add Anthropic request-building/usage-normalization parity with desktop direct mode; **done in R4f
+  provider adapter groundwork**;
 - define cancellation semantics so desktop `ai:cancel` aborts the provider request;
 - document the production validation command/API/log/DB evidence.
 

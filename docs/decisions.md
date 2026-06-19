@@ -653,3 +653,10 @@ prompt-cache read/write rates, marks aggregate cache-write usage approximate whe
 not supply a 5m/1h breakdown, and rejects unsupported models instead of silently underpricing them.
 The helper is not yet wired to a live provider call; it is the cost basis for the upcoming terminal
 usage row.
+
+**R4f Anthropic adapter groundwork:** core can now build an Anthropic Messages streaming request
+from the gateway body without calling the provider. The builder mirrors desktop direct-mode tuning:
+`5m` prompt-cache blocks use provider-default ephemeral cache markers, `1h` blocks are explicit,
+adaptive thinking omits temperature, `claude-opus-4-8` omits sampling parameters, and usage is
+normalized into the terminal ledger cost shape. This is still default-off groundwork; runtime route
+fanout, cancellation, atomic reservation/finalization, and production validation remain pending.
