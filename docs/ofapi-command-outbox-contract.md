@@ -147,3 +147,77 @@ controlled test fan and a new rollout decision.
 
 The separately flagged executor, controlled test-fan send, payload purge/export policy, and desktop
 command transport remain pending.
+
+## C6b2 Executor Contract
+
+Status: design accepted on 2026-06-19; implementation and production enablement pending.
+Decision owner: core Decision #56.
+
+### Flag and Queue Boundary
+
+- `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED` is a default-off staged boot flag requiring
+  `OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED`.
+- Intake remains available while execution is off. Disabling execution parks `queued` commands
+  and prevents new claims.
+- API create may enqueue an execution wakeup only after durable insert. A minutely sweep is the
+  recovery path for a lost wakeup.
+- The worker claims `queued -> in_flight` transactionally. The existing partial unique index
+  remains the authority for one in-flight command per `(page_id, conversation_id)` lane.
+- A command row is attempted at most once. No pg-boss retry or service retry may issue a second
+  vendor request for the same row.
+
+### Vendor Request
+
+Version 1 executes exactly:
+
+```text
+POST /api/{accountId}/chats/{conversationId}/messages
+{"text":"..."}
+```
+
+The request uses the core OFAPI client, global pacing, page-attributed credit accounting, a bounded
+timeout, and no automatic retry. Message text is never logged or copied into error/verifier
+metadata.
+
+### Outcome Classification
+
+- Valid `2xx` JSON with a message id: `confirmed`, record `platform_message_id`.
+- Definite validation/auth/not-found rejection (`400`, `401`, `403`, `404`, `409`, `422`):
+  `failed_terminal`.
+- Definite pre-delivery throttling (`429`): `failed_retryable`; retry remains a new human-visible
+  command with a new client id.
+- Transport error/timeout, `408`, `5xx`, or malformed/ambiguous success: `indeterminate`.
+- A worker crash or shutdown can lose knowledge after claim. Any stale `in_flight` row becomes
+  `indeterminate`; it is never automatically requeued.
+
+The stored error surface is a bounded code/class/status only. Raw vendor bodies and payload text
+are not persisted in command outcome metadata.
+
+### Webhook Verification
+
+A settled `messages.sent` event may confirm `in_flight` or `indeterminate` only when all of these
+hold:
+
+1. OFAPI account and fan conversation match.
+2. Normalized webhook text exactly equals normalized command text.
+3. The event falls inside the bounded attempt-correlation window.
+4. Exactly one eligible command matches.
+
+Ambiguous, late, missing-text, or multi-candidate events do not mutate command state. Successful
+HTTP response remains the primary confirmation path; webhook matching repairs response-loss and
+worker-crash cases without an extra `GET /messages` that could affect read state or spend credits.
+
+### Production Gate
+
+The executor is first deployed and validated with execution off. Enabling it requires:
+
+- both runtime roles reporting outbox and execution enabled with no skipped overrides;
+- no pre-existing unintended `queued` rows;
+- one explicitly designated controlled test fan/conversation;
+- operator-approved harmless text;
+- proof of exactly one OFAPI credit-ledger attempt, terminal command state, matching
+  `messages.sent`/projection when delivered, and no payload text in logs;
+- rollback proof that disabling execution leaves intake available and prevents new claims.
+
+Desktop write transport remains direct until this live gate passes and command status/recovery UX
+is implemented.

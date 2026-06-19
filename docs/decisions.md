@@ -565,3 +565,22 @@ command outbox enabled with no skipped overrides. A harmless command validated c
 mismatch/unassigned/read/idempotent-cancel behavior, ended `cancelled` with zero attempts, created
 no credit-ledger row, and leaked no payload text to responses or logs. No vendor send was attempted
 or authorized. Executor rollout remains a separate decision requiring a controlled test fan.
+
+## OFAPI Command Executor (2026-06-19)
+
+**Decision #56:** Vendor execution is a separate default-off staged boot dependency,
+`OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED`, requiring the command outbox. The worker may issue only
+the versioned text-send command through the core OFAPI client, with global pacing, page-attributed
+credit accounting, and exactly one HTTP attempt per durable row. Lost queue wakeups are recovered
+by a minutely sweep; a stale `in_flight` row becomes `indeterminate`, never `queued`.
+
+- A valid 2xx response carrying a message id confirms the command. Definite 4xx rejection is
+  terminal; 429 is human-retryable; transport failures, timeout, 408, 5xx, and ambiguous/malformed
+  success are indeterminate.
+- No raw vendor error body or message text may enter logs, status responses, or verifier metadata.
+- A settled `messages.sent` webhook may repair an in-flight/indeterminate outcome only for one
+  unique account + conversation + normalized-text candidate inside a bounded attempt window.
+  Ambiguous matches do nothing. The executor does not add a `GET /messages` verifier.
+- Execution is deployed off first. Production enablement requires an explicitly controlled test
+  fan, one harmless approved send, proof of one vendor/ledger attempt, response/webhook
+  confirmation, and rollback proof. Desktop writes do not switch before that gate.
