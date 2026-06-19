@@ -8,6 +8,7 @@ import {
   ofapiWebhookConfig,
   ofapiWebhookEvents,
   pages,
+  transactions,
   type OFAPI_CREDIT_LEDGER_SOURCES,
 } from "../schema.ts";
 
@@ -299,6 +300,268 @@ export async function listOfapiWebhookEventsForSpendProjection(
     ))
     .orderBy(asc(ofapiWebhookEvents.id))
     .limit(input.limit);
+}
+
+export type OfapiSpendProjectionComparisonStatus =
+  | "matched"
+  | "missing_in_core_truth"
+  | "page_mismatch"
+  | "amount_mismatch"
+  | "fan_mismatch"
+  | "state_mismatch"
+  | "ppv_estimated"
+  | "tips_blocked"
+  | "blocked"
+  | "skipped"
+  | "other";
+
+export interface OfapiSpendProjectionComparisonInput {
+  from: Date;
+  to: Date;
+  sampleLimit: number;
+}
+
+export interface OfapiSpendProjectionComparisonStatusRow {
+  status: OfapiSpendProjectionComparisonStatus;
+  count: number;
+  grossAmountMills: bigint;
+  creatorNetAmountMills: bigint;
+  coreGrossAmountMills: bigint;
+  coreCreatorNetAmountMills: bigint;
+}
+
+export interface OfapiSpendProjectionComparisonPageRow
+  extends OfapiSpendProjectionComparisonStatusRow {
+  pageId: number;
+  pageLabel: string;
+}
+
+export interface OfapiSpendProjectionComparisonSampleRow {
+  projectionId: number;
+  comparisonStatus: OfapiSpendProjectionComparisonStatus;
+  sourceEventType: string;
+  projectionStatus: string;
+  eventStatus: string | null;
+  blockedReason: string | null;
+  journalId: number;
+  pageId: number;
+  pageLabel: string;
+  fanPlatformUserId: string | null;
+  transactionId: string | null;
+  messageId: string | null;
+  occurredAt: Date;
+  grossAmountMills: bigint | null;
+  creatorNetAmountMills: bigint | null;
+  coreTransactionPk: number | null;
+  corePageId: number | null;
+  coreFanPlatformUserId: string | null;
+  coreTransactionState: string | null;
+  coreOccurredAt: Date | null;
+  coreGrossAmountMills: bigint | null;
+  coreCreatorNetAmountMills: bigint | null;
+}
+
+const OFAPI_SPEND_COMPARISON_STATUS_SQL = sql`
+  case
+    when p.source_event_type = 'messages.ppv.unlocked'
+      and p.projection_status = 'projected'
+      then 'ppv_estimated'
+    when p.source_event_type = 'tips.received'
+      and p.projection_status = 'blocked'
+      then 'tips_blocked'
+    when p.projection_status = 'blocked'
+      then 'blocked'
+    when p.projection_status = 'skipped'
+      then 'skipped'
+    when p.source_event_type = 'transactions.new'
+      and p.projection_status = 'projected'
+      and t.id is null
+      then 'missing_in_core_truth'
+    when p.source_event_type = 'transactions.new'
+      and p.projection_status = 'projected'
+      and t.platform_account_id is distinct from p.page_id
+      then 'page_mismatch'
+    when p.source_event_type = 'transactions.new'
+      and p.projection_status = 'projected'
+      and t.sender_id is distinct from p.fan_platform_user_id
+      then 'fan_mismatch'
+    when p.source_event_type = 'transactions.new'
+      and p.projection_status = 'projected'
+      and (
+        t.gross_amount_mills is distinct from p.gross_amount_mills
+        or t.creator_net_amount_mills is distinct from p.creator_net_amount_mills
+      )
+      then 'amount_mismatch'
+    when p.source_event_type = 'transactions.new'
+      and p.projection_status = 'projected'
+      and t.transaction_state::text is distinct from p.event_status
+      then 'state_mismatch'
+    when p.source_event_type = 'transactions.new'
+      and p.projection_status = 'projected'
+      then 'matched'
+    else 'other'
+  end
+`;
+
+function ofapiSpendComparisonBaseSql(input: OfapiSpendProjectionComparisonInput) {
+  return sql`
+    with compared as (
+      select
+        p.id as projection_id,
+        ${OFAPI_SPEND_COMPARISON_STATUS_SQL}::text as comparison_status,
+        p.source_event_type,
+        p.projection_status,
+        p.event_status,
+        p.blocked_reason,
+        p.journal_id,
+        p.page_id,
+        pa.label as page_label,
+        p.fan_platform_user_id,
+        p.transaction_id,
+        p.message_id,
+        p.occurred_at,
+        p.gross_amount_mills,
+        p.creator_net_amount_mills,
+        t.id as core_transaction_pk,
+        t.platform_account_id as core_page_id,
+        t.sender_id as core_fan_platform_user_id,
+        t.transaction_state::text as core_transaction_state,
+        t.occurred_at as core_occurred_at,
+        t.gross_amount_mills as core_gross_amount_mills,
+        t.creator_net_amount_mills as core_creator_net_amount_mills
+      from ${ofapiSpendProjectionEvents} p
+      join ${pages} pa on pa.id = p.page_id
+      left join lateral (
+        select tx.*
+        from ${transactions} tx
+        where p.transaction_id is not null
+          and tx.transaction_id = p.transaction_id
+        order by
+          case when tx.platform_account_id = p.page_id then 0 else 1 end,
+          tx.id
+        limit 1
+      ) t on true
+      where p.occurred_at >= ${input.from}::timestamptz
+        and p.occurred_at < ${input.to}::timestamptz
+    )
+  `;
+}
+
+export async function summarizeOfapiSpendProjectionComparison(
+  db: Database,
+  input: OfapiSpendProjectionComparisonInput,
+): Promise<OfapiSpendProjectionComparisonStatusRow[]> {
+  const result = await db.execute(sql`
+    ${ofapiSpendComparisonBaseSql(input)}
+    select
+      comparison_status,
+      count(*)::int as count,
+      coalesce(sum(gross_amount_mills), 0)::bigint as gross_amount_mills,
+      coalesce(sum(creator_net_amount_mills), 0)::bigint as creator_net_amount_mills,
+      coalesce(sum(core_gross_amount_mills), 0)::bigint as core_gross_amount_mills,
+      coalesce(sum(core_creator_net_amount_mills), 0)::bigint as core_creator_net_amount_mills
+    from compared
+    group by comparison_status
+    order by comparison_status asc
+  `);
+
+  return result.rows.map((row) => ({
+    status: String(row.comparison_status) as OfapiSpendProjectionComparisonStatus,
+    count: Number(row.count),
+    grossAmountMills: BigInt(row.gross_amount_mills as bigint | string | number),
+    creatorNetAmountMills: BigInt(row.creator_net_amount_mills as bigint | string | number),
+    coreGrossAmountMills: BigInt(row.core_gross_amount_mills as bigint | string | number),
+    coreCreatorNetAmountMills: BigInt(row.core_creator_net_amount_mills as bigint | string | number),
+  }));
+}
+
+export async function summarizeOfapiSpendProjectionComparisonByPage(
+  db: Database,
+  input: OfapiSpendProjectionComparisonInput,
+): Promise<OfapiSpendProjectionComparisonPageRow[]> {
+  const result = await db.execute(sql`
+    ${ofapiSpendComparisonBaseSql(input)}
+    select
+      page_id,
+      page_label,
+      comparison_status,
+      count(*)::int as count,
+      coalesce(sum(gross_amount_mills), 0)::bigint as gross_amount_mills,
+      coalesce(sum(creator_net_amount_mills), 0)::bigint as creator_net_amount_mills,
+      coalesce(sum(core_gross_amount_mills), 0)::bigint as core_gross_amount_mills,
+      coalesce(sum(core_creator_net_amount_mills), 0)::bigint as core_creator_net_amount_mills
+    from compared
+    group by page_id, page_label, comparison_status
+    order by page_label asc, page_id asc, comparison_status asc
+  `);
+
+  return result.rows.map((row) => ({
+    pageId: Number(row.page_id),
+    pageLabel: String(row.page_label),
+    status: String(row.comparison_status) as OfapiSpendProjectionComparisonStatus,
+    count: Number(row.count),
+    grossAmountMills: BigInt(row.gross_amount_mills as bigint | string | number),
+    creatorNetAmountMills: BigInt(row.creator_net_amount_mills as bigint | string | number),
+    coreGrossAmountMills: BigInt(row.core_gross_amount_mills as bigint | string | number),
+    coreCreatorNetAmountMills: BigInt(row.core_creator_net_amount_mills as bigint | string | number),
+  }));
+}
+
+export async function listOfapiSpendProjectionComparisonSamples(
+  db: Database,
+  input: OfapiSpendProjectionComparisonInput,
+): Promise<OfapiSpendProjectionComparisonSampleRow[]> {
+  const result = await db.execute(sql`
+    ${ofapiSpendComparisonBaseSql(input)}
+    select *
+    from compared
+    where comparison_status <> 'matched'
+    order by occurred_at desc, projection_id desc
+    limit ${input.sampleLimit}
+  `);
+
+  return result.rows.map((row) => ({
+    projectionId: Number(row.projection_id),
+    comparisonStatus: String(row.comparison_status) as OfapiSpendProjectionComparisonStatus,
+    sourceEventType: String(row.source_event_type),
+    projectionStatus: String(row.projection_status),
+    eventStatus: row.event_status === null ? null : String(row.event_status),
+    blockedReason: row.blocked_reason === null ? null : String(row.blocked_reason),
+    journalId: Number(row.journal_id),
+    pageId: Number(row.page_id),
+    pageLabel: String(row.page_label),
+    fanPlatformUserId: row.fan_platform_user_id === null ? null : String(row.fan_platform_user_id),
+    transactionId: row.transaction_id === null ? null : String(row.transaction_id),
+    messageId: row.message_id === null ? null : String(row.message_id),
+    occurredAt: row.occurred_at instanceof Date
+      ? row.occurred_at
+      : new Date(row.occurred_at as string),
+    grossAmountMills: row.gross_amount_mills === null
+      ? null
+      : BigInt(row.gross_amount_mills as bigint | string | number),
+    creatorNetAmountMills: row.creator_net_amount_mills === null
+      ? null
+      : BigInt(row.creator_net_amount_mills as bigint | string | number),
+    coreTransactionPk: row.core_transaction_pk === null ? null : Number(row.core_transaction_pk),
+    corePageId: row.core_page_id === null ? null : Number(row.core_page_id),
+    coreFanPlatformUserId: row.core_fan_platform_user_id === null
+      ? null
+      : String(row.core_fan_platform_user_id),
+    coreTransactionState: row.core_transaction_state === null
+      ? null
+      : String(row.core_transaction_state),
+    coreOccurredAt: row.core_occurred_at === null
+      ? null
+      : row.core_occurred_at instanceof Date
+        ? row.core_occurred_at
+        : new Date(row.core_occurred_at as string),
+    coreGrossAmountMills: row.core_gross_amount_mills === null
+      ? null
+      : BigInt(row.core_gross_amount_mills as bigint | string | number),
+    coreCreatorNetAmountMills: row.core_creator_net_amount_mills === null
+      ? null
+      : BigInt(row.core_creator_net_amount_mills as bigint | string | number),
+  }));
 }
 
 /** Pending rows whose enqueue may have been lost (crash between journal insert and boss.send). */

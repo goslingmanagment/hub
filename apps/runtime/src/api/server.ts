@@ -222,6 +222,7 @@ import {
   getOfapiCreditsLedger,
   getOfapiCreditsSummary,
 } from "../services/ofapi-credit-report.ts";
+import { getOfapiSpendComparison } from "../services/ofapi-spend-comparison.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
 import {
   getOfapiWebhookStatus,
@@ -1356,6 +1357,15 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
 
     return getOfapiCreditsLedger(appContext, request.query);
+  });
+
+  server.get("/api/v1/admin/ofapi/spend/comparison", {
+    schema: routeSchemas.adminOfapiSpendComparison,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    return getOfapiSpendComparison(appContext, request.query);
   });
 
   function initialSyncRetryFor(pageLabel: string) {

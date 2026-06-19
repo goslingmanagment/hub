@@ -6755,6 +6755,140 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/ofapi/spend/comparison": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Compare OFAPI spend shadow projection rows against core transaction truth
+         * @description Read-only C3/D6 gate endpoint. It does not write transactions or revenue; it classifies shadow rows as matched, missing, or mismatched against the current core transactions table so production equivalence can be proven before desktop spend polling is reduced.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    days?: number;
+                    sampleLimit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            generatedAt: string;
+                            window: {
+                                from: string;
+                                to: string;
+                                days: number;
+                            };
+                            summary: {
+                                /** @enum {string} */
+                                status: "matched" | "missing_in_core_truth" | "page_mismatch" | "amount_mismatch" | "fan_mismatch" | "state_mismatch" | "ppv_estimated" | "tips_blocked" | "blocked" | "skipped" | "other";
+                                count: number;
+                                grossAmountMills: number;
+                                creatorNetAmountMills: number;
+                                coreGrossAmountMills: number;
+                                coreCreatorNetAmountMills: number;
+                            }[];
+                            byPage: {
+                                /** @enum {string} */
+                                status: "matched" | "missing_in_core_truth" | "page_mismatch" | "amount_mismatch" | "fan_mismatch" | "state_mismatch" | "ppv_estimated" | "tips_blocked" | "blocked" | "skipped" | "other";
+                                count: number;
+                                grossAmountMills: number;
+                                creatorNetAmountMills: number;
+                                coreGrossAmountMills: number;
+                                coreCreatorNetAmountMills: number;
+                                pageId: number;
+                                pageLabel: string;
+                            }[];
+                            samples: {
+                                projectionId: number;
+                                /** @enum {string} */
+                                comparisonStatus: "matched" | "missing_in_core_truth" | "page_mismatch" | "amount_mismatch" | "fan_mismatch" | "state_mismatch" | "ppv_estimated" | "tips_blocked" | "blocked" | "skipped" | "other";
+                                sourceEventType: string;
+                                projectionStatus: string;
+                                eventStatus: string | null;
+                                blockedReason: string | null;
+                                journalId: number;
+                                pageId: number;
+                                pageLabel: string;
+                                fanPlatformUserId: string | null;
+                                transactionId: string | null;
+                                messageId: string | null;
+                                occurredAt: string;
+                                grossAmountMills: number | null;
+                                creatorNetAmountMills: number | null;
+                                coreTransactionPk: number | null;
+                                corePageId: number | null;
+                                coreFanPlatformUserId: string | null;
+                                coreTransactionState: string | null;
+                                coreOccurredAt: string | null;
+                                coreGrossAmountMills: number | null;
+                                coreCreatorNetAmountMills: number | null;
+                            }[];
+                            limitations: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/overview": {
         parameters: {
             query?: never;

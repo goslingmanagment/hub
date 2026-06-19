@@ -3002,6 +3002,73 @@ export const ofapiCreditsLedgerResponseSchema = z.object({
   })),
 });
 
+export const adminOfapiSpendComparisonQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(30).default(7),
+  sampleLimit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+const ofapiSpendComparisonStatusEnum = z.enum([
+  "matched",
+  "missing_in_core_truth",
+  "page_mismatch",
+  "amount_mismatch",
+  "fan_mismatch",
+  "state_mismatch",
+  "ppv_estimated",
+  "tips_blocked",
+  "blocked",
+  "skipped",
+  "other",
+]);
+
+const ofapiSpendComparisonAggregateSchema = z.object({
+  status: ofapiSpendComparisonStatusEnum,
+  count: z.number().int().min(0),
+  grossAmountMills: mills,
+  creatorNetAmountMills: mills,
+  coreGrossAmountMills: mills,
+  coreCreatorNetAmountMills: mills,
+});
+
+export const ofapiSpendComparisonResponseSchema = z.object({
+  generatedAt: isoTimestamp,
+  window: z.object({
+    from: isoTimestamp,
+    to: isoTimestamp,
+    days: z.number().int().min(1),
+  }),
+  summary: z.array(ofapiSpendComparisonAggregateSchema),
+  byPage: z.array(ofapiSpendComparisonAggregateSchema.extend({
+    pageId: intId,
+    pageLabel: z.string(),
+  })),
+  samples: z.array(z.object({
+    projectionId: z.number().int(),
+    comparisonStatus: ofapiSpendComparisonStatusEnum,
+    sourceEventType: z.string(),
+    projectionStatus: z.string(),
+    eventStatus: z.string().nullable(),
+    blockedReason: z.string().nullable(),
+    journalId: z.number().int(),
+    pageId: intId,
+    pageLabel: z.string(),
+    fanPlatformUserId: z.string().nullable(),
+    transactionId: z.string().nullable(),
+    messageId: z.string().nullable(),
+    occurredAt: isoTimestamp,
+    grossAmountMills: mills.nullable(),
+    creatorNetAmountMills: mills.nullable(),
+    coreTransactionPk: z.number().int().nullable(),
+    corePageId: intId.nullable(),
+    coreFanPlatformUserId: z.string().nullable(),
+    coreTransactionState: z.string().nullable(),
+    coreOccurredAt: isoTimestamp.nullable(),
+    coreGrossAmountMills: mills.nullable(),
+    coreCreatorNetAmountMills: mills.nullable(),
+  })),
+  limitations: z.array(z.string()),
+});
+
 const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
 const bearerOnlySecurity: Array<Record<string, string[]>> = [{ bearerAuth: [] }];
 const cookieOrBearerSecurity: Array<Record<string, string[]>> = [
@@ -3371,6 +3438,22 @@ export const routeSchemas = {
     querystring: adminOfapiCreditsLedgerQuerySchema,
     response: {
       200: ofapiCreditsLedgerResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminOfapiSpendComparison: {
+    tags: ["admin"],
+    summary: "Compare OFAPI spend shadow projection rows against core transaction truth",
+    description: "Read-only C3/D6 gate endpoint. It does not write transactions or revenue; "
+      + "it classifies shadow rows as matched, missing, or mismatched against the current "
+      + "core transactions table so production equivalence can be proven before desktop "
+      + "spend polling is reduced.",
+    security: cookieOnlySecurity,
+    querystring: adminOfapiSpendComparisonQuerySchema,
+    response: {
+      200: ofapiSpendComparisonResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -4688,6 +4771,9 @@ export type OfapiCreditsChatterSummaryResponse =
 export type OfapiCreditsDailyResponse = z.infer<typeof ofapiCreditsDailyResponseSchema>;
 export type AdminOfapiCreditsLedgerQuery = z.infer<typeof adminOfapiCreditsLedgerQuerySchema>;
 export type OfapiCreditsLedgerResponse = z.infer<typeof ofapiCreditsLedgerResponseSchema>;
+export type AdminOfapiSpendComparisonQuery =
+  z.infer<typeof adminOfapiSpendComparisonQuerySchema>;
+export type OfapiSpendComparisonResponse = z.infer<typeof ofapiSpendComparisonResponseSchema>;
 export type OfapiWebhookRegisterBody = z.infer<typeof ofapiWebhookRegisterBodySchema>;
 export type OfapiWebhookRegisterResponse = z.infer<typeof ofapiWebhookRegisterResponseSchema>;
 export type AdminChatterUsageQuery = z.infer<typeof adminChatterUsageQuerySchema>;
