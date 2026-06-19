@@ -1,6 +1,7 @@
 # OFAPI Desktop Command Outbox Contract
 
-Status: accepted for C6b implementation on 2026-06-19. Decision owner: core Decision #55.
+Status: C6b1 intake/read/cancel implemented default-off on 2026-06-19; production validation
+pending. Decision owner: core Decision #55.
 
 ## Boundary
 

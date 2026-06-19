@@ -998,6 +998,89 @@ export const dmMessageArchive = pgTable(
   }),
 );
 
+export const ofapiCommands = pgTable(
+  "ofapi_commands",
+  {
+    id: uuid("id").primaryKey(),
+    clientCommandId: uuid("client_command_id").notNull(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    chatterUserId: bigint("chatter_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" })
+      .notNull(),
+    ofapiAccountId: text("ofapi_account_id").notNull(),
+    conversationId: text("conversation_id").notNull(),
+    kind: text("kind").$type<"send_text_message_v1">().notNull(),
+    payload: jsonb("payload").$type<{ text: string }>().notNull(),
+    payloadHash: text("payload_hash").notNull(),
+    retryOfCommandId: uuid("retry_of_command_id"),
+    state: text("state").$type<
+      | "queued"
+      | "in_flight"
+      | "confirmed"
+      | "failed_retryable"
+      | "failed_terminal"
+      | "indeterminate"
+      | "cancelled"
+    >().default("queued").notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    lastErrorCode: text("last_error_code"),
+    lastErrorClass: text("last_error_class"),
+    verifierResult: jsonb("verifier_result").$type<Record<string, unknown>>(),
+    platformMessageId: text("platform_message_id"),
+    dedupeExpiresAt: timestamp("dedupe_expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pageChatterClientUniq: uniqueIndex("ofapi_commands_page_chatter_client_uniq")
+      .on(table.pageId, table.chatterUserId, table.clientCommandId),
+    oneInFlightLaneUniq: uniqueIndex("ofapi_commands_one_in_flight_lane_uniq")
+      .on(table.pageId, table.conversationId)
+      .where(sql`${table.state} = 'in_flight'`),
+    chatterCreatedIdx: index("ofapi_commands_chatter_created_idx")
+      .on(table.chatterUserId, table.createdAt.desc()),
+    pageLaneCreatedIdx: index("ofapi_commands_page_lane_created_idx")
+      .on(table.pageId, table.conversationId, table.createdAt),
+    dedupeExpiresIdx: index("ofapi_commands_dedupe_expires_idx").on(table.dedupeExpiresAt),
+    retryCommandFk: foreignKey({
+      name: "ofapi_commands_retry_of_command_id_fk",
+      columns: [table.retryOfCommandId],
+      foreignColumns: [table.id],
+    }).onDelete("restrict"),
+    kindCheck: check("ofapi_commands_kind_check", sql`
+      ${table.kind} = 'send_text_message_v1'
+    `),
+    stateCheck: check("ofapi_commands_state_check", sql`
+      ${table.state} in (
+        'queued',
+        'in_flight',
+        'confirmed',
+        'failed_retryable',
+        'failed_terminal',
+        'indeterminate',
+        'cancelled'
+      )
+    `),
+    attemptNonnegativeCheck: check("ofapi_commands_attempt_count_nonnegative_check", sql`
+      ${table.attemptCount} >= 0
+    `),
+    accountIdCheck: check("ofapi_commands_account_id_check", sql`
+      ${table.ofapiAccountId} ~ '^acct_[A-Za-z0-9]+$'
+    `),
+    conversationIdCheck: check("ofapi_commands_conversation_id_check", sql`
+      ${table.conversationId} ~ '^[0-9]{1,30}$'
+    `),
+    payloadHashCheck: check("ofapi_commands_payload_hash_check", sql`
+      ${table.payloadHash} ~ '^[0-9a-f]{64}$'
+    `),
+    dedupeHorizonCheck: check("ofapi_commands_dedupe_horizon_check", sql`
+      ${table.dedupeExpiresAt} >= ${table.createdAt}
+    `),
+  }),
+);
+
 export const workboardSnoozes = pgTable(
   "workboard_snoozes",
   {

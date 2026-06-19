@@ -94,10 +94,11 @@ describe("config registry", () => {
     "ofapiSpendProjectionShadowEnabled",
     "ofapiSpendTransactionIngestEnabled",
     "ofapiDesktopReadGatewayEnabled",
+    "ofapiDesktopCommandOutboxEnabled",
     "onlyFansTopSpendersEnabled",
   ];
 
-  it("wires exactly the eight live keys, the twelve boot keys, and nothing else", () => {
+  it("wires exactly the eight live keys, the thirteen boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);
@@ -128,6 +129,7 @@ describe("config registry", () => {
     expect(req("ofapiSpendProjectionShadowEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
     expect(req("ofapiSpendTransactionIngestEnabled")).toEqual(["ofapiSpendProjectionShadowEnabled"]);
     expect(req("ofapiDesktopReadGatewayEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
+    expect(req("ofapiDesktopCommandOutboxEnabled")).toEqual(["ofapiDesktopReadGatewayEnabled"]);
     expect(req("onlyFansTopSpendersEnabled")).toEqual(["ofapiPresenceProjectionEnabled"]);
   });
 
@@ -146,7 +148,7 @@ describe("config registry", () => {
     }
   });
 
-  it("orders #50, #51, #52, and the #54 read-gateway slice", () => {
+  it("orders #50, #51, #52, #54, and the #55 command-outbox slice", () => {
     const order = (key: string) => getDescriptor(key)!.stagedOrder;
     expect(order("ofapiDmProjectionEnabled")).toBe(1);
     expect(order("ofapiDmSyncEnabled")).toBe(2);
@@ -160,6 +162,7 @@ describe("config registry", () => {
     expect(order("ofapiSpendTransactionIngestEnabled")).toBe(2);
     expect(order("ofapiDmColdArchiveEnabled")).toBe(1);
     expect(order("ofapiDesktopReadGatewayEnabled")).toBe(1);
+    expect(order("ofapiDesktopCommandOutboxEnabled")).toBe(1);
   });
 
   it("masks secrets and complex values in the running snapshot", () => {

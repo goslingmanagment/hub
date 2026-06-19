@@ -551,3 +551,9 @@ There is no generic path/method proxy.
 **Rollback:** disabling command intake rejects new commands while retaining existing audit rows.
 Disabling future execution parks queued commands and prevents new claims; it never changes a
 previously `in_flight`/terminal record or makes desktop retry automatically.
+
+**C6b1 implementation:** migration `0038_ofapi_command_outbox.sql`, the `ofapi_commands` repository,
+strict core-owned contracts, and chatter-key create/read/cancel routes implement the non-executing
+slice. `OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED` is default-off and requires the read gateway. The
+schema enforces one in-flight row per page/conversation lane for the future executor, but this
+slice has no code path that transitions to `in_flight` or calls OFAPI.

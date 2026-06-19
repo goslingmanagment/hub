@@ -6786,6 +6786,438 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ofapi/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create or deduplicate a desktop OFAPI command
+         * @description Chatter-key-only C6b command intake. The first command version accepts text-only sends and persists them as queued outbox rows. This endpoint does not execute commands or call OFAPI. Exact client-id replays return the existing row; payload mismatches return 409.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        clientCommandId: string;
+                        /** @enum {string} */
+                        kind: "send_text_message_v1";
+                        accountId: string;
+                        conversationId: string;
+                        payload: {
+                            text: string;
+                        };
+                        retryOfCommandId?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            commandId: string;
+                            /** Format: uuid */
+                            clientCommandId: string;
+                            /** @enum {string} */
+                            kind: "send_text_message_v1";
+                            accountId: string;
+                            conversationId: string;
+                            /** @enum {string} */
+                            state: "queued" | "in_flight" | "confirmed" | "failed_retryable" | "failed_terminal" | "indeterminate" | "cancelled";
+                            payloadHash: string;
+                            retryOfCommandId: string | null;
+                            attemptCount: number;
+                            lastErrorCode: string | null;
+                            lastErrorClass: string | null;
+                            verifierResult: {
+                                [key: string]: unknown;
+                            } | null;
+                            platformMessageId: string | null;
+                            createdAt: string;
+                            updatedAt: string;
+                            deduplicated: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            commandId: string;
+                            /** Format: uuid */
+                            clientCommandId: string;
+                            /** @enum {string} */
+                            kind: "send_text_message_v1";
+                            accountId: string;
+                            conversationId: string;
+                            /** @enum {string} */
+                            state: "queued" | "in_flight" | "confirmed" | "failed_retryable" | "failed_terminal" | "indeterminate" | "cancelled";
+                            payloadHash: string;
+                            retryOfCommandId: string | null;
+                            attemptCount: number;
+                            lastErrorCode: string | null;
+                            lastErrorClass: string | null;
+                            verifierResult: {
+                                [key: string]: unknown;
+                            } | null;
+                            platformMessageId: string | null;
+                            createdAt: string;
+                            updatedAt: string;
+                            deduplicated: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ofapi/commands/{commandId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one owned desktop OFAPI command
+         * @description Returns command state and audit metadata without echoing message text.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    commandId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            commandId: string;
+                            /** Format: uuid */
+                            clientCommandId: string;
+                            /** @enum {string} */
+                            kind: "send_text_message_v1";
+                            accountId: string;
+                            conversationId: string;
+                            /** @enum {string} */
+                            state: "queued" | "in_flight" | "confirmed" | "failed_retryable" | "failed_terminal" | "indeterminate" | "cancelled";
+                            payloadHash: string;
+                            retryOfCommandId: string | null;
+                            attemptCount: number;
+                            lastErrorCode: string | null;
+                            lastErrorClass: string | null;
+                            verifierResult: {
+                                [key: string]: unknown;
+                            } | null;
+                            platformMessageId: string | null;
+                            createdAt: string;
+                            updatedAt: string;
+                            deduplicated: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ofapi/commands/{commandId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel one queued desktop OFAPI command
+         * @description Transitions only queued commands to cancelled. Repeating cancel on an already-cancelled command is idempotent; no vendor call is made.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    commandId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            commandId: string;
+                            /** Format: uuid */
+                            clientCommandId: string;
+                            /** @enum {string} */
+                            kind: "send_text_message_v1";
+                            accountId: string;
+                            conversationId: string;
+                            /** @enum {string} */
+                            state: "queued" | "in_flight" | "confirmed" | "failed_retryable" | "failed_terminal" | "indeterminate" | "cancelled";
+                            payloadHash: string;
+                            retryOfCommandId: string | null;
+                            attemptCount: number;
+                            lastErrorCode: string | null;
+                            lastErrorClass: string | null;
+                            verifierResult: {
+                                [key: string]: unknown;
+                            } | null;
+                            platformMessageId: string | null;
+                            createdAt: string;
+                            updatedAt: string;
+                            deduplicated: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/ofapi/credits/summary": {
         parameters: {
             query?: never;

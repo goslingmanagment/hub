@@ -225,6 +225,11 @@ import {
   getOfapiCreditsSummary,
 } from "../services/ofapi-credit-report.ts";
 import { executeOfapiReadGatewayRequest } from "../services/ofapi-read-gateway.ts";
+import {
+  cancelOfapiCommand,
+  createOfapiCommand,
+  getOfapiCommand,
+} from "../services/ofapi-command-outbox.ts";
 import { getOfapiDmColdArchiveStatus } from "../services/ofapi-dm-archive.ts";
 import { getOfapiSpendComparison } from "../services/ofapi-spend-comparison.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
@@ -1397,6 +1402,37 @@ export async function buildApiServer(appContext: AppContext) {
       reply.header(name, value);
     }
     return reply.code(response.status as 200).send(response.body);
+  });
+
+  server.post("/api/v1/ofapi/commands", {
+    schema: routeSchemas.createOfapiCommand,
+    config: {
+      rateLimit: {
+        max: 60,
+        timeWindow: "1 minute",
+      },
+    },
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const result = await createOfapiCommand(appContext, principal, request.body);
+    return reply.code(result.status).send(result.command);
+  });
+
+  server.get("/api/v1/ofapi/commands/:commandId", {
+    schema: routeSchemas.getOfapiCommand,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    return getOfapiCommand(appContext, principal, request.params.commandId);
+  });
+
+  server.post("/api/v1/ofapi/commands/:commandId/cancel", {
+    schema: routeSchemas.cancelOfapiCommand,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    return cancelOfapiCommand(appContext, principal, request.params.commandId);
   });
 
   server.get("/api/v1/admin/ofapi/credits/summary", {

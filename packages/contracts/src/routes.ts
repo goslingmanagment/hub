@@ -3029,6 +3029,52 @@ const ofapiReadGatewayParamsSchema = z.object({
   "*": z.string().min(1).max(1000),
 });
 
+export const ofapiCommandStateSchema = z.enum([
+  "queued",
+  "in_flight",
+  "confirmed",
+  "failed_retryable",
+  "failed_terminal",
+  "indeterminate",
+  "cancelled",
+]);
+
+export const createOfapiCommandBodySchema = z.strictObject({
+  clientCommandId: z.string().uuid(),
+  kind: z.literal("send_text_message_v1"),
+  accountId: z.string().regex(/^acct_[A-Za-z0-9]+$/),
+  conversationId: z.string().regex(/^[0-9]{1,30}$/),
+  payload: z.strictObject({
+    text: z.string().min(1).max(10_000).refine((text) => text.trim().length > 0, {
+      message: "Message text must not be blank",
+    }),
+  }),
+  retryOfCommandId: z.string().uuid().nullable().optional(),
+});
+
+export const ofapiCommandParamsSchema = z.object({
+  commandId: z.string().uuid(),
+});
+
+export const ofapiCommandResponseSchema = z.object({
+  commandId: z.string().uuid(),
+  clientCommandId: z.string().uuid(),
+  kind: z.literal("send_text_message_v1"),
+  accountId: z.string(),
+  conversationId: z.string(),
+  state: ofapiCommandStateSchema,
+  payloadHash: z.string().regex(/^[0-9a-f]{64}$/),
+  retryOfCommandId: z.string().uuid().nullable(),
+  attemptCount: z.number().int().min(0),
+  lastErrorCode: z.string().nullable(),
+  lastErrorClass: z.string().nullable(),
+  verifierResult: z.record(z.string(), z.unknown()).nullable(),
+  platformMessageId: z.string().nullable(),
+  createdAt: isoTimestamp,
+  updatedAt: isoTimestamp,
+  deduplicated: z.boolean(),
+});
+
 export const adminOfapiCreditsDailyQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(90).default(30),
 });
@@ -3552,6 +3598,56 @@ export const routeSchemas = {
       502: z.unknown(),
       503: z.unknown(),
       504: z.unknown(),
+    },
+  },
+  createOfapiCommand: {
+    tags: ["ofapi"],
+    summary: "Create or deduplicate a desktop OFAPI command",
+    description: "Chatter-key-only C6b command intake. The first command version accepts "
+      + "text-only sends and persists them as queued outbox rows. This endpoint does not "
+      + "execute commands or call OFAPI. Exact client-id replays return the existing row; "
+      + "payload mismatches return 409.",
+    security: bearerOnlySecurity,
+    body: createOfapiCommandBodySchema,
+    response: {
+      200: ofapiCommandResponseSchema,
+      202: ofapiCommandResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  getOfapiCommand: {
+    tags: ["ofapi"],
+    summary: "Get one owned desktop OFAPI command",
+    description: "Returns command state and audit metadata without echoing message text.",
+    security: bearerOnlySecurity,
+    params: ofapiCommandParamsSchema,
+    response: {
+      200: ofapiCommandResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  cancelOfapiCommand: {
+    tags: ["ofapi"],
+    summary: "Cancel one queued desktop OFAPI command",
+    description: "Transitions only queued commands to cancelled. Repeating cancel on an "
+      + "already-cancelled command is idempotent; no vendor call is made.",
+    security: bearerOnlySecurity,
+    params: ofapiCommandParamsSchema,
+    response: {
+      200: ofapiCommandResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+      503: errorResponseSchema,
     },
   },
   adminOfapiCreditsSummary: {
