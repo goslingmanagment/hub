@@ -20386,6 +20386,235 @@
         }
       }
     },
+    "/api/v1/ofapi/credits/summary": {
+      "get": {
+        "summary": "Get page-scoped OFAPI credit spend visible to the authenticated chatter",
+        "tags": [
+          "ofapi"
+        ],
+        "description": "Bearer chatter-key endpoint for desktop clients. It reports REST spend attributed to the chatter's assigned pages and a webhook credit estimate derived from journaled events for those pages. It intentionally omits owner-only global balance, refills, external drift, and adjustments.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "scope": {
+                      "type": "object",
+                      "properties": {
+                        "pageIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "pageCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "pageIds",
+                        "pageCount"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "today": {
+                      "type": "object",
+                      "properties": {
+                        "day": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "restCredits": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "webhook": {
+                          "type": "object",
+                          "properties": {
+                            "eventCount": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "estimatedCredits": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "eventCount",
+                            "estimatedCredits"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "totalEstimatedCredits": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "day",
+                        "from",
+                        "to",
+                        "restCredits",
+                        "webhook",
+                        "totalEstimatedCredits"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "last7d": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "restCredits": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "webhook": {
+                          "type": "object",
+                          "properties": {
+                            "eventCount": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "estimatedCredits": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "eventCount",
+                            "estimatedCredits"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "totalEstimatedCredits": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to",
+                        "restCredits",
+                        "webhook",
+                        "totalEstimatedCredits"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "limitations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "scope",
+                    "today",
+                    "last7d",
+                    "limitations"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/ofapi/credits/summary": {
       "get": {
         "summary": "Get the OFAPI credit balance, budgets, forecast, and ops state",

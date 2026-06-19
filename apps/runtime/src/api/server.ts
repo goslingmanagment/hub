@@ -217,6 +217,7 @@ import {
   type SyncEventHub,
 } from "../services/events-stream.ts";
 import {
+  getChatterOfapiCreditsSummary,
   getOfapiCreditsDaily,
   getOfapiCreditsLedger,
   getOfapiCreditsSummary,
@@ -1317,6 +1318,17 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
 
     return registerOfapiWebhook(appContext, { endpointUrl: request.body.endpointUrl });
+  });
+
+  server.get("/api/v1/ofapi/credits/summary", {
+    schema: routeSchemas.ofapiCreditsChatterSummary,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+
+    return getChatterOfapiCreditsSummary(appContext, {
+      pageIds: principal.assignedPageIds,
+    });
   });
 
   server.get("/api/v1/admin/ofapi/credits/summary", {

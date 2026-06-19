@@ -610,14 +610,21 @@ export async function upsertOfapiWebhookAccrual(
 /** Journaled deliveries received in [from, to) — the webhook accrual basis. */
 export async function countOfapiWebhookEventsReceivedBetween(
   db: Database,
-  input: { from: Date; to: Date },
+  input: { from: Date; to: Date; pageIds?: number[] },
 ): Promise<number> {
+  if (input.pageIds !== undefined && input.pageIds.length === 0) {
+    return 0;
+  }
+
   const [row] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(ofapiWebhookEvents)
     .where(and(
       gte(ofapiWebhookEvents.receivedAt, input.from),
       lt(ofapiWebhookEvents.receivedAt, input.to),
+      ...(input.pageIds !== undefined
+        ? [inArray(ofapiWebhookEvents.platformAccountId, input.pageIds)]
+        : []),
     ));
 
   return row?.count ?? 0;
@@ -810,6 +817,29 @@ export async function sumOfapiRestCreditsForOperationsBetween(
     .where(and(
       eq(ofapiCreditLedger.source, "rest"),
       inArray(ofapiCreditLedger.operation, [...input.operations]),
+      gte(ofapiCreditLedger.occurredAt, input.from),
+      lt(ofapiCreditLedger.occurredAt, input.to),
+      gt(ofapiCreditLedger.credits, 0),
+    ));
+
+  return row?.total ?? 0;
+}
+
+/** Page-scoped positive REST spend for chatter-visible credit summaries. */
+export async function sumOfapiRestCreditsForPagesBetween(
+  db: Database,
+  input: { pageIds: number[]; from: Date; to: Date },
+): Promise<number> {
+  if (input.pageIds.length === 0) {
+    return 0;
+  }
+
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${ofapiCreditLedger.credits}), 0)::int` })
+    .from(ofapiCreditLedger)
+    .where(and(
+      eq(ofapiCreditLedger.source, "rest"),
+      inArray(ofapiCreditLedger.pageId, input.pageIds),
       gte(ofapiCreditLedger.occurredAt, input.from),
       lt(ofapiCreditLedger.occurredAt, input.to),
       gt(ofapiCreditLedger.credits, 0),

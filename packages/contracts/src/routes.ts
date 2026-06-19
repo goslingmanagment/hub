@@ -2920,6 +2920,30 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
   }),
 });
 
+const ofapiCreditsChatterWindowSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  restCredits: z.number().int().min(0),
+  webhook: z.object({
+    eventCount: z.number().int().min(0),
+    estimatedCredits: z.number().int().min(0),
+  }),
+  totalEstimatedCredits: z.number().int().min(0),
+});
+
+export const ofapiCreditsChatterSummaryResponseSchema = z.object({
+  enabled: z.boolean(),
+  scope: z.object({
+    pageIds: z.array(intId),
+    pageCount: z.number().int().min(0),
+  }),
+  today: z.object({
+    day: businessDate,
+  }).merge(ofapiCreditsChatterWindowSchema),
+  last7d: ofapiCreditsChatterWindowSchema,
+  limitations: z.array(z.string()),
+});
+
 export const adminOfapiCreditsDailyQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(90).default(30),
 });
@@ -3302,6 +3326,20 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       503: errorResponseSchema,
+    },
+  },
+  ofapiCreditsChatterSummary: {
+    tags: ["ofapi"],
+    summary: "Get page-scoped OFAPI credit spend visible to the authenticated chatter",
+    description: "Bearer chatter-key endpoint for desktop clients. It reports REST spend "
+      + "attributed to the chatter's assigned pages and a webhook credit estimate derived "
+      + "from journaled events for those pages. It intentionally omits owner-only global "
+      + "balance, refills, external drift, and adjustments.",
+    security: bearerOnlySecurity,
+    response: {
+      200: ofapiCreditsChatterSummaryResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
   adminOfapiCreditsSummary: {
@@ -4645,6 +4683,8 @@ export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSche
 export type OfapiPageMapping = z.infer<typeof ofapiPageMappingSchema>;
 export type OfapiWebhookStatusResponse = z.infer<typeof ofapiWebhookStatusResponseSchema>;
 export type OfapiCreditsSummaryResponse = z.infer<typeof ofapiCreditsSummaryResponseSchema>;
+export type OfapiCreditsChatterSummaryResponse =
+  z.infer<typeof ofapiCreditsChatterSummaryResponseSchema>;
 export type OfapiCreditsDailyResponse = z.infer<typeof ofapiCreditsDailyResponseSchema>;
 export type AdminOfapiCreditsLedgerQuery = z.infer<typeof adminOfapiCreditsLedgerQuerySchema>;
 export type OfapiCreditsLedgerResponse = z.infer<typeof ofapiCreditsLedgerResponseSchema>;

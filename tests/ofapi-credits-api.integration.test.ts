@@ -12,7 +12,10 @@ import {
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import {
+  createUserAccount,
+  issueChatterApiKey,
+} from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -57,6 +60,10 @@ async function seedUsers() {
     username: "lead",
     role: "team_lead",
     password: "lead-secret",
+  }, { source: "cli" });
+  await createUserAccount(appContext, {
+    username: "anton",
+    role: "chatter",
   }, { source: "cli" });
 }
 
@@ -116,7 +123,12 @@ async function seedLedgerFixture() {
   return page;
 }
 
-async function seedWebhookEventsAt(prefix: string, count: number, receivedAt: Date) {
+async function seedWebhookEventsAt(
+  prefix: string,
+  count: number,
+  receivedAt: Date,
+  pageId?: number,
+) {
   if (!testDb) {
     throw new Error("test database not started");
   }
@@ -131,8 +143,11 @@ async function seedWebhookEventsAt(prefix: string, count: number, receivedAt: Da
   }
 
   await testDb.pool.query(
-    `update ofapi_webhook_events set received_at = $1 where idempotency_key like $2`,
-    [receivedAt, `${prefix}_%`],
+    `update ofapi_webhook_events
+        set received_at = $1,
+            platform_account_id = coalesce($3, platform_account_id)
+      where idempotency_key like $2`,
+    [receivedAt, `${prefix}_%`, pageId ?? null],
   );
 }
 
@@ -183,6 +198,147 @@ describe("ofapi credits admin api", () => {
         headers: { cookie: nonOwnerCookie },
       });
       expect(forbidden.statusCode).toBe(403);
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("returns a chatter-safe page-scoped spend summary", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedLedgerFixture();
+    const otherModel = await createModel(appContext.db, {
+      slug: "other-credits",
+      name: "Other Credits",
+    });
+    const otherPage = await createOnlyFansPage(appContext.db, {
+      modelId: otherModel.id,
+      label: "other-of",
+    });
+
+    const now = new Date();
+    const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const minutes = (count: number) => new Date(dayStart + count * 60 * 1000);
+    const daysAgo = (days: number, minute: number) =>
+      new Date(dayStart - days * 24 * 60 * 60 * 1000 + minute * 60 * 1000);
+
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chats",
+      credits: 17,
+      balanceAfter: 23_900,
+      pageId: otherPage.id,
+      httpStatus: 200,
+      occurredAt: minutes(7),
+    });
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chats",
+      credits: 3,
+      balanceAfter: 23_897,
+      pageId: page.id,
+      httpStatus: 200,
+      occurredAt: daysAgo(2, 1),
+    });
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chats",
+      credits: 11,
+      balanceAfter: 23_886,
+      pageId: otherPage.id,
+      httpStatus: 200,
+      occurredAt: daysAgo(2, 2),
+    });
+    await seedWebhookEventsAt("assigned_today", 101, minutes(8), page.id);
+    await seedWebhookEventsAt("other_today", 250, minutes(9), otherPage.id);
+    await seedWebhookEventsAt("assigned_7d", 8, daysAgo(2, 3), page.id);
+
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: page.label,
+    }, { source: "test" });
+
+    const unauthenticated = await server.inject({
+      method: "GET",
+      url: "/api/v1/ofapi/credits/summary",
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const ownerCookie = await loginCookie("dima", "owner-secret");
+    const ownerSession = await server.inject({
+      method: "GET",
+      url: "/api/v1/ofapi/credits/summary",
+      headers: { cookie: ownerCookie },
+    });
+    expect(ownerSession.statusCode).toBe(403);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/ofapi/credits/summary",
+      headers: { authorization: `Bearer ${key}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.enabled).toBe(true);
+    expect(body.scope).toEqual({ pageIds: [page.id], pageCount: 1 });
+    expect(body.today.restCredits).toBe(92);
+    expect(body.today.webhook).toEqual({ eventCount: 101, estimatedCredits: 2 });
+    expect(body.today.totalEstimatedCredits).toBe(94);
+    expect(body.last7d.restCredits).toBe(95);
+    expect(body.last7d.webhook).toEqual({ eventCount: 109, estimatedCredits: 2 });
+    expect(body.last7d.totalEstimatedCredits).toBe(97);
+    expect(body.limitations).toContain("owner-only balance, refills, external drift, and adjustments are omitted");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("returns an unavailable chatter summary when the credit ledger is disabled", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await createUserAccount(appContext, {
+      username: "boris",
+      role: "chatter",
+    }, { source: "cli" });
+    const model = await createModel(appContext.db, {
+      slug: "disabled-ledger",
+      name: "Disabled Ledger",
+    });
+    const page = await createOnlyFansPage(appContext.db, {
+      modelId: model.id,
+      label: "disabled-of",
+    });
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "boris",
+      pageLabel: page.label,
+    }, { source: "test" });
+
+    const disabledContext = createTestAppContext(testDb, { ofapiCreditLedgerEnabled: false });
+    const disabledServer = await buildApiServer(disabledContext);
+    await disabledServer.ready();
+    try {
+      const response = await disabledServer.inject({
+        method: "GET",
+        url: "/api/v1/ofapi/credits/summary",
+        headers: { authorization: `Bearer ${key}` },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        enabled: false,
+        scope: { pageIds: [page.id], pageCount: 1 },
+        today: {
+          restCredits: 0,
+          webhook: { eventCount: 0, estimatedCredits: 0 },
+          totalEstimatedCredits: 0,
+        },
+        last7d: {
+          restCredits: 0,
+          webhook: { eventCount: 0, estimatedCredits: 0 },
+          totalEstimatedCredits: 0,
+        },
+        limitations: ["ledger disabled; page-scoped credit summary unavailable"],
+      });
+    } finally {
+      await disabledServer.close();
     }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 

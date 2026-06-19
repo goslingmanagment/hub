@@ -6344,6 +6344,99 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ofapi/credits/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get page-scoped OFAPI credit spend visible to the authenticated chatter
+         * @description Bearer chatter-key endpoint for desktop clients. It reports REST spend attributed to the chatter's assigned pages and a webhook credit estimate derived from journaled events for those pages. It intentionally omits owner-only global balance, refills, external drift, and adjustments.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            enabled: boolean;
+                            scope: {
+                                pageIds: number[];
+                                pageCount: number;
+                            };
+                            today: {
+                                day: string;
+                                from: string;
+                                to: string;
+                                restCredits: number;
+                                webhook: {
+                                    eventCount: number;
+                                    estimatedCredits: number;
+                                };
+                                totalEstimatedCredits: number;
+                            };
+                            last7d: {
+                                from: string;
+                                to: string;
+                                restCredits: number;
+                                webhook: {
+                                    eventCount: number;
+                                    estimatedCredits: number;
+                                };
+                                totalEstimatedCredits: number;
+                            };
+                            limitations: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/ofapi/credits/summary": {
         parameters: {
             query?: never;
