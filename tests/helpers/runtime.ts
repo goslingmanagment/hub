@@ -17,6 +17,7 @@ export function createTestAppContext(
     onlyFansDefaultDelayMs?: number;
     onlyFansAdapter?: AppContext["onlyFansAdapter"];
     ofapi?: AppContext["ofapi"];
+    aiGatewayProvider?: AppContext["aiGatewayProvider"];
     ofapiEventRetentionDays?: number;
     ofapiDmProjectionEnabled?: boolean;
     ofapiDmSyncEnabled?: boolean;
@@ -137,6 +138,7 @@ export function createTestAppContext(
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
     onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as AppContext["onlyFansAdapter"]),
     ofapi: overrides?.ofapi,
+    aiGatewayProvider: overrides?.aiGatewayProvider,
     async close() {},
   } satisfies AppContext;
 }

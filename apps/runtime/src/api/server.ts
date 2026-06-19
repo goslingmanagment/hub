@@ -106,7 +106,10 @@ import {
   unassignPageFromUser,
   type AuthPrincipal,
 } from "../services/auth.ts";
-import { prepareAiGatewayStream } from "../services/ai-gateway.ts";
+import {
+  prepareAiGatewayStream,
+  serializeAiGatewaySseFrame,
+} from "../services/ai-gateway.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../services/ai-usage.ts";
 import { buildConfigView } from "../services/app-config-service.ts";
 import { LIVE_CONFIG_KEYS } from "../services/effective-config.ts";
@@ -671,10 +674,55 @@ export async function buildApiServer(appContext: AppContext) {
 
   server.post("/api/v1/ai/gateway/stream", {
     schema: routeSchemas.aiGatewayStream,
-  }, async (request) => {
+  }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
-    return prepareAiGatewayStream(appContext, principal, request.body);
+    const stream = await prepareAiGatewayStream(appContext, principal, request.body);
+
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+
+    const abort = new AbortController();
+    function abortProvider() {
+      abort.abort();
+    }
+    function writeFrame(frame: Parameters<typeof serializeAiGatewaySseFrame>[0]) {
+      if (!raw.writableEnded && !raw.destroyed) {
+        raw.write(serializeAiGatewaySseFrame(frame));
+      }
+    }
+
+    raw.on("close", abortProvider);
+    try {
+      writeFrame(stream.meta);
+      for await (const frame of stream.stream(abort.signal)) {
+        writeFrame(frame);
+      }
+    } catch (error) {
+      if (!abort.signal.aborted) {
+        request.log.warn({
+          requestId: stream.requestId,
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        }, "AI gateway provider stream failed");
+        writeFrame({
+          type: "error",
+          code: "provider_stream_failed",
+          message: "AI gateway provider stream failed",
+          retryAfterMs: null,
+        });
+      }
+    } finally {
+      raw.off("close", abortProvider);
+      if (!raw.writableEnded && !raw.destroyed) {
+        raw.end();
+      }
+    }
   });
 
   server.get("/api/v1/pages", {

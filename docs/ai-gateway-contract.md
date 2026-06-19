@@ -1,9 +1,9 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4f Anthropic request-building and usage normalization is implemented after the R4b
-default-off runtime gate, R4c ledger storage, R4d quota preflight, and R4e pricing utility.
-Provider execution, atomic provider-attempt reservation, cancellation wiring, and streaming
-provider fanout are still pending.
+Status: R4g SSE provider seam is implemented after the R4b default-off runtime gate, R4c ledger
+storage, R4d quota preflight, R4e pricing utility, and R4f Anthropic request-building/usage
+normalization. Real provider execution, atomic provider-attempt reservation/finalization, and
+production validation are still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -26,10 +26,10 @@ later gateway version and must preserve the same feature and output contracts.
 - Request schema: `aiGatewayStreamBodySchema` in `packages/contracts/src/routes.ts`.
 - Frame schema: each SSE `data:` payload is one `aiGatewayStreamFrameSchema` JSON object.
 - Runtime flag: `CHATMUSE_AI_GATEWAY_ENABLED`, default `false`, staged boot-applied. When the flag
-  is off, return `503` before quota preflight, page lookup, or provider network. While the runtime
-  provider implementation is still pending, enabling the flag authorizes the page-scope check,
-  applies the ledger-backed daily quota preflight, and still returns `503` before any provider call
-  or ledger write.
+  is off, return `503` before quota preflight, page lookup, or provider network. With the flag on,
+  the route authorizes page scope, applies the ledger-backed daily quota preflight, and then
+  requires an injected provider implementation. Production currently has no provider implementation
+  configured, so it still returns `503` before provider network or ledger writes.
 
 ## Request
 
@@ -126,6 +126,14 @@ tuning profile until desktop exposes a separate gateway operation contract. The 
 normalizes Anthropic usage into the terminal ledger cost shape, including 5m/1h cache-write
 breakdown when the provider supplies it.
 
+R4g wires the runtime route to the SSE framing contract behind an `AppContext.aiGatewayProvider`
+execution seam. The route emits an initial `meta` frame, streams provider frames as `event: ai`,
+aborts the provider signal on client disconnect, and converts provider failures to bounded `error`
+frames without echoing prompt text or raw provider bodies. The production app context does not yet
+instantiate a provider, so runtime behavior remains fail-closed before external network. Terminal
+ledger writes are intentionally still pending until the real provider path and atomic quota
+reservation/finalization land together.
+
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
 columns for this record:
@@ -176,7 +184,9 @@ Before runtime implementation:
 - add Anthropic gateway pricing for terminal ledger rows; **done in R4e pricing slice**;
 - add Anthropic request-building/usage-normalization parity with desktop direct mode; **done in R4f
   provider adapter groundwork**;
-- define cancellation semantics so desktop `ai:cancel` aborts the provider request;
+- define cancellation semantics so desktop `ai:cancel` aborts the provider request; **route-level
+  provider abort signal is in place in R4g; desktop cancel transport and provider SDK wiring remain
+  pending**;
 - document the production validation command/API/log/DB evidence.
 
 Production validation must use a small approved prompt and must not send any platform message.

@@ -25,6 +25,7 @@ import {
 import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
 import type { OfapiClient } from "./services/ofapi.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
+import type { AiGatewayProvider } from "./services/ai-gateway.ts";
 import type { ProviderAdapter } from "./services/provider.ts";
 
 export type AdapterLike = ProviderAdapter<
@@ -94,6 +95,10 @@ export interface AppContext {
   // (admin webhook registration then 503s). Optional so existing AppContext
   // literals (tests, codegen) need not provide it.
   ofapi?: OfapiClient;
+  // Provider execution is deliberately absent until the C6c provider slice wires
+  // a real implementation. Tests may inject a fake provider to exercise SSE
+  // plumbing without external network calls.
+  aiGatewayProvider?: AiGatewayProvider;
   close(): Promise<void>;
 }
 

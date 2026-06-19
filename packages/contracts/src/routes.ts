@@ -3569,6 +3569,7 @@ export const routeSchemas = {
     security: bearerOnlySecurity,
     body: aiGatewayStreamBodySchema,
     response: {
+      200: z.unknown(),
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,

@@ -1,4 +1,10 @@
-import type { AiGatewayStreamBody } from "@agency_hub_core/contracts";
+import { randomUUID } from "node:crypto";
+
+import type {
+  AiGatewayQuota,
+  AiGatewayStreamBody,
+  AiGatewayStreamFrame,
+} from "@agency_hub_core/contracts";
 import {
   findPageSummaryByLabel,
   getAiGatewayDailyUsageTotals,
@@ -15,6 +21,30 @@ export interface AiGatewayQuotaSnapshot {
   accepted: boolean;
   remainingRequestsToday: number;
   remainingMicroUsdToday: number;
+}
+
+export interface AiGatewayProviderInput {
+  requestId: string;
+  principal: AuthPrincipal;
+  page: {
+    id: number;
+    label: string;
+    platform: AiGatewayStreamBody["platform"];
+  };
+  body: AiGatewayStreamBody;
+  quota: AiGatewayQuota;
+  signal: AbortSignal;
+}
+
+export interface AiGatewayProvider {
+  readonly provider: "anthropic" | "openrouter";
+  stream(input: AiGatewayProviderInput): AsyncIterable<AiGatewayStreamFrame>;
+}
+
+export interface PreparedAiGatewayStream {
+  requestId: string;
+  meta: AiGatewayStreamFrame;
+  stream(signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
 }
 
 export function isChatMuseAiGatewayEnabled(
@@ -78,7 +108,7 @@ export async function prepareAiGatewayStream(
   app: AppContext,
   principal: AuthPrincipal,
   input: AiGatewayStreamBody,
-) {
+): Promise<PreparedAiGatewayStream> {
   if (!isChatMuseAiGatewayEnabled(app.config)) {
     throw new ServiceUnavailableError("ChatMuse AI gateway is disabled");
   }
@@ -95,9 +125,47 @@ export async function prepareAiGatewayStream(
   if (!quota.accepted) {
     throw new TooManyRequestsError("ChatMuse AI gateway daily quota exceeded");
   }
+  if (!app.aiGatewayProvider) {
+    throw new ServiceUnavailableError("ChatMuse AI gateway provider execution is not configured");
+  }
 
-  // Provider execution, atomic quota reservation, durable terminal provider rows,
-  // and SSE streaming land in the next C6c slices. Until then, enabling the flag
-  // still cannot reach Anthropic/OpenRouter or persist prompt text.
-  throw new ServiceUnavailableError("ChatMuse AI gateway provider execution is not implemented");
+  const requestId = randomUUID();
+  const quotaFrame: AiGatewayQuota = {
+    accepted: quota.accepted,
+    remainingRequestsToday: quota.remainingRequestsToday,
+    remainingMicroUsdToday: quota.remainingMicroUsdToday,
+  };
+
+  return {
+    requestId,
+    meta: {
+      type: "meta",
+      requestId,
+      clientRequestId: input.clientRequestId,
+      feature: input.feature,
+      pageLabel: page.label,
+      model: input.model,
+      provider: app.aiGatewayProvider.provider,
+      providerResponseId: null,
+      quota: quotaFrame,
+    },
+    stream(signal) {
+      return app.aiGatewayProvider!.stream({
+        requestId,
+        principal,
+        page: {
+          id: page.id,
+          label: page.label,
+          platform: page.platform,
+        },
+        body: input,
+        quota: quotaFrame,
+        signal,
+      });
+    },
+  };
+}
+
+export function serializeAiGatewaySseFrame(frame: AiGatewayStreamFrame) {
+  return `event: ai\ndata: ${JSON.stringify(frame)}\n\n`;
 }

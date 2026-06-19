@@ -1618,6 +1618,14 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
           "400": {
             "description": "Default Response",
             "content": {

@@ -11,6 +11,10 @@ import {
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import type {
+  AiGatewayProvider,
+  AiGatewayProviderInput,
+} from "../apps/runtime/src/services/ai-gateway.ts";
 import {
   createUserAccount,
   issueChatterApiKey,
@@ -107,6 +111,24 @@ function streamGateway(body: Record<string, unknown>, key = chatterKey) {
   });
 }
 
+function parseAiSseFrames(body: string) {
+  return body
+    .split("\n\n")
+    .filter((block) => block.trim().length > 0)
+    .map((block) => {
+      const lines = block.split("\n");
+      const event = lines.find((line) => line.startsWith("event: "))?.slice(7) ?? null;
+      const data = lines
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => line.slice(6))
+        .join("\n");
+      return {
+        event,
+        data: JSON.parse(data) as Record<string, unknown>,
+      };
+    });
+}
+
 describe("ChatMuse AI gateway runtime gate", () => {
   it("requires a chatter API key and fails closed while the staged flag is disabled", async () => {
     const anonymous = await apiServer!.inject({
@@ -148,6 +170,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
     expect(assigned.statusCode, assigned.body).toBe(503);
     expect(assigned.json()).toMatchObject({
       error: "service_unavailable",
+      message: "ChatMuse AI gateway provider execution is not configured",
     });
 
     const usageRows = await testDb!.pool.query<{ count: number }>(
@@ -196,5 +219,113 @@ describe("ChatMuse AI gateway runtime gate", () => {
       "select count(*)::int as count from ai_usage_events",
     );
     expect(usageRows.rows[0]?.count).toBe(1);
+  });
+
+  it("streams SSE frames from an injected provider after auth and quota pass", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    const providerCapture: { current?: AiGatewayProviderInput } = {};
+    const provider: AiGatewayProvider = {
+      provider: "anthropic",
+      async *stream(input) {
+        providerCapture.current = input;
+        yield { type: "content_delta", text: "hello " };
+        yield {
+          type: "usage",
+          providerResponseId: "msg_test_123",
+          cacheHit: true,
+          usage: {
+            inputTokens: 100,
+            outputTokens: 8,
+            cacheWriteTokens: 15,
+            cacheReadTokens: 20,
+            costMicroUsd: 494,
+            costApproximate: false,
+          },
+        };
+        yield { type: "done", stopReason: "end_turn" };
+      },
+    };
+    appContext.aiGatewayProvider = provider;
+
+    const requestBody = gatewayBody();
+    const response = await streamGateway(requestBody);
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    const frames = parseAiSseFrames(response.body);
+    expect(frames.map((frame) => frame.event)).toEqual(["ai", "ai", "ai", "ai"]);
+    expect(frames[0]?.data).toMatchObject({
+      type: "meta",
+      clientRequestId: requestBody.clientRequestId,
+      feature: "fast-reply",
+      pageLabel: "lora-of",
+      model: "anthropic:claude-sonnet-4-6",
+      provider: "anthropic",
+      providerResponseId: null,
+      quota: {
+        accepted: true,
+        remainingRequestsToday: 200,
+        remainingMicroUsdToday: 5_000_000,
+      },
+    });
+    expect(frames[1]?.data).toEqual({ type: "content_delta", text: "hello " });
+    expect(frames[2]?.data).toMatchObject({
+      type: "usage",
+      providerResponseId: "msg_test_123",
+      cacheHit: true,
+    });
+    expect(frames[3]?.data).toEqual({ type: "done", stopReason: "end_turn" });
+    const capturedProviderInput = providerCapture.current;
+    if (!capturedProviderInput) {
+      throw new Error("Expected AI gateway provider to be called");
+    }
+    expect(capturedProviderInput).toMatchObject({
+      requestId: frames[0]?.data.requestId,
+      body: requestBody,
+      page: {
+        id: onlyFansPageId,
+        label: "lora-of",
+        platform: "onlyfans",
+      },
+      quota: {
+        accepted: true,
+        remainingRequestsToday: 200,
+        remainingMicroUsdToday: 5_000_000,
+      },
+    });
+    expect(capturedProviderInput.signal.aborted).toBe(false);
+
+    const usageRows = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ai_usage_events",
+    );
+    expect(usageRows.rows[0]?.count).toBe(0);
+  });
+
+  it("converts provider failures to bounded SSE errors without echoing provider text", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        throw new Error("raw provider body with prompt: conversation context");
+      },
+    };
+
+    const response = await streamGateway(gatewayBody());
+
+    expect(response.statusCode, response.body).toBe(200);
+    const frames = parseAiSseFrames(response.body);
+    expect(frames[0]?.data).toMatchObject({ type: "meta" });
+    expect(frames[1]?.data).toEqual({
+      type: "error",
+      code: "provider_stream_failed",
+      message: "AI gateway provider stream failed",
+      retryAfterMs: null,
+    });
+    expect(response.body).not.toContain("conversation context");
+
+    const usageRows = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ai_usage_events",
+    );
+    expect(usageRows.rows[0]?.count).toBe(0);
   });
 });

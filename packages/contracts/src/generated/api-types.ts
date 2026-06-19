@@ -588,6 +588,15 @@ export interface paths {
             };
             responses: {
                 /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": unknown;
+                    };
+                };
+                /** @description Default Response */
                 400: {
                     headers: {
                         [name: string]: unknown;

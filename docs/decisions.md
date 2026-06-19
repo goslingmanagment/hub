@@ -660,3 +660,10 @@ from the gateway body without calling the provider. The builder mirrors desktop 
 adaptive thinking omits temperature, `claude-opus-4-8` omits sampling parameters, and usage is
 normalized into the terminal ledger cost shape. This is still default-off groundwork; runtime route
 fanout, cancellation, atomic reservation/finalization, and production validation remain pending.
+
+**R4g SSE provider seam:** `POST /api/v1/ai/gateway/stream` can now emit `event: ai` SSE frames
+from an injected provider after chatter-key auth, page authorization, and quota preflight. The
+production app context intentionally does not create a provider yet, so the route remains
+fail-closed with `503` before external provider network. Provider failures become bounded error
+frames with no prompt/provider-body echo; terminal usage ledger writes remain pending until the
+real provider execution and quota reservation/finalization slice.
