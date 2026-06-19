@@ -691,3 +691,12 @@ marks null-outcome gateway reservations older than 30 minutes as terminal `faile
 zero token/cost counts and a nonnegative duration. `completed_at` remains the original reservation
 time so quota and audit attribution stay on the acceptance day. Recovery logs only the recovered
 row count and stale threshold; prompt text, generated text, and provider bodies remain excluded.
+
+**Default-off production rollout (2026-06-19):** revision `bf249a4c33c0` is deployed to production
+with the AI gateway still disabled. API and worker image labels match
+`agency-hub.source-revision=bf249a4c33c0`; both containers are healthy, the gateway ledger columns
+exist, and production has `0` gateway ledger rows / `0` stale open reservations. Latest api/worker
+heartbeats show `chatMuseAiGatewayEnabled=false`, `anthropicApiKey=unset`, request cap `200`,
+micro-USD cap `5000000`, `ofapiDesktopCommandExecutionEnabled=false`, and `skippedOverrides=0`.
+Live provider validation remains blocked on an approved small prompt and must not send a platform
+message.

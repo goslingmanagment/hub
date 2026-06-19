@@ -3,7 +3,8 @@
 Status: R4b through R4k are implemented: default-off runtime gate, ledger storage, quota preflight,
 pricing, Anthropic request-building/usage normalization, SSE provider seam, terminal ledger
 finalization, atomic reservation, real Anthropic provider adapter, and stale-reservation recovery.
-Production validation and desktop switch are still pending.
+The default-off runtime is deployed to production; live provider validation and desktop switch are
+still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -165,6 +166,17 @@ at zero. `completed_at` remains the original reservation timestamp so quota and 
 stay on the day the request was accepted. Recovery logs include only counts and the stale threshold,
 not prompt text, generated text, or provider bodies.
 
+Default-off production rollout (2026-06-19): revision `bf249a4c33c0` was deployed with
+`scripts/deploy-production.sh --mode dist-only` and verified by the deploy script against
+`https://gosling-agency.ru`. API and worker image labels reported
+`agency-hub.source-revision=bf249a4c33c0` and dependency checksum
+`b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`; both containers were
+healthy. Production DB validation showed the AI gateway ledger columns present and `0` gateway
+rows / `0` stale open reservations. Latest api/worker runtime heartbeats had
+`chatMuseAiGatewayEnabled=false`, `anthropicApiKey=unset`, request cap `200`, micro-USD cap
+`5000000`, `ofapiDesktopCommandExecutionEnabled=false`, and `skippedOverrides=0`. This rollout did
+not perform a provider call or platform message send.
+
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
 columns for this record:
@@ -224,6 +236,7 @@ Before runtime implementation:
   absent unless `ANTHROPIC_API_KEY` is configured**;
 - recover stale gateway reservations after process death without exposing payload text; **done in
   R4k before quota preflight on the next authorized gateway request**;
-- document the production validation command/API/log/DB evidence; **pending live validation**.
+- document the production validation command/API/log/DB evidence; **default-off deploy evidence is
+  recorded above; live provider validation remains pending**.
 
 Production validation must use a small approved prompt and must not send any platform message.
