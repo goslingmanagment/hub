@@ -557,3 +557,11 @@ strict core-owned contracts, and chatter-key create/read/cancel routes implement
 slice. `OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED` is default-off and requires the read gateway. The
 schema enforces one in-flight row per page/conversation lane for the future executor, but this
 slice has no code path that transitions to `in_flight` or calls OFAPI.
+
+**Production rollout (2026-06-19):** revision `ea81511d92de` was first deployed with the staged
+flag off and returned `503` to a real chatter-key create. After an audited version-1 staged
+override and a second canonical deploy, both API and worker heartbeats reported read gateway and
+command outbox enabled with no skipped overrides. A harmless command validated create/dedupe/
+mismatch/unassigned/read/idempotent-cancel behavior, ended `cancelled` with zero attempts, created
+no credit-ledger row, and leaked no payload text to responses or logs. No vendor send was attempted
+or authorized. Executor rollout remains a separate decision requiring a controlled test fan.

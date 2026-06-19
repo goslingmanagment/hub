@@ -1,7 +1,7 @@
 # OFAPI Desktop Command Outbox Contract
 
-Status: C6b1 intake/read/cancel implemented default-off on 2026-06-19; production validation
-pending. Decision owner: core Decision #55.
+Status: C6b1 intake/read/cancel implemented and production-validated on 2026-06-19.
+Decision owner: core Decision #55.
 
 ## Boundary
 
@@ -121,3 +121,29 @@ The intake slice is validated with execution disabled:
 
 No real fan send is authorized by this validation. Execution requires a separately designated
 controlled test fan and a new rollout decision.
+
+### 2026-06-19 Production Evidence
+
+- Canonical deploy revision: `ea81511d92de`; API and worker both healthy on the same dependency
+  checksum.
+- Before enablement, both active runtime heartbeats reported read gateway `true`, command outbox
+  `false`, and no skipped overrides. A real chatter-key create returned
+  `503 service_unavailable`.
+- The audited staged override was then enabled at version 1 and the same revision redeployed.
+  Both active runtime roles reported read gateway `true`, command outbox `true`, and
+  `skippedOverrides=[]`.
+- One harmless, never-executed command produced the expected status matrix:
+  create `202`, exact replay `200`, mismatched replay `409`, unassigned account `404`, read `200`,
+  cancel `200`, repeated cancel `200`.
+- The replay returned the same command id with `deduplicated=true`; no command response contained
+  payload text.
+- The durable row ended `cancelled` with `attempt_count=0`, a 64-character SHA-256 payload hash,
+  an exact 400-day dedupe horizon, and no `in_flight` rows.
+- The credit-ledger baseline did not move during the command lifecycle, and production API/worker
+  logs contained no payload text. The command service has no vendor execution path.
+- Cross-chatter ownership remains covered by the Docker-backed integration case. Production used
+  one existing chatter credential and did not create an artificial second user/key solely for
+  validation.
+
+The separately flagged executor, controlled test-fan send, payload purge/export policy, and desktop
+command transport remain pending.
