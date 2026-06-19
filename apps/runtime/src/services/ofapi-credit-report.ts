@@ -11,6 +11,7 @@ import type {
   OfapiCreditsSummaryResponse,
 } from "@agency_hub_core/contracts";
 import {
+  countOfapiWebhookEventsReceivedBetween,
   getLastOfapiWebhookAccrualDay,
   getOfapiCreditReconcileState,
   getOfapiCreditState,
@@ -29,7 +30,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError } from "./errors.ts";
-import { isOfapiCreditLedgerEnabled } from "./ofapi-credits.ts";
+import { isOfapiCreditLedgerEnabled, webhookAccrualCredits } from "./ofapi-credits.ts";
 import { isOfapiCreditFloorBlocking } from "./sync/ofapi-dm-sync.ts";
 
 const DEFAULT_DM_DAILY_CREDIT_BUDGET = 500;
@@ -85,6 +86,7 @@ export async function getOfapiCreditsSummary(
     audienceSpentToday,
     spend7d,
     openIncidents,
+    pendingWebhookEventCount,
   ] = await Promise.all([
     getOfapiCreditState(app.db, now),
     getOfapiCreditReconcileState(app.db),
@@ -104,6 +106,9 @@ export async function getOfapiCreditsSummary(
       since: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
     }),
     listNotificationIncidents(app.db, { status: "open" }),
+    enabled
+      ? countOfapiWebhookEventsReceivedBetween(app.db, { from: dayStart, to: nextDayStart })
+      : Promise.resolve(0),
   ]);
 
   const bySource = toSpendBySource(todaySpend);
@@ -198,7 +203,16 @@ export async function getOfapiCreditsSummary(
       lastRunAt: reconcile.lastReconcileAt ? reconcile.lastReconcileAt.toISOString() : null,
       lastDriftCredits: reconcile.lastDriftCredits,
     },
-    accrual: { lastPostedDay: lastAccrualDay },
+    accrual: {
+      lastPostedDay: lastAccrualDay,
+      pendingToday: enabled
+        ? {
+          day: isoDay(dayStart),
+          eventCount: pendingWebhookEventCount,
+          estimatedCredits: webhookAccrualCredits(pendingWebhookEventCount),
+        }
+        : null,
+    },
   };
 }
 

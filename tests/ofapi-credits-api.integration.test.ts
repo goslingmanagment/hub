@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   createModel,
   createOnlyFansPage,
+  insertOfapiWebhookEvent,
   insertOfapiCreditLedgerEntry,
   recordOfapiCreditSpend,
   setOfapiCreditReconcileCursor,
@@ -115,6 +116,26 @@ async function seedLedgerFixture() {
   return page;
 }
 
+async function seedWebhookEventsAt(prefix: string, count: number, receivedAt: Date) {
+  if (!testDb) {
+    throw new Error("test database not started");
+  }
+
+  for (let index = 0; index < count; index += 1) {
+    await insertOfapiWebhookEvent(appContext.db, {
+      idempotencyKey: `${prefix}_${String(index).padStart(4, "0")}`,
+      eventType: "users.online",
+      ofapiAccountId: null,
+      payload: {},
+    });
+  }
+
+  await testDb.pool.query(
+    `update ofapi_webhook_events set received_at = $1 where idempotency_key like $2`,
+    [receivedAt, `${prefix}_%`],
+  );
+}
+
 describe("ofapi credits admin api", () => {
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();
@@ -207,6 +228,40 @@ describe("ofapi credits admin api", () => {
     expect(body.reconciliation.lastDriftCredits).toBe(0);
     expect(body.accrual.lastPostedDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(body.incidents).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reports current UTC-day pending webhook accrual without adding it to posted spend", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await seedLedgerFixture();
+
+    const now = new Date();
+    const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const nextDayStart = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    await seedWebhookEventsAt("evt_pending_before", 1, new Date(dayStart.getTime() - 1));
+    await seedWebhookEventsAt("evt_pending_start", 100, dayStart);
+    await seedWebhookEventsAt("evt_pending_end", 1, new Date(nextDayStart.getTime() - 1));
+    await seedWebhookEventsAt("evt_pending_after", 1, nextDayStart);
+
+    const cookie = await loginCookie("dima", "owner-secret");
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/summary",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+
+    expect(body.today.total).toBe(137);
+    expect(body.today.bySource.webhookAccrual).toBe(40);
+    expect(body.accrual.pendingToday).toEqual({
+      day: dayStart.toISOString().slice(0, 10),
+      eventCount: 101,
+      estimatedCredits: 2,
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("flags exhausted budgets and the balance floor in the summary", async (context) => {
@@ -329,6 +384,7 @@ describe("ofapi credits admin api", () => {
       context.skip();
       return;
     }
+    await seedWebhookEventsAt("evt_disabled_pending", 3, new Date());
     await server.close();
 
     // Users persist in the DB; only the config (and thus the server) changes.
@@ -344,5 +400,6 @@ describe("ofapi credits admin api", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().enabled).toBe(false);
+    expect(response.json().accrual.pendingToday).toBeNull();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

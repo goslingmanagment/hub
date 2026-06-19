@@ -80,6 +80,23 @@ describe("OfapiCreditsPage", () => {
     expect(markup).not.toContain("Credit ledger disabled");
   });
 
+  it("renders the pending current-day webhook estimate when present", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({
+        accrual: {
+          lastPostedDay: "2026-06-11",
+          pendingToday: { day: "2026-06-12", eventCount: 4464, estimatedCredits: 45 },
+        },
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("pending today 45 cr from");
+    expect(markup).toContain("4,464 events");
+  });
+
   it("shows the disabled notice when the ledger flag is off", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({ enabled: false }),
@@ -90,6 +107,7 @@ describe("OfapiCreditsPage", () => {
     const markup = renderPage();
     expect(markup).toContain("Credit ledger disabled");
     expect(markup).toContain("OFAPI_CREDIT_LEDGER_ENABLED");
+    expect(markup).toContain("Pending webhook estimates are unavailable");
     // Ledger-derived sections are hidden with the flag off.
     expect(markup).not.toContain("Daily spend by source");
     expect(markup).not.toContain("Breakdown");

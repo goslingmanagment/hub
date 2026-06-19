@@ -2910,6 +2910,13 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
   }),
   accrual: z.object({
     lastPostedDay: businessDate.nullable(),
+    // Optional so a dashboard bundle can roll forward/back across an API version
+    // that predates this derived estimate.
+    pendingToday: z.object({
+      day: businessDate,
+      eventCount: z.number().int().min(0),
+      estimatedCredits: z.number().int().min(0),
+    }).nullable().optional(),
   }),
 });
 

@@ -6411,6 +6411,11 @@ export interface paths {
                             };
                             accrual: {
                                 lastPostedDay: string | null;
+                                pendingToday?: {
+                                    day: string;
+                                    eventCount: number;
+                                    estimatedCredits: number;
+                                } | null;
                             };
                         };
                     };

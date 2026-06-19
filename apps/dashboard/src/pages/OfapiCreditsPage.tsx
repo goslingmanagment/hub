@@ -288,6 +288,7 @@ export function OfapiCreditsPage() {
   }
 
   const parkedBudgets = summary.budgets.filter((budget) => budget.state !== "ok");
+  const pendingWebhookEstimate = summary.accrual.pendingToday ?? null;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
@@ -304,7 +305,7 @@ export function OfapiCreditsPage() {
         <div className="mb-5">
           <StatusPanel
             title="Credit ledger disabled"
-            description="Set OFAPI_CREDIT_LEDGER_ENABLED=true to record per-request spend, webhook accrual, reconciliation, and burn alerts. The cards below only reflect the legacy day counter."
+            description="Set OFAPI_CREDIT_LEDGER_ENABLED=true to record per-request spend, webhook accrual, reconciliation, and burn alerts. Pending webhook estimates are unavailable while the ledger is disabled."
           />
         </div>
       )}
@@ -374,6 +375,15 @@ export function OfapiCreditsPage() {
             ? `accrual posted for ${summary.accrual.lastPostedDay}`
             : "no accrual posted"}
         </span>
+        {pendingWebhookEstimate && (
+          <>
+            <span className="mx-2 text-text-muted">·</span>
+            <span>
+              pending today {fmtCredits(pendingWebhookEstimate.estimatedCredits)} cr from{" "}
+              {fmtCredits(pendingWebhookEstimate.eventCount)} events
+            </span>
+          </>
+        )}
       </div>
 
       {summary.enabled && (
