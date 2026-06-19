@@ -76,12 +76,14 @@ type SettledOfapiEventRow = Parameters<typeof runOfapiDmColdArchiveForSettledRow
 // Best-effort post-settle steps (DM/subscription/presence projections, account
 // health) — all internally flag-gated and never throw into the settle path.
 async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiEventRow) {
-  await runOfapiDmColdArchiveForSettledRow(app, row);
-  await runOfapiDmProjectionForSettledRow(app, row);
-  await runOfapiSubscriptionProjectionForSettledRow(app, row);
-  await runOfapiPresenceProjectionForSettledRow(app, row);
-  await runOfapiSpendProjectionForSettledRow(app, row);
-  await applyOfapiAccountHealthEvent(app, row);
+  const settledRow = await getOfapiWebhookEventById(app.db, row.id);
+  const projectionRow = (settledRow ?? row) as SettledOfapiEventRow;
+  await runOfapiDmColdArchiveForSettledRow(app, projectionRow);
+  await runOfapiDmProjectionForSettledRow(app, projectionRow);
+  await runOfapiSubscriptionProjectionForSettledRow(app, projectionRow);
+  await runOfapiPresenceProjectionForSettledRow(app, projectionRow);
+  await runOfapiSpendProjectionForSettledRow(app, projectionRow);
+  await applyOfapiAccountHealthEvent(app, projectionRow);
 }
 
 /**

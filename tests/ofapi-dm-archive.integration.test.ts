@@ -165,6 +165,7 @@ describe("OFAPI DM cold archive", () => {
 
     expect(row).not.toBeNull();
     expect(row!.sourceJournalId).toBe(eventId);
+    expect(row!.sourceFanoutSeq).not.toBeNull();
     expect(row!.sourceEventType).toBe("messages.sent");
     expect(row!.senderRole).toBe("model");
     expect(row!.isSentByMe).toBe(true);
