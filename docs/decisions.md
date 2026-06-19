@@ -603,3 +603,26 @@ chatter-key command validated create/read/cancel while staying `attempt_count=0`
 `ofapi_command_send_text` ledger row, payload-text log, or vendor send was observed.
 Non-live recovery UX and payload purge/export policy are now defined in the command contract; the
 runtime purge/export implementation, desktop transport UI, and controlled live send remain pending.
+
+## ChatMuse AI Gateway Contract (2026-06-19)
+
+**Decision #26 update:** The first ChatMuse AI gateway slice is a default-off, chatter-key,
+SSE-streaming provider gateway. Desktop continues to build prompt blocks and parse/render results;
+core takes custody of provider keys, chatter/page authorization, quota decisions, provider network,
+and the durable cost ledger. This is a prompt-streaming v1, not yet a core-owned transcript/context
+builder.
+
+- **Wire contract:** `docs/ai-gateway-contract.md` defines the planned
+  `POST /api/v1/ai/gateway/stream` request and SSE frame shapes. The exported zod schemas live in
+  `packages/contracts/src/routes.ts` as `aiGateway*` contracts before any runtime route is added.
+- **Feature compatibility:** gateway `feature` uses the existing `ai_usage_feature` closed enum:
+  `fast-reply`, `improve-draft`, `help-me`, `fan-summary`, `chat-review`, `scan`, `ping`, and
+  `hi-greeting`. Desktop-only `compare` stays local orchestration and maps to the underlying
+  feature operations.
+- **Ledger/quotas:** runtime implementation must reserve quota before provider network and record
+  one terminal ledger row keyed by `(userId, clientRequestId)` with page, feature, model, provider,
+  provider response id, tokens, integer micro-USD cost, cache markers, quota decision, and outcome.
+- **Privacy:** raw prompt text, transcript text, generated reply text, and raw provider error bodies
+  may stream through runtime but must not be persisted in logs, diagnostics, audit, or the ledger.
+- **Rollback:** local desktop provider keys remain supported until the gateway is deployed,
+  production-validated, and disabling the gateway flag demonstrably restores direct mode.

@@ -1777,6 +1777,85 @@ export const aiUsageBatchResponseSchema = z.object({
   dedupedCount: z.number().int().nonnegative(),
 });
 
+export const aiGatewayPromptCacheTtlSchema = z.enum(["1h", "5m", "none"]);
+export const aiGatewayReasoningEffortSchema = z.enum(["off", "low", "medium", "high", "max"]);
+
+export const aiGatewayPromptBlockSchema = z.object({
+  text: z.string().min(1).max(100_000),
+  cache: aiGatewayPromptCacheTtlSchema,
+}).strict();
+
+export const aiGatewayStreamBodySchema = z.object({
+  clientRequestId: z.string().uuid(),
+  feature: aiUsageFeatureEnum,
+  pageLabel: z.string().min(1).max(120),
+  platform: platformEnum,
+  platformUserId: z.string().min(1).max(255),
+  conversationId: z.string().min(1).max(255).nullable().optional(),
+  model: z.string().min(1).max(100),
+  reasoningEffort: aiGatewayReasoningEffortSchema,
+  temperature: z.number().min(0).max(2).optional(),
+  maxTokens: z.number().int().positive().max(100_000).optional(),
+  isRegeneration: z.boolean(),
+  prompt: z.object({
+    systemBlocks: z.array(aiGatewayPromptBlockSchema).min(1).max(64),
+    userBlocks: z.array(aiGatewayPromptBlockSchema).min(1).max(64),
+  }).strict(),
+}).strict();
+
+export const aiGatewayUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cacheWriteTokens: z.number().int().nonnegative(),
+  cacheReadTokens: z.number().int().nonnegative(),
+  costMicroUsd: z.number().int().nonnegative(),
+  costApproximate: z.boolean(),
+});
+
+export const aiGatewayQuotaSchema = z.object({
+  accepted: z.boolean(),
+  remainingRequestsToday: z.number().int().nonnegative().nullable(),
+  remainingMicroUsdToday: z.number().int().nonnegative().nullable(),
+});
+
+export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("meta"),
+    requestId: z.string().uuid(),
+    clientRequestId: z.string().uuid(),
+    feature: aiUsageFeatureEnum,
+    pageLabel: z.string(),
+    model: z.string(),
+    provider: z.enum(["anthropic", "openrouter"]),
+    providerResponseId: z.string().nullable(),
+    quota: aiGatewayQuotaSchema,
+  }).strict(),
+  z.object({
+    type: z.literal("content_delta"),
+    text: z.string(),
+  }).strict(),
+  z.object({
+    type: z.literal("reasoning_delta"),
+    text: z.string(),
+  }).strict(),
+  z.object({
+    type: z.literal("usage"),
+    usage: aiGatewayUsageSchema,
+    providerResponseId: z.string().nullable(),
+    cacheHit: z.boolean(),
+  }).strict(),
+  z.object({
+    type: z.literal("error"),
+    code: z.string().min(1).max(100),
+    message: z.string().min(1).max(500),
+    retryAfterMs: z.number().int().nonnegative().nullable(),
+  }).strict(),
+  z.object({
+    type: z.literal("done"),
+    stopReason: z.string().nullable(),
+  }).strict(),
+]);
+
 export const adminChatterUsageQuerySchema = z.object({
   from: businessDate.optional(),
   to: businessDate.optional(),
@@ -5016,6 +5095,13 @@ export type SyncUxSummary = z.infer<typeof syncUxSummarySchema>;
 export type AiUsageEventInput = z.infer<typeof aiUsageEventInputSchema>;
 export type AiUsageBatchBody = z.infer<typeof aiUsageBatchBodySchema>;
 export type AiUsageBatchResponse = z.infer<typeof aiUsageBatchResponseSchema>;
+export type AiGatewayPromptCacheTtl = z.infer<typeof aiGatewayPromptCacheTtlSchema>;
+export type AiGatewayReasoningEffort = z.infer<typeof aiGatewayReasoningEffortSchema>;
+export type AiGatewayPromptBlock = z.infer<typeof aiGatewayPromptBlockSchema>;
+export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;
+export type AiGatewayUsage = z.infer<typeof aiGatewayUsageSchema>;
+export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;
+export type AiGatewayStreamFrame = z.infer<typeof aiGatewayStreamFrameSchema>;
 export type SyncEvent = z.infer<typeof syncEventSchema>;
 export type NormalizedSyncMessage = z.infer<typeof normalizedSyncMessageSchema>;
 export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSchema>;

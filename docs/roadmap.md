@@ -287,7 +287,9 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
 - 🟡 C6 command execution: the separately flagged, default-off text executor is implemented with one-attempt claims, zero queue retries, stale-attempt recovery to `indeterminate`, page-attributed credit accounting, response confirmation, and conservative `messages.sent` repair. Revision `47a36525e653` is production-validated with execution disabled and no vendor send path active. Payload purge/export policy plus non-live recovery UX are defined. Controlled test-fan enablement, runtime payload purge/export implementation, and desktop command transport/recovery UI remain pending.
 - ✅ ChatMuse pre-P4 prerequisites: profile PUT auto-creates OnlyFans fans; AI-usage batch skips invalid events per-event (`invalidCount`)
 - 🟡 Admin UI for the OFAPI webhook flow (API-only today; register via `POST /api/v1/admin/ofapi/webhook`)
-- AI proxy with streaming responses — app sends requests through the hub, not directly to AI provider
+- 🟡 AI proxy with streaming responses — R4a contract schemas/docs define the default-off
+  prompt-streaming gateway; runtime route, quota enforcement, cost ledger extension, provider
+  execution, and desktop switch remain pending
 - Fan context injection: spending (page + total), notes, AI summary, subscription status, flags in one panel
 - Fan notes via the app: chatters create and read notes visible to others on the same page
 - AI-generated fan summaries from chat history; version history preserved
