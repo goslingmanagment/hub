@@ -52,6 +52,7 @@
 | 47 | Dashboard Fan Navigation | Keep `fan` as an internal CRM/data model and API concept, but do not ship a standalone dashboard `Fans` section by default; only surface it when the UI delivers spend-ranked or CRM workflows that are clearly distinct from followers/subscribers |
 | 48 | OFAPI Real-Time Pipeline | OFAPI webhook receiver (raw-body HMAC, header-based dedupe, journal table) + pg-boss async processing + SSE fanout `GET /api/v1/events/stream` with `Last-Event-ID` replay; pages map to OFAPI accounts via `pages.ofapi_account_id`; ChatMuse profile PUT auto-creates OnlyFans fans |
 | 54 | OFAPI Desktop Read Gateway | Default-off chatter-key `GET /api/v1/ofapi/read/*` compatibility gateway with assigned-page ACL, strict path/query allowlist, central credit ledger, and no write/upload/send routes |
+| 55 | OFAPI Command Outbox | Core-owned, default-off command intake with stable client ids, page/chatter dedupe, explicit indeterminate outcomes, retry lineage, and a separate execution flag; no generic write proxy |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -507,3 +508,46 @@ revocable chatter key to core instead of receiving the unscoped vendor key.
   or proxy any command. Direct desktop mode remains the rollback path until the command outbox,
   indeterminate write handling, media uploads, production SLO/runbook, and explicit desktop
   gateway switch are complete.
+
+## OFAPI Command Outbox Contract (2026-06-19)
+
+**Decision #55:** Core owns a versioned command outbox before it owns any desktop write. The first
+slice is intake/read/cancel only behind `OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED`; it cannot call OFAPI.
+Vendor execution is a separate dependency-gated flag,
+`OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED`, and is not enabled or implemented by the intake slice.
+There is no generic path/method proxy.
+
+- **Initial command:** `send_text_message_v1` only. The request carries
+  `clientCommandId` (UUID), OFAPI `accountId`, numeric `conversationId`, non-blank text up to
+  10,000 characters, and optional `retryOfCommandId`. Media, PPV, uploads, typing, mark-read,
+  likes, unsend, and arbitrary vendor payloads are not accepted by this version.
+- **API ownership:** chatter-key `POST /api/v1/ofapi/commands` creates or deduplicates a command;
+  `GET /api/v1/ofapi/commands/{commandId}` reads one command owned by that chatter;
+  `POST /api/v1/ofapi/commands/{commandId}/cancel` cancels only `queued` commands. Responses never
+  echo message text. Account ids must map to a page currently assigned to the chatter.
+- **States:** core persists `queued`, `in_flight`, `confirmed`, `failed_retryable`,
+  `failed_terminal`, `indeterminate`, and `cancelled`. `draft/local_pending` remains desktop-local.
+  Intake creates only `queued`; cancel transitions only `queued -> cancelled`. An executor may later
+  claim `queued -> in_flight`, with at most one in-flight command per page/conversation lane.
+- **Dedupe:** unique key `(page_id, chatter_user_id, client_command_id)` with a minimum 400-day
+  retention horizon. Repeating the same canonical request returns the existing command with
+  `deduplicated=true`; reusing the id with a different account, conversation, kind, retry lineage,
+  or payload hash is `409 conflict`. Core never derives the id from message text.
+- **Retry lineage:** retries are new commands with new client ids. `retryOfCommandId` must refer to a
+  command owned by the same chatter on the same page/conversation and already in
+  `failed_retryable`, `failed_terminal`, `indeterminate`, or `cancelled`. Core never auto-retries an
+  `indeterminate` command.
+- **Outcome rule:** any execution attempt that may have reached OFAPI becomes `indeterminate`
+  unless a response or matching `messages.sent` event proves a terminal outcome. Definite
+  pre-delivery failure may become `failed_retryable`; policy/validation rejection becomes
+  `failed_terminal`; a vendor response or matched webhook confirms the command. Retry decisions
+  remain human-visible and create a new command.
+- **Audit/privacy:** the outbox stores the versioned payload for later execution, but read APIs,
+  logs, diagnostics, and audit metadata expose only ids, state, payload hash, timestamps, attempt
+  count, error code/class, and verifier result. Message text is never logged or returned by command
+  status endpoints. Payload purge/export policy must be implemented before broad rollout; the first
+  production validation uses a harmless never-executed command and cancels it.
+
+**Rollback:** disabling command intake rejects new commands while retaining existing audit rows.
+Disabling future execution parks queued commands and prevents new claims; it never changes a
+previously `in_flight`/terminal record or makes desktop retry automatically.
