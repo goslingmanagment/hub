@@ -236,3 +236,24 @@ is implemented.
   best-effort projections. Verifier failure cannot block webhook settle/fanout.
 - The default execution flag remains off. No production send is performed by implementation or
   default-off deployment validation.
+
+### 2026-06-19 Default-Off Production Evidence
+
+- Canonical deploy revision: `47a36525e653`; API and worker both healthy on the same dependency
+  checksum.
+- Migration `0039_ofapi_command_execution.sql` is applied. Production schema contains
+  `attempt_started_at`, `attempt_finished_at`, and the at-most-one-attempt constraint.
+- Active API and worker heartbeats reported command outbox `true`, command execution `false`, and
+  `skippedOverrides=[]`. No staged config row exists for execution, so the default-off value is the
+  active runtime truth.
+- `ofapi.commands.execute` and `ofapi.commands.sweep` queues exist; execute has `retry_limit=0`.
+  During validation there were no execute jobs, only completed sweep jobs.
+- A real chatter-key command create/read/cancel returned `202/200/200`. The row ended
+  `cancelled` with `attempt_count=0`, no attempt timestamps, no platform message id, and no error.
+- The validation created no `ofapi_command_send_text` credit-ledger rows and no ledger rows after
+  the pre-validation baseline. Production logs contained neither validation text nor command-send
+  operation logs.
+
+This proves the deployed executor is present but inert while execution remains disabled. The live
+send gate remains blocked on a designated controlled test fan/conversation and explicit operator
+approval for one harmless message.

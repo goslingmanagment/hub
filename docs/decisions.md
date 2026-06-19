@@ -592,3 +592,9 @@ OFAPI client now has one typed text-send method with global pacing and page-attr
 reporting. Status responses expose attempt timestamps, and settled `messages.sent` events run the
 unique-match verifier as a best-effort post-settle step. The execution flag remains default-off;
 implementation does not authorize a production send.
+
+**Default-off production rollout (2026-06-19):** revision `47a36525e653` was deployed and verified
+with API/worker healthy. Migration `0039` and the new schema columns/constraint are present.
+Runtime heartbeats reported outbox enabled, execution disabled, and no skipped overrides. A real
+chatter-key command validated create/read/cancel while staying `attempt_count=0`; no execute job,
+`ofapi_command_send_text` ledger row, payload-text log, or vendor send was observed.
