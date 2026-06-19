@@ -43,6 +43,8 @@ export function createTestAppContext(
     ofapiDesktopCommandOutboxEnabled?: boolean;
     ofapiDesktopCommandExecutionEnabled?: boolean;
     chatMuseAiGatewayEnabled?: boolean;
+    chatMuseAiGatewayDailyRequestLimit?: number;
+    chatMuseAiGatewayDailyMicroUsdLimit?: number;
     onlyFansTopSpendersEnabled?: boolean;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
@@ -118,6 +120,10 @@ export function createTestAppContext(
       ofapiDesktopCommandExecutionEnabled:
         overrides?.ofapiDesktopCommandExecutionEnabled ?? false,
       chatMuseAiGatewayEnabled: overrides?.chatMuseAiGatewayEnabled ?? false,
+      chatMuseAiGatewayDailyRequestLimit:
+        overrides?.chatMuseAiGatewayDailyRequestLimit ?? 200,
+      chatMuseAiGatewayDailyMicroUsdLimit:
+        overrides?.chatMuseAiGatewayDailyMicroUsdLimit ?? 5_000_000,
       onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
     } as AppContext["config"];
 

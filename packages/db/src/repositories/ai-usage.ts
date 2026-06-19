@@ -36,6 +36,18 @@ export interface ListChatterUsageSummaryInput {
   toExclusive: Date;
 }
 
+export interface GetAiGatewayDailyUsageTotalsInput {
+  userId: number;
+  pageId: number;
+  from: Date;
+  toExclusive: Date;
+}
+
+export interface AiGatewayDailyUsageTotals {
+  requestCount: number;
+  costMicroUsd: number;
+}
+
 export interface ChatterUsageSummaryRow {
   userId: number;
   username: string;
@@ -150,6 +162,32 @@ export async function insertAiUsageEvents(
   });
 
   return inserted.length;
+}
+
+export async function getAiGatewayDailyUsageTotals(
+  db: Database,
+  input: GetAiGatewayDailyUsageTotalsInput,
+): Promise<AiGatewayDailyUsageTotals> {
+  const result = await db.execute(sql`
+    select count(*)::int as "requestCount",
+           coalesce(sum(${aiUsageEvents.costMicroUsd}), 0)::bigint as "costMicroUsd"
+    from ${aiUsageEvents}
+    where ${aiUsageEvents.userId} = ${input.userId}
+      and ${aiUsageEvents.pageId} = ${input.pageId}
+      and ${aiUsageEvents.completedAt} >= ${input.from}
+      and ${aiUsageEvents.completedAt} < ${input.toExclusive}
+      and (
+        ${aiUsageEvents.provider} is not null
+        or ${aiUsageEvents.gatewayOutcome} is not null
+        or ${aiUsageEvents.quotaAccepted} is not null
+      )
+  `);
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+
+  return {
+    requestCount: normalizeNumber(row?.requestCount as NumericValue, "requestCount"),
+    costMicroUsd: normalizeNumber(row?.costMicroUsd as NumericValue, "costMicroUsd"),
+  };
 }
 
 export async function listChatterUsageSummary(

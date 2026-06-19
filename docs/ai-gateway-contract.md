@@ -1,7 +1,8 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4c ledger storage is implemented after the R4b default-off runtime gate. Provider
-execution, quota enforcement, and streaming provider fanout are still pending.
+Status: R4d quota preflight is implemented after the R4b default-off runtime gate and R4c ledger
+storage. Provider execution, atomic provider-attempt reservation, and streaming provider fanout are
+still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -24,9 +25,10 @@ later gateway version and must preserve the same feature and output contracts.
 - Request schema: `aiGatewayStreamBodySchema` in `packages/contracts/src/routes.ts`.
 - Frame schema: each SSE `data:` payload is one `aiGatewayStreamFrameSchema` JSON object.
 - Runtime flag: `CHATMUSE_AI_GATEWAY_ENABLED`, default `false`, staged boot-applied. When the flag
-  is off, return `503` before quota reservation, page lookup, or provider network. While the runtime
-  provider implementation is still pending, enabling the flag authorizes only the page-scope check
-  and still returns `503` before any provider call or ledger write.
+  is off, return `503` before quota preflight, page lookup, or provider network. While the runtime
+  provider implementation is still pending, enabling the flag authorizes the page-scope check,
+  applies the ledger-backed daily quota preflight, and still returns `503` before any provider call
+  or ledger write.
 
 ## Request
 
@@ -95,8 +97,16 @@ an unresolved fan to widen page scope.
 
 ## Quota and Ledger
 
-Before provider network, core reserves quota for the `(chatter, page, feature)` request. A quota
-denial emits/returns a bounded `quota_exceeded` error and must not call the provider.
+Before provider network, core checks quota for the `(chatter, page, feature)` request. R4d adds a
+UTC-day preflight over existing gateway ledger rows with these env-only defaults:
+
+- `CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT=200`
+- `CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT=5000000` ($5.00)
+
+The guard is per chatter/page and returns `429 rate_limit_exceeded` before provider execution when
+either remaining request count or remaining micro-USD budget is `0`. Setting either value to `0`
+blocks provider attempts. The later provider slice must still make reservation/finalization atomic
+around the actual provider attempt and final cost.
 
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
@@ -144,6 +154,7 @@ Before runtime implementation:
 - choose the first provider path explicitly (Anthropic first; OpenRouter compatibility can follow);
 - add/extend ledger storage for provider response id, page id, provider, cost, quota, and outcome;
   **done in R4c storage slice**;
+- add a ledger-backed daily quota preflight before provider execution; **done in R4d quota slice**;
 - define cancellation semantics so desktop `ai:cancel` aborts the provider request;
 - document the production validation command/API/log/DB evidence.
 

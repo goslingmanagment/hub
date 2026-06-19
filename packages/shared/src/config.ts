@@ -141,6 +141,8 @@ const envSchema = z.object({
   OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED: booleanSchema.default(false),
   CHATMUSE_AI_GATEWAY_ENABLED: booleanSchema.default(false),
+  CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(200),
+  CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
@@ -229,6 +231,8 @@ export interface AppConfig {
   ofapiDesktopCommandOutboxEnabled?: boolean;
   ofapiDesktopCommandExecutionEnabled?: boolean;
   chatMuseAiGatewayEnabled?: boolean;
+  chatMuseAiGatewayDailyRequestLimit?: number;
+  chatMuseAiGatewayDailyMicroUsdLimit?: number;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   wbClosingLlmEnabled?: boolean;
@@ -404,6 +408,8 @@ export function loadConfig(
     ofapiDesktopCommandOutboxEnabled: parsed.OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED,
     ofapiDesktopCommandExecutionEnabled: parsed.OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,
+    chatMuseAiGatewayDailyRequestLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT,
+    chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     // L2 only runs when explicitly enabled AND a key is present (safe by default).

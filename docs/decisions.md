@@ -639,3 +639,10 @@ micro-USD cost, approximate-cost marker, quota decision, and terminal gateway ou
 preserving the existing `(user_id, client_event_id)` idempotency key. Direct desktop
 `/api/v1/ai-usage/batch` events continue to store default cost `0` and null gateway fields.
 Runtime provider execution and quota enforcement remain pending and default-off.
+
+**R4d quota preflight:** the gateway now checks ledger-backed UTC-day usage per
+`(chatter_user_id, page_id)` before provider execution. `CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT`
+defaults to `200` and `CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT` defaults to `5000000` ($5.00);
+either set to `0` blocks provider attempts. Over-quota requests return `429 rate_limit_exceeded`
+before Anthropic/OpenRouter network and before any new ledger write. Atomic provider-attempt
+reservation/finalization remains part of the provider execution slice.

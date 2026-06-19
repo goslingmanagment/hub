@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   createFanslyPage,
+  insertAiUsageEvents,
   createModel,
   createOnlyFansPage,
 } from "@agency_hub_core/db";
@@ -25,6 +26,8 @@ let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
 let apiServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let chatterKey = "";
+let chatterUserId = 0;
+let onlyFansPageId = 0;
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -45,10 +48,11 @@ beforeEach(async (context) => {
 
   appContext = createTestAppContext(testDb);
   const model = await createModel(appContext.db, { slug: "lora", name: "Lora" });
-  await createOnlyFansPage(appContext.db, {
+  const onlyFansPage = await createOnlyFansPage(appContext.db, {
     modelId: model.id,
     label: "lora-of",
   });
+  onlyFansPageId = onlyFansPage.id;
   await createOnlyFansPage(appContext.db, {
     modelId: model.id,
     label: "lora-vip-of",
@@ -58,10 +62,14 @@ beforeEach(async (context) => {
     label: "lora-fansly",
   });
 
-  await createUserAccount(appContext, {
+  const chatter = await createUserAccount(appContext, {
     username: "chatter",
     role: "chatter",
   }, { source: "cli" });
+  if (!chatter) {
+    throw new Error("Expected chatter user to be created");
+  }
+  chatterUserId = chatter.id;
   chatterKey = (await issueChatterApiKey(appContext, {
     username: "chatter",
     pageLabel: "lora-of",
@@ -146,5 +154,47 @@ describe("ChatMuse AI gateway runtime gate", () => {
       "select count(*)::int as count from ai_usage_events",
     );
     expect(usageRows.rows[0]?.count).toBe(0);
+  });
+
+  it("rejects over-quota requests before provider execution without writing a new ledger row", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.config.chatMuseAiGatewayDailyRequestLimit = 1;
+    appContext.config.chatMuseAiGatewayDailyMicroUsdLimit = 5_000_000;
+
+    await insertAiUsageEvents(appContext.db, {
+      userId: chatterUserId,
+      events: [{
+        clientEventId: randomUUID(),
+        feature: "fast-reply",
+        model: "anthropic:claude-sonnet-4-6",
+        pageId: onlyFansPageId,
+        provider: "anthropic",
+        providerResponseId: "msg_prior",
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        costMicroUsd: 1,
+        costApproximate: false,
+        quotaAccepted: true,
+        gatewayOutcome: "completed",
+        conversationId: "123456789",
+        durationMs: 10,
+        isCacheHit: false,
+        isRegeneration: false,
+        completedAt: new Date(),
+      }],
+    });
+
+    const response = await streamGateway(gatewayBody());
+    expect(response.statusCode, response.body).toBe(429);
+    expect(response.json()).toMatchObject({
+      error: "rate_limit_exceeded",
+    });
+
+    const usageRows = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ai_usage_events",
+    );
+    expect(usageRows.rows[0]?.count).toBe(1);
   });
 });
