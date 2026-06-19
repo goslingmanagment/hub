@@ -290,11 +290,18 @@ describe("OFAPI webhook → SSE end-to-end", () => {
       const messageFrame = client.frames[0]!;
       expect(messageFrame.event).toBe("sync");
       expect(messageFrame.id).toBeGreaterThan(0);
-      expect(messageFrame.data).toEqual({
+      expect(messageFrame.data).toMatchObject({
         type: "messageReceived",
         accountId: ACCOUNT_ONE,
         chatId: "1000005",
         messageId: "1000006",
+      });
+      expect(messageFrame.data.message).toMatchObject({
+        id: "1000006",
+        isSentByMe: false,
+        text: expect.any(String),
+        createdAt: expect.any(String),
+        price: 0,
       });
 
       // 2. Dedupe: redelivering the same idempotency key is acked but not re-fanned-out.
@@ -345,11 +352,15 @@ describe("OFAPI webhook → SSE end-to-end", () => {
           type: "chatListUpdated",
           accountId: ACCOUNT_ONE,
         });
-        expect(resumed.frames[1]!.data).toEqual({
+        expect(resumed.frames[1]!.data).toMatchObject({
           type: "messageReceived",
           accountId: ACCOUNT_ONE,
           chatId: "1000005",
           messageId: "1000006",
+        });
+        expect(resumed.frames[1]!.data.message).toMatchObject({
+          id: "1000006",
+          isSentByMe: false,
         });
         expect(resumed.frames[0]!.id).toBeGreaterThan(lastSeenId);
         expect(resumed.frames[1]!.id).toBeGreaterThan(resumed.frames[0]!.id!);

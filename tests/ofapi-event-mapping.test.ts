@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
-import { syncEventSchema } from "@agency_hub_core/contracts";
+import { syncEventSchema, type SyncEvent } from "@agency_hub_core/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -16,6 +16,26 @@ async function loadFixture(name: string): Promise<OfapiWebhookEnvelope> {
   const raw = JSON.parse(await readFile(path.join(FIXTURES_DIR, name), "utf8")) as Record<string, unknown>;
   delete raw._meta;
   return ofapiWebhookEnvelopeSchema.parse(raw);
+}
+
+type MessageSyncEvent = Extract<SyncEvent, { type: "messageReceived" | "messageSent" }>;
+
+function asMessageFrame(frame: SyncEvent | null): MessageSyncEvent {
+  expect(frame).not.toBeNull();
+  expect(frame?.type === "messageReceived" || frame?.type === "messageSent").toBe(true);
+  return frame as MessageSyncEvent;
+}
+
+function hasNestedKey(value: unknown, key: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => hasNestedKey(item, key));
+  }
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  return Object.entries(value).some(([entryKey, entryValue]) =>
+    entryKey === key || hasNestedKey(entryValue, key)
+  );
 }
 
 describe("mapOfapiEventToSyncEvent", () => {
@@ -38,25 +58,124 @@ describe("mapOfapiEventToSyncEvent", () => {
 
   it("maps messages.received to messageReceived with fan chat id and message id", async () => {
     const envelope = await loadFixture("messages_received.json");
-    const payload = envelope.payload as { fromUser: { id: number }; id: number };
+    const payload = envelope.payload as {
+      fromUser: { id: number };
+      id: number;
+      text: string;
+      createdAt: string;
+      price: number;
+      isOpened: boolean;
+      isNew: boolean;
+      isTip: boolean;
+      mediaCount: number;
+    };
 
-    expect(mapOfapiEventToSyncEvent(envelope)).toEqual({
+    const frame = asMessageFrame(mapOfapiEventToSyncEvent(envelope));
+    expect(frame).toMatchObject({
       type: "messageReceived",
       accountId: envelope.account_id,
       chatId: String(payload.fromUser.id),
       messageId: String(payload.id),
     });
+    expect(frame.message).toMatchObject({
+      id: String(payload.id),
+      text: payload.text,
+      createdAt: payload.createdAt,
+      isSentByMe: false,
+      price: payload.price,
+      isOpened: payload.isOpened,
+      isNew: payload.isNew,
+      isTip: payload.isTip,
+      mediaCount: payload.mediaCount,
+    });
+    expect(frame.message?.replyTo).toMatchObject({
+      sender: "model",
+      textPreview: expect.any(String),
+    });
   });
 
   it("maps messages.sent to messageSent keyed by the recipient fan", async () => {
     const envelope = await loadFixture("messages_sent.json");
-    const payload = envelope.payload as { toUser: { id: number }; id: number };
+    const payload = envelope.payload as {
+      toUser: { id: number };
+      id: number;
+      text: string;
+      createdAt: string;
+      price: number;
+    };
 
-    expect(mapOfapiEventToSyncEvent(envelope)).toEqual({
+    const frame = asMessageFrame(mapOfapiEventToSyncEvent(envelope));
+    expect(frame).toMatchObject({
       type: "messageSent",
       accountId: envelope.account_id,
       chatId: String(payload.toUser.id),
       messageId: String(payload.id),
+    });
+    expect(frame.message).toMatchObject({
+      id: String(payload.id),
+      text: payload.text,
+      createdAt: payload.createdAt,
+      isSentByMe: true,
+      price: payload.price,
+    });
+    expect(frame.message?.media?.length).toBeGreaterThan(0);
+  });
+
+  it("normalizes message media metadata without URL-bearing OFAPI fields", () => {
+    const frame = asMessageFrame(mapOfapiEventToSyncEvent({
+      event: "messages.sent",
+      account_id: "acct_test",
+      payload: {
+        id: "m_media",
+        text: "",
+        createdAt: "2026-06-10T18:35:30+00:00",
+        toUser: { id: "fan_1" },
+        mediaCount: 1,
+        media: [{
+          id: "media_1",
+          type: "sticker",
+          canView: false,
+          isReady: false,
+          duration: 12,
+          files: { full: { url: "https://example.invalid/full.jpg" } },
+          videoSources: { 720: "https://example.invalid/video.mp4" },
+        }],
+      },
+    }));
+
+    expect(frame.message?.media).toEqual([{
+      id: "media_1",
+      type: "other",
+      isReady: false,
+      locked: true,
+      durationSeconds: 12,
+    }]);
+    expect(hasNestedKey(frame.message, "files")).toBe(false);
+    expect(hasNestedKey(frame.message, "videoSources")).toBe(false);
+    expect(hasNestedKey(frame.message, "url")).toBe(false);
+  });
+
+  it("derives reply sender from the reply author id instead of nonexistent isSentByMe", () => {
+    const frame = asMessageFrame(mapOfapiEventToSyncEvent({
+      event: "messages.received",
+      account_id: "acct_test",
+      payload: {
+        id: "m_reply",
+        text: "<p>new</p>",
+        createdAt: "2026-06-10T18:35:30+00:00",
+        fromUser: { id: "fan_1" },
+        replyToMessage: {
+          id: "old_1",
+          text: "<p>older model text</p>",
+          fromUser: { id: "model_1" },
+        },
+      },
+    }));
+
+    expect(frame.message?.replyTo).toEqual({
+      messageId: "old_1",
+      sender: "model",
+      textPreview: "older model text",
     });
   });
 
@@ -80,6 +199,7 @@ describe("mapOfapiEventToSyncEvent", () => {
       accountId: envelope.account_id,
       chatId: String(payload.user.id),
     });
+    expect(mapOfapiEventToSyncEvent(envelope)).not.toHaveProperty("message");
   });
 
   it("recovers the chat and message ids from the notification chat link when present", () => {
@@ -125,6 +245,25 @@ describe("mapOfapiEventToSyncEvent", () => {
       accountId: envelope.account_id,
       chatId: String(payload.user.id),
       amountUsd: payload.amountGross,
+    });
+    expect(mapOfapiEventToSyncEvent(envelope)).not.toHaveProperty("message");
+  });
+
+  it("falls back to the id-only frame when the message body is incomplete", () => {
+    expect(mapOfapiEventToSyncEvent({
+      event: "messages.received",
+      account_id: "acct_test",
+      payload: {
+        id: "m_incomplete",
+        fromUser: { id: "fan_1" },
+        createdAt: "not-a-date",
+        text: "<p>ignored body</p>",
+      },
+    })).toEqual({
+      type: "messageReceived",
+      accountId: "acct_test",
+      chatId: "fan_1",
+      messageId: "m_incomplete",
     });
   });
 

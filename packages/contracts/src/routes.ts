@@ -2679,6 +2679,37 @@ export const deletedResponseSchema = z.object({
 
 const syncEventIdSchema = z.string().min(1);
 
+export const normalizedSyncMessageMediaSchema = z.object({
+  id: syncEventIdSchema,
+  type: z.enum(["photo", "video", "audio", "gif", "other"]),
+  isReady: z.boolean(),
+  locked: z.boolean(),
+  durationSeconds: z.number().nonnegative().nullable().optional(),
+});
+
+export const normalizedSyncMessageReplyToSchema = z.object({
+  messageId: syncEventIdSchema.optional(),
+  sender: z.enum(["fan", "model"]).optional(),
+  textPreview: z.string(),
+});
+
+export const normalizedSyncMessageSchema = z.object({
+  id: syncEventIdSchema,
+  // OFAPI HTML. Consumers derive their own plain-text preview.
+  text: z.string(),
+  createdAt: isoTimestamp,
+  isSentByMe: z.boolean(),
+  price: z.number().nonnegative(),
+  isOpened: z.boolean().nullable().optional(),
+  isNew: z.boolean().optional(),
+  isTip: z.boolean().optional(),
+  tipAmountUsd: z.number().nonnegative().nullable().optional(),
+  tipText: z.string().nullable().optional(),
+  mediaCount: z.number().int().nonnegative().optional(),
+  media: z.array(normalizedSyncMessageMediaSchema).optional(),
+  replyTo: normalizedSyncMessageReplyToSchema.nullable().optional(),
+});
+
 export const chatListUpdatedEventSchema = z.object({
   type: z.literal("chatListUpdated"),
   accountId: syncEventIdSchema,
@@ -2689,6 +2720,7 @@ export const messageReceivedEventSchema = z.object({
   accountId: syncEventIdSchema,
   chatId: syncEventIdSchema,
   messageId: syncEventIdSchema,
+  message: normalizedSyncMessageSchema.optional(),
 });
 
 export const messageSentEventSchema = z.object({
@@ -2696,6 +2728,7 @@ export const messageSentEventSchema = z.object({
   accountId: syncEventIdSchema,
   chatId: syncEventIdSchema,
   messageId: syncEventIdSchema,
+  message: normalizedSyncMessageSchema.optional(),
 });
 
 // Core extension over the desktop union (load-bearing for its message tombstones);
@@ -4600,6 +4633,7 @@ export type AiUsageEventInput = z.infer<typeof aiUsageEventInputSchema>;
 export type AiUsageBatchBody = z.infer<typeof aiUsageBatchBodySchema>;
 export type AiUsageBatchResponse = z.infer<typeof aiUsageBatchResponseSchema>;
 export type SyncEvent = z.infer<typeof syncEventSchema>;
+export type NormalizedSyncMessage = z.infer<typeof normalizedSyncMessageSchema>;
 export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSchema>;
 export type OfapiPageMapping = z.infer<typeof ofapiPageMappingSchema>;
 export type OfapiWebhookStatusResponse = z.infer<typeof ofapiWebhookStatusResponseSchema>;

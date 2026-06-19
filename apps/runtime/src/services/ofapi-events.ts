@@ -30,6 +30,7 @@ import {
 import {
   asRecord,
   idToString,
+  normalizeOfapiSyncMessage,
   ofapiWebhookEnvelopeSchema,
   extractMessageIdFromNotification,
   notificationChatId,
@@ -90,15 +91,33 @@ export function mapOfapiEventToSyncEvent(envelope: OfapiWebhookEnvelope): SyncEv
     case "messages.received": {
       const chatId = idToString(asRecord(payload.fromUser)?.id);
       const messageId = idToString(payload.id);
+      const message = chatId
+        ? normalizeOfapiSyncMessage({ payload, chatId, isSentByMe: false })
+        : null;
       return chatId && messageId
-        ? { type: "messageReceived", accountId, chatId, messageId }
+        ? {
+          type: "messageReceived",
+          accountId,
+          chatId,
+          messageId,
+          ...(message ? { message } : {}),
+        }
         : null;
     }
     case "messages.sent": {
       const chatId = idToString(asRecord(payload.toUser)?.id);
       const messageId = idToString(payload.id);
+      const message = chatId
+        ? normalizeOfapiSyncMessage({ payload, chatId, isSentByMe: true })
+        : null;
       return chatId && messageId
-        ? { type: "messageSent", accountId, chatId, messageId }
+        ? {
+          type: "messageSent",
+          accountId,
+          chatId,
+          messageId,
+          ...(message ? { message } : {}),
+        }
         : null;
     }
     case "messages.deleted": {
