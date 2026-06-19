@@ -4,6 +4,7 @@ import type { Database } from "../client.ts";
 import {
   ofapiCreditLedger,
   ofapiCreditState,
+  ofapiSpendProjectionEvents,
   ofapiWebhookConfig,
   ofapiWebhookEvents,
   pages,
@@ -203,6 +204,101 @@ export async function getLatestSettledOfapiDmEventTimes(
   }
 
   return result;
+}
+
+export interface UpsertOfapiSpendProjectionEventInput {
+  domainKey: string;
+  projectionStatus: "projected" | "blocked" | "skipped";
+  blockedReason?: string | null;
+  sourceEventType: "transactions.new" | "tips.received" | "messages.ppv.unlocked";
+  sourceIdempotencyKey: string;
+  journalId: number;
+  fanoutSeq?: number | null;
+  ofapiAccountId: string;
+  pageId: number;
+  fanPlatformUserId?: string | null;
+  transactionId?: string | null;
+  messageId?: string | null;
+  occurredAt: Date;
+  category?: "message" | "tip" | "subscription" | "post" | "stream" | "other" | null;
+  currency?: "USD" | null;
+  grossAmountMills?: bigint | null;
+  creatorNetAmountMills?: bigint | null;
+  eventStatus?: "pending" | "settled" | "reversed" | "estimated" | null;
+}
+
+export async function upsertOfapiSpendProjectionEvent(
+  db: Database,
+  input: UpsertOfapiSpendProjectionEventInput,
+) {
+  const values = {
+    projectionStatus: input.projectionStatus,
+    blockedReason: input.blockedReason ?? null,
+    sourceEventType: input.sourceEventType,
+    sourceIdempotencyKey: input.sourceIdempotencyKey,
+    journalId: input.journalId,
+    fanoutSeq: input.fanoutSeq ?? null,
+    ofapiAccountId: input.ofapiAccountId,
+    pageId: input.pageId,
+    fanPlatformUserId: input.fanPlatformUserId ?? null,
+    transactionId: input.transactionId ?? null,
+    messageId: input.messageId ?? null,
+    occurredAt: input.occurredAt,
+    category: input.category ?? null,
+    currency: input.currency ?? null,
+    grossAmountMills: input.grossAmountMills ?? null,
+    creatorNetAmountMills: input.creatorNetAmountMills ?? null,
+    eventStatus: input.eventStatus ?? null,
+    updatedAt: new Date(),
+  };
+
+  const [row] = await db
+    .insert(ofapiSpendProjectionEvents)
+    .values({
+      domainKey: input.domainKey,
+      ...values,
+    })
+    .onConflictDoUpdate({
+      target: [ofapiSpendProjectionEvents.domainKey],
+      set: values,
+    })
+    .returning();
+
+  return row;
+}
+
+export async function listOfapiSpendProjectionEvents(db: Database) {
+  return db
+    .select()
+    .from(ofapiSpendProjectionEvents)
+    .orderBy(asc(ofapiSpendProjectionEvents.id));
+}
+
+export async function listOfapiWebhookEventsForSpendProjection(
+  db: Database,
+  input: {
+    eventTypes: readonly string[];
+    limit: number;
+  },
+) {
+  if (input.eventTypes.length === 0) {
+    return [];
+  }
+
+  return db
+    .select()
+    .from(ofapiWebhookEvents)
+    .where(and(
+      inArray(ofapiWebhookEvents.eventType, [...input.eventTypes]),
+      sql`${ofapiWebhookEvents.status} <> 'pending'`,
+      isNotNull(ofapiWebhookEvents.platformAccountId),
+      sql`not exists (
+        select 1 from ${ofapiSpendProjectionEvents}
+        where ${ofapiSpendProjectionEvents.journalId} = ${ofapiWebhookEvents.id}
+      )`,
+    ))
+    .orderBy(asc(ofapiWebhookEvents.id))
+    .limit(input.limit);
 }
 
 /** Pending rows whose enqueue may have been lost (crash between journal insert and boss.send). */

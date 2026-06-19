@@ -24,6 +24,10 @@ import {
   sweepOfapiPresenceProjections,
 } from "./ofapi-presence-projection.ts";
 import {
+  runOfapiSpendProjectionForSettledRow,
+  sweepOfapiSpendProjections,
+} from "./ofapi-spend-projection.ts";
+import {
   runOfapiSubscriptionProjectionForSettledRow,
   sweepOfapiSubscriptionProjections,
 } from "./ofapi-subscription-projection.ts";
@@ -70,6 +74,7 @@ async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiE
   await runOfapiDmProjectionForSettledRow(app, row);
   await runOfapiSubscriptionProjectionForSettledRow(app, row);
   await runOfapiPresenceProjectionForSettledRow(app, row);
+  await runOfapiSpendProjectionForSettledRow(app, row);
   await applyOfapiAccountHealthEvent(app, row);
 }
 
@@ -369,6 +374,13 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
       app.logger.info(
         { projected: presenceProjected },
         "OFAPI presence projection sweep processed journal rows",
+      );
+    }
+    const spendProjected = await sweepOfapiSpendProjections(app);
+    if (spendProjected > 0) {
+      app.logger.info(
+        { projected: spendProjected },
+        "OFAPI spend shadow projection sweep processed journal rows",
       );
     }
     await runOfapiAccountHealthMonitor(app);

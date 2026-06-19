@@ -1771,6 +1771,66 @@ export const ofapiCreditLedger = pgTable(
   }),
 );
 
+// Shadow-only spend projection from OFAPI webhook journal rows (ChatGoose C3).
+// This is not production revenue truth; it exists to compare webhook-derived
+// spend signals against the existing transactions/desktop sweep before D6 can
+// reduce polling. Tips remain "blocked" until a live fixture verifies shape.
+export const ofapiSpendProjectionEvents = pgTable(
+  "ofapi_spend_projection_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    domainKey: text("domain_key").notNull(),
+    projectionStatus: text("projection_status").notNull(),
+    blockedReason: text("blocked_reason"),
+    sourceEventType: text("source_event_type").notNull(),
+    sourceIdempotencyKey: text("source_idempotency_key").notNull(),
+    journalId: bigint("journal_id", { mode: "number" }).notNull(),
+    fanoutSeq: bigint("fanout_seq", { mode: "number" }),
+    ofapiAccountId: text("ofapi_account_id").notNull(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    fanPlatformUserId: text("fan_platform_user_id"),
+    transactionId: text("transaction_id"),
+    messageId: text("message_id"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    category: text("category"),
+    currency: text("currency"),
+    grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }),
+    creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" }),
+    eventStatus: text("event_status"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    domainKeyUniq: uniqueIndex("ofapi_spend_projection_events_domain_key_uniq")
+      .on(table.domainKey),
+    pageOccurredIdx: index("ofapi_spend_projection_events_page_occurred_idx")
+      .on(table.pageId, table.occurredAt),
+    statusIdx: index("ofapi_spend_projection_events_status_idx")
+      .on(table.projectionStatus, table.sourceEventType),
+    journalIdx: index("ofapi_spend_projection_events_journal_idx")
+      .on(table.journalId),
+    projectionStatusCheck: check("ofapi_spend_projection_status_check", sql`
+      ${table.projectionStatus} in ('projected', 'blocked', 'skipped')
+    `),
+    sourceEventTypeCheck: check("ofapi_spend_projection_event_type_check", sql`
+      ${table.sourceEventType} in ('transactions.new', 'tips.received', 'messages.ppv.unlocked')
+    `),
+    categoryCheck: check("ofapi_spend_projection_category_check", sql`
+      ${table.category} is null
+      or ${table.category} in ('message', 'tip', 'subscription', 'post', 'stream', 'other')
+    `),
+    currencyCheck: check("ofapi_spend_projection_currency_check", sql`
+      ${table.currency} is null or ${table.currency} = 'USD'
+    `),
+    eventStatusCheck: check("ofapi_spend_projection_event_status_check", sql`
+      ${table.eventStatus} is null
+      or ${table.eventStatus} in ('pending', 'settled', 'reversed', 'estimated')
+    `),
+  }),
+);
+
 // Journal of received OFAPI webhook deliveries; sync_event/platform_account_id are
 // filled in by the async pg-boss processor. fanout_seq (assigned in settle order from
 // ofapi_webhook_events_fanout_seq) is the SSE event id for Last-Event-ID replay —
