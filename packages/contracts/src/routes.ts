@@ -1899,7 +1899,28 @@ export const aiUsageFeatureBreakdownSchema = z.object({
   requestCount: z.number().int().nonnegative(),
   sharePct: z.number().nonnegative(),
   tokenCounts: aiUsageTokenCountsSchema,
+  costMicroUsd: z.number().int().nonnegative(),
+  costApproximate: z.boolean(),
   regenerateRatePct: z.number().nonnegative(),
+});
+
+export const aiUsageCostSummarySchema = z.object({
+  microUsd: z.number().int().nonnegative(),
+  approximate: z.boolean(),
+});
+
+export const aiUsageGatewaySummarySchema = z.object({
+  requestCount: z.number().int().nonnegative(),
+  completedCount: z.number().int().nonnegative(),
+  failedCount: z.number().int().nonnegative(),
+  cancelledCount: z.number().int().nonnegative(),
+  quotaDeniedCount: z.number().int().nonnegative(),
+  openReservationCount: z.number().int().nonnegative(),
+  providerBreakdown: z.array(z.object({
+    provider: z.enum(["anthropic", "openrouter"]),
+    requestCount: z.number().int().nonnegative(),
+    costMicroUsd: z.number().int().nonnegative(),
+  })),
 });
 
 export const adminChatterUsageRowSchema = z.object({
@@ -1907,6 +1928,8 @@ export const adminChatterUsageRowSchema = z.object({
   username: z.string(),
   totalGenerations: z.number().int().nonnegative(),
   tokenCounts: aiUsageTokenCountsSchema,
+  cost: aiUsageCostSummarySchema,
+  gateway: aiUsageGatewaySummarySchema,
   topFeature: aiUsageTopFeatureSchema.nullable(),
   featureBreakdown: z.array(aiUsageFeatureBreakdownSchema),
   regenerateRatePct: z.number().nonnegative(),

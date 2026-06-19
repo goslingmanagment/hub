@@ -295,9 +295,10 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
   for provider-seam streams; R4i reserves
   request ids before provider execution to prevent duplicate paid attempts; R4j adds the real
   Anthropic streaming adapter default-off; R4k recovers stale null-outcome reservations before new
-  authorized provider attempts. Revision `bf249a4c33c0` is deployed default-off with api/worker
-  healthy, `chatMuseAiGatewayEnabled=false`, `anthropicApiKey=unset`, and no gateway ledger rows.
-  Live provider validation and desktop switch remain pending
+  authorized provider attempts; R4l adds owner usage reporting for gateway cost/outcomes. Revision
+  `bf249a4c33c0` is deployed default-off with api/worker healthy, `chatMuseAiGatewayEnabled=false`,
+  `anthropicApiKey=unset`, and no gateway ledger rows. Live provider validation and desktop switch
+  remain pending
 - Fan context injection: spending (page + total), notes, AI summary, subscription status, flags in one panel
 - Fan notes via the app: chatters create and read notes visible to others on the same page
 - AI-generated fan summaries from chat history; version history preserved

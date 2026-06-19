@@ -1,10 +1,10 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4b through R4k are implemented: default-off runtime gate, ledger storage, quota preflight,
+Status: R4b through R4l are implemented: default-off runtime gate, ledger storage, quota preflight,
 pricing, Anthropic request-building/usage normalization, SSE provider seam, terminal ledger
-finalization, atomic reservation, real Anthropic provider adapter, and stale-reservation recovery.
-The default-off runtime is deployed to production; live provider validation and desktop switch are
-still pending.
+finalization, atomic reservation, real Anthropic provider adapter, stale-reservation recovery, and
+owner usage reporting for gateway cost/outcomes. The default-off runtime is deployed to production;
+live provider validation and desktop switch are still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -177,6 +177,13 @@ rows / `0` stale open reservations. Latest api/worker runtime heartbeats had
 `5000000`, `ofapiDesktopCommandExecutionEnabled=false`, and `skippedOverrides=0`. This rollout did
 not perform a provider call or platform message send.
 
+R4l extends owner-visible usage reporting before live enablement. `GET /api/v1/admin/usage/chatters`
+now includes per-chatter micro-USD cost, approximate-cost marker, gateway request/outcome counts,
+open reservation count, provider cost breakdown, and per-feature cost fields. The Usage dashboard
+shows a compact Cost column plus gateway details in the expanded chatter row. These surfaces read
+only ledger metadata; they do not store or display prompt text, generated text, or raw provider
+bodies.
+
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
 columns for this record:
@@ -236,6 +243,8 @@ Before runtime implementation:
   absent unless `ANTHROPIC_API_KEY` is configured**;
 - recover stale gateway reservations after process death without exposing payload text; **done in
   R4k before quota preflight on the next authorized gateway request**;
+- expose gateway cost/outcome metadata in owner usage reporting before live enablement; **done in
+  R4l**;
 - document the production validation command/API/log/DB evidence; **default-off deploy evidence is
   recorded above; live provider validation remains pending**.
 

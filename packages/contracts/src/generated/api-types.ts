@@ -10503,6 +10503,24 @@ export interface paths {
                                     cacheRead: number;
                                     cacheTotal: number;
                                 };
+                                cost: {
+                                    microUsd: number;
+                                    approximate: boolean;
+                                };
+                                gateway: {
+                                    requestCount: number;
+                                    completedCount: number;
+                                    failedCount: number;
+                                    cancelledCount: number;
+                                    quotaDeniedCount: number;
+                                    openReservationCount: number;
+                                    providerBreakdown: {
+                                        /** @enum {string} */
+                                        provider: "anthropic" | "openrouter";
+                                        requestCount: number;
+                                        costMicroUsd: number;
+                                    }[];
+                                };
                                 topFeature: {
                                     /** @enum {string} */
                                     feature: "fast-reply" | "improve-draft" | "help-me" | "fan-summary" | "chat-review" | "scan" | "ping" | "hi-greeting";
@@ -10521,6 +10539,8 @@ export interface paths {
                                         cacheRead: number;
                                         cacheTotal: number;
                                     };
+                                    costMicroUsd: number;
+                                    costApproximate: boolean;
                                     regenerateRatePct: number;
                                 }[];
                                 regenerateRatePct: number;

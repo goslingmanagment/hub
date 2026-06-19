@@ -14,6 +14,21 @@ function renderPage() {
   return renderToStaticMarkup(createElement(UsagePage));
 }
 
+const zeroCost = {
+  microUsd: 0,
+  approximate: false,
+};
+
+const zeroGateway = {
+  requestCount: 0,
+  completedCount: 0,
+  failedCount: 0,
+  cancelledCount: 0,
+  quotaDeniedCount: 0,
+  openReservationCount: 0,
+  providerBreakdown: [],
+};
+
 describe("UsagePage", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -42,6 +57,23 @@ describe("UsagePage", () => {
             cacheRead: 50,
             cacheTotal: 150,
           },
+          cost: {
+            microUsd: 2_340_000,
+            approximate: true,
+          },
+          gateway: {
+            requestCount: 2,
+            completedCount: 2,
+            failedCount: 0,
+            cancelledCount: 0,
+            quotaDeniedCount: 0,
+            openReservationCount: 0,
+            providerBreakdown: [{
+              provider: "anthropic",
+              requestCount: 2,
+              costMicroUsd: 2_340_000,
+            }],
+          },
           topFeature: {
             feature: "fast-reply",
             requestCount: 8,
@@ -59,6 +91,8 @@ describe("UsagePage", () => {
                 cacheRead: 40,
                 cacheTotal: 120,
               },
+              costMicroUsd: 2_000_000,
+              costApproximate: true,
               regenerateRatePct: 25,
             },
             {
@@ -72,6 +106,8 @@ describe("UsagePage", () => {
                 cacheRead: 10,
                 cacheTotal: 30,
               },
+              costMicroUsd: 340_000,
+              costApproximate: true,
               regenerateRatePct: 50,
             },
           ],
@@ -92,6 +128,7 @@ describe("UsagePage", () => {
     // chatter name and total
     expect(html).toContain("anton");
     expect(html).toContain(">12<");
+    expect(html).toContain("~$2.34");
 
     // feature request counts shown in cells
     expect(html).toContain(">8<");
@@ -112,6 +149,8 @@ describe("UsagePage", () => {
             username: "active",
             totalGenerations: 5,
             tokenCounts: { input: 100, output: 50, cacheWrite: 10, cacheRead: 5, cacheTotal: 15 },
+            cost: zeroCost,
+            gateway: zeroGateway,
             topFeature: { feature: "fast-reply", requestCount: 5, sharePct: 100 },
             featureBreakdown: [
               {
@@ -119,6 +158,8 @@ describe("UsagePage", () => {
                 requestCount: 5,
                 sharePct: 100,
                 tokenCounts: { input: 100, output: 50, cacheWrite: 10, cacheRead: 5, cacheTotal: 15 },
+                costMicroUsd: 0,
+                costApproximate: false,
                 regenerateRatePct: 0,
               },
             ],
@@ -130,6 +171,8 @@ describe("UsagePage", () => {
             username: "idle",
             totalGenerations: 0,
             tokenCounts: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cacheTotal: 0 },
+            cost: zeroCost,
+            gateway: zeroGateway,
             topFeature: null,
             featureBreakdown: [],
             regenerateRatePct: 0,

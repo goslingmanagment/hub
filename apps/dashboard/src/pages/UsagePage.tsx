@@ -40,6 +40,18 @@ function formatPercent(value: number): string {
   return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`;
 }
 
+function formatMicroUsd(value: number, approximate = false): string {
+  if (value <= 0) {
+    return "$0";
+  }
+  const usd = value / 1_000_000;
+  const prefix = approximate ? "~" : "";
+  if (usd < 0.01) {
+    return `${prefix}< $0.01`;
+  }
+  return `${prefix}$${usd.toFixed(2)}`;
+}
+
 function formatFeatureLabel(feature: string): string {
   return FEATURE_LABELS[feature] ?? feature;
 }
@@ -97,7 +109,7 @@ export function UsagePage() {
     return <StatusPanel title="No data" description="The report returned no data." tone="error" />;
   }
 
-  const colCount = visibleFeatures.length + 3;
+  const colCount = visibleFeatures.length + 4;
 
   return (
     <div>
@@ -144,6 +156,9 @@ export function UsagePage() {
                 Total
               </th>
               <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
+                Cost
+              </th>
+              <th className="px-4 py-3 text-right text-[12px] font-semibold uppercase tracking-wider text-text-muted">
                 Regen
               </th>
             </tr>
@@ -186,6 +201,9 @@ export function UsagePage() {
                     <td className="px-4 py-3 text-right text-sm font-semibold tabular-nums text-text-primary">
                       {row.totalGenerations}
                     </td>
+                    <td className="px-4 py-3 text-right text-sm tabular-nums text-text-secondary">
+                      {formatMicroUsd(row.cost.microUsd, row.cost.approximate)}
+                    </td>
                     <td className="px-4 py-3 text-right text-sm tabular-nums">
                       <span className={row.warning ? "font-semibold text-warning-dark" : "text-text-secondary"}>
                         {formatPercent(row.regenerateRatePct)}
@@ -216,6 +234,11 @@ export function UsagePage() {
                                 {" · "}
                                 {formatCompact(fb.tokenCounts.cacheTotal)} cache
                               </span>
+                              {fb.costMicroUsd > 0 && (
+                                <span className="tabular-nums text-text-muted">
+                                  · {formatMicroUsd(fb.costMicroUsd, fb.costApproximate)}
+                                </span>
+                              )}
                               {fb.regenerateRatePct > 0 && (
                                 <span className="tabular-nums text-text-muted">
                                   · {formatPercent(fb.regenerateRatePct)} regen
@@ -229,7 +252,37 @@ export function UsagePage() {
                             {formatCompact(row.tokenCounts.output)} out
                             {" · "}
                             {formatCompact(row.tokenCounts.cacheTotal)} cache
+                            {" · "}
+                            {formatMicroUsd(row.cost.microUsd, row.cost.approximate)}
                           </div>
+                          {row.gateway.requestCount > 0 && (
+                            <div className="text-[12px] tabular-nums text-text-muted">
+                              Gateway: {row.gateway.requestCount} requests
+                              {" · "}
+                              {row.gateway.completedCount} completed
+                              {" · "}
+                              {row.gateway.failedCount} failed
+                              {row.gateway.cancelledCount > 0 && (
+                                <>
+                                  {" · "}
+                                  {row.gateway.cancelledCount} cancelled
+                                </>
+                              )}
+                              {row.gateway.openReservationCount > 0 && (
+                                <>
+                                  {" · "}
+                                  {row.gateway.openReservationCount} open
+                                </>
+                              )}
+                              {row.gateway.providerBreakdown.map((provider) => (
+                                <span key={provider.provider}>
+                                  {" · "}
+                                  {provider.provider}: {provider.requestCount} /{" "}
+                                  {formatMicroUsd(provider.costMicroUsd)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>

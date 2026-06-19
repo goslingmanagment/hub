@@ -8,12 +8,14 @@ import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
+  findUserByUsername,
   finalizePageDmConversationMessageSync,
   finishSyncRequestAttempt,
   finishSyncRun,
   getNotificationIncidentByKey,
   insertSyncRequestAttempt,
   insertSyncRunEvent,
+  insertAiUsageEvents,
   markPageSyncAuthBlocked,
   openNotificationIncident,
   recalculateFanPageSpend,
@@ -2179,7 +2181,7 @@ describe("api integration", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toEqual({
       receivedCount: 2,
       insertedCount: 2,
@@ -2612,6 +2614,34 @@ describe("api integration", () => {
     });
     expect(batch.statusCode).toBe(200);
 
+    const anton = await findUserByUsername(appContext.db, "anton");
+    if (!anton) {
+      throw new Error("Expected anton to exist");
+    }
+    await insertAiUsageEvents(appContext.db, {
+      userId: anton.id,
+      events: [{
+        clientEventId: "evt-agg-gateway-1",
+        feature: "fast-reply",
+        model: "anthropic:claude-sonnet-4-6",
+        provider: "anthropic",
+        providerResponseId: "msg_usage_report_1",
+        inputTokens: 50,
+        outputTokens: 25,
+        cacheWriteTokens: 10,
+        cacheReadTokens: 5,
+        costMicroUsd: 1234,
+        costApproximate: false,
+        quotaAccepted: true,
+        gatewayOutcome: "completed",
+        conversationId: "conversation-101",
+        durationMs: 450,
+        isCacheHit: true,
+        isRegeneration: true,
+        completedAt: new Date("2026-04-03T11:00:00.000Z"),
+      }],
+    });
+
     const cookie = await loginOwnerCookie(server);
     const response = await server.inject({
       method: "GET",
@@ -2634,37 +2664,56 @@ describe("api integration", () => {
         {
           userId: expect.any(Number),
           username: "anton",
-          totalGenerations: 3,
+          totalGenerations: 4,
           tokenCounts: {
-            input: 300,
-            output: 120,
-            cacheWrite: 9,
-            cacheRead: 13,
-            cacheTotal: 22,
+            input: 350,
+            output: 145,
+            cacheWrite: 19,
+            cacheRead: 18,
+            cacheTotal: 37,
+          },
+          cost: {
+            microUsd: 1234,
+            approximate: false,
+          },
+          gateway: {
+            requestCount: 1,
+            completedCount: 1,
+            failedCount: 0,
+            cancelledCount: 0,
+            quotaDeniedCount: 0,
+            openReservationCount: 0,
+            providerBreakdown: [{
+              provider: "anthropic",
+              requestCount: 1,
+              costMicroUsd: 1234,
+            }],
           },
           topFeature: {
             feature: "fast-reply",
-            requestCount: 2,
-            sharePct: 66.67,
+            requestCount: 3,
+            sharePct: 75,
           },
           featureBreakdown: [
             {
               feature: "fast-reply",
-              requestCount: 2,
-              sharePct: 66.67,
+              requestCount: 3,
+              sharePct: 75,
               tokenCounts: {
-                input: 220,
-                output: 100,
-                cacheWrite: 9,
-                cacheRead: 3,
-                cacheTotal: 12,
+                input: 270,
+                output: 125,
+                cacheWrite: 19,
+                cacheRead: 8,
+                cacheTotal: 27,
               },
-              regenerateRatePct: 50,
+              costMicroUsd: 1234,
+              costApproximate: false,
+              regenerateRatePct: 66.67,
             },
             {
               feature: "help-me",
               requestCount: 1,
-              sharePct: 33.33,
+              sharePct: 25,
               tokenCounts: {
                 input: 80,
                 output: 20,
@@ -2672,10 +2721,12 @@ describe("api integration", () => {
                 cacheRead: 10,
                 cacheTotal: 10,
               },
+              costMicroUsd: 0,
+              costApproximate: false,
               regenerateRatePct: 0,
             },
           ],
-          regenerateRatePct: 33.33,
+          regenerateRatePct: 50,
           warning: true,
         },
         {
@@ -2688,6 +2739,19 @@ describe("api integration", () => {
             cacheWrite: 0,
             cacheRead: 0,
             cacheTotal: 0,
+          },
+          cost: {
+            microUsd: 0,
+            approximate: false,
+          },
+          gateway: {
+            requestCount: 0,
+            completedCount: 0,
+            failedCount: 0,
+            cancelledCount: 0,
+            quotaDeniedCount: 0,
+            openReservationCount: 0,
+            providerBreakdown: [],
           },
           topFeature: null,
           featureBreakdown: [],
@@ -2762,7 +2826,7 @@ describe("api integration", () => {
         cookie,
       },
     });
-    expect(aprilThird.statusCode).toBe(200);
+    expect(aprilThird.statusCode, aprilThird.body).toBe(200);
     expect(aprilThird.json()).toEqual({
       range: {
         from: "2026-04-03",
@@ -2789,6 +2853,8 @@ describe("api integration", () => {
               cacheRead: 0,
               cacheTotal: 0,
             },
+            costMicroUsd: 0,
+            costApproximate: false,
             regenerateRatePct: 0,
           }],
         }),
@@ -2802,7 +2868,7 @@ describe("api integration", () => {
         cookie,
       },
     });
-    expect(aprilFourth.statusCode).toBe(200);
+    expect(aprilFourth.statusCode, aprilFourth.body).toBe(200);
     expect(aprilFourth.json()).toEqual({
       range: {
         from: "2026-04-04",
@@ -2829,6 +2895,8 @@ describe("api integration", () => {
               cacheRead: 0,
               cacheTotal: 0,
             },
+            costMicroUsd: 0,
+            costApproximate: false,
             regenerateRatePct: 0,
           }],
         }),

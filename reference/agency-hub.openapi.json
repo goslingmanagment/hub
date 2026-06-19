@@ -36504,6 +36504,100 @@
                             ],
                             "additionalProperties": false
                           },
+                          "cost": {
+                            "type": "object",
+                            "properties": {
+                              "microUsd": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "approximate": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "microUsd",
+                              "approximate"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "gateway": {
+                            "type": "object",
+                            "properties": {
+                              "requestCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "completedCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "cancelledCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "quotaDeniedCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "openReservationCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "providerBreakdown": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "provider": {
+                                      "type": "string",
+                                      "enum": [
+                                        "anthropic",
+                                        "openrouter"
+                                      ]
+                                    },
+                                    "requestCount": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "costMicroUsd": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "provider",
+                                    "requestCount",
+                                    "costMicroUsd"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "requestCount",
+                              "completedCount",
+                              "failedCount",
+                              "cancelledCount",
+                              "quotaDeniedCount",
+                              "openReservationCount",
+                              "providerBreakdown"
+                            ],
+                            "additionalProperties": false
+                          },
                           "topFeature": {
                             "anyOf": [
                               {
@@ -36609,6 +36703,14 @@
                                   ],
                                   "additionalProperties": false
                                 },
+                                "costMicroUsd": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "costApproximate": {
+                                  "type": "boolean"
+                                },
                                 "regenerateRatePct": {
                                   "type": "number",
                                   "minimum": 0
@@ -36619,6 +36721,8 @@
                                 "requestCount",
                                 "sharePct",
                                 "tokenCounts",
+                                "costMicroUsd",
+                                "costApproximate",
                                 "regenerateRatePct"
                               ],
                               "additionalProperties": false
@@ -36637,6 +36741,8 @@
                           "username",
                           "totalGenerations",
                           "tokenCounts",
+                          "cost",
+                          "gateway",
                           "topFeature",
                           "featureBreakdown",
                           "regenerateRatePct",

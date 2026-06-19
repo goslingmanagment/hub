@@ -700,3 +700,9 @@ heartbeats show `chatMuseAiGatewayEnabled=false`, `anthropicApiKey=unset`, reque
 micro-USD cap `5000000`, `ofapiDesktopCommandExecutionEnabled=false`, and `skippedOverrides=0`.
 Live provider validation remains blocked on an approved small prompt and must not send a platform
 message.
+
+**R4l owner usage reporting:** owner `GET /api/v1/admin/usage/chatters` and the dashboard Usage
+page now surface gateway ledger cost/outcome metadata: per-chatter micro-USD cost, approximate-cost
+marker, gateway request/outcome/open-reservation counts, provider cost breakdown, and per-feature
+cost fields. The report remains metadata-only and does not expose prompts, generated replies, or
+raw provider bodies.

@@ -90,6 +90,23 @@ export interface ChatterUsageSummaryRow {
     cacheRead: number;
     cacheTotal: number;
   };
+  cost: {
+    microUsd: number;
+    approximate: boolean;
+  };
+  gateway: {
+    requestCount: number;
+    completedCount: number;
+    failedCount: number;
+    cancelledCount: number;
+    quotaDeniedCount: number;
+    openReservationCount: number;
+    providerBreakdown: {
+      provider: AiGatewayProvider;
+      requestCount: number;
+      costMicroUsd: number;
+    }[];
+  };
   topFeature: {
     feature: AiUsageFeature;
     requestCount: number;
@@ -100,12 +117,14 @@ export interface ChatterUsageSummaryRow {
     requestCount: number;
     sharePct: number;
     tokenCounts: {
-      input: number;
-      output: number;
-      cacheWrite: number;
-      cacheRead: number;
-      cacheTotal: number;
-    };
+        input: number;
+        output: number;
+        cacheWrite: number;
+        cacheRead: number;
+        cacheTotal: number;
+      };
+      costMicroUsd: number;
+      costApproximate: boolean;
     regenerateRatePct: number;
   }[];
   regenerateRatePct: number;
@@ -134,6 +153,18 @@ function normalizeNullableNumber(value: NumericValue, field: string) {
   }
 
   return normalizeNumber(value, field);
+}
+
+function rowValue(row: Record<string, unknown>, field: string) {
+  return row[field] ?? row[field.toLowerCase()];
+}
+
+function normalizeRowNumber(row: Record<string, unknown>, field: string) {
+  return normalizeNumber(rowValue(row, field) as NumericValue, field);
+}
+
+function normalizeRowBoolean(row: Record<string, unknown>, field: string) {
+  return Boolean(rowValue(row, field));
 }
 
 function normalizeFeature(value: unknown, field: string): AiUsageFeature {
@@ -332,6 +363,11 @@ export async function listChatterUsageSummary(
              ${aiUsageEvents.outputTokens} as "outputTokens",
              ${aiUsageEvents.cacheWriteTokens} as "cacheWriteTokens",
              ${aiUsageEvents.cacheReadTokens} as "cacheReadTokens",
+             ${aiUsageEvents.costMicroUsd} as "costMicroUsd",
+             ${aiUsageEvents.costApproximate} as "costApproximate",
+             ${aiUsageEvents.provider} as provider,
+             ${aiUsageEvents.gatewayOutcome} as "gatewayOutcome",
+             ${aiUsageEvents.quotaAccepted} as "quotaAccepted",
              ${aiUsageEvents.isRegeneration} as "isRegeneration"
       from ${aiUsageEvents}
       where ${aiUsageEvents.completedAt} >= ${input.from}
@@ -345,6 +381,22 @@ export async function listChatterUsageSummary(
              coalesce(sum(fe."outputTokens"), 0)::bigint as "outputTokens",
              coalesce(sum(fe."cacheWriteTokens"), 0)::bigint as "cacheWriteTokens",
              coalesce(sum(fe."cacheReadTokens"), 0)::bigint as "cacheReadTokens",
+             coalesce(sum(fe."costMicroUsd"), 0)::bigint as "costMicroUsd",
+             coalesce(bool_or(fe."costApproximate"), false) as "costApproximate",
+             count(fe.id) filter (
+               where fe.provider is not null
+                  or fe."gatewayOutcome" is not null
+                  or fe."quotaAccepted" is not null
+             )::int as "gatewayRequestCount",
+             count(fe.id) filter (where fe."gatewayOutcome" = 'completed')::int as "gatewayCompletedCount",
+             count(fe.id) filter (where fe."gatewayOutcome" = 'failed')::int as "gatewayFailedCount",
+             count(fe.id) filter (where fe."gatewayOutcome" = 'cancelled')::int as "gatewayCancelledCount",
+             count(fe.id) filter (where fe."gatewayOutcome" = 'quota_denied')::int as "gatewayQuotaDeniedCount",
+             count(fe.id) filter (
+               where fe.provider is not null
+                 and fe."quotaAccepted" = true
+                 and fe."gatewayOutcome" is null
+             )::int as "gatewayOpenReservationCount",
              count(fe.id) filter (where fe."isRegeneration")::int as "regenerationCount"
       from chatter_users cu
       left join filtered_events fe on fe."userId" = cu."userId"
@@ -357,6 +409,14 @@ export async function listChatterUsageSummary(
            ut."outputTokens",
            ut."cacheWriteTokens",
            ut."cacheReadTokens",
+           ut."costMicroUsd",
+           ut."costApproximate",
+           ut."gatewayRequestCount",
+           ut."gatewayCompletedCount",
+           ut."gatewayFailedCount",
+           ut."gatewayCancelledCount",
+           ut."gatewayQuotaDeniedCount",
+           ut."gatewayOpenReservationCount",
            case
              when ut."totalGenerations" = 0
                then 0::double precision
@@ -379,6 +439,8 @@ export async function listChatterUsageSummary(
              ${aiUsageEvents.outputTokens} as "outputTokens",
              ${aiUsageEvents.cacheWriteTokens} as "cacheWriteTokens",
              ${aiUsageEvents.cacheReadTokens} as "cacheReadTokens",
+             ${aiUsageEvents.costMicroUsd} as "costMicroUsd",
+             ${aiUsageEvents.costApproximate} as "costApproximate",
              ${aiUsageEvents.isRegeneration} as "isRegeneration"
       from ${aiUsageEvents}
       where ${aiUsageEvents.completedAt} >= ${input.from}
@@ -391,10 +453,25 @@ export async function listChatterUsageSummary(
            coalesce(sum(fe."outputTokens"), 0)::bigint as "outputTokens",
            coalesce(sum(fe."cacheWriteTokens"), 0)::bigint as "cacheWriteTokens",
            coalesce(sum(fe."cacheReadTokens"), 0)::bigint as "cacheReadTokens",
+           coalesce(sum(fe."costMicroUsd"), 0)::bigint as "costMicroUsd",
+           coalesce(bool_or(fe."costApproximate"), false) as "costApproximate",
            count(*) filter (where fe."isRegeneration")::int as "regenerationCount"
     from filtered_events fe
     group by fe."userId", fe.feature
     order by fe."userId" asc, "requestCount" desc, fe.feature asc
+  `);
+
+  const providerBreakdownResult = await db.execute(sql`
+    select ${aiUsageEvents.userId} as "userId",
+           ${aiUsageEvents.provider} as provider,
+           count(*)::int as "requestCount",
+           coalesce(sum(${aiUsageEvents.costMicroUsd}), 0)::bigint as "costMicroUsd"
+    from ${aiUsageEvents}
+    where ${aiUsageEvents.completedAt} >= ${input.from}
+      and ${aiUsageEvents.completedAt} < ${input.toExclusive}
+      and ${aiUsageEvents.provider} is not null
+    group by ${aiUsageEvents.userId}, ${aiUsageEvents.provider}
+    order by ${aiUsageEvents.userId} asc, "requestCount" desc, ${aiUsageEvents.provider} asc
   `);
 
   const summaries = totalsResult.rows.map((row) => {
@@ -413,6 +490,19 @@ export async function listChatterUsageSummary(
         cacheWrite: cacheWriteTokens,
         cacheRead: cacheReadTokens,
         cacheTotal: cacheWriteTokens + cacheReadTokens,
+      },
+      cost: {
+        microUsd: normalizeRowNumber(row as Record<string, unknown>, "costMicroUsd"),
+        approximate: normalizeRowBoolean(row as Record<string, unknown>, "costApproximate"),
+      },
+      gateway: {
+        requestCount: normalizeRowNumber(row as Record<string, unknown>, "gatewayRequestCount"),
+        completedCount: normalizeRowNumber(row as Record<string, unknown>, "gatewayCompletedCount"),
+        failedCount: normalizeRowNumber(row as Record<string, unknown>, "gatewayFailedCount"),
+        cancelledCount: normalizeRowNumber(row as Record<string, unknown>, "gatewayCancelledCount"),
+        quotaDeniedCount: normalizeRowNumber(row as Record<string, unknown>, "gatewayQuotaDeniedCount"),
+        openReservationCount: normalizeRowNumber(row as Record<string, unknown>, "gatewayOpenReservationCount"),
+        providerBreakdown: [],
       },
       regenerateRatePct: normalizeNumber((row as any).regenerateRatePct, "regenerateRatePct"),
       warning: Boolean((row as any).warning),
@@ -449,10 +539,28 @@ export async function listChatterUsageSummary(
         cacheRead: cacheReadTokens,
         cacheTotal: cacheWriteTokens + cacheReadTokens,
       },
+      costMicroUsd: normalizeRowNumber(row as Record<string, unknown>, "costMicroUsd"),
+      costApproximate: normalizeRowBoolean(row as Record<string, unknown>, "costApproximate"),
       regenerateRatePct: roundPercentage(regenerationCount, requestCount),
     });
 
     featureBreakdownByUser.set(userId, breakdown);
+  }
+
+  const providerBreakdownByUser = new Map<number, ChatterUsageSummaryRow["gateway"]["providerBreakdown"]>();
+  for (const row of providerBreakdownResult.rows) {
+    const userId = normalizeNumber((row as any).userId, "userId");
+    const provider = (row as any).provider;
+    if (provider !== "anthropic" && provider !== "openrouter") {
+      continue;
+    }
+    const breakdown = providerBreakdownByUser.get(userId) ?? [];
+    breakdown.push({
+      provider,
+      requestCount: normalizeRowNumber(row as Record<string, unknown>, "requestCount"),
+      costMicroUsd: normalizeRowNumber(row as Record<string, unknown>, "costMicroUsd"),
+    });
+    providerBreakdownByUser.set(userId, breakdown);
   }
 
   return summaries.map((summary) => {
@@ -467,6 +575,10 @@ export async function listChatterUsageSummary(
 
     return {
       ...summary,
+      gateway: {
+        ...summary.gateway,
+        providerBreakdown: providerBreakdownByUser.get(summary.userId) ?? [],
+      },
       topFeature,
       featureBreakdown,
     } satisfies ChatterUsageSummaryRow;
