@@ -667,3 +667,10 @@ production app context intentionally does not create a provider yet, so the rout
 fail-closed with `503` before external provider network. Provider failures become bounded error
 frames with no prompt/provider-body echo; terminal usage ledger writes remain pending until the
 real provider execution and quota reservation/finalization slice.
+
+**R4h terminal ledger finalization:** provider-seam streams now write one terminal gateway ledger
+row for completed, failed, or cancelled attempts. The row stores page, provider, provider response
+id when observed, usage/cost, quota decision, cache-hit marker, regeneration marker, duration, and
+gateway outcome without prompt or response text. Existing `(user_id, client_event_id)` idempotency
+dedupes repeated terminal writes, but duplicate provider-attempt prevention still needs an atomic
+reservation slice before live provider execution is production-ready.

@@ -295,10 +295,63 @@ describe("ChatMuse AI gateway runtime gate", () => {
     });
     expect(capturedProviderInput.signal.aborted).toBe(false);
 
-    const usageRows = await testDb!.pool.query<{ count: number }>(
-      "select count(*)::int as count from ai_usage_events",
+    const usageRows = await testDb!.pool.query<{
+      clientEventId: string;
+      feature: string;
+      model: string;
+      provider: string | null;
+      providerResponseId: string | null;
+      inputTokens: number;
+      outputTokens: number;
+      cacheWriteTokens: number;
+      cacheReadTokens: number;
+      costMicroUsd: number;
+      costApproximate: boolean;
+      quotaAccepted: boolean | null;
+      gatewayOutcome: string | null;
+      conversationId: string | null;
+      isCacheHit: boolean;
+      isRegeneration: boolean;
+      durationRecorded: boolean;
+    }>(
+      `select client_event_id as "clientEventId",
+              feature,
+              model,
+              provider,
+              provider_response_id as "providerResponseId",
+              input_tokens::int as "inputTokens",
+              output_tokens::int as "outputTokens",
+              cache_write_tokens::int as "cacheWriteTokens",
+              cache_read_tokens::int as "cacheReadTokens",
+              cost_micro_usd::int as "costMicroUsd",
+              cost_approximate as "costApproximate",
+              quota_accepted as "quotaAccepted",
+              gateway_outcome as "gatewayOutcome",
+              conversation_id as "conversationId",
+              is_cache_hit as "isCacheHit",
+              is_regeneration as "isRegeneration",
+              duration_ms is not null as "durationRecorded"
+       from ai_usage_events`,
     );
-    expect(usageRows.rows[0]?.count).toBe(0);
+    expect(usageRows.rows).toEqual([{
+      clientEventId: requestBody.clientRequestId,
+      feature: "fast-reply",
+      model: "anthropic:claude-sonnet-4-6",
+      provider: "anthropic",
+      providerResponseId: "msg_test_123",
+      inputTokens: 100,
+      outputTokens: 8,
+      cacheWriteTokens: 15,
+      cacheReadTokens: 20,
+      costMicroUsd: 494,
+      costApproximate: false,
+      quotaAccepted: true,
+      gatewayOutcome: "completed",
+      conversationId: "123456789",
+      isCacheHit: true,
+      isRegeneration: false,
+      durationRecorded: true,
+    }]);
   });
 
   it("converts provider failures to bounded SSE errors without echoing provider text", async () => {
@@ -323,9 +376,35 @@ describe("ChatMuse AI gateway runtime gate", () => {
     });
     expect(response.body).not.toContain("conversation context");
 
-    const usageRows = await testDb!.pool.query<{ count: number }>(
-      "select count(*)::int as count from ai_usage_events",
+    const usageRows = await testDb!.pool.query<{
+      provider: string | null;
+      providerResponseId: string | null;
+      inputTokens: number;
+      outputTokens: number;
+      costMicroUsd: number;
+      quotaAccepted: boolean | null;
+      gatewayOutcome: string | null;
+      isCacheHit: boolean;
+    }>(
+      `select provider,
+              provider_response_id as "providerResponseId",
+              input_tokens::int as "inputTokens",
+              output_tokens::int as "outputTokens",
+              cost_micro_usd::int as "costMicroUsd",
+              quota_accepted as "quotaAccepted",
+              gateway_outcome as "gatewayOutcome",
+              is_cache_hit as "isCacheHit"
+       from ai_usage_events`,
     );
-    expect(usageRows.rows[0]?.count).toBe(0);
+    expect(usageRows.rows).toEqual([{
+      provider: "anthropic",
+      providerResponseId: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      costMicroUsd: 0,
+      quotaAccepted: true,
+      gatewayOutcome: "failed",
+      isCacheHit: false,
+    }]);
   });
 });

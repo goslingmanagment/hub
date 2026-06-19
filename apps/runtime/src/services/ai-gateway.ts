@@ -4,10 +4,12 @@ import type {
   AiGatewayQuota,
   AiGatewayStreamBody,
   AiGatewayStreamFrame,
+  AiGatewayUsage,
 } from "@agency_hub_core/contracts";
 import {
   findPageSummaryByLabel,
   getAiGatewayDailyUsageTotals,
+  insertAiUsageEvents,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -45,6 +47,16 @@ export interface PreparedAiGatewayStream {
   requestId: string;
   meta: AiGatewayStreamFrame;
   stream(signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
+  recordTerminal(input: AiGatewayTerminalRecordInput): Promise<number>;
+}
+
+export interface AiGatewayTerminalRecordInput {
+  outcome: "completed" | "failed" | "cancelled";
+  usage: AiGatewayUsage | null;
+  providerResponseId: string | null;
+  cacheHit: boolean;
+  durationMs: number;
+  completedAt: Date;
 }
 
 export function isChatMuseAiGatewayEnabled(
@@ -161,6 +173,40 @@ export async function prepareAiGatewayStream(
         body: input,
         quota: quotaFrame,
         signal,
+      });
+    },
+    recordTerminal(record) {
+      const usage = record.usage ?? {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        costMicroUsd: 0,
+        costApproximate: false,
+      };
+      return insertAiUsageEvents(app.db, {
+        userId: principal.user.id,
+        events: [{
+          clientEventId: input.clientRequestId,
+          feature: input.feature,
+          model: input.model,
+          pageId: page.id,
+          provider: app.aiGatewayProvider!.provider,
+          providerResponseId: record.providerResponseId,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cacheWriteTokens: usage.cacheWriteTokens,
+          cacheReadTokens: usage.cacheReadTokens,
+          costMicroUsd: usage.costMicroUsd,
+          costApproximate: usage.costApproximate,
+          quotaAccepted: true,
+          gatewayOutcome: record.outcome,
+          conversationId: input.conversationId ?? null,
+          durationMs: Math.max(0, Math.floor(record.durationMs)),
+          isCacheHit: record.cacheHit,
+          isRegeneration: input.isRegeneration,
+          completedAt: record.completedAt,
+        }],
       });
     },
   };

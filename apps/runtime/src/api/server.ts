@@ -681,6 +681,11 @@ export async function buildApiServer(appContext: AppContext) {
 
     reply.hijack();
     const raw = reply.raw;
+    const startedAt = Date.now();
+    let terminalOutcome: "completed" | "failed" | "cancelled" = "completed";
+    let terminalUsage: Parameters<typeof stream.recordTerminal>[0]["usage"] = null;
+    let terminalProviderResponseId: string | null = null;
+    let terminalCacheHit = false;
     raw.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache, no-transform",
@@ -702,10 +707,20 @@ export async function buildApiServer(appContext: AppContext) {
     try {
       writeFrame(stream.meta);
       for await (const frame of stream.stream(abort.signal)) {
+        if (frame.type === "usage") {
+          terminalUsage = frame.usage;
+          terminalProviderResponseId = frame.providerResponseId;
+          terminalCacheHit = frame.cacheHit;
+        } else if (frame.type === "error") {
+          terminalOutcome = "failed";
+        }
         writeFrame(frame);
       }
     } catch (error) {
-      if (!abort.signal.aborted) {
+      if (abort.signal.aborted) {
+        terminalOutcome = "cancelled";
+      } else {
+        terminalOutcome = "failed";
         request.log.warn({
           requestId: stream.requestId,
           errorName: error instanceof Error ? error.name : "UnknownError",
@@ -719,6 +734,21 @@ export async function buildApiServer(appContext: AppContext) {
       }
     } finally {
       raw.off("close", abortProvider);
+      try {
+        await stream.recordTerminal({
+          outcome: terminalOutcome,
+          usage: terminalUsage,
+          providerResponseId: terminalProviderResponseId,
+          cacheHit: terminalCacheHit,
+          durationMs: Date.now() - startedAt,
+          completedAt: new Date(),
+        });
+      } catch (error) {
+        request.log.error({
+          requestId: stream.requestId,
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        }, "AI gateway terminal ledger write failed");
+      }
       if (!raw.writableEnded && !raw.destroyed) {
         raw.end();
       }

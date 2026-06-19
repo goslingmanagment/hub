@@ -1,9 +1,9 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4g SSE provider seam is implemented after the R4b default-off runtime gate, R4c ledger
-storage, R4d quota preflight, R4e pricing utility, and R4f Anthropic request-building/usage
-normalization. Real provider execution, atomic provider-attempt reservation/finalization, and
-production validation are still pending.
+Status: R4h terminal ledger finalization is implemented after the R4b default-off runtime gate,
+R4c ledger storage, R4d quota preflight, R4e pricing utility, R4f Anthropic request-building/usage
+normalization, and R4g SSE provider seam. Real provider execution, atomic provider-attempt
+reservation, duplicate provider-attempt prevention, and production validation are still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -134,6 +134,14 @@ instantiate a provider, so runtime behavior remains fail-closed before external 
 ledger writes are intentionally still pending until the real provider path and atomic quota
 reservation/finalization land together.
 
+R4h adds terminal ledger finalization around the provider seam. A completed provider stream records
+one `ai_usage_events` row with page, provider, provider response id, quota decision, usage, cost,
+cache-hit marker, regeneration marker, duration, and `gateway_outcome='completed'`. Provider
+failures and client cancellations record bounded terminal rows with zero usage when no provider
+usage was observed. Existing `(user_id, client_event_id)` idempotency prevents duplicate rows, but
+it does not yet prevent a duplicate provider attempt before the row exists; that requires the
+future atomic reservation slice.
+
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
 columns for this record:
@@ -185,8 +193,10 @@ Before runtime implementation:
 - add Anthropic request-building/usage-normalization parity with desktop direct mode; **done in R4f
   provider adapter groundwork**;
 - define cancellation semantics so desktop `ai:cancel` aborts the provider request; **route-level
-  provider abort signal is in place in R4g; desktop cancel transport and provider SDK wiring remain
-  pending**;
+  provider abort signal is in place in R4g and cancelled terminal rows are recorded in R4h; desktop
+  cancel transport and provider SDK wiring remain pending**;
+- make reservation/finalization atomic so duplicate client request ids cannot start duplicate
+  provider attempts; **pending**.
 - document the production validation command/API/log/DB evidence.
 
 Production validation must use a small approved prompt and must not send any platform message.
