@@ -108,6 +108,14 @@ either remaining request count or remaining micro-USD budget is `0`. Setting eit
 blocks provider attempts. The later provider slice must still make reservation/finalization atomic
 around the actual provider attempt and final cost.
 
+R4e adds the first Anthropic pricing utility for terminal gateway usage rows. It supports the
+desktop Anthropic model ids currently accepted by ChatMuse (`anthropic:claude-sonnet-4-6`,
+`anthropic:claude-sonnet-4-5`, `anthropic:claude-opus-4-8`, `anthropic:claude-opus-4-6`,
+`anthropic:claude-opus-4-5`, and `anthropic:claude-haiku-4-5`) and computes integer micro-USD
+costs from input, output, cache-write, and cache-read tokens. Aggregate cache-write usage without
+5m/1h provider breakdown is recorded as approximate. Unsupported models fail closed instead of
+being silently underpriced.
+
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
 columns for this record:
@@ -155,6 +163,7 @@ Before runtime implementation:
 - add/extend ledger storage for provider response id, page id, provider, cost, quota, and outcome;
   **done in R4c storage slice**;
 - add a ledger-backed daily quota preflight before provider execution; **done in R4d quota slice**;
+- add Anthropic gateway pricing for terminal ledger rows; **done in R4e pricing slice**;
 - define cancellation semantics so desktop `ai:cancel` aborts the provider request;
 - document the production validation command/API/log/DB evidence.
 

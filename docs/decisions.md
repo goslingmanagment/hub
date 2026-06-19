@@ -646,3 +646,10 @@ defaults to `200` and `CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT` defaults to `5
 either set to `0` blocks provider attempts. Over-quota requests return `429 rate_limit_exceeded`
 before Anthropic/OpenRouter network and before any new ledger write. Atomic provider-attempt
 reservation/finalization remains part of the provider execution slice.
+
+**R4e pricing utility:** the gateway has a pure Anthropic pricing helper for terminal ledger rows.
+It prices the desktop-supported `anthropic:*` ChatMuse models in integer micro-USD, includes
+prompt-cache read/write rates, marks aggregate cache-write usage approximate when the provider does
+not supply a 5m/1h breakdown, and rejects unsupported models instead of silently underpricing them.
+The helper is not yet wired to a live provider call; it is the cost basis for the upcoming terminal
+usage row.
