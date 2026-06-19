@@ -224,9 +224,11 @@ describe("ChatMuse AI gateway runtime gate", () => {
   it("streams SSE frames from an injected provider after auth and quota pass", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
     const providerCapture: { current?: AiGatewayProviderInput } = {};
+    let providerCalls = 0;
     const provider: AiGatewayProvider = {
       provider: "anthropic",
       async *stream(input) {
+        providerCalls += 1;
         providerCapture.current = input;
         yield { type: "content_delta", text: "hello " };
         yield {
@@ -352,6 +354,18 @@ describe("ChatMuse AI gateway runtime gate", () => {
       isRegeneration: false,
       durationRecorded: true,
     }]);
+
+    const duplicate = await streamGateway(requestBody);
+    expect(duplicate.statusCode, duplicate.body).toBe(409);
+    expect(duplicate.json()).toMatchObject({
+      error: "conflict",
+      message: "ChatMuse AI gateway request id is already reserved",
+    });
+    expect(providerCalls).toBe(1);
+    const countRows = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ai_usage_events",
+    );
+    expect(countRows.rows[0]?.count).toBe(1);
   });
 
   it("converts provider failures to bounded SSE errors without echoing provider text", async () => {

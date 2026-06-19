@@ -31,6 +31,32 @@ export interface InsertAiUsageEventInput {
   completedAt: Date;
 }
 
+export interface ReserveAiGatewayUsageEventInput {
+  clientEventId: string;
+  feature: AiUsageFeature;
+  model: string;
+  pageId: number;
+  provider: AiGatewayProvider;
+  conversationId?: string | null;
+  isRegeneration: boolean;
+  reservedAt: Date;
+}
+
+export interface FinalizeAiGatewayUsageEventInput {
+  clientEventId: string;
+  providerResponseId?: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+  costMicroUsd: number;
+  costApproximate: boolean;
+  gatewayOutcome: Exclude<AiGatewayOutcome, "quota_denied">;
+  durationMs: number;
+  isCacheHit: boolean;
+  completedAt: Date;
+}
+
 export interface ListChatterUsageSummaryInput {
   from: Date;
   toExclusive: Date;
@@ -162,6 +188,73 @@ export async function insertAiUsageEvents(
   });
 
   return inserted.length;
+}
+
+export async function reserveAiGatewayUsageEvent(
+  db: Database,
+  input: {
+    userId: number;
+    event: ReserveAiGatewayUsageEventInput;
+  },
+) {
+  const inserted = await db.insert(aiUsageEvents).values({
+    userId: input.userId,
+    clientEventId: input.event.clientEventId,
+    feature: input.event.feature,
+    model: input.event.model,
+    pageId: input.event.pageId,
+    provider: input.event.provider,
+    providerResponseId: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheWriteTokens: 0,
+    cacheReadTokens: 0,
+    costMicroUsd: 0,
+    costApproximate: false,
+    quotaAccepted: true,
+    gatewayOutcome: null,
+    conversationId: input.event.conversationId ?? null,
+    durationMs: null,
+    isCacheHit: false,
+    isRegeneration: input.event.isRegeneration,
+    completedAt: input.event.reservedAt,
+  }).onConflictDoNothing({
+    target: [aiUsageEvents.userId, aiUsageEvents.clientEventId],
+  }).returning({
+    id: aiUsageEvents.id,
+  });
+
+  return inserted.length === 1;
+}
+
+export async function finalizeAiGatewayUsageEvent(
+  db: Database,
+  input: {
+    userId: number;
+    event: FinalizeAiGatewayUsageEventInput;
+  },
+) {
+  const updated = await db.update(aiUsageEvents)
+    .set({
+      providerResponseId: input.event.providerResponseId ?? null,
+      inputTokens: input.event.inputTokens,
+      outputTokens: input.event.outputTokens,
+      cacheWriteTokens: input.event.cacheWriteTokens,
+      cacheReadTokens: input.event.cacheReadTokens,
+      costMicroUsd: input.event.costMicroUsd,
+      costApproximate: input.event.costApproximate,
+      gatewayOutcome: input.event.gatewayOutcome,
+      durationMs: Math.max(0, Math.floor(input.event.durationMs)),
+      isCacheHit: input.event.isCacheHit,
+      completedAt: input.event.completedAt,
+    })
+    .where(sql`
+      ${aiUsageEvents.userId} = ${input.userId}
+      and ${aiUsageEvents.clientEventId} = ${input.event.clientEventId}
+    `)
+    .returning({ id: aiUsageEvents.id });
+
+  return updated.length === 1;
 }
 
 export async function getAiGatewayDailyUsageTotals(

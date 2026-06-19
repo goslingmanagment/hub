@@ -674,3 +674,9 @@ id when observed, usage/cost, quota decision, cache-hit marker, regeneration mar
 gateway outcome without prompt or response text. Existing `(user_id, client_event_id)` idempotency
 dedupes repeated terminal writes, but duplicate provider-attempt prevention still needs an atomic
 reservation slice before live provider execution is production-ready.
+
+**R4i atomic reservation:** the gateway now reserves `(user_id, client_event_id)` in
+`ai_usage_events` before provider execution. A duplicate `clientRequestId` returns `409 conflict`
+before provider execution and cannot start a second paid call. Terminal handling updates the same
+row. Stale reservation recovery after process death remains pending before production live
+provider validation.

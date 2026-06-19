@@ -1,9 +1,9 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4h terminal ledger finalization is implemented after the R4b default-off runtime gate,
+Status: R4i atomic reservation is implemented after the R4b default-off runtime gate,
 R4c ledger storage, R4d quota preflight, R4e pricing utility, R4f Anthropic request-building/usage
-normalization, and R4g SSE provider seam. Real provider execution, atomic provider-attempt
-reservation, duplicate provider-attempt prevention, and production validation are still pending.
+normalization, R4g SSE provider seam, and R4h terminal ledger finalization. Real provider execution
+and production validation are still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -142,6 +142,15 @@ usage was observed. Existing `(user_id, client_event_id)` idempotency prevents d
 it does not yet prevent a duplicate provider attempt before the row exists; that requires the
 future atomic reservation slice.
 
+R4i makes reservation/finalization atomic enough for the first live provider path: after auth,
+page authorization, quota preflight, and provider availability checks, core inserts a zero-usage
+reservation row keyed by `(user_id, client_event_id)` before calling the provider seam. Duplicate
+client request ids return `409 conflict` before provider execution, so a retry cannot start a
+second paid provider call. Terminal handling updates the same row to `completed`, `failed`, or
+`cancelled`. A process crash after reservation and before terminal update can leave a reserved row
+with null `gateway_outcome`; recovery policy for those stale reservations remains part of the live
+provider hardening checklist.
+
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
 columns for this record:
@@ -196,7 +205,8 @@ Before runtime implementation:
   provider abort signal is in place in R4g and cancelled terminal rows are recorded in R4h; desktop
   cancel transport and provider SDK wiring remain pending**;
 - make reservation/finalization atomic so duplicate client request ids cannot start duplicate
-  provider attempts; **pending**.
+  provider attempts; **done in R4i for the first provider seam, with stale-reservation recovery
+  still pending**.
 - document the production validation command/API/log/DB evidence.
 
 Production validation must use a small approved prompt and must not send any platform message.

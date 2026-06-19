@@ -7,14 +7,15 @@ import type {
   AiGatewayUsage,
 } from "@agency_hub_core/contracts";
 import {
+  finalizeAiGatewayUsageEvent,
   findPageSummaryByLabel,
   getAiGatewayDailyUsageTotals,
-  insertAiUsageEvents,
+  reserveAiGatewayUsageEvent,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
-import { NotFoundError, ServiceUnavailableError, TooManyRequestsError } from "./errors.ts";
+import { ConflictError, NotFoundError, ServiceUnavailableError, TooManyRequestsError } from "./errors.ts";
 
 export const DEFAULT_AI_GATEWAY_DAILY_REQUEST_LIMIT = 200;
 export const DEFAULT_AI_GATEWAY_DAILY_MICRO_USD_LIMIT = 5_000_000;
@@ -47,7 +48,7 @@ export interface PreparedAiGatewayStream {
   requestId: string;
   meta: AiGatewayStreamFrame;
   stream(signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
-  recordTerminal(input: AiGatewayTerminalRecordInput): Promise<number>;
+  recordTerminal(input: AiGatewayTerminalRecordInput): Promise<boolean>;
 }
 
 export interface AiGatewayTerminalRecordInput {
@@ -140,6 +141,22 @@ export async function prepareAiGatewayStream(
   if (!app.aiGatewayProvider) {
     throw new ServiceUnavailableError("ChatMuse AI gateway provider execution is not configured");
   }
+  const reserved = await reserveAiGatewayUsageEvent(app.db, {
+    userId: principal.user.id,
+    event: {
+      clientEventId: input.clientRequestId,
+      feature: input.feature,
+      model: input.model,
+      pageId: page.id,
+      provider: app.aiGatewayProvider.provider,
+      conversationId: input.conversationId ?? null,
+      isRegeneration: input.isRegeneration,
+      reservedAt: new Date(),
+    },
+  });
+  if (!reserved) {
+    throw new ConflictError("ChatMuse AI gateway request id is already reserved");
+  }
 
   const requestId = randomUUID();
   const quotaFrame: AiGatewayQuota = {
@@ -184,14 +201,10 @@ export async function prepareAiGatewayStream(
         costMicroUsd: 0,
         costApproximate: false,
       };
-      return insertAiUsageEvents(app.db, {
+      return finalizeAiGatewayUsageEvent(app.db, {
         userId: principal.user.id,
-        events: [{
+        event: {
           clientEventId: input.clientRequestId,
-          feature: input.feature,
-          model: input.model,
-          pageId: page.id,
-          provider: app.aiGatewayProvider!.provider,
           providerResponseId: record.providerResponseId,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
@@ -199,14 +212,11 @@ export async function prepareAiGatewayStream(
           cacheReadTokens: usage.cacheReadTokens,
           costMicroUsd: usage.costMicroUsd,
           costApproximate: usage.costApproximate,
-          quotaAccepted: true,
           gatewayOutcome: record.outcome,
-          conversationId: input.conversationId ?? null,
           durationMs: Math.max(0, Math.floor(record.durationMs)),
           isCacheHit: record.cacheHit,
-          isRegeneration: input.isRegeneration,
           completedAt: record.completedAt,
-        }],
+        },
       });
     },
   };
