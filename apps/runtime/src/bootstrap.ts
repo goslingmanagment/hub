@@ -26,6 +26,7 @@ import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
 import type { OfapiClient } from "./services/ofapi.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
 import type { AiGatewayProvider } from "./services/ai-gateway.ts";
+import { createAnthropicAiGatewayProvider } from "./services/ai-gateway-anthropic-provider.ts";
 import type { ProviderAdapter } from "./services/provider.ts";
 
 export type AdapterLike = ProviderAdapter<
@@ -172,6 +173,9 @@ export async function createAppContext(): Promise<AppContext> {
         onCreditSpend: createOfapiCreditSpendSink({ db, logger, config }),
       })
       : undefined;
+    const aiGatewayProvider = config.chatMuseAiGatewayEnabled && config.anthropicApiKey
+      ? createAnthropicAiGatewayProvider({ apiKey: config.anthropicApiKey })
+      : undefined;
 
     return {
       config,
@@ -183,6 +187,7 @@ export async function createAppContext(): Promise<AppContext> {
       adapter,
       onlyFansAdapter,
       ofapi,
+      aiGatewayProvider,
       async close() {
         await adapter.close?.();
         await onlyFansAdapter.close();

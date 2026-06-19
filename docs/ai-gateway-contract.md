@@ -1,9 +1,9 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4i atomic reservation is implemented after the R4b default-off runtime gate,
+Status: R4j Anthropic provider execution is implemented after the R4b default-off runtime gate,
 R4c ledger storage, R4d quota preflight, R4e pricing utility, R4f Anthropic request-building/usage
-normalization, R4g SSE provider seam, and R4h terminal ledger finalization. Real provider execution
-and production validation are still pending.
+normalization, R4g SSE provider seam, R4h terminal ledger finalization, and R4i atomic
+reservation. Production validation and desktop switch are still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -151,6 +151,14 @@ second paid provider call. Terminal handling updates the same row to `completed`
 with null `gateway_outcome`; recovery policy for those stale reservations remains part of the live
 provider hardening checklist.
 
+R4j adds the real Anthropic provider adapter. When `CHATMUSE_AI_GATEWAY_ENABLED=true` and
+`ANTHROPIC_API_KEY` is configured, the runtime app context can instantiate an Anthropic Messages
+streaming provider. The adapter uses the R4f request builder, passes the route abort signal into
+the SDK request, maps text/thinking deltas to gateway frames, converts provider usage to integer
+micro-USD cost, and emits the terminal `done` frame. Tests use an injected fake Anthropic client;
+production validation must still use a small approved prompt and must not send any platform
+message.
+
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
 columns for this record:
@@ -207,6 +215,8 @@ Before runtime implementation:
 - make reservation/finalization atomic so duplicate client request ids cannot start duplicate
   provider attempts; **done in R4i for the first provider seam, with stale-reservation recovery
   still pending**.
-- document the production validation command/API/log/DB evidence.
+- add the real Anthropic SDK provider path; **done in R4j, default-off through the gateway flag and
+  absent unless `ANTHROPIC_API_KEY` is configured**;
+- document the production validation command/API/log/DB evidence; **pending live validation**.
 
 Production validation must use a small approved prompt and must not send any platform message.

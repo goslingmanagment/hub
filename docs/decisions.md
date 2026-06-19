@@ -680,3 +680,9 @@ reservation slice before live provider execution is production-ready.
 before provider execution and cannot start a second paid call. Terminal handling updates the same
 row. Stale reservation recovery after process death remains pending before production live
 provider validation.
+
+**R4j Anthropic provider execution:** core now has a real Anthropic Messages streaming adapter
+behind the default-off gateway. It is instantiated only when `CHATMUSE_AI_GATEWAY_ENABLED=true` and
+`ANTHROPIC_API_KEY` is configured, maps provider text/thinking/usage events into gateway frames,
+uses the same abort signal as the SSE route, and relies on the R4i reservation plus R4h finalizer
+for ledger state. Production validation remains pending and must use a small approved prompt.
