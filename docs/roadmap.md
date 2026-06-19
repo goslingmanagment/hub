@@ -280,7 +280,8 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
 
 **Features:**
 - ✅ OFAPI webhook receiver: raw-body HMAC verify, `x-ofapi-idempotency-key` dedupe, event journal, async pg-boss processing, owner admin flow to register the webhook + map accounts to pages
-- ✅ SSE event fanout `GET /api/v1/events/stream`: chatter-key auth, page-filtered `SyncEvent` frames, `Last-Event-ID` replay, ~7-day journal retention
+- ✅ SSE event fanout `GET /api/v1/events/stream`: chatter-key auth, page-filtered `SyncEvent` frames, `Last-Event-ID` replay, ~7-day journal retention; stale cursors receive `409 sync_snapshot_required`
+- ✅ Chatter-scoped `GET /api/v1/events/snapshot`: paginated durable chat/message/tombstone/account-auth state with a snapshot cursor for replay-gap recovery
 - ✅ ChatMuse pre-P4 prerequisites: profile PUT auto-creates OnlyFans fans; AI-usage batch skips invalid events per-event (`invalidCount`)
 - 🟡 Admin UI for the OFAPI webhook flow (API-only today; register via `POST /api/v1/admin/ofapi/webhook`)
 - AI proxy with streaming responses — app sends requests through the hub, not directly to AI provider

@@ -448,3 +448,33 @@ comparison: { summary, delta }
 - **Governance surface:** `OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS` defaults to 3650 days; the existing OFAPI cleanup queue purges expired archive rows by `retain_until`. Owner-only `GET /api/v1/admin/ofapi/dm-archive/status` exposes the enabled flag, retention days, row/tombstone counts, last archived/source timestamps, archive lag, and policy markers: owner-only ACL, source-journal audit, daily retention purge, no raw transcript export endpoint yet, stable-media-metadata-only storage.
 
 **Non-goals:** no historical bulk `GET /messages` backfill, no media download/storage, no raw transcript export API, no analytics dashboard scanning raw archive rows directly, and no desktop spend-sweep or polling cadence change. Historical import still needs explicit owner/admin acceptance of read-state risk, budget, retention, ACL, audit, purge/export, and backfill controls.
+
+
+## OFAPI Sync Snapshot and Replay-Gap Recovery (2026-06-19)
+
+**Decision #53:** The SSE fanout distinguishes an empty replay from a cursor that has fallen
+behind journal retention. `GET /api/v1/events/stream` checks the durable fanout sequence
+high-water and the oldest retained journal row before hijacking the response. A stale
+`Last-Event-ID` receives HTTP `409 sync_snapshot_required`; a cursor ahead of the server receives
+HTTP `400`. The sequence high-water is read from `ofapi_webhook_events_fanout_seq`, so gap
+detection still works if every journal row has been pruned.
+
+- **Snapshot endpoint:** chatter-key `GET /api/v1/events/snapshot` is scoped to one assigned OFAPI
+  account and paginated by internal thread id. The first page captures `snapshotCursor` before
+  reading projection state; later pages reuse that cursor. The client persists it only after every
+  account/page is applied, then reconnects SSE from that cursor. Events settled after cursor
+  capture are replayed normally, so concurrent snapshot reads cannot lose them.
+- **State and coverage:** the snapshot contains current hot chat heads/messages, cold-archive
+  deltas and tombstones after the requested cursor, current account-auth state, page/account
+  coverage, source timestamps/sequences, and explicit omissions. Presence and typing are omitted
+  as ephemeral state. `resumeAllowed=false` when either DM projection or the cold archive is
+  disabled, preventing a partial durable snapshot from advancing the client cursor.
+- **Bounded behavior:** no OFAPI request, historical message backfill, media download, or raw signed
+  media URL is introduced. Thread pages are bounded (`limit<=50`); hot-message retention remains
+  the existing 200/1000 per-thread policy, while archive rows are included only when they overlay
+  the hot window or are deltas after the client's requested sequence.
+
+**Rationale:** replay retention is an implementation bound, not a correctness policy. A silent
+empty replay allowed a long-offline desktop to claim live freshness after skipping durable events.
+The 409 plus snapshot/tail protocol makes the gap explicit while preserving page ACLs, idempotent
+apply, and the existing polling fallback until desktop snapshot recovery is deployed.

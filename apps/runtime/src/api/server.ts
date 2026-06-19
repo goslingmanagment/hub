@@ -27,6 +27,7 @@ import {
   setConfigOverridesAtomic,
   findPlatformFan,
   getLatestSyncRunPerPage,
+  getOfapiFanoutReplayWindow,
   getRevenueBreakdownForScope,
   getRevenuePageTotals,
   listFanFlags,
@@ -216,6 +217,7 @@ import {
   type SyncEventFrame,
   type SyncEventHub,
 } from "../services/events-stream.ts";
+import { getOfapiSyncSnapshot } from "../services/ofapi-sync-snapshot.ts";
 import {
   getChatterOfapiCreditsSummary,
   getOfapiCreditsDaily,
@@ -1186,6 +1188,32 @@ export async function buildApiServer(appContext: AppContext) {
       ? headerLastEventId
       : request.query.lastEventId ?? null;
 
+    if (lastEventId !== null) {
+      const replayWindow = await getOfapiFanoutReplayWindow(appContext.db);
+      if (lastEventId > replayWindow.latestSeq) {
+        throw new BadRequestError(
+          `Last-Event-ID ${lastEventId} is ahead of current fanout sequence ${replayWindow.latestSeq}`,
+        );
+      }
+      const replayGap = replayWindow.latestSeq > lastEventId
+        && (
+          replayWindow.oldestRetainedSeq === null
+          || lastEventId < replayWindow.oldestRetainedSeq - 1
+        );
+      if (replayGap) {
+        return reply.code(409).send({
+          error: "sync_snapshot_required",
+          message: "Requested event cursor is older than the retained replay window",
+          statusCode: 409,
+          version: 1,
+          requestedSeq: lastEventId,
+          oldestAvailableSeq: replayWindow.oldestRetainedSeq,
+          currentSeq: replayWindow.latestSeq,
+          snapshotPath: "/api/v1/events/snapshot",
+        });
+      }
+    }
+
     // Wait for the shared LISTEN connection before the replay query so no frame
     // settles between journal catch-up and live delivery. Failure is tolerable:
     // the hub reconnects with its own journal catch-up.
@@ -1302,6 +1330,21 @@ export async function buildApiServer(appContext: AppContext) {
       writeFrame(frame);
     }
     bufferedLive.length = 0;
+  });
+
+  server.get("/api/v1/events/snapshot", {
+    schema: routeSchemas.eventsSnapshot,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    return getOfapiSyncSnapshot(appContext, {
+      assignedPageIds: principal.assignedPageIds,
+      accountId: request.query.accountId,
+      afterSeq: request.query.afterSeq,
+      snapshotCursor: request.query.snapshotCursor,
+      pageCursor: request.query.pageCursor,
+      limit: request.query.limit,
+    });
   });
 
   server.get("/api/v1/admin/ofapi/webhook", {

@@ -6123,6 +6123,19 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 401: {
                     headers: {
                         [name: string]: unknown;
@@ -6137,6 +6150,202 @@ export interface paths {
                 };
                 /** @description Default Response */
                 403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            error: "sync_snapshot_required";
+                            message: string;
+                            /** @enum {number} */
+                            statusCode: 409;
+                            /** @enum {number} */
+                            version: 1;
+                            requestedSeq: number;
+                            oldestAvailableSeq: number | null;
+                            currentSeq: number;
+                            /** @enum {string} */
+                            snapshotPath: "/api/v1/events/snapshot";
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/events/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current durable sync state for replay-gap recovery
+         * @description Chatter-key scoped, paginated snapshot for one assigned OFAPI account. The cursor is captured before state reads; clients apply every page idempotently, persist snapshotCursor only after the final page, then resume SSE from that cursor. No OFAPI requests or historical DM backfill are performed.
+         */
+        get: {
+            parameters: {
+                query: {
+                    accountId: string;
+                    afterSeq: number;
+                    snapshotCursor?: number;
+                    pageCursor?: number;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {number} */
+                            version: 1;
+                            requestedAfterSeq: number;
+                            snapshotCursor: number;
+                            stateAt: string;
+                            resumeAllowed: boolean;
+                            page: {
+                                pageId: number;
+                                label: string;
+                                accountId: string;
+                                username: string | null;
+                                authStatus: string | null;
+                                authenticated: boolean | null;
+                                authChangedAt: string | null;
+                            };
+                            coverage: {
+                                durableDomains: ("chat_heads" | "hot_messages" | "message_tombstones" | "account_auth")[];
+                                omittedDomains: {
+                                    domain: string;
+                                    reason: string;
+                                }[];
+                                /** @enum {string} */
+                                messageWindow: "hot_projection_plus_archive_delta";
+                            };
+                            threads: {
+                                chatId: string;
+                                fanName: string;
+                                unreadCount: number;
+                                lastMessageId: string | null;
+                                lastMessageAt: string | null;
+                                lastMessageIsSentByMe: boolean;
+                                lastMessagePreview: string;
+                                visible: boolean;
+                                sourceUpdatedAt: string;
+                                messages: {
+                                    chatId: string;
+                                    messageId: string;
+                                    message: {
+                                        id: string;
+                                        text: string;
+                                        createdAt: string;
+                                        isSentByMe: boolean;
+                                        price: number;
+                                        isOpened?: boolean | null;
+                                        isNew?: boolean;
+                                        isTip?: boolean;
+                                        tipAmountUsd?: number | null;
+                                        tipText?: string | null;
+                                        mediaCount?: number;
+                                        media?: {
+                                            id: string;
+                                            /** @enum {string} */
+                                            type: "photo" | "video" | "audio" | "gif" | "other";
+                                            isReady: boolean;
+                                            locked: boolean;
+                                            durationSeconds?: number | null;
+                                        }[];
+                                        replyTo?: {
+                                            messageId?: string;
+                                            /** @enum {string} */
+                                            sender?: "fan" | "model";
+                                            textPreview: string;
+                                        } | null;
+                                    } | null;
+                                    deletedAt: string | null;
+                                    sourceUpdatedAt: string;
+                                    sourceFanoutSeq: number | null;
+                                }[];
+                            }[];
+                            unresolvedTombstones: {
+                                messageId: string;
+                                deletedAt: string;
+                                sourceUpdatedAt: string;
+                                sourceFanoutSeq: number;
+                            }[];
+                            nextPageCursor: number | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -6850,6 +7059,90 @@ export interface paths {
                             error: string;
                             message: string;
                             statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ofapi/dm-archive/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get OFAPI DM cold archive status and governance policy markers
+         * @description Read-only C4 gate endpoint. It exposes the forward-only archive flag, retention window, lag/count metrics, and the current ACL/audit/purge/export/media policy markers. It does not expose raw transcript text.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            enabled: boolean;
+                            retentionDays: number;
+                            rowCount: number;
+                            tombstoneCount: number;
+                            lastArchivedAt: string | null;
+                            lastSourceReceivedAt: string | null;
+                            nextPurgeAt: string | null;
+                            archiveLagMs: number | null;
+                            /** @enum {string} */
+                            acl: "owner_admin_endpoint_only";
+                            /** @enum {string} */
+                            audit: "source_journal_metadata_on_each_row";
+                            /** @enum {string} */
+                            purgePolicy: "daily_retention_purge_by_retain_until";
+                            /** @enum {string} */
+                            exportPolicy: "no_raw_transcript_export_endpoint_yet";
+                            /** @enum {string} */
+                            mediaPolicy: "stable_metadata_only_no_signed_urls";
                         };
                     };
                 };

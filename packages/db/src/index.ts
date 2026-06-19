@@ -12,6 +12,7 @@ export * from "./repositories/fan-metadata.ts";
 export * from "./repositories/ai-usage.ts";
 export * from "./repositories/notifications.ts";
 export * from "./repositories/ofapi.ts";
+export * from "./repositories/ofapi-sync-snapshot.ts";
 export * from "./repositories/onlyfans-public-profiles.ts";
 export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";

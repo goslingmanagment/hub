@@ -735,6 +735,40 @@ export async function getMaxOfapiFanoutSeq(db: Database): Promise<number> {
   return row?.maxSeq === null || row?.maxSeq === undefined ? 0 : Number(row.maxSeq);
 }
 
+export interface OfapiFanoutReplayWindow {
+  oldestRetainedSeq: number | null;
+  latestSeq: number;
+}
+
+/**
+ * Current durable fanout high-water plus the oldest replayable journal row.
+ * The sequence high-water remains valid after every journal row is pruned.
+ */
+export async function getOfapiFanoutReplayWindow(
+  db: Database,
+): Promise<OfapiFanoutReplayWindow> {
+  const result = await db.execute<{
+    oldestRetainedSeq: number | string | bigint | null;
+    latestSeq: number | string | bigint | null;
+  }>(sql`
+    select
+      min(fanout_seq)::bigint as "oldestRetainedSeq",
+      coalesce((
+        select case when is_called then last_value else 0 end
+        from ofapi_webhook_events_fanout_seq
+      ), 0)::bigint as "latestSeq"
+    from ofapi_webhook_events
+    where fanout_seq is not null
+  `);
+  const row = result.rows[0];
+  return {
+    oldestRetainedSeq: row?.oldestRetainedSeq == null
+      ? null
+      : Number(row.oldestRetainedSeq),
+    latestSeq: row?.latestSeq == null ? 0 : Number(row.latestSeq),
+  };
+}
+
 export async function deleteExpiredOfapiWebhookEvents(
   db: Database,
   receivedBefore: Date,

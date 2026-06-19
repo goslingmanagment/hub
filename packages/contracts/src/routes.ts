@@ -2791,6 +2791,87 @@ export const syncEventSchema = z.discriminatedUnion("type", [
   accountAuthChangedEventSchema,
 ]);
 
+export const syncSnapshotRequiredResponseSchema = z.object({
+  error: z.literal("sync_snapshot_required"),
+  message: z.string(),
+  statusCode: z.literal(409),
+  version: z.literal(1),
+  requestedSeq: z.number().int().nonnegative(),
+  oldestAvailableSeq: z.number().int().nonnegative().nullable(),
+  currentSeq: z.number().int().nonnegative(),
+  snapshotPath: z.literal("/api/v1/events/snapshot"),
+});
+
+export const syncSnapshotQuerySchema = z.object({
+  accountId: syncEventIdSchema,
+  afterSeq: z.coerce.number().int().nonnegative(),
+  snapshotCursor: z.coerce.number().int().nonnegative().optional(),
+  pageCursor: z.coerce.number().int().nonnegative().default(0),
+  limit: z.coerce.number().int().min(1).max(50).default(25),
+});
+
+export const syncSnapshotMessageSchema = z.object({
+  chatId: syncEventIdSchema,
+  messageId: syncEventIdSchema,
+  message: normalizedSyncMessageSchema.nullable(),
+  deletedAt: isoTimestamp.nullable(),
+  sourceUpdatedAt: isoTimestamp,
+  sourceFanoutSeq: z.number().int().nonnegative().nullable(),
+});
+
+export const syncSnapshotThreadSchema = z.object({
+  chatId: syncEventIdSchema,
+  fanName: z.string(),
+  unreadCount: z.number().int().nonnegative(),
+  lastMessageId: syncEventIdSchema.nullable(),
+  lastMessageAt: isoTimestamp.nullable(),
+  lastMessageIsSentByMe: z.boolean(),
+  lastMessagePreview: z.string(),
+  visible: z.boolean(),
+  sourceUpdatedAt: isoTimestamp,
+  messages: z.array(syncSnapshotMessageSchema),
+});
+
+export const syncSnapshotUnresolvedTombstoneSchema = z.object({
+  messageId: syncEventIdSchema,
+  deletedAt: isoTimestamp,
+  sourceUpdatedAt: isoTimestamp,
+  sourceFanoutSeq: z.number().int().nonnegative(),
+});
+
+export const syncSnapshotResponseSchema = z.object({
+  version: z.literal(1),
+  requestedAfterSeq: z.number().int().nonnegative(),
+  snapshotCursor: z.number().int().nonnegative(),
+  stateAt: isoTimestamp,
+  resumeAllowed: z.boolean(),
+  page: z.object({
+    pageId: intId,
+    label: z.string(),
+    accountId: syncEventIdSchema,
+    username: z.string().nullable(),
+    authStatus: z.string().nullable(),
+    authenticated: z.boolean().nullable(),
+    authChangedAt: isoTimestamp.nullable(),
+  }),
+  coverage: z.object({
+    durableDomains: z.array(z.enum([
+      "chat_heads",
+      "hot_messages",
+      "message_tombstones",
+      "account_auth",
+    ])),
+    omittedDomains: z.array(z.object({
+      domain: z.string(),
+      reason: z.string(),
+    })),
+    messageWindow: z.literal("hot_projection_plus_archive_delta"),
+  }),
+  threads: z.array(syncSnapshotThreadSchema),
+  unresolvedTombstones: z.array(syncSnapshotUnresolvedTombstoneSchema),
+  nextPageCursor: z.number().int().nonnegative().nullable(),
+});
+
 export const ofapiWebhookAckResponseSchema = z.object({
   received: z.literal(true),
   duplicate: z.boolean(),
@@ -3381,8 +3462,27 @@ export const routeSchemas = {
         "text/event-stream — `event: sync` frames whose `data` is a JSON SyncEvent "
         + "(see syncEventSchema) and whose `id` is the journal fanout sequence.",
       ),
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+      409: syncSnapshotRequiredResponseSchema,
+    },
+  },
+  eventsSnapshot: {
+    tags: ["events"],
+    summary: "Current durable sync state for replay-gap recovery",
+    description: "Chatter-key scoped, paginated snapshot for one assigned OFAPI account. "
+      + "The cursor is captured before state reads; clients apply every page idempotently, "
+      + "persist snapshotCursor only after the final page, then resume SSE from that cursor. "
+      + "No OFAPI requests or historical DM backfill are performed.",
+    security: bearerOnlySecurity,
+    querystring: syncSnapshotQuerySchema,
+    response: {
+      200: syncSnapshotResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
     },
   },
   adminOfapiWebhookStatus: {
