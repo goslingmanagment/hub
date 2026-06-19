@@ -936,6 +936,68 @@ export const pageDmMessages = pgTable(
   }),
 );
 
+export const dmMessageArchive = pgTable(
+  "dm_message_archive",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platform: platformEnum("platform").notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    ofapiAccountId: text("ofapi_account_id").notNull(),
+    platformConversationId: text("platform_conversation_id"),
+    fanPlatformUserId: text("fan_platform_user_id"),
+    platformMessageId: text("platform_message_id").notNull(),
+    senderPlatformUserId: text("sender_platform_user_id"),
+    senderRole: dmSenderRoleEnum("sender_role").default("unknown").notNull(),
+    isSentByMe: boolean("is_sent_by_me").default(false).notNull(),
+    messageCreatedAt: timestamp("message_created_at", { withTimezone: true }),
+    textPlain: text("text_plain").default("").notNull(),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    isOpened: boolean("is_opened"),
+    isTip: boolean("is_tip").default(false).notNull(),
+    tipAmountMills: bigint("tip_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    inReplyToMessageId: text("in_reply_to_message_id"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    source: text("source").$type<"webhook" | "command" | "rest_reconcile" | "rest_backfill">().notNull(),
+    sourceEventType: text("source_event_type").$type<
+      "messages.received" | "messages.sent" | "messages.deleted"
+    >().notNull(),
+    sourceIdempotencyKey: text("source_idempotency_key").notNull(),
+    sourceJournalId: bigint("source_journal_id", { mode: "number" }).notNull(),
+    sourceFanoutSeq: bigint("source_fanout_seq", { mode: "number" }),
+    sourceReceivedAt: timestamp("source_received_at", { withTimezone: true }).notNull(),
+    rawShapeVersion: text("raw_shape_version").default("ofapi-message-v1").notNull(),
+    mediaMetadata: jsonb("media_metadata").$type<Array<Record<string, unknown>>>().default([]).notNull(),
+    retentionPolicy: text("retention_policy").default("default").notNull(),
+    retainUntil: timestamp("retain_until", { withTimezone: true }).notNull(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    platformAccountMessageUniq: uniqueIndex("dm_message_archive_platform_account_message_uniq")
+      .on(table.platform, table.ofapiAccountId, table.platformMessageId),
+    pageMessageCreatedIdx: index("dm_message_archive_page_message_created_idx")
+      .on(table.platformAccountId, table.messageCreatedAt.desc(), table.id.desc()),
+    pageConversationIdx: index("dm_message_archive_page_conversation_idx")
+      .on(table.platformAccountId, table.platformConversationId, table.messageCreatedAt.desc()),
+    retainUntilIdx: index("dm_message_archive_retain_until_idx").on(table.retainUntil),
+    sourceJournalIdx: index("dm_message_archive_source_journal_idx").on(table.sourceJournalId),
+    sourceCheck: check("dm_message_archive_source_check", sql`
+      ${table.source} in ('webhook', 'command', 'rest_reconcile', 'rest_backfill')
+    `),
+    eventTypeCheck: check("dm_message_archive_event_type_check", sql`
+      ${table.sourceEventType} in ('messages.received', 'messages.sent', 'messages.deleted')
+    `),
+    tipNonnegativeCheck: check("dm_message_archive_tip_nonnegative_check", sql`
+      ${table.tipAmountMills} >= 0
+    `),
+    priceNonnegativeCheck: check("dm_message_archive_price_nonnegative_check", sql`
+      ${table.priceMills} is null or ${table.priceMills} >= 0
+    `),
+  }),
+);
+
 export const workboardSnoozes = pgTable(
   "workboard_snoozes",
   {

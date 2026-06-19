@@ -3069,6 +3069,22 @@ export const ofapiSpendComparisonResponseSchema = z.object({
   limitations: z.array(z.string()),
 });
 
+export const ofapiDmColdArchiveStatusResponseSchema = z.object({
+  enabled: z.boolean(),
+  retentionDays: z.number().int().min(1),
+  rowCount: z.number().int().min(0),
+  tombstoneCount: z.number().int().min(0),
+  lastArchivedAt: isoTimestamp.nullable(),
+  lastSourceReceivedAt: isoTimestamp.nullable(),
+  nextPurgeAt: isoTimestamp.nullable(),
+  archiveLagMs: z.number().int().min(0).nullable(),
+  acl: z.literal("owner_admin_endpoint_only"),
+  audit: z.literal("source_journal_metadata_on_each_row"),
+  purgePolicy: z.literal("daily_retention_purge_by_retain_until"),
+  exportPolicy: z.literal("no_raw_transcript_export_endpoint_yet"),
+  mediaPolicy: z.literal("stable_metadata_only_no_signed_urls"),
+});
+
 const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
 const bearerOnlySecurity: Array<Record<string, string[]>> = [{ bearerAuth: [] }];
 const cookieOrBearerSecurity: Array<Record<string, string[]>> = [
@@ -3455,6 +3471,19 @@ export const routeSchemas = {
     response: {
       200: ofapiSpendComparisonResponseSchema,
       400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminOfapiDmColdArchiveStatus: {
+    tags: ["admin"],
+    summary: "Get OFAPI DM cold archive status and governance policy markers",
+    description: "Read-only C4 gate endpoint. It exposes the forward-only archive flag, "
+      + "retention window, lag/count metrics, and the current ACL/audit/purge/export/media "
+      + "policy markers. It does not expose raw transcript text.",
+    security: cookieOnlySecurity,
+    response: {
+      200: ofapiDmColdArchiveStatusResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
@@ -4774,6 +4803,8 @@ export type OfapiCreditsLedgerResponse = z.infer<typeof ofapiCreditsLedgerRespon
 export type AdminOfapiSpendComparisonQuery =
   z.infer<typeof adminOfapiSpendComparisonQuerySchema>;
 export type OfapiSpendComparisonResponse = z.infer<typeof ofapiSpendComparisonResponseSchema>;
+export type OfapiDmColdArchiveStatusResponse =
+  z.infer<typeof ofapiDmColdArchiveStatusResponseSchema>;
 export type OfapiWebhookRegisterBody = z.infer<typeof ofapiWebhookRegisterBodySchema>;
 export type OfapiWebhookRegisterResponse = z.infer<typeof ofapiWebhookRegisterResponseSchema>;
 export type AdminChatterUsageQuery = z.infer<typeof adminChatterUsageQuerySchema>;

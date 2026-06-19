@@ -117,6 +117,8 @@ const envSchema = z.object({
   OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
   OFAPI_DM_PROJECTION_ENABLED: booleanSchema.default(false),
   OFAPI_DM_SYNC_ENABLED: booleanSchema.default(false),
+  OFAPI_DM_COLD_ARCHIVE_ENABLED: booleanSchema.default(false),
+  OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().positive().default(3650),
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
   OFAPI_DM_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(500),
@@ -199,6 +201,8 @@ export interface AppConfig {
   ofapiEventRetentionDays?: number;
   ofapiDmProjectionEnabled?: boolean;
   ofapiDmSyncEnabled?: boolean;
+  ofapiDmColdArchiveEnabled?: boolean;
+  ofapiDmColdArchiveRetentionDays?: number;
   ofapiRestDelayMs?: number;
   ofapiDmBootstrapMaxRequestsPerRun?: number;
   ofapiDmDailyCreditBudget?: number;
@@ -368,6 +372,8 @@ export function loadConfig(
     ofapiEventRetentionDays: parsed.OFAPI_EVENT_RETENTION_DAYS,
     ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,
     ofapiDmSyncEnabled: parsed.OFAPI_DM_SYNC_ENABLED,
+    ofapiDmColdArchiveEnabled: parsed.OFAPI_DM_COLD_ARCHIVE_ENABLED,
+    ofapiDmColdArchiveRetentionDays: parsed.OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
     ofapiDmBootstrapMaxRequestsPerRun: parsed.OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN,
     ofapiDmDailyCreditBudget: parsed.OFAPI_DM_DAILY_CREDIT_BUDGET,

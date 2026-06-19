@@ -3,6 +3,7 @@ export * from "./schema.ts";
 export * from "./schema-guard.ts";
 export * from "./repositories/catalog.ts";
 export * from "./repositories/config-settings.ts";
+export * from "./repositories/dm-message-archive.ts";
 export * from "./repositories/fans.ts";
 export * from "./repositories/auth.ts";
 export * from "./repositories/fan-page-identity.ts";

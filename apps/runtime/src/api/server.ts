@@ -222,6 +222,7 @@ import {
   getOfapiCreditsLedger,
   getOfapiCreditsSummary,
 } from "../services/ofapi-credit-report.ts";
+import { getOfapiDmColdArchiveStatus } from "../services/ofapi-dm-archive.ts";
 import { getOfapiSpendComparison } from "../services/ofapi-spend-comparison.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
 import {
@@ -1366,6 +1367,15 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
 
     return getOfapiSpendComparison(appContext, request.query);
+  });
+
+  server.get("/api/v1/admin/ofapi/dm-archive/status", {
+    schema: routeSchemas.adminOfapiDmColdArchiveStatus,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    return getOfapiDmColdArchiveStatus(appContext);
   });
 
   function initialSyncRetryFor(pageLabel: string) {

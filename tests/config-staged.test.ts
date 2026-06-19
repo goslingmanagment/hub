@@ -8,13 +8,14 @@ import {
   type StagedPatchEntry,
 } from "../apps/runtime/src/services/staged-config.ts";
 
-// A minimal AppConfig with the fields applyBootOverrides reads/writes: the 10 boot
+// A minimal AppConfig with the fields applyBootOverrides reads/writes: the 11 boot
 // boolean flags plus the fields the generic merged-invariant check consults. Partial
 // cast keeps the test free of the full env schema.
 function baseConfig(): AppConfig {
   return {
     ofapiDmProjectionEnabled: false,
     ofapiDmSyncEnabled: false,
+    ofapiDmColdArchiveEnabled: false,
     ofapiAccountHealthEnabled: false,
     ofapiCreditLedgerEnabled: false,
     ofapiBalancePingEnabled: false,

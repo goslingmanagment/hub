@@ -16,6 +16,10 @@ import {
 } from "./ofapi-account-health.ts";
 import { runOfapiCreditBurnMonitor } from "./ofapi-credits.ts";
 import {
+  cleanupExpiredDmMessageArchive,
+  runOfapiDmColdArchiveForSettledRow,
+} from "./ofapi-dm-archive.ts";
+import {
   runOfapiDmProjectionForSettledRow,
   sweepOfapiDmProjections,
 } from "./ofapi-dm-projection.ts";
@@ -63,7 +67,8 @@ export interface OfapiEventProcessPayload {
   eventId: number;
 }
 
-type SettledOfapiEventRow = Parameters<typeof runOfapiDmProjectionForSettledRow>[1] &
+type SettledOfapiEventRow = Parameters<typeof runOfapiDmColdArchiveForSettledRow>[1] &
+  Parameters<typeof runOfapiDmProjectionForSettledRow>[1] &
   Parameters<typeof runOfapiSubscriptionProjectionForSettledRow>[1] &
   Parameters<typeof runOfapiPresenceProjectionForSettledRow>[1] &
   Parameters<typeof applyOfapiAccountHealthEvent>[1];
@@ -71,6 +76,7 @@ type SettledOfapiEventRow = Parameters<typeof runOfapiDmProjectionForSettledRow>
 // Best-effort post-settle steps (DM/subscription/presence projections, account
 // health) — all internally flag-gated and never throw into the settle path.
 async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiEventRow) {
+  await runOfapiDmColdArchiveForSettledRow(app, row);
   await runOfapiDmProjectionForSettledRow(app, row);
   await runOfapiSubscriptionProjectionForSettledRow(app, row);
   await runOfapiPresenceProjectionForSettledRow(app, row);
@@ -389,5 +395,9 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
 
   await boss.work(OFAPI_EVENT_CLEANUP_QUEUE, { batchSize: 1 }, async () => {
     await cleanupExpiredOfapiEvents(app);
+    const purged = await cleanupExpiredDmMessageArchive(app);
+    if (purged > 0) {
+      app.logger.info({ purged }, "OFAPI DM cold archive retention purge complete");
+    }
   });
 }

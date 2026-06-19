@@ -20,6 +20,8 @@ export function createTestAppContext(
     ofapiEventRetentionDays?: number;
     ofapiDmProjectionEnabled?: boolean;
     ofapiDmSyncEnabled?: boolean;
+    ofapiDmColdArchiveEnabled?: boolean;
+    ofapiDmColdArchiveRetentionDays?: number;
     ofapiDmBootstrapMaxRequestsPerRun?: number;
     ofapiDmDailyCreditBudget?: number;
     ofapiCreditFloor?: number;
@@ -86,6 +88,8 @@ export function createTestAppContext(
       ofapiEventRetentionDays: overrides?.ofapiEventRetentionDays ?? 7,
       ofapiDmProjectionEnabled: overrides?.ofapiDmProjectionEnabled ?? false,
       ofapiDmSyncEnabled: overrides?.ofapiDmSyncEnabled ?? false,
+      ofapiDmColdArchiveEnabled: overrides?.ofapiDmColdArchiveEnabled ?? false,
+      ofapiDmColdArchiveRetentionDays: overrides?.ofapiDmColdArchiveRetentionDays ?? 3650,
       ofapiRestDelayMs: 0,
       ofapiDmBootstrapMaxRequestsPerRun: overrides?.ofapiDmBootstrapMaxRequestsPerRun ?? 25,
       ofapiDmDailyCreditBudget: overrides?.ofapiDmDailyCreditBudget ?? 500,
