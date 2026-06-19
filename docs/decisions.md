@@ -584,3 +584,11 @@ by a minutely sweep; a stale `in_flight` row becomes `indeterminate`, never `que
 - Execution is deployed off first. Production enablement requires an explicitly controlled test
   fan, one harmless approved send, proof of one vendor/ledger attempt, response/webhook
   confirmation, and rollback proof. Desktop writes do not switch before that gate.
+
+**C6b2 implementation:** migration `0039_ofapi_command_execution.sql` adds attempt timestamps,
+queued/verifier indexes, and an at-most-one-attempt constraint. The API enqueues only after durable
+insert; zero-retry pg-boss execution plus a minutely recovery sweep drive the worker. The core
+OFAPI client now has one typed text-send method with global pacing and page-attributed ledger
+reporting. Status responses expose attempt timestamps, and settled `messages.sent` events run the
+unique-match verifier as a best-effort post-settle step. The execution flag remains default-off;
+implementation does not authorize a production send.

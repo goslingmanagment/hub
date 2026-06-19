@@ -77,6 +77,10 @@ export interface OfapiRawResponse {
   headers: Record<string, string>;
 }
 
+export interface OfapiSentMessage {
+  messageId: string;
+}
+
 // One credit-spend report per response that reached the server (retry attempts
 // included — OFAPI charged each). Emitted by the client itself on BOTH request
 // paths, so callers cannot forget to account spend (D1).
@@ -180,6 +184,14 @@ export interface OfapiClient {
       fallbackEstimated: boolean;
     },
   ): Promise<OfapiRawResponse>;
+  // Decision #56: exactly one text-send attempt. Optional for legacy test
+  // doubles; production createOfapiClient always implements it.
+  sendTextMessage?(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+    input: { text: string },
+  ): Promise<OfapiSentMessage>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -369,7 +381,7 @@ export function createOfapiClient(input: {
         attemptNumber: report.attemptNumber,
         isCached: meta?.isCached ?? null,
       });
-    } catch {
+    } catch (error) {
       // Spend recording is best-effort at this layer; reconciliation closes gaps.
     }
   }
@@ -620,6 +632,92 @@ export function createOfapiClient(input: {
     };
   }
 
+  async function sendTextMessageRequest(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+    command: { text: string },
+  ): Promise<OfapiSentMessage> {
+    const operation = "ofapi_command_send_text";
+    const pathname = `/${encodeURIComponent(accountId)}/chats/${
+      encodeURIComponent(conversationId)
+    }/messages`;
+    const requestId = `${operation}:${randomUUID()}`;
+    await waitForRequestSlot();
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}${pathname}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${input.apiKey}`,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ text: command.text }),
+        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      throw new OfapiApiError(
+        `OFAPI command transport failed: POST ${pathname}`,
+        null,
+        null,
+      );
+    }
+
+    const text = await response.text();
+    let responseBody: unknown = null;
+    let bodyIsJson = text.length === 0;
+    if (text.length > 0) {
+      try {
+        responseBody = JSON.parse(text) as unknown;
+        bodyIsJson = true;
+      } catch {
+        bodyIsJson = false;
+      }
+    }
+
+    await reportCreditSpend({
+      operation,
+      httpStatus: response.status,
+      body: responseBody,
+      requestId,
+      pageId: context.pageId ?? null,
+      attemptNumber: 1,
+    });
+
+    if (!response.ok) {
+      throw new OfapiApiError(
+        `OFAPI command rejected: POST ${pathname} returned ${response.status}`,
+        response.status,
+        null,
+      );
+    }
+    if (!bodyIsJson) {
+      throw new OfapiApiError(
+        `OFAPI command returned non-JSON success: POST ${pathname}`,
+        response.status,
+        null,
+      );
+    }
+
+    const record = asRecord(unwrapData(responseBody));
+    const rawId = record?.id;
+    const messageId = typeof rawId === "string" && rawId.length > 0
+      ? rawId
+      : typeof rawId === "number" && Number.isFinite(rawId)
+        ? String(rawId)
+        : null;
+    if (!messageId) {
+      throw new OfapiApiError(
+        `OFAPI command success omitted message id: POST ${pathname}`,
+        response.status,
+        null,
+      );
+    }
+    return { messageId };
+  }
+
   async function request(
     operation: string,
     method: string,
@@ -785,6 +883,9 @@ export function createOfapiClient(input: {
     },
     async proxyRead(context, options) {
       return proxyReadRequest(context, options);
+    },
+    async sendTextMessage(context, accountId, conversationId, command) {
+      return sendTextMessageRequest(context, accountId, conversationId, command);
     },
   };
 }

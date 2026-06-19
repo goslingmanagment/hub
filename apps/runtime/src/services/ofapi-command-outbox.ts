@@ -53,6 +53,8 @@ export interface OfapiCommandView {
   lastErrorClass: string | null;
   verifierResult: Record<string, unknown> | null;
   platformMessageId: string | null;
+  attemptStartedAt: string | null;
+  attemptFinishedAt: string | null;
   createdAt: string;
   updatedAt: string;
   deduplicated: boolean;
@@ -113,6 +115,8 @@ function toView(row: OfapiCommandRow, deduplicated: boolean): OfapiCommandView {
     lastErrorClass: row.lastErrorClass,
     verifierResult: row.verifierResult,
     platformMessageId: row.platformMessageId,
+    attemptStartedAt: row.attemptStartedAt?.toISOString() ?? null,
+    attemptFinishedAt: row.attemptFinishedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     deduplicated,

@@ -150,7 +150,7 @@ command transport remain pending.
 
 ## C6b2 Executor Contract
 
-Status: design accepted on 2026-06-19; implementation and production enablement pending.
+Status: default-off executor implemented on 2026-06-19; production deploy/enablement pending.
 Decision owner: core Decision #56.
 
 ### Flag and Queue Boundary
@@ -221,3 +221,18 @@ The executor is first deployed and validated with execution off. Enabling it req
 
 Desktop write transport remains direct until this live gate passes and command status/recovery UX
 is implemented.
+
+### C6b2 Implementation
+
+- Migration `0039_ofapi_command_execution.sql` adds attempt timestamps, queued/verifier indexes,
+  and a database constraint limiting each command row to one attempt.
+- The API enqueues a durable wakeup only after a new command is committed. The worker owns
+  `ofapi.commands.execute` and `ofapi.commands.sweep`; execute jobs have zero retries.
+- The core OFAPI client implements only the versioned text-send request and returns only the
+  platform message id. Credit observations use operation `ofapi_command_send_text` with page
+  attribution.
+- Command status responses expose nullable attempt start/finish timestamps, but no payload text.
+- Post-settle `messages.sent` processing runs the conservative verifier before the existing
+  best-effort projections. Verifier failure cannot block webhook settle/fanout.
+- The default execution flag remains off. No production send is performed by implementation or
+  default-off deployment validation.

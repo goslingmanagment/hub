@@ -43,6 +43,12 @@ const ofapiCreditMocks = vi.hoisted(() => ({
   runOfapiCreditBurnMonitor: vi.fn(),
 }));
 
+const ofapiCommandMocks = vi.hoisted(() => ({
+  ensureOfapiCommandQueues: vi.fn(),
+  ensureOfapiCommandSchedules: vi.fn(),
+  startOfapiCommandWorker: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
@@ -54,6 +60,7 @@ vi.mock("../apps/runtime/src/services/sync/planner.ts", () => ({
 }));
 vi.mock("../apps/runtime/src/services/ofapi-events.ts", () => ofapiEventMocks);
 vi.mock("../apps/runtime/src/services/ofapi-credits.ts", () => ofapiCreditMocks);
+vi.mock("../apps/runtime/src/services/ofapi-command-executor.ts", () => ofapiCommandMocks);
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,
@@ -99,6 +106,10 @@ describe("worker startup", () => {
     }
     for (const mock of Object.values(queueMocks)) {
       mock.mockReset();
+    }
+    for (const mock of Object.values(ofapiCommandMocks)) {
+      mock.mockReset();
+      mock.mockResolvedValue(undefined);
     }
     plannerMocks.runSyncPlannerCycle.mockReset();
 
@@ -209,6 +220,12 @@ describe("worker startup", () => {
     }), "Orphaned sync run startup cleanup complete");
     expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledTimes(1);
     expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledWith(boss);
+    expect(ofapiCommandMocks.ensureOfapiCommandQueues).toHaveBeenCalledWith(
+      boss,
+      expect.any(Set),
+    );
+    expect(ofapiCommandMocks.ensureOfapiCommandSchedules).toHaveBeenCalledWith(boss);
+    expect(ofapiCommandMocks.startOfapiCommandWorker).toHaveBeenCalledWith(app, boss);
     expect(app.logger.info).toHaveBeenCalledWith("Worker started");
 
     await runtime.shutdown();

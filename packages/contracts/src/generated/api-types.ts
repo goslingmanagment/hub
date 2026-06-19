@@ -6849,6 +6849,8 @@ export interface paths {
                                 [key: string]: unknown;
                             } | null;
                             platformMessageId: string | null;
+                            attemptStartedAt: string | null;
+                            attemptFinishedAt: string | null;
                             createdAt: string;
                             updatedAt: string;
                             deduplicated: boolean;
@@ -6881,6 +6883,8 @@ export interface paths {
                                 [key: string]: unknown;
                             } | null;
                             platformMessageId: string | null;
+                            attemptStartedAt: string | null;
+                            attemptFinishedAt: string | null;
                             createdAt: string;
                             updatedAt: string;
                             deduplicated: boolean;
@@ -7021,6 +7025,8 @@ export interface paths {
                                 [key: string]: unknown;
                             } | null;
                             platformMessageId: string | null;
+                            attemptStartedAt: string | null;
+                            attemptFinishedAt: string | null;
                             createdAt: string;
                             updatedAt: string;
                             deduplicated: boolean;
@@ -7139,6 +7145,8 @@ export interface paths {
                                 [key: string]: unknown;
                             } | null;
                             platformMessageId: string | null;
+                            attemptStartedAt: string | null;
+                            attemptFinishedAt: string | null;
                             createdAt: string;
                             updatedAt: string;
                             deduplicated: boolean;

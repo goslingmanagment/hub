@@ -230,6 +230,11 @@ import {
   createOfapiCommand,
   getOfapiCommand,
 } from "../services/ofapi-command-outbox.ts";
+import {
+  ensureOfapiCommandQueues,
+  isOfapiCommandExecutionEnabled,
+  sendOfapiCommandExecuteJob,
+} from "../services/ofapi-command-executor.ts";
 import { getOfapiDmColdArchiveStatus } from "../services/ofapi-dm-archive.ts";
 import { getOfapiSpendComparison } from "../services/ofapi-spend-comparison.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
@@ -1130,6 +1135,7 @@ export async function buildApiServer(appContext: AppContext) {
     await boss.start();
     await ensureSyncQueues(boss, createdQueues);
     await ensureOfapiQueues(boss, createdQueues);
+    await ensureOfapiCommandQueues(boss, createdQueues);
     server.addHook("onClose", async () => {
       await boss!.stop();
     });
@@ -1416,6 +1422,16 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
     const result = await createOfapiCommand(appContext, principal, request.body);
+    if (result.status === 202 && boss && isOfapiCommandExecutionEnabled(appContext.config)) {
+      try {
+        await sendOfapiCommandExecuteJob(boss, result.command.commandId);
+      } catch (error) {
+        request.log.warn(
+          { err: error, commandId: result.command.commandId },
+          "Failed to enqueue OFAPI command; sweep will retry",
+        );
+      }
+    }
     return reply.code(result.status).send(result.command);
   });
 

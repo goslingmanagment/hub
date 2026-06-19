@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createModel,
@@ -14,6 +14,12 @@ import {
   createUserAccount,
   issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
+import {
+  executeOfapiCommand,
+  sweepOfapiCommands,
+  verifyOfapiCommandFromSentWebhook,
+} from "../apps/runtime/src/services/ofapi-command-executor.ts";
+import { OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -253,5 +259,107 @@ describe("OFAPI command outbox intake", () => {
       retryOfCommandId: originalId,
     }));
     expect(wrongLane.statusCode, wrongLane.body).toBe(409);
+  });
+
+  it("executes one vendor attempt and confirms from the response id", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(commandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await expect(executeOfapiCommand(
+      appContext,
+      commandId,
+      new Date("2026-06-19T20:00:00.000Z"),
+    )).resolves.toMatchObject({ status: "confirmed", commandId });
+    await executeOfapiCommand(appContext, commandId);
+
+    expect(sendTextMessage).toHaveBeenCalledTimes(1);
+    expect(sendTextMessage).toHaveBeenCalledWith(
+      { pageId: expect.any(Number) },
+      ACCOUNT_ONE,
+      CONVERSATION,
+      { text: "c6b intake validation only" },
+    );
+    const fetched = await getCommand(commandId);
+    expect(fetched.json()).toMatchObject({
+      state: "confirmed",
+      attemptCount: 1,
+      platformMessageId: "987654321",
+      attemptStartedAt: "2026-06-19T20:00:00.000Z",
+      attemptFinishedAt: expect.any(String),
+      verifierResult: { source: "ofapi_response" },
+    });
+    expect(fetched.body).not.toContain("c6b intake validation only");
+  });
+
+  it("repairs an indeterminate send from one matching messages.sent webhook", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendTextMessage = vi.fn().mockRejectedValue(
+      new OfapiApiError("sanitized transport outcome", null, null),
+    );
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(commandBody({
+      payload: { text: "repair me" },
+    }));
+    const commandId = (created.json() as { commandId: string }).commandId;
+    const attemptStartedAt = new Date("2026-06-19T20:10:00.000Z");
+    await executeOfapiCommand(appContext, commandId, attemptStartedAt);
+
+    const verified = await verifyOfapiCommandFromSentWebhook(appContext, {
+      id: 9001,
+      eventType: "messages.sent",
+      ofapiAccountId: ACCOUNT_ONE,
+      receivedAt: new Date("2026-06-19T20:10:01.000Z"),
+      payload: {
+        event: "messages.sent",
+        account_id: ACCOUNT_ONE,
+        payload: {
+          id: 1234567890,
+          text: "<p>repair me</p>",
+          toUser: { id: Number(CONVERSATION) },
+        },
+      },
+    });
+
+    expect(sendTextMessage).toHaveBeenCalledTimes(1);
+    expect(verified).toMatchObject({ status: "confirmed", commandId });
+    expect((await getCommand(commandId)).json()).toMatchObject({
+      state: "confirmed",
+      attemptCount: 1,
+      platformMessageId: "1234567890",
+      verifierResult: { source: "messages.sent", eventId: 9001 },
+    });
+  });
+
+  it("marks a stale in-flight attempt indeterminate even while execution is disabled", async () => {
+    const created = await createCommand(commandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      `update ofapi_commands
+       set state = 'in_flight',
+           attempt_count = 1,
+           attempt_started_at = $2,
+           updated_at = $2
+       where id = $1`,
+      [commandId, new Date("2026-06-19T19:00:00.000Z")],
+    );
+    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
+    const send = vi.fn();
+
+    await expect(sweepOfapiCommands(
+      appContext,
+      { send } as never,
+      new Date("2026-06-19T20:00:00.000Z"),
+    )).resolves.toEqual({ stale: 1, enqueued: 0 });
+    expect(send).not.toHaveBeenCalled();
+    expect((await getCommand(commandId)).json()).toMatchObject({
+      state: "indeterminate",
+      attemptCount: 1,
+      lastErrorCode: "worker_attempt_stale",
+      verifierResult: { source: "stale_recovery" },
+    });
   });
 });

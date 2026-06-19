@@ -21684,6 +21684,26 @@
                         }
                       ]
                     },
+                    "attemptStartedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "attemptFinishedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "createdAt": {
                       "type": "string"
                     },
@@ -21708,6 +21728,8 @@
                     "lastErrorClass",
                     "verifierResult",
                     "platformMessageId",
+                    "attemptStartedAt",
+                    "attemptFinishedAt",
                     "createdAt",
                     "updatedAt",
                     "deduplicated"
@@ -21823,6 +21845,26 @@
                         }
                       ]
                     },
+                    "attemptStartedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "attemptFinishedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "createdAt": {
                       "type": "string"
                     },
@@ -21847,6 +21889,8 @@
                     "lastErrorClass",
                     "verifierResult",
                     "platformMessageId",
+                    "attemptStartedAt",
+                    "attemptFinishedAt",
                     "createdAt",
                     "updatedAt",
                     "deduplicated"
@@ -22164,6 +22208,26 @@
                         }
                       ]
                     },
+                    "attemptStartedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "attemptFinishedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "createdAt": {
                       "type": "string"
                     },
@@ -22188,6 +22252,8 @@
                     "lastErrorClass",
                     "verifierResult",
                     "platformMessageId",
+                    "attemptStartedAt",
+                    "attemptFinishedAt",
                     "createdAt",
                     "updatedAt",
                     "deduplicated"
@@ -22447,6 +22513,26 @@
                         }
                       ]
                     },
+                    "attemptStartedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "attemptFinishedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "createdAt": {
                       "type": "string"
                     },
@@ -22471,6 +22557,8 @@
                     "lastErrorClass",
                     "verifierResult",
                     "platformMessageId",
+                    "attemptStartedAt",
+                    "attemptFinishedAt",
                     "createdAt",
                     "updatedAt",
                     "deduplicated"

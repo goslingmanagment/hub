@@ -3070,6 +3070,8 @@ export const ofapiCommandResponseSchema = z.object({
   lastErrorClass: z.string().nullable(),
   verifierResult: z.record(z.string(), z.unknown()).nullable(),
   platformMessageId: z.string().nullable(),
+  attemptStartedAt: isoTimestamp.nullable(),
+  attemptFinishedAt: isoTimestamp.nullable(),
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
   deduplicated: z.boolean(),
