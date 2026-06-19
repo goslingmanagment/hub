@@ -545,8 +545,11 @@ There is no generic path/method proxy.
 - **Audit/privacy:** the outbox stores the versioned payload for later execution, but read APIs,
   logs, diagnostics, and audit metadata expose only ids, state, payload hash, timestamps, attempt
   count, error code/class, and verifier result. Message text is never logged or returned by command
-  status endpoints. Payload purge/export policy must be implemented before broad rollout; the first
-  production validation uses a harmless never-executed command and cancels it.
+  status endpoints. The purge/export policy is defined in
+  `docs/ofapi-command-outbox-contract.md`: terminal rows must eventually tombstone payload text
+  while retaining non-text audit metadata, and owner/admin exports must exclude command text.
+  Runtime purge/export implementation remains required before broad rollout; the first production
+  validation uses a harmless never-executed command and cancels it.
 
 **Rollback:** disabling command intake rejects new commands while retaining existing audit rows.
 Disabling future execution parks queued commands and prevents new claims; it never changes a
@@ -598,3 +601,5 @@ with API/worker healthy. Migration `0039` and the new schema columns/constraint 
 Runtime heartbeats reported outbox enabled, execution disabled, and no skipped overrides. A real
 chatter-key command validated create/read/cancel while staying `attempt_count=0`; no execute job,
 `ofapi_command_send_text` ledger row, payload-text log, or vendor send was observed.
+Non-live recovery UX and payload purge/export policy are now defined in the command contract; the
+runtime purge/export implementation, desktop transport UI, and controlled live send remain pending.

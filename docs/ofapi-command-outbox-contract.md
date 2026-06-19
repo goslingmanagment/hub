@@ -1,6 +1,7 @@
 # OFAPI Desktop Command Outbox Contract
 
-Status: C6b1 intake/read/cancel implemented and production-validated on 2026-06-19.
+Status: C6b1 intake/read/cancel and C6b2 default-off executor implemented and
+production-validated on 2026-06-19. Live execution remains blocked on the controlled-send gate.
 Decision owner: core Decision #55.
 
 ## Boundary
@@ -101,12 +102,60 @@ indeterminate -> confirmed   (matching webhook or read-only verifier)
 No transition requeues the same row. Retry creates a new row and references the terminal original.
 Only one row may be `in_flight` for a `(page_id, conversation_id)` lane.
 
+## Desktop Status and Recovery UX Contract
+
+Desktop may display command state from the core status endpoint, but must keep draft/message text in
+desktop-local state. Core status responses never return the payload text needed to rebuild a draft.
+
+- `draft` / `local_pending`: desktop-local only; no core command exists yet.
+- `queued`: accepted by core. If execution is disabled, desktop should show that sending is parked
+  by the server and may offer cancel while the command remains queued.
+- `in_flight`: one server-owned attempt is in progress. Desktop must not submit an automatic
+  duplicate or fall back to direct send for the same client command id.
+- `confirmed`: terminal success. The optional `platformMessageId` may be used to reconcile the
+  optimistic bubble when present.
+- `failed_retryable`: terminal failed attempt that a human may retry. Retry creates a new
+  `clientCommandId` with `retryOfCommandId`; core never retries the same row.
+- `failed_terminal`: terminal policy/auth/validation failure. Desktop may let the chatter edit and
+  submit a new command, but must use a new `clientCommandId`.
+- `indeterminate`: the server cannot prove delivery or failure. Desktop must present this as a
+  manual recovery state, not as failed-safe-to-resend. A retry is a new command and should be a
+  visible human decision after checking the platform/conversation when possible.
+- `cancelled`: queued command cancelled before any vendor attempt.
+
+Desktop command transport remains blocked until this UX is implemented around the existing status
+endpoint. Recovery must not add a `GET /messages` body read solely to decide command outcome; the
+core response path and `messages.sent` webhook verifier are the non-read-state-changing evidence
+sources.
+
 ## Dedupe and Retention
 
 The dedupe key is `(page_id, chatter_user_id, client_command_id)`. Canonical request hashing includes
 kind, account, conversation, payload, and retry lineage. Rows have a minimum 400-day dedupe horizon.
-No automatic command purge ships in the first intake slice; payload purge/export policy is a
-required follow-up before broad rollout.
+No automatic command purge ships in the first execution slice.
+
+## Payload Retention, Purge, and Export Policy
+
+The command payload currently stores `payload.text` so a later executor can send it and the webhook
+verifier can compare normalized `messages.sent` text. That storage is runtime truth until a separate
+purge implementation ships.
+
+- Retain full payload only while the row may still need execution, webhook repair, explicit human
+  recovery, or retry-context inspection.
+- After a command is terminal and outside the recovery/correlation window, purge implementation must
+  remove or tombstone `payload.text` while preserving non-text audit fields: command ids, page,
+  chatter, account, conversation id, state, payload hash, retry lineage, attempt timestamps,
+  bounded error code/class, verifier source, platform message id, and dedupe horizon.
+- `indeterminate` rows keep payload until a human recovery decision creates a retry, accepts the
+  outcome, or the future governance policy expires the recovery window.
+- Owner/admin exports, diagnostics, audit logs, and command status APIs may include only the
+  non-text audit fields above. They must not include `payload.text`, raw vendor bodies, or webhook
+  text copied from verifier comparisons.
+- Raw command payload export is not part of C6b. If ever required for legal support, it needs a
+  separate owner-approved governance decision with scope, ACL, audit trail, and retention limits.
+- Runtime purge/export implementation remains required before broad rollout or desktop write
+  transport switch. Until then, live execution can only be enabled for the explicit controlled-send
+  validation gate.
 
 ## Production Validation
 
@@ -145,12 +194,13 @@ controlled test fan and a new rollout decision.
   one existing chatter credential and did not create an artificial second user/key solely for
   validation.
 
-The separately flagged executor, controlled test-fan send, payload purge/export policy, and desktop
-command transport remain pending.
+The separately flagged executor is now implemented default-off. Controlled test-fan send,
+payload purge/export implementation, and desktop command transport/recovery UI remain pending.
 
 ## C6b2 Executor Contract
 
-Status: default-off executor implemented on 2026-06-19; production deploy/enablement pending.
+Status: default-off executor implemented and production-validated with execution disabled on
+2026-06-19; live enablement pending.
 Decision owner: core Decision #56.
 
 ### Flag and Queue Boundary
@@ -219,8 +269,8 @@ The executor is first deployed and validated with execution off. Enabling it req
   `messages.sent`/projection when delivered, and no payload text in logs;
 - rollback proof that disabling execution leaves intake available and prevents new claims.
 
-Desktop write transport remains direct until this live gate passes and command status/recovery UX
-is implemented.
+Desktop write transport remains direct until this live gate passes, payload purge/export
+implementation exists, and command status/recovery UI is implemented.
 
 ### C6b2 Implementation
 

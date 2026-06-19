@@ -135,6 +135,10 @@ function cancelCommand(commandId: string, key = chatterKey) {
   });
 }
 
+function expectResponseOmits(response: { body: string }, text: string) {
+  expect(response.body).not.toContain(text);
+}
+
 describe("OFAPI command outbox intake", () => {
   it("fails closed while the staged flag is disabled", async () => {
     appContext.config.ofapiDesktopCommandOutboxEnabled = false;
@@ -230,6 +234,63 @@ describe("OFAPI command outbox intake", () => {
     const repeated = await cancelCommand(commandId);
     expect(repeated.statusCode, repeated.body).toBe(200);
     expect(repeated.json()).toMatchObject({ state: "cancelled" });
+  });
+
+  it("keeps payload text out of command responses across recovery surfaces", async () => {
+    const cancelText = "r3 redaction cancel payload";
+    const created = await createCommand(commandBody({ payload: { text: cancelText } }));
+    expect(created.statusCode, created.body).toBe(202);
+    expectResponseOmits(created, cancelText);
+
+    const commandId = (created.json() as { commandId: string }).commandId;
+    const fetched = await getCommand(commandId);
+    expect(fetched.statusCode, fetched.body).toBe(200);
+    expectResponseOmits(fetched, cancelText);
+    const cancelled = await cancelCommand(commandId);
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expectResponseOmits(cancelled, cancelText);
+
+    const sourceText = "r3 redaction retry source payload";
+    const retrySource = await createCommand(commandBody({ payload: { text: sourceText } }));
+    const retrySourceId = (retrySource.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      "update ofapi_commands set state = 'indeterminate', updated_at = now() where id = $1",
+      [retrySourceId],
+    );
+    const retryText = "r3 redaction retry payload";
+    const retry = await createCommand(commandBody({
+      payload: { text: retryText },
+      retryOfCommandId: retrySourceId,
+    }));
+    expect(retry.statusCode, retry.body).toBe(202);
+    expectResponseOmits(retry, retryText);
+    expectResponseOmits(retry, sourceText);
+
+    const staleText = "r3 redaction stale payload";
+    const staleCreated = await createCommand(commandBody({ payload: { text: staleText } }));
+    const staleId = (staleCreated.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      `update ofapi_commands
+       set state = 'in_flight',
+           attempt_count = 1,
+           attempt_started_at = $2,
+           updated_at = $2
+       where id = $1`,
+      [staleId, new Date("2026-06-19T19:00:00.000Z")],
+    );
+    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
+    await sweepOfapiCommands(
+      appContext,
+      { send: vi.fn() } as never,
+      new Date("2026-06-19T20:00:00.000Z"),
+    );
+    const staleRecovered = await getCommand(staleId);
+    expect(staleRecovered.statusCode, staleRecovered.body).toBe(200);
+    expect(staleRecovered.json()).toMatchObject({
+      state: "indeterminate",
+      lastErrorCode: "worker_attempt_stale",
+    });
+    expectResponseOmits(staleRecovered, staleText);
   });
 
   it("accepts retry lineage only from an owned terminal command in the same lane", async () => {
