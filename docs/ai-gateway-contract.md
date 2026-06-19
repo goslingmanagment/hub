@@ -184,6 +184,13 @@ shows a compact Cost column plus gateway details in the expanded chatter row. Th
 only ledger metadata; they do not store or display prompt text, generated text, or raw provider
 bodies.
 
+R4l production rollout (2026-06-19): revision `736d37c66549` was deployed with
+`scripts/deploy-production.sh --mode dist-only` and verified against `https://gosling-agency.ru`.
+API and worker labels reported `agency-hub.source-revision=736d37c66549`; the production reporting
+repository ran against real data with `rowCount=5`, `activeRows=2`, `hasCostField=true`, and
+`hasGatewayField=true`. Gateway totals stayed `0` (`totalGatewayRequests=0`,
+`openReservations=0`) because live gateway execution remains disabled.
+
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
 columns for this record:

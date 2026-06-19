@@ -706,3 +706,9 @@ page now surface gateway ledger cost/outcome metadata: per-chatter micro-USD cos
 marker, gateway request/outcome/open-reservation counts, provider cost breakdown, and per-feature
 cost fields. The report remains metadata-only and does not expose prompts, generated replies, or
 raw provider bodies.
+
+**R4l production rollout (2026-06-19):** revision `736d37c66549` is deployed default-off. API and
+worker labels match the revision, health checks pass, latest heartbeats still show
+`chatMuseAiGatewayEnabled=false` and `anthropicApiKey=unset`, and production reporting code
+successfully returned the new cost/gateway fields against real data (`rowCount=5`, `activeRows=2`,
+`totalGatewayRequests=0`, `openReservations=0`).
