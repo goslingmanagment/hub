@@ -7,13 +7,15 @@ import {
   insertAiUsageEvents,
   createModel,
   createOnlyFansPage,
+  reserveAiGatewayUsageEvent,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import type {
-  AiGatewayProvider,
-  AiGatewayProviderInput,
+import {
+  AI_GATEWAY_STALE_RESERVATION_MS,
+  type AiGatewayProvider,
+  type AiGatewayProviderInput,
 } from "../apps/runtime/src/services/ai-gateway.ts";
 import {
   createUserAccount,
@@ -420,5 +422,55 @@ describe("ChatMuse AI gateway runtime gate", () => {
       gatewayOutcome: "failed",
       isCacheHit: false,
     }]);
+  });
+
+  it("recovers stale gateway reservations before a new provider attempt", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        yield { type: "content_delta", text: "ok" };
+        yield { type: "done", stopReason: "end_turn" };
+      },
+    };
+    const staleClientRequestId = randomUUID();
+    const staleReservedAt = new Date(Date.now() - AI_GATEWAY_STALE_RESERVATION_MS - 60_000);
+    const reserved = await reserveAiGatewayUsageEvent(appContext.db, {
+      userId: chatterUserId,
+      event: {
+        clientEventId: staleClientRequestId,
+        feature: "fast-reply",
+        model: "anthropic:claude-sonnet-4-6",
+        pageId: onlyFansPageId,
+        provider: "anthropic",
+        conversationId: "123456789",
+        isRegeneration: false,
+        reservedAt: staleReservedAt,
+      },
+    });
+    expect(reserved).toBe(true);
+
+    const response = await streamGateway(gatewayBody());
+
+    expect(response.statusCode, response.body).toBe(200);
+    const usageRows = await testDb!.pool.query<{
+      clientEventId: string;
+      gatewayOutcome: string | null;
+      durationRecorded: boolean;
+    }>(
+      `select client_event_id as "clientEventId",
+              gateway_outcome as "gatewayOutcome",
+              duration_ms is not null as "durationRecorded"
+       from ai_usage_events`,
+    );
+    const rowsByClientRequestId = new Map(
+      usageRows.rows.map((row) => [row.clientEventId, row]),
+    );
+    expect(rowsByClientRequestId.get(staleClientRequestId)).toMatchObject({
+      gatewayOutcome: "failed",
+      durationRecorded: true,
+    });
+    expect([...rowsByClientRequestId.values()].filter((row) => row.gatewayOutcome === "completed"))
+      .toHaveLength(1);
   });
 });

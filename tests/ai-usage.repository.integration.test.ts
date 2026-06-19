@@ -7,6 +7,8 @@ import {
   createOnlyFansPage,
   createUser,
   insertAiUsageEvents,
+  markStaleAiGatewayReservationsFailed,
+  reserveAiGatewayUsageEvent,
 } from "@agency_hub_core/db";
 
 import {
@@ -186,5 +188,103 @@ describe("AI usage ledger repository", () => {
       conversation_id: "123456789",
       duration_ms: 875,
     }]);
+  });
+
+  it("marks stale gateway reservations failed without touching fresh reservations", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const user = await createUser(testDb.db, {
+      username: "reservation-chatter",
+      role: "chatter",
+      passwordHash: null,
+    });
+    const model = await createModel(testDb.db, { slug: "lora", name: "Lora" });
+    const page = await createOnlyFansPage(testDb.db, {
+      modelId: model.id,
+      label: "lora-of",
+    });
+    const staleClientRequestId = randomUUID();
+    const freshClientRequestId = randomUUID();
+
+    const staleReserved = await reserveAiGatewayUsageEvent(testDb.db, {
+      userId: user.id,
+      event: {
+        clientEventId: staleClientRequestId,
+        feature: "fast-reply",
+        model: "anthropic:claude-sonnet-4-6",
+        pageId: page.id,
+        provider: "anthropic",
+        conversationId: "123456789",
+        isRegeneration: false,
+        reservedAt: new Date("2026-06-19T10:00:00.000Z"),
+      },
+    });
+    const freshReserved = await reserveAiGatewayUsageEvent(testDb.db, {
+      userId: user.id,
+      event: {
+        clientEventId: freshClientRequestId,
+        feature: "fast-reply",
+        model: "anthropic:claude-sonnet-4-6",
+        pageId: page.id,
+        provider: "anthropic",
+        conversationId: "123456789",
+        isRegeneration: false,
+        reservedAt: new Date("2026-06-19T10:45:00.000Z"),
+      },
+    });
+
+    expect(staleReserved).toBe(true);
+    expect(freshReserved).toBe(true);
+
+    const recovered = await markStaleAiGatewayReservationsFailed(testDb.db, {
+      reservedBefore: new Date("2026-06-19T10:30:00.000Z"),
+      recoveredAt: new Date("2026-06-19T11:00:00.000Z"),
+    });
+
+    expect(recovered).toBe(1);
+
+    const rows = await testDb.pool.query<{
+      client_event_id: string;
+      gateway_outcome: string | null;
+      input_tokens: number;
+      output_tokens: number;
+      cost_micro_usd: number;
+      duration_ms: number | null;
+      completed_at: Date;
+    }>(`
+      select client_event_id,
+             gateway_outcome,
+             input_tokens::int as input_tokens,
+             output_tokens::int as output_tokens,
+             cost_micro_usd::int as cost_micro_usd,
+             duration_ms::int as duration_ms,
+             completed_at
+      from ai_usage_events
+    `);
+    const rowsByClientRequestId = new Map(rows.rows.map((row) => [row.client_event_id, row]));
+
+    expect(rowsByClientRequestId).toEqual(new Map([
+      [freshClientRequestId, {
+        client_event_id: freshClientRequestId,
+        gateway_outcome: null,
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_micro_usd: 0,
+        duration_ms: null,
+        completed_at: new Date("2026-06-19T10:45:00.000Z"),
+      }],
+      [staleClientRequestId, {
+        client_event_id: staleClientRequestId,
+        gateway_outcome: "failed",
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_micro_usd: 0,
+        duration_ms: 3_600_000,
+        completed_at: new Date("2026-06-19T10:00:00.000Z"),
+      }],
+    ]));
   });
 });

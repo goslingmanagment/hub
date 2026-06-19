@@ -10,6 +10,7 @@ import {
   finalizeAiGatewayUsageEvent,
   findPageSummaryByLabel,
   getAiGatewayDailyUsageTotals,
+  markStaleAiGatewayReservationsFailed,
   reserveAiGatewayUsageEvent,
 } from "@agency_hub_core/db";
 
@@ -19,6 +20,7 @@ import { ConflictError, NotFoundError, ServiceUnavailableError, TooManyRequestsE
 
 export const DEFAULT_AI_GATEWAY_DAILY_REQUEST_LIMIT = 200;
 export const DEFAULT_AI_GATEWAY_DAILY_MICRO_USD_LIMIT = 5_000_000;
+export const AI_GATEWAY_STALE_RESERVATION_MS = 30 * 60 * 1000;
 
 export interface AiGatewayQuotaSnapshot {
   accepted: boolean;
@@ -131,9 +133,22 @@ export async function prepareAiGatewayStream(
     throw new NotFoundError("Page not found");
   }
 
+  const now = new Date();
+  const recoveredReservations = await markStaleAiGatewayReservationsFailed(app.db, {
+    reservedBefore: new Date(now.getTime() - AI_GATEWAY_STALE_RESERVATION_MS),
+    recoveredAt: now,
+  });
+  if (recoveredReservations > 0) {
+    app.logger.warn({
+      recoveredReservations,
+      staleAfterMs: AI_GATEWAY_STALE_RESERVATION_MS,
+    }, "recovered stale ai gateway reservations");
+  }
+
   const quota = await evaluateAiGatewayQuota(app, {
     userId: principal.user.id,
     pageId: page.id,
+    now,
   });
   if (!quota.accepted) {
     throw new TooManyRequestsError("ChatMuse AI gateway daily quota exceeded");
@@ -151,7 +166,7 @@ export async function prepareAiGatewayStream(
       provider: app.aiGatewayProvider.provider,
       conversationId: input.conversationId ?? null,
       isRegeneration: input.isRegeneration,
-      reservedAt: new Date(),
+      reservedAt: now,
     },
   });
   if (!reserved) {

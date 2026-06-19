@@ -1,9 +1,9 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4j Anthropic provider execution is implemented after the R4b default-off runtime gate,
-R4c ledger storage, R4d quota preflight, R4e pricing utility, R4f Anthropic request-building/usage
-normalization, R4g SSE provider seam, R4h terminal ledger finalization, and R4i atomic
-reservation. Production validation and desktop switch are still pending.
+Status: R4b through R4k are implemented: default-off runtime gate, ledger storage, quota preflight,
+pricing, Anthropic request-building/usage normalization, SSE provider seam, terminal ledger
+finalization, atomic reservation, real Anthropic provider adapter, and stale-reservation recovery.
+Production validation and desktop switch are still pending.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -27,9 +27,10 @@ later gateway version and must preserve the same feature and output contracts.
 - Frame schema: each SSE `data:` payload is one `aiGatewayStreamFrameSchema` JSON object.
 - Runtime flag: `CHATMUSE_AI_GATEWAY_ENABLED`, default `false`, staged boot-applied. When the flag
   is off, return `503` before quota preflight, page lookup, or provider network. With the flag on,
-  the route authorizes page scope, applies the ledger-backed daily quota preflight, and then
-  requires an injected provider implementation. Production currently has no provider implementation
-  configured, so it still returns `503` before provider network or ledger writes.
+  the route authorizes page scope, recovers stale gateway reservations, applies the ledger-backed
+  daily quota preflight, and then requires an injected provider implementation. The production app
+  instantiates the Anthropic provider only when both the gateway flag and `ANTHROPIC_API_KEY` are
+  configured.
 
 ## Request
 
@@ -147,9 +148,7 @@ page authorization, quota preflight, and provider availability checks, core inse
 reservation row keyed by `(user_id, client_event_id)` before calling the provider seam. Duplicate
 client request ids return `409 conflict` before provider execution, so a retry cannot start a
 second paid provider call. Terminal handling updates the same row to `completed`, `failed`, or
-`cancelled`. A process crash after reservation and before terminal update can leave a reserved row
-with null `gateway_outcome`; recovery policy for those stale reservations remains part of the live
-provider hardening checklist.
+`cancelled`.
 
 R4j adds the real Anthropic provider adapter. When `CHATMUSE_AI_GATEWAY_ENABLED=true` and
 `ANTHROPIC_API_KEY` is configured, the runtime app context can instantiate an Anthropic Messages
@@ -158,6 +157,13 @@ the SDK request, maps text/thinking deltas to gateway frames, converts provider 
 micro-USD cost, and emits the terminal `done` frame. Tests use an injected fake Anthropic client;
 production validation must still use a small approved prompt and must not send any platform
 message.
+
+R4k adds bounded stale-reservation recovery before new provider attempts. After page authorization
+and before quota preflight, core marks gateway reservation rows older than 30 minutes with null
+`gateway_outcome` as terminal `failed`, records a nonnegative duration, and leaves token/cost counts
+at zero. `completed_at` remains the original reservation timestamp so quota and audit attribution
+stay on the day the request was accepted. Recovery logs include only counts and the stale threshold,
+not prompt text, generated text, or provider bodies.
 
 Every terminal provider attempt writes one durable ledger record keyed by `(userId,
 clientRequestId)` for idempotency. The existing `ai_usage_events` table now has gateway metadata
@@ -213,10 +219,11 @@ Before runtime implementation:
   provider abort signal is in place in R4g and cancelled terminal rows are recorded in R4h; desktop
   cancel transport and provider SDK wiring remain pending**;
 - make reservation/finalization atomic so duplicate client request ids cannot start duplicate
-  provider attempts; **done in R4i for the first provider seam, with stale-reservation recovery
-  still pending**.
+  provider attempts; **done in R4i for the first provider seam**.
 - add the real Anthropic SDK provider path; **done in R4j, default-off through the gateway flag and
   absent unless `ANTHROPIC_API_KEY` is configured**;
+- recover stale gateway reservations after process death without exposing payload text; **done in
+  R4k before quota preflight on the next authorized gateway request**;
 - document the production validation command/API/log/DB evidence; **pending live validation**.
 
 Production validation must use a small approved prompt and must not send any platform message.

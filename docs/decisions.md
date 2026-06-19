@@ -678,11 +678,16 @@ reservation slice before live provider execution is production-ready.
 **R4i atomic reservation:** the gateway now reserves `(user_id, client_event_id)` in
 `ai_usage_events` before provider execution. A duplicate `clientRequestId` returns `409 conflict`
 before provider execution and cannot start a second paid call. Terminal handling updates the same
-row. Stale reservation recovery after process death remains pending before production live
-provider validation.
+row.
 
 **R4j Anthropic provider execution:** core now has a real Anthropic Messages streaming adapter
 behind the default-off gateway. It is instantiated only when `CHATMUSE_AI_GATEWAY_ENABLED=true` and
 `ANTHROPIC_API_KEY` is configured, maps provider text/thinking/usage events into gateway frames,
 uses the same abort signal as the SSE route, and relies on the R4i reservation plus R4h finalizer
 for ledger state. Production validation remains pending and must use a small approved prompt.
+
+**R4k stale reservation recovery:** before quota preflight on an authorized gateway request, core
+marks null-outcome gateway reservations older than 30 minutes as terminal `failed` rows with
+zero token/cost counts and a nonnegative duration. `completed_at` remains the original reservation
+time so quota and audit attribution stay on the acceptance day. Recovery logs only the recovered
+row count and stale threshold; prompt text, generated text, and provider bodies remain excluded.

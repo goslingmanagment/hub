@@ -291,11 +291,11 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
   prompt-streaming gateway; R4b adds the default-off route/config gate; R4c adds gateway ledger
   storage/repository fields; R4d adds ledger-backed daily quota preflight; R4e adds Anthropic
   pricing for terminal usage rows; R4f adds Anthropic request-building and usage normalization
-  without provider network; R4g adds the SSE provider seam while production still has no provider
-  configured; R4h adds terminal ledger finalization for provider-seam streams; R4i reserves
+  without provider network; R4g adds the SSE provider seam; R4h adds terminal ledger finalization
+  for provider-seam streams; R4i reserves
   request ids before provider execution to prevent duplicate paid attempts; R4j adds the real
-  Anthropic streaming adapter default-off. Stale-reservation recovery, production validation, and
-  desktop switch remain pending
+  Anthropic streaming adapter default-off; R4k recovers stale null-outcome reservations before new
+  authorized provider attempts. Production validation and desktop switch remain pending
 - Fan context injection: spending (page + total), notes, AI summary, subscription status, flags in one panel
 - Fan notes via the app: chatters create and read notes visible to others on the same page
 - AI-generated fan summaries from chat history; version history preserved

@@ -57,6 +57,11 @@ export interface FinalizeAiGatewayUsageEventInput {
   completedAt: Date;
 }
 
+export interface MarkStaleAiGatewayReservationsInput {
+  reservedBefore: Date;
+  recoveredAt: Date;
+}
+
 export interface ListChatterUsageSummaryInput {
   from: Date;
   toExclusive: Date;
@@ -255,6 +260,31 @@ export async function finalizeAiGatewayUsageEvent(
     .returning({ id: aiUsageEvents.id });
 
   return updated.length === 1;
+}
+
+export async function markStaleAiGatewayReservationsFailed(
+  db: Database,
+  input: MarkStaleAiGatewayReservationsInput,
+) {
+  const updated = await db.update(aiUsageEvents)
+    .set({
+      gatewayOutcome: "failed",
+      durationMs: sql<number>`
+        greatest(
+          0,
+          floor(extract(epoch from (${input.recoveredAt} - ${aiUsageEvents.completedAt})) * 1000)
+        )::int
+      `,
+    })
+    .where(sql`
+      ${aiUsageEvents.provider} is not null
+      and ${aiUsageEvents.quotaAccepted} = true
+      and ${aiUsageEvents.gatewayOutcome} is null
+      and ${aiUsageEvents.completedAt} < ${input.reservedBefore}
+    `)
+    .returning({ id: aiUsageEvents.id });
+
+  return updated.length;
 }
 
 export async function getAiGatewayDailyUsageTotals(
