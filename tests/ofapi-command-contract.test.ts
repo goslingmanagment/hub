@@ -17,10 +17,33 @@ function validBody() {
   };
 }
 
+function validTypingBody() {
+  return {
+    clientCommandId: randomUUID(),
+    kind: "typing_active_v1" as const,
+    accountId: "acct_11000000000000000000000000000000",
+    conversationId: "123456789",
+    payload: {},
+  };
+}
+
 describe("OFAPI command contract", () => {
   it("accepts the versioned text-only command", () => {
     const body = validBody();
     expect(createOfapiCommandBodySchema.parse(body)).toEqual(body);
+  });
+
+  it("accepts the versioned typing command with an empty payload only", () => {
+    const body = validTypingBody();
+    expect(createOfapiCommandBodySchema.parse(body)).toEqual(body);
+    expect(createOfapiCommandBodySchema.safeParse({
+      ...body,
+      payload: { text: "must not be accepted" },
+    }).success).toBe(false);
+    expect(createOfapiCommandBodySchema.safeParse({
+      ...body,
+      retryOfCommandId: randomUUID(),
+    }).success).toBe(false);
   });
 
   it("rejects blank text, media fields, unknown top-level fields, and malformed ids", () => {
@@ -50,7 +73,7 @@ describe("OFAPI command contract", () => {
     const response = {
       commandId: randomUUID(),
       clientCommandId: randomUUID(),
-      kind: "send_text_message_v1" as const,
+      kind: "typing_active_v1" as const,
       accountId: "acct_11000000000000000000000000000000",
       conversationId: "123456789",
       state: "queued" as const,

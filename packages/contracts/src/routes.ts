@@ -3141,18 +3141,35 @@ export const ofapiCommandStateSchema = z.enum([
   "cancelled",
 ]);
 
-export const createOfapiCommandBodySchema = z.strictObject({
+export const ofapiCommandKindSchema = z.enum([
+  "send_text_message_v1",
+  "typing_active_v1",
+]);
+
+const ofapiCommandBaseFields = {
   clientCommandId: z.string().uuid(),
-  kind: z.literal("send_text_message_v1"),
   accountId: z.string().regex(/^acct_[A-Za-z0-9]+$/),
   conversationId: z.string().regex(/^[0-9]{1,30}$/),
-  payload: z.strictObject({
-    text: z.string().min(1).max(10_000).refine((text) => text.trim().length > 0, {
-      message: "Message text must not be blank",
+};
+
+export const createOfapiCommandBodySchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    ...ofapiCommandBaseFields,
+    kind: z.literal("send_text_message_v1"),
+    payload: z.strictObject({
+      text: z.string().min(1).max(10_000).refine((text) => text.trim().length > 0, {
+        message: "Message text must not be blank",
+      }),
     }),
+    retryOfCommandId: z.string().uuid().nullable().optional(),
   }),
-  retryOfCommandId: z.string().uuid().nullable().optional(),
-});
+  z.strictObject({
+    ...ofapiCommandBaseFields,
+    kind: z.literal("typing_active_v1"),
+    payload: z.strictObject({}),
+    retryOfCommandId: z.null().optional(),
+  }),
+]);
 
 export const ofapiCommandParamsSchema = z.object({
   commandId: z.string().uuid(),
@@ -3161,7 +3178,7 @@ export const ofapiCommandParamsSchema = z.object({
 export const ofapiCommandResponseSchema = z.object({
   commandId: z.string().uuid(),
   clientCommandId: z.string().uuid(),
-  kind: z.literal("send_text_message_v1"),
+  kind: ofapiCommandKindSchema,
   accountId: z.string(),
   conversationId: z.string(),
   state: ofapiCommandStateSchema,
@@ -3726,10 +3743,9 @@ export const routeSchemas = {
   createOfapiCommand: {
     tags: ["ofapi"],
     summary: "Create or deduplicate a desktop OFAPI command",
-    description: "Chatter-key-only C6b command intake. The first command version accepts "
-      + "text-only sends and persists them as queued outbox rows. This endpoint does not "
-      + "execute commands or call OFAPI. Exact client-id replays return the existing row; "
-      + "payload mismatches return 409.",
+    description: "Chatter-key-only C6b command intake. The command boundary accepts "
+      + "narrow versioned desktop writes and persists them as queued outbox rows. Exact "
+      + "client-id replays return the existing row; payload mismatches return 409.",
     security: bearerOnlySecurity,
     body: createOfapiCommandBodySchema,
     response: {

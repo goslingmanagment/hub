@@ -4,10 +4,10 @@ Status: active production runbook, 2026-06-20.
 
 ## Production Boundary
 
-Core is the normal custody path for OFAPI reads, text commands, webhook receipt, replay/snapshot,
-credit truth, spend projection, and forward-only DM archive. Desktop keeps its encrypted SQLite
-cache and explicit Direct controls as rollback for still-unsupported command kinds. Historical DM
-bulk backfill is prohibited.
+Core is the normal custody path for OFAPI reads, text commands, approved command-executor slices,
+webhook receipt, replay/snapshot, credit truth, spend projection, and forward-only DM archive.
+Desktop keeps its encrypted SQLite cache and explicit Direct controls as rollback for
+still-unsupported command kinds. Historical DM bulk backfill is prohibited.
 
 AI gateway execution is enabled only through the proxy-routed core path. The earlier direct
 production-host Anthropic egress returned `403 Request not allowed`, so direct production-host
@@ -111,10 +111,10 @@ from ofapi_webhook_events;
 Command health:
 
 ```sql
-select state, count(*), min(created_at)
+select kind, state, count(*), min(created_at)
 from ofapi_commands
-group by state
-order by state;
+group by kind, state
+order by kind, state;
 ```
 
 Archive and aggregate health:
@@ -194,5 +194,7 @@ automatically. Never run an unbounded historical DM backfill during an incident.
 ## Controlled Write Validation
 
 Any future new command kind must use only the owner-controlled `loravie`/`loravievip` pair. Record
-the exact account, conversation, approved payload, command id, attempt count, ledger row, platform
-id, webhook evidence, unsend/cleanup, and rollback. No third-party fan mutation is permitted.
+the exact account, conversation, approved payload shape, command id, attempt count, ledger row,
+platform id when the command creates one, webhook evidence when relevant, unsend/cleanup when
+relevant, and rollback. Typing validation must record null platform id and requires no cleanup.
+No third-party fan mutation is permitted.

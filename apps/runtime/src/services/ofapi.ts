@@ -81,6 +81,10 @@ export interface OfapiSentMessage {
   messageId: string;
 }
 
+export interface OfapiTypingResult {
+  success: true;
+}
+
 // One credit-spend report per response that reached the server (retry attempts
 // included — OFAPI charged each). Emitted by the client itself on BOTH request
 // paths, so callers cannot forget to account spend (D1).
@@ -192,6 +196,13 @@ export interface OfapiClient {
     conversationId: string,
     input: { text: string },
   ): Promise<OfapiSentMessage>;
+  // Decision #57: exactly one advisory typing beacon. The endpoint is documented
+  // as free, so fallback credit accounting records zero credits if _meta is absent.
+  startTyping?(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+  ): Promise<OfapiTypingResult>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -718,6 +729,77 @@ export function createOfapiClient(input: {
     return { messageId };
   }
 
+  async function startTypingRequest(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+  ): Promise<OfapiTypingResult> {
+    const operation = "ofapi_command_typing_active";
+    const pathname = `/${encodeURIComponent(accountId)}/chats/${
+      encodeURIComponent(conversationId)
+    }/typing`;
+    const requestId = `${operation}:${randomUUID()}`;
+    await waitForRequestSlot();
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}${pathname}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${input.apiKey}`,
+          accept: "application/json",
+        },
+        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      throw new OfapiApiError(
+        `OFAPI command transport failed: POST ${pathname}`,
+        null,
+        null,
+      );
+    }
+
+    const text = await response.text();
+    let responseBody: unknown = null;
+    let bodyIsJson = text.length === 0;
+    if (text.length > 0) {
+      try {
+        responseBody = JSON.parse(text) as unknown;
+        bodyIsJson = true;
+      } catch {
+        bodyIsJson = false;
+      }
+    }
+
+    await reportCreditSpend({
+      operation,
+      httpStatus: response.status,
+      body: responseBody,
+      requestId,
+      pageId: context.pageId ?? null,
+      attemptNumber: 1,
+      fallbackCredits: 0,
+      fallbackEstimated: true,
+    });
+
+    if (!response.ok) {
+      throw new OfapiApiError(
+        `OFAPI command rejected: POST ${pathname} returned ${response.status}`,
+        response.status,
+        null,
+      );
+    }
+    if (!bodyIsJson) {
+      throw new OfapiApiError(
+        `OFAPI command returned non-JSON success: POST ${pathname}`,
+        response.status,
+        null,
+      );
+    }
+
+    return { success: true };
+  }
+
   async function request(
     operation: string,
     method: string,
@@ -886,6 +968,9 @@ export function createOfapiClient(input: {
     },
     async sendTextMessage(context, accountId, conversationId, command) {
       return sendTextMessageRequest(context, accountId, conversationId, command);
+    },
+    async startTyping(context, accountId, conversationId) {
+      return startTypingRequest(context, accountId, conversationId);
     },
   };
 }

@@ -16,6 +16,24 @@ import {
   ServiceUnavailableError,
 } from "./errors.ts";
 
+type OfapiCommandKind = "send_text_message_v1" | "typing_active_v1";
+type TextCommandRequest = {
+  clientCommandId: string;
+  kind: "send_text_message_v1";
+  accountId: string;
+  conversationId: string;
+  payload: { text: string };
+  retryOfCommandId?: string | null;
+};
+type TypingCommandRequest = {
+  clientCommandId: string;
+  kind: "typing_active_v1";
+  accountId: string;
+  conversationId: string;
+  payload: Record<string, never>;
+  retryOfCommandId?: null;
+};
+
 const RETRYABLE_SOURCE_STATES = new Set([
   "failed_retryable",
   "failed_terminal",
@@ -23,19 +41,12 @@ const RETRYABLE_SOURCE_STATES = new Set([
   "cancelled",
 ]);
 
-export interface CreateOfapiCommandRequest {
-  clientCommandId: string;
-  kind: "send_text_message_v1";
-  accountId: string;
-  conversationId: string;
-  payload: { text: string };
-  retryOfCommandId?: string | null;
-}
+export type CreateOfapiCommandRequest = TextCommandRequest | TypingCommandRequest;
 
 export interface OfapiCommandView {
   commandId: string;
   clientCommandId: string;
-  kind: "send_text_message_v1";
+  kind: OfapiCommandKind;
   accountId: string;
   conversationId: string;
   state:
@@ -83,10 +94,10 @@ async function resolveAssignedPage(
 }
 
 function canonicalHash(input: {
-  kind: "send_text_message_v1";
+  kind: OfapiCommandKind;
   accountId: string;
   conversationId: string;
-  payload: { text: string };
+  payload: { text: string } | Record<string, never>;
   retryOfCommandId: string | null;
 }) {
   return createHash("sha256")
@@ -138,6 +149,10 @@ export async function createOfapiCommand(
   const page = await resolveAssignedPage(app, principal, input.accountId);
   const retryOfCommandId = input.retryOfCommandId ?? null;
 
+  if (input.kind === "typing_active_v1" && retryOfCommandId !== null) {
+    throw new ConflictError("Typing commands cannot retry another command");
+  }
+
   if (retryOfCommandId !== null) {
     const original = await getOfapiCommandByIdForUser(app.db, {
       commandId: retryOfCommandId,
@@ -149,6 +164,9 @@ export async function createOfapiCommand(
       || original.conversationId !== input.conversationId
     ) {
       throw new ConflictError("Retry source must be an owned command in the same conversation");
+    }
+    if (original.kind !== input.kind) {
+      throw new ConflictError("Retry source must use the same command kind");
     }
     if (!RETRYABLE_SOURCE_STATES.has(original.state)) {
       throw new ConflictError(`Command in state '${original.state}' cannot be retried`);

@@ -22,6 +22,9 @@ import { sql } from "drizzle-orm";
 import { aiUsageFeatures, fanFlagTypes, userRoles } from "@agency_hub_core/shared";
 import type { ConfigOverrideValue, RunningSnapshot } from "@agency_hub_core/shared";
 
+export type OfapiCommandKind = "send_text_message_v1" | "typing_active_v1";
+export type OfapiCommandPayload = { text: string } | Record<string, never>;
+
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
 export const syncRunOutcomeEnum = pgEnum("sync_run_outcome", [
   "running",
@@ -1059,8 +1062,8 @@ export const ofapiCommands = pgTable(
       .notNull(),
     ofapiAccountId: text("ofapi_account_id").notNull(),
     conversationId: text("conversation_id").notNull(),
-    kind: text("kind").$type<"send_text_message_v1">().notNull(),
-    payload: jsonb("payload").$type<{ text: string }>().notNull(),
+    kind: text("kind").$type<OfapiCommandKind>().notNull(),
+    payload: jsonb("payload").$type<OfapiCommandPayload>().notNull(),
     payloadHash: text("payload_hash").notNull(),
     retryOfCommandId: uuid("retry_of_command_id"),
     state: text("state").$type<
@@ -1113,7 +1116,7 @@ export const ofapiCommands = pgTable(
       foreignColumns: [table.id],
     }).onDelete("restrict"),
     kindCheck: check("ofapi_commands_kind_check", sql`
-      ${table.kind} = 'send_text_message_v1'
+      ${table.kind} in ('send_text_message_v1', 'typing_active_v1')
     `),
     stateCheck: check("ofapi_commands_state_check", sql`
       ${table.state} in (

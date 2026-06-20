@@ -110,6 +110,17 @@ function commandBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function typingCommandBody(overrides: Record<string, unknown> = {}) {
+  return {
+    clientCommandId: randomUUID(),
+    kind: "typing_active_v1",
+    accountId: ACCOUNT_ONE,
+    conversationId: CONVERSATION,
+    payload: {},
+    ...overrides,
+  };
+}
+
 function createCommand(body: Record<string, unknown>, key = chatterKey) {
   return apiServer!.inject({
     method: "POST",
@@ -185,6 +196,43 @@ describe("OFAPI command outbox intake", () => {
     expect(ledger.rows[0]?.count).toBe(0);
   });
 
+  it("creates one queued typing command with an empty payload and no payload echo", async () => {
+    const body = typingCommandBody();
+    const response = await createCommand(body);
+    expect(response.statusCode, response.body).toBe(202);
+    const created = response.json() as Record<string, unknown>;
+    expect(created).toMatchObject({
+      clientCommandId: body.clientCommandId,
+      kind: "typing_active_v1",
+      accountId: ACCOUNT_ONE,
+      conversationId: CONVERSATION,
+      state: "queued",
+      attemptCount: 0,
+      platformMessageId: null,
+      deduplicated: false,
+    });
+    expect("payload" in created).toBe(false);
+
+    const { rows } = await testDb!.pool.query<{
+      payload: Record<string, unknown>;
+      horizon_days: number;
+    }>(
+      `select payload,
+              floor(extract(epoch from (dedupe_expires_at - created_at)) / 86400)::int
+                as horizon_days
+       from ofapi_commands`,
+    );
+    expect(rows).toEqual([{
+      payload: {},
+      horizon_days: 400,
+    }]);
+
+    const ledger = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ofapi_credit_ledger",
+    );
+    expect(ledger.rows[0]?.count).toBe(0);
+  });
+
   it("deduplicates exact replays and rejects client-id payload mismatches", async () => {
     const body = commandBody();
     const first = await createCommand(body);
@@ -219,6 +267,11 @@ describe("OFAPI command outbox intake", () => {
       payload: { text: "no media yet", mediaFiles: ["vault_1"] },
     }));
     expect(mediaPayload.statusCode, mediaPayload.body).toBe(400);
+
+    const typingPayload = await createCommand(typingCommandBody({
+      payload: { text: "not a typing payload" },
+    }));
+    expect(typingPayload.statusCode, typingPayload.body).toBe(400);
 
     const created = await createCommand(commandBody());
     const commandId = (created.json() as { commandId: string }).commandId;
@@ -322,6 +375,31 @@ describe("OFAPI command outbox intake", () => {
     expect(wrongLane.statusCode, wrongLane.body).toBe(409);
   });
 
+  it("rejects retry lineage across command kinds", async () => {
+    const original = await createCommand(commandBody());
+    const originalId = (original.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      "update ofapi_commands set state = 'cancelled', updated_at = now() where id = $1",
+      [originalId],
+    );
+
+    const typingRetry = await createCommand(typingCommandBody({
+      retryOfCommandId: originalId,
+    }));
+    expect(typingRetry.statusCode, typingRetry.body).toBe(400);
+
+    const typing = await createCommand(typingCommandBody());
+    const typingId = (typing.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      "update ofapi_commands set state = 'indeterminate', updated_at = now() where id = $1",
+      [typingId],
+    );
+    const textRetryFromTyping = await createCommand(commandBody({
+      retryOfCommandId: typingId,
+    }));
+    expect(textRetryFromTyping.statusCode, textRetryFromTyping.body).toBe(409);
+  });
+
   it("executes one vendor attempt and confirms from the response id", async () => {
     appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });
@@ -353,6 +431,39 @@ describe("OFAPI command outbox intake", () => {
       verifierResult: { source: "ofapi_response" },
     });
     expect(fetched.body).not.toContain("c6b intake validation only");
+  });
+
+  it("executes one typing beacon attempt and confirms without a platform message id", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const startTyping = vi.fn().mockResolvedValue({ success: true });
+    appContext.ofapi = { startTyping } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(typingCommandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await expect(executeOfapiCommand(
+      appContext,
+      commandId,
+      new Date("2026-06-19T20:05:00.000Z"),
+    )).resolves.toMatchObject({ status: "confirmed", commandId });
+    await executeOfapiCommand(appContext, commandId);
+
+    expect(startTyping).toHaveBeenCalledTimes(1);
+    expect(startTyping).toHaveBeenCalledWith(
+      { pageId: expect.any(Number) },
+      ACCOUNT_ONE,
+      CONVERSATION,
+    );
+    const fetched = await getCommand(commandId);
+    expect(fetched.json()).toMatchObject({
+      kind: "typing_active_v1",
+      state: "confirmed",
+      attemptCount: 1,
+      platformMessageId: null,
+      attemptStartedAt: "2026-06-19T20:05:00.000Z",
+      attemptFinishedAt: expect.any(String),
+      verifierResult: { source: "ofapi_response", commandKind: "typing_active_v1" },
+    });
+    expect("payload" in (fetched.json() as Record<string, unknown>)).toBe(false);
   });
 
   it("repairs an indeterminate send from one matching messages.sent webhook", async () => {
@@ -392,6 +503,42 @@ describe("OFAPI command outbox intake", () => {
       attemptCount: 1,
       platformMessageId: "1234567890",
       verifierResult: { source: "messages.sent", eventId: 9001 },
+    });
+  });
+
+  it("does not match typing commands from messages.sent webhooks", async () => {
+    const created = await createCommand(typingCommandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      `update ofapi_commands
+       set state = 'in_flight',
+           attempt_count = 1,
+           attempt_started_at = $2,
+           updated_at = $2
+       where id = $1`,
+      [commandId, new Date("2026-06-19T20:20:00.000Z")],
+    );
+
+    const verified = await verifyOfapiCommandFromSentWebhook(appContext, {
+      id: 9002,
+      eventType: "messages.sent",
+      ofapiAccountId: ACCOUNT_ONE,
+      receivedAt: new Date("2026-06-19T20:20:01.000Z"),
+      payload: {
+        event: "messages.sent",
+        account_id: ACCOUNT_ONE,
+        payload: {
+          id: 1234567891,
+          text: "<p>typing should not match text</p>",
+          toUser: { id: Number(CONVERSATION) },
+        },
+      },
+    });
+
+    expect(verified).toEqual({ status: "no_match" });
+    expect((await getCommand(commandId)).json()).toMatchObject({
+      state: "in_flight",
+      platformMessageId: null,
     });
   });
 

@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { ofapiCommands } from "../schema.ts";
+import { ofapiCommands, type OfapiCommandKind, type OfapiCommandPayload } from "../schema.ts";
 
 export type OfapiCommandRow = typeof ofapiCommands.$inferSelect;
 export type OfapiCommandState = OfapiCommandRow["state"];
@@ -22,8 +22,8 @@ export interface CreateOfapiCommandInput {
   chatterUserId: number;
   ofapiAccountId: string;
   conversationId: string;
-  kind: "send_text_message_v1";
-  payload: { text: string };
+  kind: OfapiCommandKind;
+  payload: OfapiCommandPayload;
   payloadHash: string;
   retryOfCommandId?: string | null;
 }
@@ -87,6 +87,15 @@ export async function getOfapiCommandByIdForUser(
       eq(ofapiCommands.id, input.commandId),
       eq(ofapiCommands.chatterUserId, input.chatterUserId),
     ),
+  }) ?? null;
+}
+
+export async function getOfapiCommandById(
+  db: Database,
+  input: { commandId: string },
+) {
+  return await db.query.ofapiCommands.findFirst({
+    where: eq(ofapiCommands.id, input.commandId),
   }) ?? null;
 }
 
@@ -245,7 +254,10 @@ export async function redactTerminalOfapiCommandPayloads(
       limit ${input.limit}
     )
     update ${ofapiCommands} c
-    set payload = jsonb_build_object('text', ''),
+    set payload = case
+          when c.kind = 'send_text_message_v1' then jsonb_build_object('text', '')
+          else '{}'::jsonb
+        end,
         payload_redacted_at = ${input.redactedAt}
     from candidates
     where c.id = candidates.id

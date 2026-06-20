@@ -6959,7 +6959,7 @@ export interface paths {
         put?: never;
         /**
          * Create or deduplicate a desktop OFAPI command
-         * @description Chatter-key-only C6b command intake. The first command version accepts text-only sends and persists them as queued outbox rows. This endpoint does not execute commands or call OFAPI. Exact client-id replays return the existing row; payload mismatches return 409.
+         * @description Chatter-key-only C6b command intake. The command boundary accepts narrow versioned desktop writes and persists them as queued outbox rows. Exact client-id replays return the existing row; payload mismatches return 409.
          */
         post: {
             parameters: {
@@ -6973,14 +6973,23 @@ export interface paths {
                     "application/json": {
                         /** Format: uuid */
                         clientCommandId: string;
-                        /** @enum {string} */
-                        kind: "send_text_message_v1";
                         accountId: string;
                         conversationId: string;
+                        /** @enum {string} */
+                        kind: "send_text_message_v1";
                         payload: {
                             text: string;
                         };
                         retryOfCommandId?: string | null;
+                    } | {
+                        /** Format: uuid */
+                        clientCommandId: string;
+                        accountId: string;
+                        conversationId: string;
+                        /** @enum {string} */
+                        kind: "typing_active_v1";
+                        payload: Record<string, never>;
+                        retryOfCommandId?: null;
                     };
                 };
             };
@@ -6997,7 +7006,7 @@ export interface paths {
                             /** Format: uuid */
                             clientCommandId: string;
                             /** @enum {string} */
-                            kind: "send_text_message_v1";
+                            kind: "send_text_message_v1" | "typing_active_v1";
                             accountId: string;
                             conversationId: string;
                             /** @enum {string} */
@@ -7031,7 +7040,7 @@ export interface paths {
                             /** Format: uuid */
                             clientCommandId: string;
                             /** @enum {string} */
-                            kind: "send_text_message_v1";
+                            kind: "send_text_message_v1" | "typing_active_v1";
                             accountId: string;
                             conversationId: string;
                             /** @enum {string} */
@@ -7173,7 +7182,7 @@ export interface paths {
                             /** Format: uuid */
                             clientCommandId: string;
                             /** @enum {string} */
-                            kind: "send_text_message_v1";
+                            kind: "send_text_message_v1" | "typing_active_v1";
                             accountId: string;
                             conversationId: string;
                             /** @enum {string} */
@@ -7293,7 +7302,7 @@ export interface paths {
                             /** Format: uuid */
                             clientCommandId: string;
                             /** @enum {string} */
-                            kind: "send_text_message_v1";
+                            kind: "send_text_message_v1" | "typing_active_v1";
                             accountId: string;
                             conversationId: string;
                             /** @enum {string} */

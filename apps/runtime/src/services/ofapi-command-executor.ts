@@ -1,9 +1,11 @@
 import {
   claimQueuedOfapiCommand,
   finalizeOfapiCommand,
+  getOfapiCommandById,
   listOfapiCommandVerificationCandidates,
   listQueuedOfapiCommandIds,
   markStaleInFlightOfapiCommandsIndeterminate,
+  type OfapiCommandRow,
   redactTerminalOfapiCommandPayloads,
 } from "@agency_hub_core/db";
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
@@ -120,6 +122,26 @@ export function sendOfapiCommandExecuteJob(
   );
 }
 
+function canExecuteCommandKind(
+  app: AppContext,
+  command: Pick<OfapiCommandRow, "kind">,
+): boolean {
+  switch (command.kind) {
+    case "send_text_message_v1":
+      return typeof app.ofapi?.sendTextMessage === "function";
+    case "typing_active_v1":
+      return typeof app.ofapi?.startTyping === "function";
+  }
+}
+
+function textPayload(command: OfapiCommandRow): { text: string } {
+  const payload = command.payload as { text?: unknown };
+  if (typeof payload.text !== "string") {
+    throw new OfapiApiError("OFAPI text command payload is invalid", 422, null);
+  }
+  return { text: payload.text };
+}
+
 export async function executeOfapiCommand(
   app: AppContext,
   commandId: string,
@@ -128,8 +150,11 @@ export async function executeOfapiCommand(
   if (!isOfapiCommandExecutionEnabled(app.config)) {
     return { status: "execution_disabled" as const };
   }
-  const sendTextMessage = app.ofapi?.sendTextMessage;
-  if (!sendTextMessage) {
+  const queued = await getOfapiCommandById(app.db, { commandId });
+  if (!queued || queued.state !== "queued") {
+    return { status: "not_claimed" as const };
+  }
+  if (!canExecuteCommandKind(app, queued)) {
     app.logger.warn({ commandId }, "OFAPI command execution unavailable; command remains queued");
     return { status: "client_unavailable" as const };
   }
@@ -140,27 +165,38 @@ export async function executeOfapiCommand(
   }
 
   try {
-    const result = await sendTextMessage.call(
-      app.ofapi,
-      { pageId: command.pageId },
-      command.ofapiAccountId,
-      command.conversationId,
-      { text: command.payload.text },
-    );
+    let platformMessageId: string | null = null;
+    const verifierResult: Record<string, unknown> = {
+      source: "ofapi_response",
+      commandKind: command.kind,
+    };
+    if (command.kind === "send_text_message_v1") {
+      const result = await app.ofapi!.sendTextMessage!(
+        { pageId: command.pageId },
+        command.ofapiAccountId,
+        command.conversationId,
+        textPayload(command),
+      );
+      platformMessageId = result.messageId;
+    } else {
+      await app.ofapi!.startTyping!(
+        { pageId: command.pageId },
+        command.ofapiAccountId,
+        command.conversationId,
+      );
+    }
     const confirmedAt = new Date();
+    verifierResult.confirmedAt = confirmedAt.toISOString();
     await finalizeOfapiCommand(app.db, {
       commandId: command.id,
       fromStates: ["in_flight", "indeterminate"],
       state: "confirmed",
       now: confirmedAt,
-      platformMessageId: result.messageId,
-      verifierResult: {
-        source: "ofapi_response",
-        confirmedAt: confirmedAt.toISOString(),
-      },
+      platformMessageId,
+      verifierResult,
     });
     app.logger.info(
-      { commandId: command.id, pageId: command.pageId, platformMessageId: result.messageId },
+      { commandId: command.id, pageId: command.pageId, commandKind: command.kind, platformMessageId },
       "OFAPI command confirmed by vendor response",
     );
     return { status: "confirmed" as const, commandId: command.id };
@@ -222,7 +258,7 @@ export async function sweepOfapiCommands(
     );
   }
 
-  if (!isOfapiCommandExecutionEnabled(app.config) || !app.ofapi?.sendTextMessage) {
+  if (!isOfapiCommandExecutionEnabled(app.config) || !app.ofapi) {
     return { stale: stale.length, purged: redacted.length, enqueued: 0 };
   }
 
@@ -266,9 +302,13 @@ export async function verifyOfapiCommandFromSentWebhook(
     attemptStartedFrom: new Date(row.receivedAt.getTime() - WEBHOOK_CORRELATION_WINDOW_MS),
     attemptStartedTo: new Date(row.receivedAt.getTime() + WEBHOOK_CLOCK_SKEW_MS),
   });
-  const matches = candidates.filter((candidate) =>
-    normalizeDmMessageText(candidate.payload.text) === text
-  );
+  const matches = candidates.filter((candidate) => {
+    if (candidate.kind !== "send_text_message_v1") {
+      return false;
+    }
+    const payload = candidate.payload as { text?: unknown };
+    return normalizeDmMessageText(typeof payload.text === "string" ? payload.text : "") === text;
+  });
   if (matches.length !== 1) {
     if (matches.length > 1) {
       app.logger.warn(

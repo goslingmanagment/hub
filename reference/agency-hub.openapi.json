@@ -21898,68 +21898,112 @@
         "tags": [
           "ofapi"
         ],
-        "description": "Chatter-key-only C6b command intake. The first command version accepts text-only sends and persists them as queued outbox rows. This endpoint does not execute commands or call OFAPI. Exact client-id replays return the existing row; payload mismatches return 409.",
+        "description": "Chatter-key-only C6b command intake. The command boundary accepts narrow versioned desktop writes and persists them as queued outbox rows. Exact client-id replays return the existing row; payload mismatches return 409.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "clientCommandId": {
-                    "type": "string",
-                    "format": "uuid",
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                  },
-                  "kind": {
-                    "type": "string",
-                    "enum": [
-                      "send_text_message_v1"
-                    ]
-                  },
-                  "accountId": {
-                    "type": "string",
-                    "pattern": "^acct_[A-Za-z0-9]+$"
-                  },
-                  "conversationId": {
-                    "type": "string",
-                    "pattern": "^[0-9]{1,30}$"
-                  },
-                  "payload": {
+                "oneOf": [
+                  {
                     "type": "object",
                     "properties": {
-                      "text": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 10000
-                      }
-                    },
-                    "required": [
-                      "text"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "retryOfCommandId": {
-                    "anyOf": [
-                      {
+                      "clientCommandId": {
                         "type": "string",
                         "format": "uuid",
                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
-                      {
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "send_text_message_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 10000
+                          }
+                        },
+                        "required": [
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "typing_active_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
                         "type": "null"
                       }
-                    ]
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
                   }
-                },
-                "required": [
-                  "clientCommandId",
-                  "kind",
-                  "accountId",
-                  "conversationId",
-                  "payload"
-                ],
-                "additionalProperties": false
+                ]
               }
             }
           }
@@ -21990,7 +22034,8 @@
                     "kind": {
                       "type": "string",
                       "enum": [
-                        "send_text_message_v1"
+                        "send_text_message_v1",
+                        "typing_active_v1"
                       ]
                     },
                     "accountId": {
@@ -22151,7 +22196,8 @@
                     "kind": {
                       "type": "string",
                       "enum": [
-                        "send_text_message_v1"
+                        "send_text_message_v1",
+                        "typing_active_v1"
                       ]
                     },
                     "accountId": {
@@ -22514,7 +22560,8 @@
                     "kind": {
                       "type": "string",
                       "enum": [
-                        "send_text_message_v1"
+                        "send_text_message_v1",
+                        "typing_active_v1"
                       ]
                     },
                     "accountId": {
@@ -22819,7 +22866,8 @@
                     "kind": {
                       "type": "string",
                       "enum": [
-                        "send_text_message_v1"
+                        "send_text_message_v1",
+                        "typing_active_v1"
                       ]
                     },
                     "accountId": {

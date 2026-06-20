@@ -1,8 +1,9 @@
 # OFAPI Desktop Command Outbox Contract
 
 Status: C6b1 intake/read/cancel, C6b2 executor, terminal payload redaction, desktop recovery
-transport, and controlled production execution are live as of 2026-06-20.
-Decision owner: core Decision #55.
+transport, controlled text execution, and the core typing command slice are implemented as of
+2026-06-20.
+Decision owner: core Decisions #55, #56, and #58.
 
 ## Boundary
 
@@ -14,10 +15,13 @@ The v1 boundary remains deliberately narrow:
 
 - `OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED` gates intake/read/cancel.
 - `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED` gates vendor execution and requires the outbox flag.
-- Only `send_text_message_v1` can execute. Typing, marking read, uploading, liking, unsend,
-  media, and PPV remain outside this command version.
+- Executable command kinds are narrow and versioned: `send_text_message_v1` and
+  `typing_active_v1`. Marking read, uploading, liking, unsend, media, and PPV remain outside this
+  command version.
 
-## Version 1 Command
+## Version 1 Commands
+
+Text send:
 
 ```json
 {
@@ -32,8 +36,21 @@ The v1 boundary remains deliberately narrow:
 }
 ```
 
-Version 1 rejects media, PPV, reply-to, uploads, typing, mark-read, likes, unsend, and unknown
-payload fields. Later command kinds get separate discriminated schemas and execution policies.
+Typing beacon:
+
+```json
+{
+  "clientCommandId": "uuid",
+  "kind": "typing_active_v1",
+  "accountId": "acct_...",
+  "conversationId": "numeric OnlyFans fan/chat id",
+  "payload": {}
+}
+```
+
+Version 1 rejects media, PPV, reply-to, uploads, mark-read, likes, unsend, and unknown payload
+fields. Typing commands have an empty payload, cannot set `retryOfCommandId`, and are advisory:
+desktop does not need recovery UI for a missed beacon.
 
 ## API
 
@@ -64,13 +81,13 @@ state returns `409`.
 
 ## Response Shape
 
-Command responses omit payload text:
+Command responses omit command payloads:
 
 ```json
 {
   "commandId": "uuid",
   "clientCommandId": "uuid",
-  "kind": "send_text_message_v1",
+  "kind": "send_text_message_v1 | typing_active_v1",
   "accountId": "acct_...",
   "conversationId": "123",
   "state": "queued",
@@ -123,21 +140,24 @@ desktop-local state. Core status responses never return the payload text needed 
   visible human decision after checking the platform/conversation when possible.
 - `cancelled`: queued command cancelled before any vendor attempt.
 
-Desktop implements this UX around the status endpoint. Recovery does not add a `GET /messages`
-body read solely to decide command outcome; the core response path and `messages.sent` webhook
-verifier are the non-read-state-changing evidence sources.
+Desktop implements this UX around text sends. Recovery does not add a `GET /messages` body read
+solely to decide command outcome; the core response path and `messages.sent` webhook verifier are
+the non-read-state-changing evidence sources. `typing_active_v1` is lossy/advisory and does not
+participate in desktop recovery.
 
 ## Dedupe and Retention
 
 The dedupe key is `(page_id, chatter_user_id, client_command_id)`. Canonical request hashing includes
 kind, account, conversation, payload, and retry lineage. Rows have a minimum 400-day dedupe horizon.
-Payload text redaction does not shorten that horizon or change the stored `payload_hash`.
+Payload text redaction does not shorten that horizon or change the stored `payload_hash`. Retry
+lineage must stay within the same command kind; typing commands are not retryable.
 
 ## Payload Retention, Purge, and Export Policy
 
-The command payload stores `payload.text` while the command may still execute or need recovery.
-The worker sweep now tombstones terminal command text after the recovery window while preserving
-non-text audit and dedupe fields.
+Text commands store `payload.text` while the command may still execute or need recovery. Typing
+commands store only `{}`. The worker sweep tombstones terminal text command payloads after the
+recovery window while preserving non-text audit and dedupe fields; terminal typing payloads remain
+empty.
 
 - Retain full payload only while the row may still need execution, webhook repair, explicit human
   recovery, or retry-context inspection.
@@ -214,22 +234,30 @@ Decision owner: core Decision #56.
 - A command row is attempted at most once. No pg-boss retry or service retry may issue a second
   vendor request for the same row.
 
-### Vendor Request
+### Vendor Requests
 
-Version 1 executes exactly:
+`send_text_message_v1` executes exactly:
 
 ```text
 POST /api/{accountId}/chats/{conversationId}/messages
 {"text":"..."}
 ```
 
-The request uses the core OFAPI client, global pacing, page-attributed credit accounting, a bounded
-timeout, and no automatic retry. Message text is never logged or copied into error/verifier
-metadata.
+`typing_active_v1` executes exactly:
+
+```text
+POST /api/{accountId}/chats/{conversationId}/typing
+```
+
+Both requests use the core OFAPI client, global pacing, page-attributed credit accounting, a
+bounded timeout, and no automatic retry. Message text is never logged or copied into
+error/verifier metadata. Typing has no text/media payload and records zero fallback credits if a
+successful OFAPI response omits `_meta`; provider `_meta._credits.used` still wins when present.
 
 ### Outcome Classification
 
-- Valid `2xx` JSON with a message id: `confirmed`, record `platform_message_id`.
+- Valid text-send `2xx` JSON with a message id: `confirmed`, record `platform_message_id`.
+- Valid typing `2xx` JSON or empty success: `confirmed`, leave `platform_message_id` null.
 - Definite validation/auth/not-found rejection (`400`, `401`, `403`, `404`, `409`, `422`):
   `failed_terminal`.
 - Definite pre-delivery throttling (`429`): `failed_retryable`; retry remains a new human-visible
@@ -243,17 +271,18 @@ are not persisted in command outcome metadata.
 
 ### Webhook Verification
 
-A settled `messages.sent` event may confirm `in_flight` or `indeterminate` only when all of these
-hold:
+A settled `messages.sent` event may confirm `send_text_message_v1` commands in `in_flight` or
+`indeterminate` only when all of these hold:
 
 1. OFAPI account and fan conversation match.
 2. Normalized webhook text exactly equals normalized command text.
 3. The event falls inside the bounded attempt-correlation window.
 4. Exactly one eligible command matches.
 
-Ambiguous, late, missing-text, or multi-candidate events do not mutate command state. Successful
-HTTP response remains the primary confirmation path; webhook matching repairs response-loss and
-worker-crash cases without an extra `GET /messages` that could affect read state or spend credits.
+Ambiguous, late, missing-text, non-text-kind, or multi-candidate events do not mutate command
+state. Successful HTTP response remains the primary confirmation path; webhook matching repairs
+text response-loss and worker-crash cases without an extra `GET /messages` that could affect read
+state or spend credits.
 
 ### Production Gate
 
@@ -262,9 +291,9 @@ The executor is first deployed and validated with execution off. Enabling it req
 - both runtime roles reporting outbox and execution enabled with no skipped overrides;
 - no pre-existing unintended `queued` rows;
 - one explicitly designated controlled test fan/conversation;
-- operator-approved harmless text;
+- operator-approved harmless text for text sends or an owner-account typing beacon for typing;
 - proof of exactly one OFAPI credit-ledger attempt, terminal command state, matching
-  `messages.sent`/projection when delivered, and no payload text in logs;
+  `messages.sent`/projection when validating text delivery, and no payload text in logs;
 - rollback proof that disabling execution leaves intake available and prevents new claims.
 
 Desktop write transport remains direct until this live gate passes, payload purge/export
@@ -276,9 +305,9 @@ implementation exists, and command status/recovery UI is implemented.
   and a database constraint limiting each command row to one attempt.
 - The API enqueues a durable wakeup only after a new command is committed. The worker owns
   `ofapi.commands.execute` and `ofapi.commands.sweep`; execute jobs have zero retries.
-- The core OFAPI client implements only the versioned text-send request and returns only the
-  platform message id. Credit observations use operation `ofapi_command_send_text` with page
-  attribution.
+- The core OFAPI client implements the versioned text-send request and advisory typing request.
+  Text returns only the platform message id and records operation `ofapi_command_send_text`.
+  Typing returns only `{ success: true }` and records operation `ofapi_command_typing_active`.
 - Command status responses expose nullable attempt start/finish timestamps, but no payload text.
 - The minutely command sweep also redacts old terminal command payload text while preserving
   command state, payload hash, verifier metadata, platform message id, and retry lineage.
@@ -328,6 +357,52 @@ approval for one harmless message.
 - Rollback remains: stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false` and recreate API/worker.
   Intake remains available and queued commands stay parked; Direct desktop write transport is the
   client rollback.
+
+## C6b3 Typing Command Slice
+
+Status: implemented, pending production deploy/validation.
+Decision owner: core Decision #58.
+
+### Contract
+
+- `typing_active_v1` uses the same command outbox, page/chatter ACL, dedupe, state machine,
+  one-attempt executor, and staged rollback as text commands.
+- Payload is exactly `{}`. Request/response/log surfaces must not contain message text, media URLs,
+  fan names, or arbitrary vendor body fields.
+- `retryOfCommandId` is rejected for typing commands. Re-sending a typing beacon is a fresh
+  client command id and has no desktop recovery obligation.
+- `messages.sent` webhook verification ignores typing commands; only the direct OFAPI typing
+  endpoint response can confirm the row.
+- `platform_message_id` remains null on success. Audit evidence is command id, account,
+  conversation id, state, payload hash, timestamps, attempt count, bounded error metadata, and
+  credit ledger operation.
+
+### Implementation
+
+- Migration `0043_ofapi_command_typing_active.sql` widens `ofapi_commands.kind` to include
+  `typing_active_v1`; existing rows are not rewritten.
+- Core contracts use a discriminated command schema: text commands require non-blank text, typing
+  commands require empty payload.
+- The core OFAPI client sends one `POST /api/{accountId}/chats/{conversationId}/typing` request
+  with no body, global pacing, and page-attributed credit observation
+  `ofapi_command_typing_active`.
+- Since the typing endpoint is documented free, a successful response without `_meta` records zero
+  estimated fallback credits. Any `_meta._credits.used` value is authoritative if returned.
+
+### Production Validation Plan
+
+Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
+
+1. Migration `0043` applied and API/worker heartbeats match the deployed source revision.
+2. Create one `typing_active_v1` command through a chatter key assigned only to the owner page.
+3. Command reaches terminal `confirmed` with `attempt_count=1`, null `platform_message_id`, and
+   payload `{}`.
+4. `ofapi_credit_ledger` has exactly one matching `ofapi_command_typing_active` row; expected
+   credits are zero unless OFAPI reports otherwise in `_meta`.
+5. API/worker logs contain command ids and bounded outcome metadata only; no payload text/media
+   canary appears.
+6. Stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false`, recreate API/worker, prove a new typing
+   command remains `queued`/unclaimed, then restore execution if validation passes.
 
 ### 2026-06-19 Payload Redaction Production Evidence
 

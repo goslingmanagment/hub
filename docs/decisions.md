@@ -55,6 +55,7 @@
 | 55 | OFAPI Command Outbox | Core-owned, default-off command intake with stable client ids, page/chatter dedupe, explicit indeterminate outcomes, retry lineage, and a separate execution flag; no generic write proxy |
 | 56 | OFAPI Command Executor | Separately staged one-attempt text execution with no automatic retry, page-attributed credit accounting, webhook repair, and terminal payload redaction |
 | 57 | DM Aggregate Analytics | Replaceable aggregate-only UTC daily facts over the governed cold archive; no transcript text, media URLs, or fan identifiers |
+| 58 | OFAPI Typing Command Custody | Empty-payload `typing_active_v1` command through the core outbox/executor; no retry, no webhook text matching, zero fallback credits, Direct rollback retained |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -617,6 +618,28 @@ and the minutely sweep redaction path with execution still disabled. Production 
 the new column/index, active API/worker flags (`outbox=true`, `execution=false`), zero command-send
 ledger rows, zero old terminal unredacted production rows, and a rollback-only redaction smoke that
 left no synthetic row behind.
+
+## OFAPI Typing Command Custody (2026-06-20)
+
+**Decision #58:** The first non-text desktop write centralized after text sends is the advisory
+typing beacon. It extends the existing command outbox instead of adding a generic write proxy.
+
+- **Command kind:** `typing_active_v1`, with the same `clientCommandId`, account, conversation,
+  page/chatter ACL, durable dedupe, and one-attempt executor as text commands. Payload is exactly
+  `{}`.
+- **No retry/recovery:** typing is lossy and cosmetic. `retryOfCommandId` is rejected, desktop does
+  not need status recovery UI for a missed beacon, and re-sending typing later is a fresh command.
+- **Vendor request:** one `POST /api/{accountId}/chats/{conversationId}/typing` through the core
+  OFAPI client, with global pacing, bounded timeout, no body, and no automatic retry.
+- **Accounting:** the endpoint is documented free, so a successful response without `_meta` records
+  zero estimated fallback credits under operation `ofapi_command_typing_active`; provider
+  `_meta._credits.used` still wins if returned.
+- **Verifier/privacy:** `messages.sent` webhook repair applies only to `send_text_message_v1`.
+  Typing rows confirm only from the endpoint response, keep `platform_message_id=null`, and expose
+  only non-payload audit fields.
+- **Rollback:** staging `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false` prevents new typing claims
+  just like text commands. Desktop Direct write transport remains the rollback path until all write
+  kinds are centralized and production-soaked.
 
 ## ChatMuse AI Gateway Contract (2026-06-19)
 

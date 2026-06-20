@@ -170,3 +170,73 @@ describe("OFAPI text command client", () => {
     });
   });
 });
+
+describe("OFAPI typing command client", () => {
+  it("makes one paced POST and reports zero fallback spend when _meta is absent", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { success: true },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const observations: OfapiCreditSpendObservation[] = [];
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+      onCreditSpend: (observation) => {
+        observations.push(observation);
+      },
+    });
+
+    await expect(client.startTyping!(
+      { pageId: 42 },
+      ACCOUNT,
+      CONVERSATION,
+    )).resolves.toEqual({ success: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `https://ofapi.invalid/api/${ACCOUNT}/chats/${CONVERSATION}/typing`,
+    );
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      operation: "ofapi_command_typing_active",
+      httpStatus: 200,
+      credits: 0,
+      estimated: true,
+      pageId: 42,
+      attemptNumber: 1,
+    });
+  });
+
+  it("never retries or retains a rejected typing vendor body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "typing rejected with vendor details",
+    }), {
+      status: 422,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+    });
+
+    const error = await client.startTyping!(
+      { pageId: 42 },
+      ACCOUNT,
+      CONVERSATION,
+    ).catch((caught) => caught);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(OfapiApiError);
+    expect(error).toMatchObject({ status: 422, body: null });
+    expect(JSON.stringify(error)).not.toContain("vendor details");
+  });
+});
