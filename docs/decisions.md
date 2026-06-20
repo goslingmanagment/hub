@@ -750,3 +750,10 @@ This is groundwork, not permission to infer unsupported metrics. Response-time p
 unlock funnels, revenue attribution windows, and AI-generation-to-send linkage require explicit
 identity contracts before implementation. Historical DM `GET /messages` backfill remains out of
 scope.
+
+**Production rollout:** revision `1d7be970bbd1` deployed through the canonical dist-only process
+with matching API/worker image labels and dependency checksum. Migration 0042 is applied and the
+exclusive queue exists. A one-off production rebuild wrote 5 aggregate rows from 779 archive rows
+(`355` inbound, `417` outbound, `7` deleted, `4` paid outbound); aggregate privacy-column count was
+zero and cold archive media URL leakage count was zero. Webhook pending returned to zero after the
+deploy and command nonterminal rows remained zero.

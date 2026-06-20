@@ -312,6 +312,8 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
   idempotently, corrects tombstones, and stores no transcript, media URL, or fan identifier.
   Response-time pairing, PPV unlock funnels, revenue attribution, and AI-to-send correlation stay
   deferred until their identity contracts are explicit; dashboards must not infer them by time.
+  Production revision `1d7be970bbd1` applied migration 0042 and rebuilt 5 page/day rows from 779
+  archive rows; the aggregate schema has zero text/media/fan-id columns.
 - Fan context injection: spending (page + total), notes, AI summary, subscription status, flags in one panel
 - Fan notes via the app: chatters create and read notes visible to others on the same page
 - AI-generated fan summaries from chat history; version history preserved
