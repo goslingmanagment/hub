@@ -54,6 +54,16 @@ describe("config", () => {
     expect(config.trustProxy).toBe(false);
     expect(config.chatMuseAiGatewayDailyRequestLimit).toBe(200);
     expect(config.chatMuseAiGatewayDailyMicroUsdLimit).toBe(5_000_000);
+    expect(config.ofapiEventWorkerReplicas).toBe(1);
+  });
+
+  it("accepts an explicit OFAPI event worker replica declaration", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      OFAPI_EVENT_WORKER_REPLICAS: "2",
+    });
+
+    expect(config.ofapiEventWorkerReplicas).toBe(2);
   });
 
   it("accepts an explicit OnlyFans DM polling override", () => {

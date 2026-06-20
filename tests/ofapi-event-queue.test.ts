@@ -42,4 +42,18 @@ describe("OFAPI event process queue", () => {
       { data: { eventId: 5 } },
     ]).map((job) => job.data.eventId)).toEqual([2, 5, 9]);
   });
+
+  it("refuses multi-replica OFAPI event worker startup", async () => {
+    const work = vi.fn(async () => "worker-id");
+
+    await expect(startOfapiEventWorker(
+      {
+        config: { ofapiEventWorkerReplicas: 2 },
+        logger: { info: vi.fn(), warn: vi.fn() },
+      } as never,
+      { work, send: vi.fn(async () => null) },
+    )).rejects.toThrow("OFAPI event worker requires exactly one replica");
+
+    expect(work).not.toHaveBeenCalled();
+  });
 });

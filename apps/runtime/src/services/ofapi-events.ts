@@ -371,8 +371,19 @@ export async function cleanupExpiredOfapiEvents(app: AppContext, now = new Date(
 
 type OfapiWorkerBoss = Pick<PgBoss, "send" | "work">;
 
+function assertOfapiEventWorkerSingleton(app: Pick<AppContext, "config">) {
+  const replicas = app.config.ofapiEventWorkerReplicas ?? 1;
+  if (replicas !== 1) {
+    throw new Error(
+      `OFAPI event worker requires exactly one replica; received OFAPI_EVENT_WORKER_REPLICAS=${replicas}`,
+    );
+  }
+}
+
 /** Registers the OFAPI event handlers; shared by the worker and integration tests. */
 export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBoss) {
+  assertOfapiEventWorkerSingleton(app);
+
   await boss.work<OfapiEventProcessPayload>(
     OFAPI_EVENT_PROCESS_QUEUE,
     // One handler still settles rows sequentially, preserving the single-worker
