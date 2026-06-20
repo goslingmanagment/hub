@@ -85,6 +85,10 @@ export interface OfapiTypingResult {
   success: true;
 }
 
+export interface OfapiUnsendResult {
+  success: true;
+}
+
 // One credit-spend report per response that reached the server (retry attempts
 // included — OFAPI charged each). Emitted by the client itself on BOTH request
 // paths, so callers cannot forget to account spend (D1).
@@ -203,6 +207,14 @@ export interface OfapiClient {
     accountId: string,
     conversationId: string,
   ): Promise<OfapiTypingResult>;
+  // Decision #59: exactly one message-unsend attempt. The target message id is
+  // the only payload; no text/media fields are accepted or logged.
+  unsendMessage?(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+    messageId: string,
+  ): Promise<OfapiUnsendResult>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -800,6 +812,87 @@ export function createOfapiClient(input: {
     return { success: true };
   }
 
+  async function unsendMessageRequest(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+    messageId: string,
+  ): Promise<OfapiUnsendResult> {
+    const operation = "ofapi_command_unsend_message";
+    const pathname = `/${encodeURIComponent(accountId)}/chats/${
+      encodeURIComponent(conversationId)
+    }/messages/${encodeURIComponent(messageId)}`;
+    const requestId = `${operation}:${randomUUID()}`;
+    await waitForRequestSlot();
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}${pathname}`, {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${input.apiKey}`,
+          accept: "application/json",
+        },
+        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      throw new OfapiApiError(
+        `OFAPI command transport failed: DELETE ${pathname}`,
+        null,
+        null,
+      );
+    }
+
+    const text = await response.text();
+    let responseBody: unknown = null;
+    let bodyIsJson = text.length === 0;
+    if (text.length > 0) {
+      try {
+        responseBody = JSON.parse(text) as unknown;
+        bodyIsJson = true;
+      } catch {
+        bodyIsJson = false;
+      }
+    }
+
+    await reportCreditSpend({
+      operation,
+      httpStatus: response.status,
+      body: responseBody,
+      requestId,
+      pageId: context.pageId ?? null,
+      attemptNumber: 1,
+    });
+
+    if (!response.ok) {
+      throw new OfapiApiError(
+        `OFAPI command rejected: DELETE ${pathname} returned ${response.status}`,
+        response.status,
+        null,
+      );
+    }
+    if (!bodyIsJson) {
+      throw new OfapiApiError(
+        `OFAPI command returned non-JSON success: DELETE ${pathname}`,
+        response.status,
+        null,
+      );
+    }
+    if (text.length === 0) {
+      return { success: true };
+    }
+
+    const record = asRecord(unwrapData(responseBody));
+    if (record?.success !== true) {
+      throw new OfapiApiError(
+        `OFAPI command success omitted success=true: DELETE ${pathname}`,
+        response.status,
+        null,
+      );
+    }
+    return { success: true };
+  }
+
   async function request(
     operation: string,
     method: string,
@@ -971,6 +1064,9 @@ export function createOfapiClient(input: {
     },
     async startTyping(context, accountId, conversationId) {
       return startTypingRequest(context, accountId, conversationId);
+    },
+    async unsendMessage(context, accountId, conversationId, messageId) {
+      return unsendMessageRequest(context, accountId, conversationId, messageId);
     },
   };
 }

@@ -3144,6 +3144,7 @@ export const ofapiCommandStateSchema = z.enum([
 export const ofapiCommandKindSchema = z.enum([
   "send_text_message_v1",
   "typing_active_v1",
+  "unsend_message_v1",
 ]);
 
 const ofapiCommandBaseFields = {
@@ -3167,6 +3168,14 @@ export const createOfapiCommandBodySchema = z.discriminatedUnion("kind", [
     ...ofapiCommandBaseFields,
     kind: z.literal("typing_active_v1"),
     payload: z.strictObject({}),
+    retryOfCommandId: z.null().optional(),
+  }),
+  z.strictObject({
+    ...ofapiCommandBaseFields,
+    kind: z.literal("unsend_message_v1"),
+    payload: z.strictObject({
+      messageId: z.string().regex(/^[0-9]{1,30}$/),
+    }),
     retryOfCommandId: z.null().optional(),
   }),
 ]);

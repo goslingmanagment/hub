@@ -131,6 +131,8 @@ function canExecuteCommandKind(
       return typeof app.ofapi?.sendTextMessage === "function";
     case "typing_active_v1":
       return typeof app.ofapi?.startTyping === "function";
+    case "unsend_message_v1":
+      return typeof app.ofapi?.unsendMessage === "function";
   }
 }
 
@@ -140,6 +142,14 @@ function textPayload(command: OfapiCommandRow): { text: string } {
     throw new OfapiApiError("OFAPI text command payload is invalid", 422, null);
   }
   return { text: payload.text };
+}
+
+function unsendPayload(command: OfapiCommandRow): { messageId: string } {
+  const payload = command.payload as { messageId?: unknown };
+  if (typeof payload.messageId !== "string" || !/^[0-9]{1,30}$/.test(payload.messageId)) {
+    throw new OfapiApiError("OFAPI unsend command payload is invalid", 422, null);
+  }
+  return { messageId: payload.messageId };
 }
 
 export async function executeOfapiCommand(
@@ -178,12 +188,21 @@ export async function executeOfapiCommand(
         textPayload(command),
       );
       platformMessageId = result.messageId;
-    } else {
+    } else if (command.kind === "typing_active_v1") {
       await app.ofapi!.startTyping!(
         { pageId: command.pageId },
         command.ofapiAccountId,
         command.conversationId,
       );
+    } else {
+      const { messageId } = unsendPayload(command);
+      await app.ofapi!.unsendMessage!(
+        { pageId: command.pageId },
+        command.ofapiAccountId,
+        command.conversationId,
+        messageId,
+      );
+      platformMessageId = messageId;
     }
     const confirmedAt = new Date();
     verifierResult.confirmedAt = confirmedAt.toISOString();

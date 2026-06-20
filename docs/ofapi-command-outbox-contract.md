@@ -2,8 +2,9 @@
 
 Status: C6b1 intake/read/cancel, C6b2 executor, terminal payload redaction, desktop recovery
 transport, controlled text execution, and the core typing command slice are implemented and
-production-validated as of 2026-06-20.
-Decision owner: core Decisions #55, #56, and #58.
+production-validated as of 2026-06-20. The core unsend command slice is implemented and pending
+production validation.
+Decision owner: core Decisions #55, #56, #58, and #59.
 
 ## Boundary
 
@@ -15,8 +16,8 @@ The v1 boundary remains deliberately narrow:
 
 - `OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED` gates intake/read/cancel.
 - `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED` gates vendor execution and requires the outbox flag.
-- Executable command kinds are narrow and versioned: `send_text_message_v1` and
-  `typing_active_v1`. Marking read, uploading, liking, unsend, media, and PPV remain outside this
+- Executable command kinds are narrow and versioned: `send_text_message_v1`, `typing_active_v1`,
+  and `unsend_message_v1`. Marking read, uploading, liking, media, and PPV remain outside this
   command version.
 
 ## Version 1 Commands
@@ -48,9 +49,24 @@ Typing beacon:
 }
 ```
 
-Version 1 rejects media, PPV, reply-to, uploads, mark-read, likes, unsend, and unknown payload
-fields. Typing commands have an empty payload, cannot set `retryOfCommandId`, and are advisory:
-desktop does not need recovery UI for a missed beacon.
+Unsend message:
+
+```json
+{
+  "clientCommandId": "uuid",
+  "kind": "unsend_message_v1",
+  "accountId": "acct_...",
+  "conversationId": "numeric OnlyFans fan/chat id",
+  "payload": {
+    "messageId": "numeric OnlyFans message id"
+  }
+}
+```
+
+Version 1 rejects media, PPV, reply-to, uploads, mark-read, likes, and unknown payload fields.
+Typing and unsend commands cannot set `retryOfCommandId`. Typing is advisory: desktop does not
+need recovery UI for a missed beacon. Unsend is destructive: desktop tombstones the local row only
+after core confirms the DELETE response or a later `messages.deleted` event/snapshot tombstone.
 
 ## API
 
@@ -87,7 +103,7 @@ Command responses omit command payloads:
 {
   "commandId": "uuid",
   "clientCommandId": "uuid",
-  "kind": "send_text_message_v1 | typing_active_v1",
+  "kind": "send_text_message_v1 | typing_active_v1 | unsend_message_v1",
   "accountId": "acct_...",
   "conversationId": "123",
   "state": "queued",
@@ -143,7 +159,9 @@ desktop-local state. Core status responses never return the payload text needed 
 Desktop implements this UX around text sends. Recovery does not add a `GET /messages` body read
 solely to decide command outcome; the core response path and `messages.sent` webhook verifier are
 the non-read-state-changing evidence sources. `typing_active_v1` is lossy/advisory and does not
-participate in desktop recovery.
+participate in desktop recovery. `unsend_message_v1` does not retry or poll message bodies; if the
+command is not confirmed, desktop leaves the local message visible until an authoritative delete
+event/snapshot tombstone arrives or a human retries after inspecting the conversation.
 
 ## Dedupe and Retention
 
@@ -155,9 +173,10 @@ lineage must stay within the same command kind; typing commands are not retryabl
 ## Payload Retention, Purge, and Export Policy
 
 Text commands store `payload.text` while the command may still execute or need recovery. Typing
-commands store only `{}`. The worker sweep tombstones terminal text command payloads after the
-recovery window while preserving non-text audit and dedupe fields; terminal typing payloads remain
-empty.
+commands store only `{}`. Unsend commands store only the numeric target `messageId`. The worker
+sweep tombstones terminal text command payloads after the recovery window while preserving
+non-text audit and dedupe fields; terminal typing payloads remain empty and terminal unsend
+payloads retain the target message id for audit.
 
 - Retain full payload only while the row may still need execution, webhook repair, explicit human
   recovery, or retry-context inspection.
@@ -249,15 +268,24 @@ POST /api/{accountId}/chats/{conversationId}/messages
 POST /api/{accountId}/chats/{conversationId}/typing
 ```
 
+`unsend_message_v1` executes exactly:
+
+```text
+DELETE /api/{accountId}/chats/{conversationId}/messages/{messageId}
+```
+
 Both requests use the core OFAPI client, global pacing, page-attributed credit accounting, a
 bounded timeout, and no automatic retry. Message text is never logged or copied into
 error/verifier metadata. Typing has no text/media payload and records zero fallback credits if a
 successful OFAPI response omits `_meta`; provider `_meta._credits.used` still wins when present.
+Unsend has no text/media payload and uses normal OFAPI response credit observation.
 
 ### Outcome Classification
 
 - Valid text-send `2xx` JSON with a message id: `confirmed`, record `platform_message_id`.
 - Valid typing `2xx` JSON or empty success: `confirmed`, leave `platform_message_id` null.
+- Valid unsend `2xx` JSON with `success=true`, or empty `2xx/204` success: `confirmed`, record the
+  target message id as `platform_message_id`.
 - Definite validation/auth/not-found rejection (`400`, `401`, `403`, `404`, `409`, `422`):
   `failed_terminal`.
 - Definite pre-delivery throttling (`429`): `failed_retryable`; retry remains a new human-visible
@@ -308,6 +336,7 @@ implementation exists, and command status/recovery UI is implemented.
 - The core OFAPI client implements the versioned text-send request and advisory typing request.
   Text returns only the platform message id and records operation `ofapi_command_send_text`.
   Typing returns only `{ success: true }` and records operation `ofapi_command_typing_active`.
+  Unsend returns only `{ success: true }` and records operation `ofapi_command_unsend_message`.
 - Command status responses expose nullable attempt start/finish timestamps, but no payload text.
 - The minutely command sweep also redacts old terminal command payload text while preserving
   command state, payload hash, verifier metadata, platform message id, and retry lineage.
@@ -440,6 +469,57 @@ Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
   final heartbeats reported outbox `true`, execution `true`, AI gateway `true`, and zero skipped
   overrides. The temporary validation key was revoked and the temporary chatter's page assignment
   was removed; it has zero active keys and no assigned pages.
+
+## C6b4 Unsend Command Slice
+
+Status: implemented, pending production deploy/validation.
+Decision owner: core Decision #59.
+
+### Contract
+
+- `unsend_message_v1` uses the same command outbox, page/chatter ACL, durable dedupe, state
+  machine, one-attempt executor, and staged rollback as text and typing commands.
+- Payload is exactly `{ "messageId": "<numeric OnlyFans message id>" }`. It cannot contain text,
+  media URLs, arbitrary vendor path fields, or reply/media/PPV fields.
+- `retryOfCommandId` is rejected. A second unsend can have different platform effects after an
+  ambiguous first DELETE, so retry is a visible human decision outside automatic recovery.
+- `messages.sent` webhook verification ignores unsend commands. `messages.deleted` projection may
+  tombstone desktop state later, but it does not mutate command state in this slice.
+- On confirmed DELETE, `platform_message_id` records the target message id. Audit evidence is
+  command id, account, conversation id, target message id, state, payload hash, timestamps,
+  attempt count, bounded error metadata, and credit ledger operation.
+
+### Implementation
+
+- Migration `0044_ofapi_command_unsend_message.sql` widens `ofapi_commands.kind` to include
+  `unsend_message_v1`; existing rows are not rewritten.
+- Core contracts use a discriminated command schema: unsend commands require a strict numeric
+  `messageId` payload and reject retry lineage.
+- The core OFAPI client sends one
+  `DELETE /api/{accountId}/chats/{conversationId}/messages/{messageId}` request with no body,
+  global pacing, bounded timeout, and page-attributed credit observation
+  `ofapi_command_unsend_message`.
+- Successful JSON `{data:{success:true}}`, bare `{success:true}`, or empty `2xx/204` response
+  confirms the command. Non-JSON or missing-success `2xx` is indeterminate.
+- Desktop Hub write transport creates this command for the unsend action and tombstones the local
+  message only after core confirms; Direct remains the support rollback path.
+
+### Production Validation Plan
+
+Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
+
+1. Migration `0044` applied and API/worker heartbeats match the deployed source revision.
+2. Create one fresh owner-only text command or otherwise use an owner-owned unsendable message id.
+3. Create one `unsend_message_v1` command through a chatter key assigned only to the owner page.
+4. Command reaches terminal `confirmed` with `attempt_count=1`, `platform_message_id` equal to the
+   target message id, and payload containing only the numeric `messageId`.
+5. `ofapi_credit_ledger` has exactly one matching `ofapi_command_unsend_message` row.
+6. The paired `messages.deleted` webhook settles/projects when OFAPI emits it; if delayed, record
+   the command proof separately without polling third-party fan bodies.
+7. API/worker logs contain command ids and bounded outcome metadata only; no message text or media
+   URLs appear.
+8. Stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false`, recreate API/worker, prove a new unsend
+   command remains `queued`/unclaimed, cancel it, then restore execution if validation passes.
 
 ### 2026-06-19 Payload Redaction Production Evidence
 

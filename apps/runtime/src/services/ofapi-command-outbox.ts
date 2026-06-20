@@ -16,7 +16,7 @@ import {
   ServiceUnavailableError,
 } from "./errors.ts";
 
-type OfapiCommandKind = "send_text_message_v1" | "typing_active_v1";
+type OfapiCommandKind = "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1";
 type TextCommandRequest = {
   clientCommandId: string;
   kind: "send_text_message_v1";
@@ -33,6 +33,14 @@ type TypingCommandRequest = {
   payload: Record<string, never>;
   retryOfCommandId?: null;
 };
+type UnsendCommandRequest = {
+  clientCommandId: string;
+  kind: "unsend_message_v1";
+  accountId: string;
+  conversationId: string;
+  payload: { messageId: string };
+  retryOfCommandId?: null;
+};
 
 const RETRYABLE_SOURCE_STATES = new Set([
   "failed_retryable",
@@ -41,7 +49,7 @@ const RETRYABLE_SOURCE_STATES = new Set([
   "cancelled",
 ]);
 
-export type CreateOfapiCommandRequest = TextCommandRequest | TypingCommandRequest;
+export type CreateOfapiCommandRequest = TextCommandRequest | TypingCommandRequest | UnsendCommandRequest;
 
 export interface OfapiCommandView {
   commandId: string;
@@ -97,7 +105,7 @@ function canonicalHash(input: {
   kind: OfapiCommandKind;
   accountId: string;
   conversationId: string;
-  payload: { text: string } | Record<string, never>;
+  payload: { text: string } | { messageId: string } | Record<string, never>;
   retryOfCommandId: string | null;
 }) {
   return createHash("sha256")
@@ -149,8 +157,8 @@ export async function createOfapiCommand(
   const page = await resolveAssignedPage(app, principal, input.accountId);
   const retryOfCommandId = input.retryOfCommandId ?? null;
 
-  if (input.kind === "typing_active_v1" && retryOfCommandId !== null) {
-    throw new ConflictError("Typing commands cannot retry another command");
+  if (input.kind !== "send_text_message_v1" && retryOfCommandId !== null) {
+    throw new ConflictError(`${input.kind} commands cannot retry another command`);
   }
 
   if (retryOfCommandId !== null) {

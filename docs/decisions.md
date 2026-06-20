@@ -56,6 +56,7 @@
 | 56 | OFAPI Command Executor | Separately staged one-attempt text execution with no automatic retry, page-attributed credit accounting, webhook repair, and terminal payload redaction |
 | 57 | DM Aggregate Analytics | Replaceable aggregate-only UTC daily facts over the governed cold archive; no transcript text, media URLs, or fan identifiers |
 | 58 | OFAPI Typing Command Custody | Empty-payload `typing_active_v1` command through the core outbox/executor; no retry, no webhook text matching, zero fallback credits, Direct rollback retained |
+| 59 | OFAPI Unsend Command Custody | Numeric-target `unsend_message_v1` command through the core outbox/executor; no retry, one DELETE attempt, bounded audit surface, Direct rollback retained |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -652,6 +653,31 @@ checks contained only command/page/kind/outcome metadata. The rollback drill sta
 queued with zero attempts and no new ledger row, cancelled it, then restored execution `true`.
 Final API/worker heartbeats reported outbox `true`, execution `true`, AI gateway `true`, and zero
 skipped overrides. The temporary validation key was revoked and its page assignment removed.
+
+## OFAPI Unsend Command Custody (2026-06-20)
+
+**Decision #59:** The next safe non-text write centralized after typing is unsend for already-sent
+creator messages. It extends the existing command outbox instead of adding a wildcard DELETE proxy.
+
+- **Command kind:** `unsend_message_v1`, with the same `clientCommandId`, account, conversation,
+  page/chatter ACL, durable dedupe, and one-attempt executor as other command kinds. Payload is
+  exactly `{ "messageId": "<numeric OnlyFans message id>" }`.
+- **No retry/recovery:** unsend is destructive and a second DELETE after an ambiguous first attempt
+  can produce a different platform result. `retryOfCommandId` is rejected; any second unsend is a
+  visible human action after checking the conversation state.
+- **Vendor request:** one
+  `DELETE /api/{accountId}/chats/{conversationId}/messages/{messageId}` through the core OFAPI
+  client, with global pacing, bounded timeout, no body, and no automatic retry.
+- **Accounting:** operation `ofapi_command_unsend_message` records page-attributed OFAPI credit
+  observations from `_meta`; a successful response without `_meta` falls back to the normal
+  one-credit estimated REST assumption.
+- **Verifier/privacy:** text/webhook matching applies only to `send_text_message_v1`. Unsend rows
+  confirm only from the DELETE response in this slice; `messages.deleted` remains the downstream
+  projection/tombstone evidence. APIs and logs can include command id, page id, command kind, and
+  target platform message id, but never message text or media URLs.
+- **Rollback:** staging `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false` prevents new unsend claims.
+  Desktop Direct write transport remains the rollback path until all write kinds are centralized
+  and production-soaked.
 
 ## ChatMuse AI Gateway Contract (2026-06-19)
 

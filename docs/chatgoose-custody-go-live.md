@@ -232,6 +232,7 @@ limit 5;
 |---|---|---|
 | Read gateway regression | stage read gateway off after disabling dependents; recreate API/worker | set read transport to Direct and restart |
 | Command executor regression | stage execution `false`; recreate API/worker; inspect queued/in-flight rows | set write transport to Direct; never auto-resend an indeterminate row |
+| New command kind regression | stage execution `false`; recreate API/worker; cancel any queued validation command before restore | set write transport to Direct; leave local state unchanged unless a webhook/snapshot proves the mutation |
 | Spend projection mismatch | stage transaction ingest off; retain shadow comparison | set legacy 10-minute sweep on |
 | DM archive issue | stage cold archive off; keep hot projection/SSE running | no desktop change |
 | Snapshot issue | keep SSE degraded and polling active; do not advance cursor | force polling, then retry snapshot after fix |
@@ -247,4 +248,7 @@ Any future new command kind must use only the owner-controlled `loravie`/`loravi
 the exact account, conversation, approved payload shape, command id, attempt count, ledger row,
 platform id when the command creates one, webhook evidence when relevant, unsend/cleanup when
 relevant, and rollback. Typing validation must record null platform id and requires no cleanup.
+Unsend validation must use only an owner-owned unsendable message id, record that the command's
+`platform_message_id` equals the target message id, and record the `messages.deleted` evidence when
+OFAPI emits it without polling third-party fan bodies.
 No third-party fan mutation is permitted.

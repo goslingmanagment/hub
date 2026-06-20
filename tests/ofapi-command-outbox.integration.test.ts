@@ -121,6 +121,17 @@ function typingCommandBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function unsendCommandBody(overrides: Record<string, unknown> = {}) {
+  return {
+    clientCommandId: randomUUID(),
+    kind: "unsend_message_v1",
+    accountId: ACCOUNT_ONE,
+    conversationId: CONVERSATION,
+    payload: { messageId: "987654321" },
+    ...overrides,
+  };
+}
+
 function createCommand(body: Record<string, unknown>, key = chatterKey) {
   return apiServer!.inject({
     method: "POST",
@@ -233,6 +244,45 @@ describe("OFAPI command outbox intake", () => {
     expect(ledger.rows[0]?.count).toBe(0);
   });
 
+  it("creates one queued unsend command with a bounded message id payload and no payload echo", async () => {
+    const body = unsendCommandBody();
+    const response = await createCommand(body);
+    expect(response.statusCode, response.body).toBe(202);
+    const created = response.json() as Record<string, unknown>;
+    expect(created).toMatchObject({
+      clientCommandId: body.clientCommandId,
+      kind: "unsend_message_v1",
+      accountId: ACCOUNT_ONE,
+      conversationId: CONVERSATION,
+      state: "queued",
+      attemptCount: 0,
+      platformMessageId: null,
+      deduplicated: false,
+    });
+    expect("payload" in created).toBe(false);
+    expect(response.body).not.toContain("987654321");
+
+    const { rows } = await testDb!.pool.query<{
+      payload: Record<string, unknown>;
+      horizon_days: number;
+    }>(
+      `select payload,
+              floor(extract(epoch from (dedupe_expires_at - created_at)) / 86400)::int
+                as horizon_days
+       from ofapi_commands`,
+    );
+    expect(rows).toEqual([{
+      payload: { messageId: "987654321" },
+      horizon_days: 400,
+    }]);
+
+    const ledger = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ofapi_credit_ledger",
+    );
+    expect(ledger.rows[0]?.count).toBe(0);
+  });
+
+
   it("deduplicates exact replays and rejects client-id payload mismatches", async () => {
     const body = commandBody();
     const first = await createCommand(body);
@@ -272,6 +322,11 @@ describe("OFAPI command outbox intake", () => {
       payload: { text: "not a typing payload" },
     }));
     expect(typingPayload.statusCode, typingPayload.body).toBe(400);
+
+    const unsendPayload = await createCommand(unsendCommandBody({
+      payload: { messageId: "../987654321" },
+    }));
+    expect(unsendPayload.statusCode, unsendPayload.body).toBe(400);
 
     const created = await createCommand(commandBody());
     const commandId = (created.json() as { commandId: string }).commandId;
@@ -398,6 +453,11 @@ describe("OFAPI command outbox intake", () => {
       retryOfCommandId: typingId,
     }));
     expect(textRetryFromTyping.statusCode, textRetryFromTyping.body).toBe(409);
+
+    const unsendRetry = await createCommand(unsendCommandBody({
+      retryOfCommandId: originalId,
+    }));
+    expect(unsendRetry.statusCode, unsendRetry.body).toBe(400);
   });
 
   it("executes one vendor attempt and confirms from the response id", async () => {
@@ -465,6 +525,41 @@ describe("OFAPI command outbox intake", () => {
     });
     expect("payload" in (fetched.json() as Record<string, unknown>)).toBe(false);
   });
+
+  it("executes one unsend attempt and confirms with the target platform message id", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const unsendMessage = vi.fn().mockResolvedValue({ success: true });
+    appContext.ofapi = { unsendMessage } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(unsendCommandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await expect(executeOfapiCommand(
+      appContext,
+      commandId,
+      new Date("2026-06-19T20:06:00.000Z"),
+    )).resolves.toMatchObject({ status: "confirmed", commandId });
+    await executeOfapiCommand(appContext, commandId);
+
+    expect(unsendMessage).toHaveBeenCalledTimes(1);
+    expect(unsendMessage).toHaveBeenCalledWith(
+      { pageId: expect.any(Number) },
+      ACCOUNT_ONE,
+      CONVERSATION,
+      "987654321",
+    );
+    const fetched = await getCommand(commandId);
+    expect(fetched.json()).toMatchObject({
+      kind: "unsend_message_v1",
+      state: "confirmed",
+      attemptCount: 1,
+      platformMessageId: "987654321",
+      attemptStartedAt: "2026-06-19T20:06:00.000Z",
+      attemptFinishedAt: expect.any(String),
+      verifierResult: { source: "ofapi_response", commandKind: "unsend_message_v1" },
+    });
+    expect("payload" in (fetched.json() as Record<string, unknown>)).toBe(false);
+  });
+
 
   it("repairs an indeterminate send from one matching messages.sent webhook", async () => {
     appContext.config.ofapiDesktopCommandExecutionEnabled = true;

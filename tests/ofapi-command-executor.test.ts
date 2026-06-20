@@ -240,3 +240,103 @@ describe("OFAPI typing command client", () => {
     expect(JSON.stringify(error)).not.toContain("vendor details");
   });
 });
+
+describe("OFAPI unsend command client", () => {
+  it("makes one paced DELETE and reports page-attributed spend", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { success: true },
+      _meta: {
+        _credits: { used: 1, balance: 998 },
+      },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const observations: OfapiCreditSpendObservation[] = [];
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+      onCreditSpend: (observation) => {
+        observations.push(observation);
+      },
+    });
+
+    await expect(client.unsendMessage!(
+      { pageId: 42 },
+      ACCOUNT,
+      CONVERSATION,
+      "987654321",
+    )).resolves.toEqual({ success: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `https://ofapi.invalid/api/${ACCOUNT}/chats/${CONVERSATION}/messages/987654321`,
+    );
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      operation: "ofapi_command_unsend_message",
+      httpStatus: 200,
+      credits: 1,
+      estimated: false,
+      balanceAfter: 998,
+      pageId: 42,
+      attemptNumber: 1,
+    });
+  });
+
+  it("never retries or retains a rejected unsend vendor body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "message 987654321 can no longer be unsent",
+    }), {
+      status: 422,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+    });
+
+    const error = await client.unsendMessage!(
+      { pageId: 42 },
+      ACCOUNT,
+      CONVERSATION,
+      "987654321",
+    ).catch((caught) => caught);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(OfapiApiError);
+    expect(error).toMatchObject({ status: 422, body: null });
+    expect(JSON.stringify(error)).not.toContain("can no longer be unsent");
+  });
+
+  it("treats a 2xx response without success=true as ambiguous", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: 987654321 },
+    }), { status: 200 })));
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+    });
+
+    const error = await client.unsendMessage!(
+      { pageId: 42 },
+      ACCOUNT,
+      CONVERSATION,
+      "987654321",
+    ).catch((caught) => caught);
+
+    expect(error).toMatchObject({ status: 200, body: null });
+    expect(classifyOfapiCommandFailure(error)).toMatchObject({
+      state: "indeterminate",
+      errorCode: "ofapi_ambiguous_success",
+    });
+  });
+});
