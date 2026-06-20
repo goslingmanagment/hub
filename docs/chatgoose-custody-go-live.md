@@ -304,10 +304,24 @@ order by id desc
 limit 5;
 ```
 
-Production mark-read validation is pending deploy. Use only the owner-controlled
-`loravievip`/`loravie` route, verify exactly one vendor attempt and one ledger row, prove payload/API
-and logs remain redacted, then run the staged execution rollback drill before leaving execution
-enabled.
+Production mark-read validation completed on 2026-06-20:
+
+- Canonical dist-only deploy reached revision `8fb9a9bc8393`; migration
+  `0045_ofapi_command_mark_chat_read.sql` was applied at `2026-06-20 04:13:53.282961+00`.
+- Owner-only command `be5c38b9-2697-4bc1-81de-957ec8db2368` on the
+  `loravievip`/`loravie` route reached `confirmed` with one vendor attempt, payload `{}`, null
+  `platform_message_id`, and an OFAPI-response verifier.
+- Ledger row `18` recorded `ofapi_command_mark_chat_read` for page `9`, HTTP 200, one credit,
+  `estimated=false`, and `{"attemptNumber":1}`.
+- Worker log checks for the validation window found no payload, media URL, signed CDN field, text,
+  or owner conversation id.
+- Rollback drill staged command execution `false`, recreated API/worker, and proved mark-read
+  command `4bbd0943-5e56-4500-9125-38928b89ebd9` remained queued/cancelled with zero attempts and no
+  new mark-read ledger row. Execution was restored to staged `true`; final API/worker heartbeats
+  reported command outbox `true`, command execution `true`, AI gateway `true`, and zero skipped
+  overrides.
+- The temporary validation key was revoked and its page assignment removed. The validation user has
+  zero active keys and no assigned pages.
 
 ## Rollback Matrix
 

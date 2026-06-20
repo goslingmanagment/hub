@@ -1,9 +1,8 @@
 # OFAPI Desktop Command Outbox Contract
 
 Status: C6b1 intake/read/cancel, C6b2 executor, terminal payload redaction, desktop recovery
-transport, controlled text execution, and the core typing/unsend command slices are implemented
-and production-validated as of 2026-06-20. The core mark-read command slice is implemented and
-pending production validation.
+transport, controlled text execution, and the core typing/unsend/mark-read command slices are
+implemented and production-validated as of 2026-06-20.
 Decision owner: core Decisions #55, #56, #58, #59, and #60.
 
 ## Boundary
@@ -576,7 +575,7 @@ Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
 
 ## C6b5 Mark-Read Command Slice
 
-Status: implemented, pending production deploy/validation.
+Status: implemented and production-validated.
 Decision owner: core Decision #60.
 
 ### Contract
@@ -605,19 +604,28 @@ Decision owner: core Decision #60.
 - Successful JSON `{data:{success:true}}`, bare `{success:true}`, or empty `2xx/204` response
   confirms the command. Non-JSON or missing-success `2xx` is indeterminate.
 
-### Production Validation Plan
+### Production Validation Evidence
 
-Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
+Owner-controlled `loravievip` to `loravie` validation completed on 2026-06-20:
 
-1. Migration `0045` applied and API/worker heartbeats match the deployed source revision.
-2. Create one `mark_chat_read_v1` command through a chatter key assigned only to the owner page.
-3. Command reaches terminal `confirmed` with `attempt_count=1`, null `platform_message_id`, and
-   payload `{}`.
-4. `ofapi_credit_ledger` has exactly one matching `ofapi_command_mark_chat_read` row.
-5. API/worker logs contain command ids and bounded outcome metadata only; no message text, payload,
-   or media URLs appear.
-6. Stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false`, recreate API/worker, prove a new mark-read
-   command remains `queued`/unclaimed, cancel it, then restore execution if validation passes.
+1. Canonical dist-only deploy reached revision `8fb9a9bc8393`; API and worker were healthy on
+   dependency checksum `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`.
+2. Migration `0045_ofapi_command_mark_chat_read.sql` was applied at
+   `2026-06-20 04:13:53.282961+00`.
+3. Owner-only command `be5c38b9-2697-4bc1-81de-957ec8db2368` reached `confirmed` with
+   `attempt_count=1`, null `platform_message_id`, payload `{}`, and verifier
+   `{"source":"ofapi_response","commandKind":"mark_chat_read_v1"}`.
+4. `ofapi_credit_ledger` row `18` recorded `ofapi_command_mark_chat_read` for page `9`, HTTP 200,
+   one credit, `estimated=false`, and `{"attemptNumber":1}`.
+5. Worker log redaction checks over the validation window found no payload, text, media URL, signed
+   CDN field, or owner conversation id.
+6. Rollback staged `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false`, recreated API/worker, and proved
+   command `4bbd0943-5e56-4500-9125-38928b89ebd9` stayed unclaimed with `attempt_count=0` and no
+   additional mark-read ledger row. The command was cancelled, execution was restored to `true`, and
+   final API/worker heartbeats reported outbox `true`, execution `true`, AI gateway `true`, and zero
+   skipped overrides.
+7. The temporary validation key was revoked and the validation user has zero assigned pages and zero
+   active keys.
 
 ### 2026-06-19 Payload Redaction Production Evidence
 

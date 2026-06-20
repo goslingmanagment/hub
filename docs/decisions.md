@@ -719,9 +719,19 @@ command outbox instead of adding a generic write proxy.
   Desktop Direct write transport remains the rollback path until all write kinds are centralized
   and production-soaked.
 
-**Production validation status:** implementation is pending deploy and owner-only validation. The
-validation route must be `loravievip`/`loravie`; no third-party or paying-fan mark-read action is
-allowed.
+**Production validation:** revision `8fb9a9bc8393` deployed through the canonical dist-only path
+with migration `0045_ofapi_command_mark_chat_read.sql` applied. The owner-only route
+`lora-vip-of` to the `loravie` conversation `518588958` created mark-read command
+`be5c38b9-2697-4bc1-81de-957ec8db2368`. The command reached `confirmed` after one vendor
+attempt, kept payload `{}`, kept `platform_message_id=null`, and wrote one `ofapi_credit_ledger`
+row under `ofapi_command_mark_chat_read` with HTTP 200, one credit, `estimated=false`, and
+`attemptNumber=1`. Bounded worker log checks contained command/page/kind metadata only and no
+payload, text, media URL, signed CDN field, or conversation/account text. The rollback drill staged
+execution `false`, recreated API/worker, proved command
+`4bbd0943-5e56-4500-9125-38928b89ebd9` stayed queued with zero attempts and no new ledger row,
+cancelled it, then restored execution `true`. Final heartbeats reported outbox `true`, execution
+`true`, AI gateway `true`, and zero skipped overrides. The temporary validation key was revoked and
+its page assignment removed.
 
 ## ChatMuse AI Gateway Contract (2026-06-19)
 
