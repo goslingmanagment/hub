@@ -25,7 +25,8 @@ import type { ConfigOverrideValue, RunningSnapshot } from "@agency_hub_core/shar
 export type OfapiCommandKind =
   | "send_text_message_v1"
   | "typing_active_v1"
-  | "unsend_message_v1";
+  | "unsend_message_v1"
+  | "mark_chat_read_v1";
 export type OfapiCommandPayload = { text: string } | { messageId: string } | Record<string, never>;
 
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);

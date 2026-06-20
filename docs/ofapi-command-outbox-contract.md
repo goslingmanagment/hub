@@ -2,8 +2,9 @@
 
 Status: C6b1 intake/read/cancel, C6b2 executor, terminal payload redaction, desktop recovery
 transport, controlled text execution, and the core typing/unsend command slices are implemented
-and production-validated as of 2026-06-20.
-Decision owner: core Decisions #55, #56, #58, and #59.
+and production-validated as of 2026-06-20. The core mark-read command slice is implemented and
+pending production validation.
+Decision owner: core Decisions #55, #56, #58, #59, and #60.
 
 ## Boundary
 
@@ -16,8 +17,8 @@ The v1 boundary remains deliberately narrow:
 - `OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED` gates intake/read/cancel.
 - `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED` gates vendor execution and requires the outbox flag.
 - Executable command kinds are narrow and versioned: `send_text_message_v1`, `typing_active_v1`,
-  and `unsend_message_v1`. Marking read, uploading, liking, media, and PPV remain outside this
-  command version.
+  `unsend_message_v1`, and `mark_chat_read_v1`. Uploading, liking, media, and PPV remain outside
+  this command version.
 
 ## Version 1 Commands
 
@@ -62,10 +63,23 @@ Unsend message:
 }
 ```
 
-Version 1 rejects media, PPV, reply-to, uploads, mark-read, likes, and unknown payload fields.
-Typing and unsend commands cannot set `retryOfCommandId`. Typing is advisory: desktop does not
-need recovery UI for a missed beacon. Unsend is destructive: desktop tombstones the local row only
-after core confirms the DELETE response or a later `messages.deleted` event/snapshot tombstone.
+Mark chat read:
+
+```json
+{
+  "clientCommandId": "uuid",
+  "kind": "mark_chat_read_v1",
+  "accountId": "acct_...",
+  "conversationId": "numeric OnlyFans fan/chat id",
+  "payload": {}
+}
+```
+
+Version 1 rejects media, PPV, reply-to, uploads, likes, and unknown payload fields. Typing, unsend,
+and mark-read commands cannot set `retryOfCommandId`. Typing is advisory: desktop does not need
+recovery UI for a missed beacon. Unsend is destructive: desktop tombstones the local row only after
+core confirms the DELETE response or a later `messages.deleted` event/snapshot tombstone. Mark-read
+confirms only from the OFAPI response; any later read workflow action is a fresh command.
 
 ## API
 
@@ -559,6 +573,51 @@ Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
   final heartbeats reported execution `true`, outbox `true`, AI gateway `true`, and zero skipped
   overrides. The temporary validation key was revoked and its page assignment removed; it has zero
   active keys and no assigned pages.
+
+## C6b5 Mark-Read Command Slice
+
+Status: implemented, pending production deploy/validation.
+Decision owner: core Decision #60.
+
+### Contract
+
+- `mark_chat_read_v1` uses the same command outbox, page/chatter ACL, durable dedupe, state
+  machine, one-attempt executor, and staged rollback as text, typing, and unsend commands.
+- Payload is exactly `{}`. It cannot contain text, media URLs, arbitrary vendor path fields, or
+  reply/media/PPV fields.
+- `retryOfCommandId` is rejected. A later mark-read is a fresh explicit action from desktop's
+  open/read workflow rather than automatic retry after an ambiguous first attempt.
+- `messages.sent` webhook verification ignores mark-read commands. There is no webhook verifier in
+  this slice; the OFAPI response confirms the row.
+- On confirmed POST, `platform_message_id` remains null. Audit evidence is command id, account,
+  conversation id, state, payload hash, timestamps, attempt count, bounded error metadata, and
+  credit ledger operation.
+
+### Implementation
+
+- Migration `0045_ofapi_command_mark_chat_read.sql` widens `ofapi_commands.kind` to include
+  `mark_chat_read_v1`; existing rows are not rewritten.
+- Core contracts use a discriminated command schema: mark-read commands require empty payload and
+  reject retry lineage.
+- The core OFAPI client sends one
+  `POST /api/{accountId}/chats/{conversationId}/mark-as-read` request with no body, global pacing,
+  bounded timeout, and page-attributed credit observation `ofapi_command_mark_chat_read`.
+- Successful JSON `{data:{success:true}}`, bare `{success:true}`, or empty `2xx/204` response
+  confirms the command. Non-JSON or missing-success `2xx` is indeterminate.
+
+### Production Validation Plan
+
+Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
+
+1. Migration `0045` applied and API/worker heartbeats match the deployed source revision.
+2. Create one `mark_chat_read_v1` command through a chatter key assigned only to the owner page.
+3. Command reaches terminal `confirmed` with `attempt_count=1`, null `platform_message_id`, and
+   payload `{}`.
+4. `ofapi_credit_ledger` has exactly one matching `ofapi_command_mark_chat_read` row.
+5. API/worker logs contain command ids and bounded outcome metadata only; no message text, payload,
+   or media URLs appear.
+6. Stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false`, recreate API/worker, prove a new mark-read
+   command remains `queued`/unclaimed, cancel it, then restore execution if validation passes.
 
 ### 2026-06-19 Payload Redaction Production Evidence
 

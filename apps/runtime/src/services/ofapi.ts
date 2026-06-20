@@ -89,6 +89,10 @@ export interface OfapiUnsendResult {
   success: true;
 }
 
+export interface OfapiMarkReadResult {
+  success: true;
+}
+
 // One credit-spend report per response that reached the server (retry attempts
 // included — OFAPI charged each). Emitted by the client itself on BOTH request
 // paths, so callers cannot forget to account spend (D1).
@@ -215,6 +219,13 @@ export interface OfapiClient {
     conversationId: string,
     messageId: string,
   ): Promise<OfapiUnsendResult>;
+  // Decision #60: exactly one mark-read attempt. Empty payload; no text/media
+  // fields are accepted or logged.
+  markChatRead?(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+  ): Promise<OfapiMarkReadResult>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -893,6 +904,86 @@ export function createOfapiClient(input: {
     return { success: true };
   }
 
+  async function markChatReadRequest(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+  ): Promise<OfapiMarkReadResult> {
+    const operation = "ofapi_command_mark_chat_read";
+    const pathname = `/${encodeURIComponent(accountId)}/chats/${
+      encodeURIComponent(conversationId)
+    }/mark-as-read`;
+    const requestId = `${operation}:${randomUUID()}`;
+    await waitForRequestSlot();
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}${pathname}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${input.apiKey}`,
+          accept: "application/json",
+        },
+        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      throw new OfapiApiError(
+        `OFAPI command transport failed: POST ${pathname}`,
+        null,
+        null,
+      );
+    }
+
+    const text = await response.text();
+    let responseBody: unknown = null;
+    let bodyIsJson = text.length === 0;
+    if (text.length > 0) {
+      try {
+        responseBody = JSON.parse(text) as unknown;
+        bodyIsJson = true;
+      } catch {
+        bodyIsJson = false;
+      }
+    }
+
+    await reportCreditSpend({
+      operation,
+      httpStatus: response.status,
+      body: responseBody,
+      requestId,
+      pageId: context.pageId ?? null,
+      attemptNumber: 1,
+    });
+
+    if (!response.ok) {
+      throw new OfapiApiError(
+        `OFAPI command rejected: POST ${pathname} returned ${response.status}`,
+        response.status,
+        null,
+      );
+    }
+    if (!bodyIsJson) {
+      throw new OfapiApiError(
+        `OFAPI command returned non-JSON success: POST ${pathname}`,
+        response.status,
+        null,
+      );
+    }
+    if (text.length === 0) {
+      return { success: true };
+    }
+
+    const record = asRecord(unwrapData(responseBody));
+    if (record?.success !== true) {
+      throw new OfapiApiError(
+        `OFAPI command success omitted success=true: POST ${pathname}`,
+        response.status,
+        null,
+      );
+    }
+    return { success: true };
+  }
+
   async function request(
     operation: string,
     method: string,
@@ -1067,6 +1158,9 @@ export function createOfapiClient(input: {
     },
     async unsendMessage(context, accountId, conversationId, messageId) {
       return unsendMessageRequest(context, accountId, conversationId, messageId);
+    },
+    async markChatRead(context, accountId, conversationId) {
+      return markChatReadRequest(context, accountId, conversationId);
     },
   };
 }

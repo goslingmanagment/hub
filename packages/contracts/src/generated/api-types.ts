@@ -7001,6 +7001,15 @@ export interface paths {
                             messageId: string;
                         };
                         retryOfCommandId?: null;
+                    } | {
+                        /** Format: uuid */
+                        clientCommandId: string;
+                        accountId: string;
+                        conversationId: string;
+                        /** @enum {string} */
+                        kind: "mark_chat_read_v1";
+                        payload: Record<string, never>;
+                        retryOfCommandId?: null;
                     };
                 };
             };
@@ -7017,7 +7026,7 @@ export interface paths {
                             /** Format: uuid */
                             clientCommandId: string;
                             /** @enum {string} */
-                            kind: "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1";
+                            kind: "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1" | "mark_chat_read_v1";
                             accountId: string;
                             conversationId: string;
                             /** @enum {string} */
@@ -7051,7 +7060,7 @@ export interface paths {
                             /** Format: uuid */
                             clientCommandId: string;
                             /** @enum {string} */
-                            kind: "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1";
+                            kind: "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1" | "mark_chat_read_v1";
                             accountId: string;
                             conversationId: string;
                             /** @enum {string} */
@@ -7193,7 +7202,7 @@ export interface paths {
                             /** Format: uuid */
                             clientCommandId: string;
                             /** @enum {string} */
-                            kind: "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1";
+                            kind: "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1" | "mark_chat_read_v1";
                             accountId: string;
                             conversationId: string;
                             /** @enum {string} */
@@ -7313,7 +7322,7 @@ export interface paths {
                             /** Format: uuid */
                             clientCommandId: string;
                             /** @enum {string} */
-                            kind: "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1";
+                            kind: "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1" | "mark_chat_read_v1";
                             accountId: string;
                             conversationId: string;
                             /** @enum {string} */

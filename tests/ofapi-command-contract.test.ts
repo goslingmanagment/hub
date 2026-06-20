@@ -37,6 +37,16 @@ function validUnsendBody() {
   };
 }
 
+function validMarkReadBody() {
+  return {
+    clientCommandId: randomUUID(),
+    kind: "mark_chat_read_v1" as const,
+    accountId: "acct_11000000000000000000000000000000",
+    conversationId: "123456789",
+    payload: {},
+  };
+}
+
 describe("OFAPI command contract", () => {
   it("accepts the versioned text-only command", () => {
     const body = validBody();
@@ -66,6 +76,19 @@ describe("OFAPI command contract", () => {
     expect(createOfapiCommandBodySchema.safeParse({
       ...body,
       payload: { messageId: "987654321", text: "must not be accepted" },
+    }).success).toBe(false);
+    expect(createOfapiCommandBodySchema.safeParse({
+      ...body,
+      retryOfCommandId: randomUUID(),
+    }).success).toBe(false);
+  });
+
+  it("accepts the versioned mark-read command with an empty payload only", () => {
+    const body = validMarkReadBody();
+    expect(createOfapiCommandBodySchema.parse(body)).toEqual(body);
+    expect(createOfapiCommandBodySchema.safeParse({
+      ...body,
+      payload: { messageId: "987654321" },
     }).success).toBe(false);
     expect(createOfapiCommandBodySchema.safeParse({
       ...body,

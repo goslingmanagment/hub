@@ -57,6 +57,7 @@
 | 57 | DM Aggregate Analytics | Replaceable aggregate-only UTC daily facts over the governed cold archive; no transcript text, media URLs, or fan identifiers |
 | 58 | OFAPI Typing Command Custody | Empty-payload `typing_active_v1` command through the core outbox/executor; no retry, no webhook text matching, zero fallback credits, Direct rollback retained |
 | 59 | OFAPI Unsend Command Custody | Numeric-target `unsend_message_v1` command through the core outbox/executor; no retry, one DELETE attempt, bounded audit surface, Direct rollback retained |
+| 60 | OFAPI Mark-Read Command Custody | Empty-payload `mark_chat_read_v1` command through the core outbox/executor; no retry, one mark-as-read POST, bounded audit surface, Direct rollback retained |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -694,6 +695,33 @@ command `358ad76c-3670-494a-800f-b99fe35b5474` stayed queued with zero attempts 
 row, cancelled it, then restored execution `true`. Final heartbeats reported outbox `true`,
 execution `true`, AI gateway `true`, and zero skipped overrides. The temporary validation key was
 revoked and its page assignment removed.
+
+## OFAPI Mark-Read Command Custody (2026-06-20)
+
+**Decision #60:** The next safe command after unsend is explicit chat mark-read. It has no
+message text/media payload, but it still mutates OnlyFans read state, so it extends the existing
+command outbox instead of adding a generic write proxy.
+
+- **Command kind:** `mark_chat_read_v1`, with the same `clientCommandId`, account, conversation,
+  page/chatter ACL, durable dedupe, and one-attempt executor as other command kinds. Payload is
+  exactly `{}`.
+- **No retry/recovery:** mark-read is a state mutation. `retryOfCommandId` is rejected; any later
+  mark-read is a fresh explicit action from the desktop open/read workflow.
+- **Vendor request:** one `POST /api/{accountId}/chats/{conversationId}/mark-as-read` through the
+  core OFAPI client, with global pacing, bounded timeout, no body, and no automatic retry.
+- **Accounting:** operation `ofapi_command_mark_chat_read` records page-attributed OFAPI credit
+  observations from `_meta`; a successful response without `_meta` falls back to the normal
+  one-credit estimated REST assumption.
+- **Verifier/privacy:** webhook text matching applies only to `send_text_message_v1`. Mark-read rows
+  confirm only from the POST response in this slice. APIs and logs can include command id, page id,
+  and command kind, but never message text, media URLs, or arbitrary vendor response fields.
+- **Rollback:** staging `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false` prevents new mark-read claims.
+  Desktop Direct write transport remains the rollback path until all write kinds are centralized
+  and production-soaked.
+
+**Production validation status:** implementation is pending deploy and owner-only validation. The
+validation route must be `loravievip`/`loravie`; no third-party or paying-fan mark-read action is
+allowed.
 
 ## ChatMuse AI Gateway Contract (2026-06-19)
 

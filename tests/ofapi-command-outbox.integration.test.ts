@@ -132,6 +132,17 @@ function unsendCommandBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function markReadCommandBody(overrides: Record<string, unknown> = {}) {
+  return {
+    clientCommandId: randomUUID(),
+    kind: "mark_chat_read_v1",
+    accountId: ACCOUNT_ONE,
+    conversationId: CONVERSATION,
+    payload: {},
+    ...overrides,
+  };
+}
+
 function createCommand(body: Record<string, unknown>, key = chatterKey) {
   return apiServer!.inject({
     method: "POST",
@@ -244,6 +255,43 @@ describe("OFAPI command outbox intake", () => {
     expect(ledger.rows[0]?.count).toBe(0);
   });
 
+  it("creates one queued mark-read command with an empty payload and no payload echo", async () => {
+    const body = markReadCommandBody();
+    const response = await createCommand(body);
+    expect(response.statusCode, response.body).toBe(202);
+    const created = response.json() as Record<string, unknown>;
+    expect(created).toMatchObject({
+      clientCommandId: body.clientCommandId,
+      kind: "mark_chat_read_v1",
+      accountId: ACCOUNT_ONE,
+      conversationId: CONVERSATION,
+      state: "queued",
+      attemptCount: 0,
+      platformMessageId: null,
+      deduplicated: false,
+    });
+    expect("payload" in created).toBe(false);
+
+    const { rows } = await testDb!.pool.query<{
+      payload: Record<string, unknown>;
+      horizon_days: number;
+    }>(
+      `select payload,
+              floor(extract(epoch from (dedupe_expires_at - created_at)) / 86400)::int
+                as horizon_days
+       from ofapi_commands`,
+    );
+    expect(rows).toEqual([{
+      payload: {},
+      horizon_days: 400,
+    }]);
+
+    const ledger = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ofapi_credit_ledger",
+    );
+    expect(ledger.rows[0]?.count).toBe(0);
+  });
+
   it("creates one queued unsend command with a bounded message id payload and no payload echo", async () => {
     const body = unsendCommandBody();
     const response = await createCommand(body);
@@ -327,6 +375,11 @@ describe("OFAPI command outbox intake", () => {
       payload: { messageId: "../987654321" },
     }));
     expect(unsendPayload.statusCode, unsendPayload.body).toBe(400);
+
+    const markReadPayload = await createCommand(markReadCommandBody({
+      payload: { text: "not a mark-read payload" },
+    }));
+    expect(markReadPayload.statusCode, markReadPayload.body).toBe(400);
 
     const created = await createCommand(commandBody());
     const commandId = (created.json() as { commandId: string }).commandId;
@@ -458,6 +511,11 @@ describe("OFAPI command outbox intake", () => {
       retryOfCommandId: originalId,
     }));
     expect(unsendRetry.statusCode, unsendRetry.body).toBe(400);
+
+    const markReadRetry = await createCommand(markReadCommandBody({
+      retryOfCommandId: originalId,
+    }));
+    expect(markReadRetry.statusCode, markReadRetry.body).toBe(400);
   });
 
   it("executes one vendor attempt and confirms from the response id", async () => {
@@ -556,6 +614,39 @@ describe("OFAPI command outbox intake", () => {
       attemptStartedAt: "2026-06-19T20:06:00.000Z",
       attemptFinishedAt: expect.any(String),
       verifierResult: { source: "ofapi_response", commandKind: "unsend_message_v1" },
+    });
+    expect("payload" in (fetched.json() as Record<string, unknown>)).toBe(false);
+  });
+
+  it("executes one mark-read attempt and confirms without a platform message id", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const markChatRead = vi.fn().mockResolvedValue({ success: true });
+    appContext.ofapi = { markChatRead } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(markReadCommandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await expect(executeOfapiCommand(
+      appContext,
+      commandId,
+      new Date("2026-06-19T20:07:00.000Z"),
+    )).resolves.toMatchObject({ status: "confirmed", commandId });
+    await executeOfapiCommand(appContext, commandId);
+
+    expect(markChatRead).toHaveBeenCalledTimes(1);
+    expect(markChatRead).toHaveBeenCalledWith(
+      { pageId: expect.any(Number) },
+      ACCOUNT_ONE,
+      CONVERSATION,
+    );
+    const fetched = await getCommand(commandId);
+    expect(fetched.json()).toMatchObject({
+      kind: "mark_chat_read_v1",
+      state: "confirmed",
+      attemptCount: 1,
+      platformMessageId: null,
+      attemptStartedAt: "2026-06-19T20:07:00.000Z",
+      attemptFinishedAt: expect.any(String),
+      verifierResult: { source: "ofapi_response", commandKind: "mark_chat_read_v1" },
     });
     expect("payload" in (fetched.json() as Record<string, unknown>)).toBe(false);
   });

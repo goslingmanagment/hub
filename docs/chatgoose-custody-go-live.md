@@ -278,6 +278,37 @@ limit 5;
 - The temporary validation key was revoked and its page assignment removed. The validation user has
   zero active keys and no assigned pages.
 
+Mark-read command validation:
+
+```sql
+select id,
+       kind,
+       state,
+       attempt_count,
+       platform_message_id,
+       payload,
+       verifier_result
+from ofapi_commands
+where id = '<mark-read command id>';
+
+select id,
+       operation,
+       page_id,
+       http_status,
+       credits,
+       estimated,
+       details
+from ofapi_credit_ledger
+where operation = 'ofapi_command_mark_chat_read'
+order by id desc
+limit 5;
+```
+
+Production mark-read validation is pending deploy. Use only the owner-controlled
+`loravievip`/`loravie` route, verify exactly one vendor attempt and one ledger row, prove payload/API
+and logs remain redacted, then run the staged execution rollback drill before leaving execution
+enabled.
+
 ## Rollback Matrix
 
 | Failure | Server rollback | Desktop rollback |

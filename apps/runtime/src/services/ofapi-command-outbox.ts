@@ -16,7 +16,11 @@ import {
   ServiceUnavailableError,
 } from "./errors.ts";
 
-type OfapiCommandKind = "send_text_message_v1" | "typing_active_v1" | "unsend_message_v1";
+type OfapiCommandKind =
+  | "send_text_message_v1"
+  | "typing_active_v1"
+  | "unsend_message_v1"
+  | "mark_chat_read_v1";
 type TextCommandRequest = {
   clientCommandId: string;
   kind: "send_text_message_v1";
@@ -41,6 +45,14 @@ type UnsendCommandRequest = {
   payload: { messageId: string };
   retryOfCommandId?: null;
 };
+type MarkReadCommandRequest = {
+  clientCommandId: string;
+  kind: "mark_chat_read_v1";
+  accountId: string;
+  conversationId: string;
+  payload: Record<string, never>;
+  retryOfCommandId?: null;
+};
 
 const RETRYABLE_SOURCE_STATES = new Set([
   "failed_retryable",
@@ -49,7 +61,11 @@ const RETRYABLE_SOURCE_STATES = new Set([
   "cancelled",
 ]);
 
-export type CreateOfapiCommandRequest = TextCommandRequest | TypingCommandRequest | UnsendCommandRequest;
+export type CreateOfapiCommandRequest =
+  | TextCommandRequest
+  | TypingCommandRequest
+  | UnsendCommandRequest
+  | MarkReadCommandRequest;
 
 export interface OfapiCommandView {
   commandId: string;

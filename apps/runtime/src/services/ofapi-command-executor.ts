@@ -133,6 +133,8 @@ function canExecuteCommandKind(
       return typeof app.ofapi?.startTyping === "function";
     case "unsend_message_v1":
       return typeof app.ofapi?.unsendMessage === "function";
+    case "mark_chat_read_v1":
+      return typeof app.ofapi?.markChatRead === "function";
   }
 }
 
@@ -194,7 +196,7 @@ export async function executeOfapiCommand(
         command.ofapiAccountId,
         command.conversationId,
       );
-    } else {
+    } else if (command.kind === "unsend_message_v1") {
       const { messageId } = unsendPayload(command);
       await app.ofapi!.unsendMessage!(
         { pageId: command.pageId },
@@ -203,6 +205,12 @@ export async function executeOfapiCommand(
         messageId,
       );
       platformMessageId = messageId;
+    } else {
+      await app.ofapi!.markChatRead!(
+        { pageId: command.pageId },
+        command.ofapiAccountId,
+        command.conversationId,
+      );
     }
     const confirmedAt = new Date();
     verifierResult.confirmedAt = confirmedAt.toISOString();
