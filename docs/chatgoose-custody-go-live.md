@@ -226,6 +226,58 @@ limit 5;
 - The temporary validation key was revoked and its page assignment removed. The validation user has
   zero active keys and no assigned pages.
 
+Unsend command validation:
+
+```sql
+select id,
+       kind,
+       state,
+       attempt_count,
+       platform_message_id,
+       payload,
+       verifier_result
+from ofapi_commands
+where id = '21cd8d41-8383-40b2-8418-7ca01067ea85';
+
+select id,
+       operation,
+       page_id,
+       http_status,
+       credits,
+       estimated,
+       details
+from ofapi_credit_ledger
+where operation = 'ofapi_command_unsend_message'
+order by id desc
+limit 5;
+```
+
+2026-06-20 production unsend validation evidence:
+
+- Deployed revision `8d75e4f94d93`; API/worker image labels matched that source revision and
+  dependency checksum `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`.
+  Migration `0044_ofapi_command_unsend_message.sql` was applied at
+  `2026-06-20 03:46:07.858525+00`.
+- The owner-controlled validation route was `lora-vip-of` page 9 to `loravie` conversation
+  `518588958`. A fresh owner-only text command created target platform message id
+  `10090438628342`; unsend command `21cd8d41-8383-40b2-8418-7ca01067ea85` then confirmed with
+  `attempt_count=1`, payload `{"messageId":"10090438628342"}`, and
+  `platform_message_id=10090438628342`.
+- Ledger row `15` recorded `ofapi_command_unsend_message`, page 9, HTTP 200, `credits=1`,
+  `estimated=false`, and `attemptNumber=1`.
+- Webhook journal rows for the target message included projected `messages.sent`,
+  `messages.received`, and paired `messages.deleted` events with fanout seq `15563` through
+  `15566`.
+- Bounded production log checks contained command/page/kind/platform-id metadata only and no text
+  canary, payload, media URL, signed CDN field, or provider failure text.
+- Rollback drill staged command execution `false`, recreated API/worker, and proved unsend command
+  `358ad76c-3670-494a-800f-b99fe35b5474` remained `queued` with zero attempts and no new unsend
+  ledger row. The parked command was cancelled, execution was restored to staged `true`, and final
+  API/worker heartbeats reported command outbox `true`, command execution `true`, AI gateway
+  `true`, and zero skipped overrides.
+- The temporary validation key was revoked and its page assignment removed. The validation user has
+  zero active keys and no assigned pages.
+
 ## Rollback Matrix
 
 | Failure | Server rollback | Desktop rollback |

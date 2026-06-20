@@ -679,6 +679,22 @@ creator messages. It extends the existing command outbox instead of adding a wil
   Desktop Direct write transport remains the rollback path until all write kinds are centralized
   and production-soaked.
 
+**Production validation:** revision `8d75e4f94d93` deployed through the canonical dist-only path
+with migration `0044_ofapi_command_unsend_message.sql` applied. The owner-only route
+`lora-vip-of` to the `loravie` conversation `518588958` first created a fresh owner-owned text
+message (`c6f73e57-8b51-4c13-aef7-6ced300390f5`, platform id `10090438628342`), then created
+unsend command `21cd8d41-8383-40b2-8418-7ca01067ea85`. The unsend command reached `confirmed`
+after one vendor attempt, kept payload `{"messageId":"10090438628342"}`, recorded
+`platform_message_id=10090438628342`, and wrote one `ofapi_credit_ledger` row under
+`ofapi_command_unsend_message` with HTTP 200, one credit, and `estimated=false`. Webhook journal
+rows for the target message included projected `messages.sent`, `messages.received`, and paired
+`messages.deleted` events. Bounded log/API checks contained no text canary, payload, media URL, or
+signed CDN fields. The rollback drill staged execution `false`, recreated API/worker, proved
+command `358ad76c-3670-494a-800f-b99fe35b5474` stayed queued with zero attempts and no new ledger
+row, cancelled it, then restored execution `true`. Final heartbeats reported outbox `true`,
+execution `true`, AI gateway `true`, and zero skipped overrides. The temporary validation key was
+revoked and its page assignment removed.
+
 ## ChatMuse AI Gateway Contract (2026-06-19)
 
 **Decision #26 update:** The first ChatMuse AI gateway slice is a default-off, chatter-key,
