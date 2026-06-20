@@ -81,6 +81,13 @@ export interface OfapiSentMessage {
   messageId: string;
 }
 
+export interface OfapiMediaMessageInput {
+  text: string;
+  price: number;
+  mediaFiles: string[];
+  previews: string[];
+}
+
 export interface OfapiTypingResult {
   success: true;
 }
@@ -203,6 +210,14 @@ export interface OfapiClient {
     accountId: string,
     conversationId: string,
     input: { text: string },
+  ): Promise<OfapiSentMessage>;
+  // Decision #61: exactly one media/PPV send attempt. Payload accepts only
+  // bounded media IDs, preview IDs, price, and optional caption text.
+  sendMediaMessage?(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+    input: OfapiMediaMessageInput,
   ): Promise<OfapiSentMessage>;
   // Decision #57: exactly one advisory typing beacon. The endpoint is documented
   // as free, so fallback credit accounting records zero credits if _meta is absent.
@@ -666,13 +681,25 @@ export function createOfapiClient(input: {
     };
   }
 
-  async function sendTextMessageRequest(
+  type OfapiCommandMessageBody = {
+    text: string;
+    price?: number;
+    mediaFiles?: Array<string | number>;
+    previews?: Array<string | number>;
+    lockedText?: true;
+  };
+
+  function toWireMediaId(id: string): string | number {
+    return /^[0-9]+$/.test(id) ? Number(id) : id;
+  }
+
+  async function sendMessageRequest(
     context: OfapiRequestContext,
     accountId: string,
     conversationId: string,
-    command: { text: string },
+    operation: "ofapi_command_send_text" | "ofapi_command_send_media",
+    body: OfapiCommandMessageBody,
   ): Promise<OfapiSentMessage> {
-    const operation = "ofapi_command_send_text";
     const pathname = `/${encodeURIComponent(accountId)}/chats/${
       encodeURIComponent(conversationId)
     }/messages`;
@@ -688,7 +715,7 @@ export function createOfapiClient(input: {
           accept: "application/json",
           "content-type": "application/json",
         },
-        body: JSON.stringify({ text: command.text }),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
       });
     } catch {
@@ -750,6 +777,47 @@ export function createOfapiClient(input: {
       );
     }
     return { messageId };
+  }
+
+  async function sendTextMessageRequest(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+    command: { text: string },
+  ): Promise<OfapiSentMessage> {
+    return sendMessageRequest(
+      context,
+      accountId,
+      conversationId,
+      "ofapi_command_send_text",
+      { text: command.text },
+    );
+  }
+
+  async function sendMediaMessageRequest(
+    context: OfapiRequestContext,
+    accountId: string,
+    conversationId: string,
+    command: OfapiMediaMessageInput,
+  ): Promise<OfapiSentMessage> {
+    const body: OfapiCommandMessageBody = {
+      text: command.text,
+      price: command.price,
+      mediaFiles: command.mediaFiles.map(toWireMediaId),
+    };
+    if (command.previews.length > 0) {
+      body.previews = command.previews.map(toWireMediaId);
+    }
+    if (command.price > 0 && command.text.trim() !== "") {
+      body.lockedText = true;
+    }
+    return sendMessageRequest(
+      context,
+      accountId,
+      conversationId,
+      "ofapi_command_send_media",
+      body,
+    );
   }
 
   async function startTypingRequest(
@@ -1152,6 +1220,9 @@ export function createOfapiClient(input: {
     },
     async sendTextMessage(context, accountId, conversationId, command) {
       return sendTextMessageRequest(context, accountId, conversationId, command);
+    },
+    async sendMediaMessage(context, accountId, conversationId, command) {
+      return sendMediaMessageRequest(context, accountId, conversationId, command);
     },
     async startTyping(context, accountId, conversationId) {
       return startTypingRequest(context, accountId, conversationId);

@@ -34,9 +34,10 @@ Verify from `runtime_instances.running`, not repository defaults:
 - `chatMuseAiGatewayEnabled=true`
 - `skippedOverrides=[]` for both API and worker
 
-Desktop production defaults are Hub read, Hub text write, hourly spend reconcile, and Direct AI
-until the desktop gateway rollout is accepted. Support rollback controls are Direct read/write,
-Direct AI, and the legacy 10-minute spend sweep.
+Desktop production defaults are Hub read, Hub write for text/typing/unsend/mark-read, hourly spend
+reconcile, and Direct AI until the desktop gateway rollout is accepted. Media/PPV send hub write is
+implemented pending production validation and desktop release. Support rollback controls are Direct
+read/write, Direct AI, and the legacy 10-minute spend sweep.
 
 ## Canonical Deploy
 
@@ -322,6 +323,48 @@ Production mark-read validation completed on 2026-06-20:
   overrides.
 - The temporary validation key was revoked and its page assignment removed. The validation user has
   zero active keys and no assigned pages.
+
+Media/PPV send command validation:
+
+```sql
+select id,
+       kind,
+       state,
+       attempt_count,
+       platform_message_id,
+       payload,
+       verifier_result
+from ofapi_commands
+where id = '<media command id>';
+
+select id,
+       operation,
+       page_id,
+       http_status,
+       credits,
+       estimated,
+       details
+from ofapi_credit_ledger
+where operation = 'ofapi_command_send_media'
+order by id desc
+limit 5;
+```
+
+Pending validation for migration `0046_ofapi_command_send_media_message.sql`:
+
+- Validate only on the owner-controlled `loravievip`/`loravie` route and only with an existing owner
+  media id. If no existing media id is available, abort rather than implementing upload in this
+  slice.
+- The command payload may contain caption, price, media IDs, and preview IDs, but API responses and
+  logs must not echo caption text, media IDs, filenames, media URLs, signed CDN fields, or arbitrary
+  vendor body fields.
+- The command must reach a terminal state after exactly one vendor attempt, write exactly one
+  `ofapi_command_send_media` ledger row, and record the platform message id when confirmed.
+- If a live message is posted, clean it up only through the already validated owner-only unsend
+  command path.
+- Rollback drill: stage command execution `false`, recreate API/worker, prove a fresh media command
+  stays `queued` with zero attempts and no new media ledger row, cancel it, and restore execution
+  only if validation passes.
 
 ## Rollback Matrix
 

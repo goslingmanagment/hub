@@ -27,6 +27,21 @@ function validTypingBody() {
   };
 }
 
+function validMediaBody() {
+  return {
+    clientCommandId: randomUUID(),
+    kind: "send_media_message_v1" as const,
+    accountId: "acct_11000000000000000000000000000000",
+    conversationId: "123456789",
+    payload: {
+      text: "",
+      price: 25,
+      mediaFiles: ["3866342509", "ofapi_media_abc123"],
+      previews: ["3866342509"],
+    },
+  };
+}
+
 function validUnsendBody() {
   return {
     clientCommandId: randomUUID(),
@@ -51,6 +66,44 @@ describe("OFAPI command contract", () => {
   it("accepts the versioned text-only command", () => {
     const body = validBody();
     expect(createOfapiCommandBodySchema.parse(body)).toEqual(body);
+  });
+
+  it("accepts the versioned media/PPV command without URLs or file bytes", () => {
+    const body = validMediaBody();
+    expect(createOfapiCommandBodySchema.parse(body)).toEqual(body);
+    expect(createOfapiCommandBodySchema.parse({
+      ...body,
+      payload: {
+        text: "free preview",
+        price: 0,
+        mediaFiles: ["ofapi_media_uploaded"],
+        previews: [],
+      },
+    })).toMatchObject({
+      kind: "send_media_message_v1",
+      payload: { price: 0 },
+    });
+  });
+
+  it("rejects malformed media command payloads", () => {
+    const body = validMediaBody();
+    const cases = [
+      { payload: { ...body.payload, mediaFiles: [] } },
+      { payload: { ...body.payload, mediaFiles: ["https://cdn.example/media.jpg"] } },
+      { payload: { ...body.payload, mediaFiles: ["123", "123"] } },
+      { payload: { ...body.payload, previews: ["999"] } },
+      { payload: { ...body.payload, previews: ["123", "123"], mediaFiles: ["123"] } },
+      { payload: { ...body.payload, price: 2 } },
+      { payload: { ...body.payload, price: 25.5 } },
+      { payload: { ...body.payload, text: "x".repeat(10_001) } },
+      { payload: { ...body.payload, mediaUrl: "https://cdn.example/media.jpg" } },
+    ];
+    for (const broken of cases) {
+      expect(createOfapiCommandBodySchema.safeParse({
+        ...body,
+        ...broken,
+      }).success).toBe(false);
+    }
   });
 
   it("accepts the versioned typing command with an empty payload only", () => {

@@ -18,6 +18,7 @@ import {
 
 type OfapiCommandKind =
   | "send_text_message_v1"
+  | "send_media_message_v1"
   | "typing_active_v1"
   | "unsend_message_v1"
   | "mark_chat_read_v1";
@@ -27,6 +28,19 @@ type TextCommandRequest = {
   accountId: string;
   conversationId: string;
   payload: { text: string };
+  retryOfCommandId?: string | null;
+};
+type MediaCommandRequest = {
+  clientCommandId: string;
+  kind: "send_media_message_v1";
+  accountId: string;
+  conversationId: string;
+  payload: {
+    text: string;
+    price: number;
+    mediaFiles: string[];
+    previews: string[];
+  };
   retryOfCommandId?: string | null;
 };
 type TypingCommandRequest = {
@@ -63,6 +77,7 @@ const RETRYABLE_SOURCE_STATES = new Set([
 
 export type CreateOfapiCommandRequest =
   | TextCommandRequest
+  | MediaCommandRequest
   | TypingCommandRequest
   | UnsendCommandRequest
   | MarkReadCommandRequest;
@@ -121,7 +136,16 @@ function canonicalHash(input: {
   kind: OfapiCommandKind;
   accountId: string;
   conversationId: string;
-  payload: { text: string } | { messageId: string } | Record<string, never>;
+  payload:
+    | { text: string }
+    | {
+      text: string;
+      price: number;
+      mediaFiles: string[];
+      previews: string[];
+    }
+    | { messageId: string }
+    | Record<string, never>;
   retryOfCommandId: string | null;
 }) {
   return createHash("sha256")
@@ -173,7 +197,11 @@ export async function createOfapiCommand(
   const page = await resolveAssignedPage(app, principal, input.accountId);
   const retryOfCommandId = input.retryOfCommandId ?? null;
 
-  if (input.kind !== "send_text_message_v1" && retryOfCommandId !== null) {
+  if (
+    input.kind !== "send_text_message_v1"
+    && input.kind !== "send_media_message_v1"
+    && retryOfCommandId !== null
+  ) {
     throw new ConflictError(`${input.kind} commands cannot retry another command`);
   }
 

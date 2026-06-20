@@ -110,6 +110,22 @@ function commandBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function mediaCommandBody(overrides: Record<string, unknown> = {}) {
+  return {
+    clientCommandId: randomUUID(),
+    kind: "send_media_message_v1",
+    accountId: ACCOUNT_ONE,
+    conversationId: CONVERSATION,
+    payload: {
+      text: "c6 media validation only",
+      price: 25,
+      mediaFiles: ["3866342509", "ofapi_media_abc123"],
+      previews: ["3866342509"],
+    },
+    ...overrides,
+  };
+}
+
 function typingCommandBody(overrides: Record<string, unknown> = {}) {
   return {
     clientCommandId: randomUUID(),
@@ -209,6 +225,49 @@ describe("OFAPI command outbox intake", () => {
     );
     expect(rows).toEqual([{
       payload_text: "c6b intake validation only",
+      horizon_days: 400,
+    }]);
+
+    const ledger = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ofapi_credit_ledger",
+    );
+    expect(ledger.rows[0]?.count).toBe(0);
+  });
+
+  it("creates one queued media command without calling OFAPI or echoing payload", async () => {
+    const body = mediaCommandBody();
+    const response = await createCommand(body);
+    expect(response.statusCode, response.body).toBe(202);
+    const created = response.json() as Record<string, unknown>;
+    expect(created).toMatchObject({
+      clientCommandId: body.clientCommandId,
+      kind: "send_media_message_v1",
+      accountId: ACCOUNT_ONE,
+      conversationId: CONVERSATION,
+      state: "queued",
+      attemptCount: 0,
+      deduplicated: false,
+    });
+    expect(response.body).not.toContain("c6 media validation only");
+    expect(response.body).not.toContain("3866342509");
+    expect(response.body).not.toContain("ofapi_media_abc123");
+
+    const { rows } = await testDb!.pool.query<{
+      payload: Record<string, unknown>;
+      horizon_days: number;
+    }>(
+      `select payload,
+              floor(extract(epoch from (dedupe_expires_at - created_at)) / 86400)::int
+                as horizon_days
+       from ofapi_commands`,
+    );
+    expect(rows).toEqual([{
+      payload: {
+        text: "c6 media validation only",
+        price: 25,
+        mediaFiles: ["3866342509", "ofapi_media_abc123"],
+        previews: ["3866342509"],
+      },
       horizon_days: 400,
     }]);
 
@@ -366,6 +425,16 @@ describe("OFAPI command outbox intake", () => {
     }));
     expect(mediaPayload.statusCode, mediaPayload.body).toBe(400);
 
+    const badMediaCommand = await createCommand(mediaCommandBody({
+      payload: {
+        text: "bad media",
+        price: 25,
+        mediaFiles: ["3866342509"],
+        previews: ["999"],
+      },
+    }));
+    expect(badMediaCommand.statusCode, badMediaCommand.body).toBe(400);
+
     const typingPayload = await createCommand(typingCommandBody({
       payload: { text: "not a typing payload" },
     }));
@@ -476,6 +545,21 @@ describe("OFAPI command outbox intake", () => {
       state: "queued",
     });
 
+    const mediaOriginal = await createCommand(mediaCommandBody());
+    const mediaOriginalId = (mediaOriginal.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      "update ofapi_commands set state = 'indeterminate', updated_at = now() where id = $1",
+      [mediaOriginalId],
+    );
+    const mediaRetry = await createCommand(mediaCommandBody({
+      retryOfCommandId: mediaOriginalId,
+    }));
+    expect(mediaRetry.statusCode, mediaRetry.body).toBe(202);
+    expect(mediaRetry.json()).toMatchObject({
+      retryOfCommandId: mediaOriginalId,
+      state: "queued",
+    });
+
     const wrongLane = await createCommand(commandBody({
       conversationId: "987654321",
       retryOfCommandId: originalId,
@@ -496,6 +580,11 @@ describe("OFAPI command outbox intake", () => {
     }));
     expect(typingRetry.statusCode, typingRetry.body).toBe(400);
 
+    const mediaRetryFromText = await createCommand(mediaCommandBody({
+      retryOfCommandId: originalId,
+    }));
+    expect(mediaRetryFromText.statusCode, mediaRetryFromText.body).toBe(409);
+
     const typing = await createCommand(typingCommandBody());
     const typingId = (typing.json() as { commandId: string }).commandId;
     await testDb!.pool.query(
@@ -506,6 +595,17 @@ describe("OFAPI command outbox intake", () => {
       retryOfCommandId: typingId,
     }));
     expect(textRetryFromTyping.statusCode, textRetryFromTyping.body).toBe(409);
+
+    const media = await createCommand(mediaCommandBody());
+    const mediaId = (media.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      "update ofapi_commands set state = 'indeterminate', updated_at = now() where id = $1",
+      [mediaId],
+    );
+    const textRetryFromMedia = await createCommand(commandBody({
+      retryOfCommandId: mediaId,
+    }));
+    expect(textRetryFromMedia.statusCode, textRetryFromMedia.body).toBe(409);
 
     const unsendRetry = await createCommand(unsendCommandBody({
       retryOfCommandId: originalId,
@@ -549,6 +649,46 @@ describe("OFAPI command outbox intake", () => {
       verifierResult: { source: "ofapi_response" },
     });
     expect(fetched.body).not.toContain("c6b intake validation only");
+  });
+
+  it("executes one media vendor attempt and confirms from the response id", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendMediaMessage = vi.fn().mockResolvedValue({ messageId: "987654322" });
+    appContext.ofapi = { sendMediaMessage } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(mediaCommandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await expect(executeOfapiCommand(
+      appContext,
+      commandId,
+      new Date("2026-06-19T20:02:00.000Z"),
+    )).resolves.toMatchObject({ status: "confirmed", commandId });
+    await executeOfapiCommand(appContext, commandId);
+
+    expect(sendMediaMessage).toHaveBeenCalledTimes(1);
+    expect(sendMediaMessage).toHaveBeenCalledWith(
+      { pageId: expect.any(Number) },
+      ACCOUNT_ONE,
+      CONVERSATION,
+      {
+        text: "c6 media validation only",
+        price: 25,
+        mediaFiles: ["3866342509", "ofapi_media_abc123"],
+        previews: ["3866342509"],
+      },
+    );
+    const fetched = await getCommand(commandId);
+    expect(fetched.json()).toMatchObject({
+      kind: "send_media_message_v1",
+      state: "confirmed",
+      attemptCount: 1,
+      platformMessageId: "987654322",
+      attemptStartedAt: "2026-06-19T20:02:00.000Z",
+      attemptFinishedAt: expect.any(String),
+      verifierResult: { source: "ofapi_response", commandKind: "send_media_message_v1" },
+    });
+    expect(fetched.body).not.toContain("c6 media validation only");
+    expect(fetched.body).not.toContain("ofapi_media_abc123");
   });
 
   it("executes one typing beacon attempt and confirms without a platform message id", async () => {
@@ -689,6 +829,53 @@ describe("OFAPI command outbox intake", () => {
       attemptCount: 1,
       platformMessageId: "1234567890",
       verifierResult: { source: "messages.sent", eventId: 9001 },
+    });
+  });
+
+  it("repairs an indeterminate media send from a matching messages.sent webhook", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendMediaMessage = vi.fn().mockRejectedValue(
+      new OfapiApiError("sanitized transport outcome", null, null),
+    );
+    appContext.ofapi = { sendMediaMessage } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(mediaCommandBody({
+      payload: {
+        text: "",
+        price: 25,
+        mediaFiles: ["3866342509", "ofapi_media_abc123"],
+        previews: ["3866342509"],
+      },
+    }));
+    const commandId = (created.json() as { commandId: string }).commandId;
+    const attemptStartedAt = new Date("2026-06-19T20:11:00.000Z");
+    await executeOfapiCommand(appContext, commandId, attemptStartedAt);
+
+    const verified = await verifyOfapiCommandFromSentWebhook(appContext, {
+      id: 9003,
+      eventType: "messages.sent",
+      ofapiAccountId: ACCOUNT_ONE,
+      receivedAt: new Date("2026-06-19T20:11:01.000Z"),
+      payload: {
+        event: "messages.sent",
+        account_id: ACCOUNT_ONE,
+        payload: {
+          id: 1234567892,
+          text: "",
+          price: 25,
+          media: [{ id: "redacted-a" }, { id: "redacted-b" }],
+          toUser: { id: Number(CONVERSATION) },
+        },
+      },
+    });
+
+    expect(sendMediaMessage).toHaveBeenCalledTimes(1);
+    expect(verified).toMatchObject({ status: "confirmed", commandId });
+    expect((await getCommand(commandId)).json()).toMatchObject({
+      state: "confirmed",
+      attemptCount: 1,
+      platformMessageId: "1234567892",
+      verifierResult: { source: "messages.sent", eventId: 9003 },
     });
   });
 

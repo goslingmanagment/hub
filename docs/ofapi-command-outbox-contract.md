@@ -2,8 +2,9 @@
 
 Status: C6b1 intake/read/cancel, C6b2 executor, terminal payload redaction, desktop recovery
 transport, controlled text execution, and the core typing/unsend/mark-read command slices are
-implemented and production-validated as of 2026-06-20.
-Decision owner: core Decisions #55, #56, #58, #59, and #60.
+implemented and production-validated as of 2026-06-20. The bounded media/PPV send command slice is
+implemented pending production validation.
+Decision owner: core Decisions #55, #56, #58, #59, #60, and #61.
 
 ## Boundary
 
@@ -15,9 +16,10 @@ The v1 boundary remains deliberately narrow:
 
 - `OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED` gates intake/read/cancel.
 - `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED` gates vendor execution and requires the outbox flag.
-- Executable command kinds are narrow and versioned: `send_text_message_v1`, `typing_active_v1`,
-  `unsend_message_v1`, and `mark_chat_read_v1`. Uploading, liking, media, and PPV remain outside
-  this command version.
+- Executable command kinds are narrow and versioned: `send_text_message_v1`,
+  `send_media_message_v1`, `typing_active_v1`, `unsend_message_v1`, and `mark_chat_read_v1`.
+  Uploading, liking, reply-to sends, and arbitrary vendor write paths remain outside this command
+  version.
 
 ## Version 1 Commands
 
@@ -31,6 +33,24 @@ Text send:
   "conversationId": "numeric OnlyFans fan/chat id",
   "payload": {
     "text": "non-blank, max 10000 characters"
+  },
+  "retryOfCommandId": "optional core command UUID"
+}
+```
+
+Media/PPV send with existing media ids:
+
+```json
+{
+  "clientCommandId": "uuid",
+  "kind": "send_media_message_v1",
+  "accountId": "acct_...",
+  "conversationId": "numeric OnlyFans fan/chat id",
+  "payload": {
+    "text": "caption may be empty, max 10000 characters",
+    "price": 25,
+    "mediaFiles": ["3866342509", "ofapi_media_abc123"],
+    "previews": ["3866342509"]
   },
   "retryOfCommandId": "optional core command UUID"
 }
@@ -74,11 +94,14 @@ Mark chat read:
 }
 ```
 
-Version 1 rejects media, PPV, reply-to, uploads, likes, and unknown payload fields. Typing, unsend,
-and mark-read commands cannot set `retryOfCommandId`. Typing is advisory: desktop does not need
-recovery UI for a missed beacon. Unsend is destructive: desktop tombstones the local row only after
-core confirms the DELETE response or a later `messages.deleted` event/snapshot tombstone. Mark-read
-confirms only from the OFAPI response; any later read workflow action is a fresh command.
+Version 1 media sends accept only bounded media identifiers already known to OFAPI. They reject
+URLs, local file bytes, filenames, reply-to fields, upload instructions, likes, and unknown payload
+fields. Typing, unsend, and mark-read commands cannot set `retryOfCommandId`. Text and media sends
+may retry only same-kind owned terminal/indeterminate commands in the same lane. Typing is
+advisory: desktop does not need recovery UI for a missed beacon. Unsend is destructive: desktop
+tombstones the local row only after core confirms the DELETE response or a later
+`messages.deleted` event/snapshot tombstone. Mark-read confirms only from the OFAPI response; any
+later read workflow action is a fresh command.
 
 ## API
 
@@ -115,7 +138,7 @@ Command responses omit command payloads:
 {
   "commandId": "uuid",
   "clientCommandId": "uuid",
-  "kind": "send_text_message_v1 | typing_active_v1 | unsend_message_v1",
+  "kind": "send_text_message_v1 | send_media_message_v1 | typing_active_v1 | unsend_message_v1 | mark_chat_read_v1",
   "accountId": "acct_...",
   "conversationId": "123",
   "state": "queued",
@@ -274,6 +297,16 @@ POST /api/{accountId}/chats/{conversationId}/messages
 {"text":"..."}
 ```
 
+`send_media_message_v1` executes exactly one message POST with bounded media fields:
+
+```text
+POST /api/{accountId}/chats/{conversationId}/messages
+{"text":"...","price":25,"mediaFiles":[3866342509,"ofapi_media_abc123"],"previews":[3866342509],"lockedText":true}
+```
+
+`previews` is omitted when empty. `lockedText` is derived by core only when `price > 0` and the
+caption is non-blank.
+
 `typing_active_v1` executes exactly:
 
 ```text
@@ -286,15 +319,15 @@ POST /api/{accountId}/chats/{conversationId}/typing
 DELETE /api/{accountId}/chats/{conversationId}/messages/{messageId}
 ```
 
-Both requests use the core OFAPI client, global pacing, page-attributed credit accounting, a
-bounded timeout, and no automatic retry. Message text is never logged or copied into
+All requests use the core OFAPI client, global pacing, page-attributed credit accounting, a bounded
+timeout, and no automatic retry. Message text and media identifiers are never logged or copied into
 error/verifier metadata. Typing has no text/media payload and records zero fallback credits if a
 successful OFAPI response omits `_meta`; provider `_meta._credits.used` still wins when present.
-Unsend has no text/media payload and uses normal OFAPI response credit observation.
+Unsend and mark-read have no text/media payload and use normal OFAPI response credit observation.
 
 ### Outcome Classification
 
-- Valid text-send `2xx` JSON with a message id: `confirmed`, record `platform_message_id`.
+- Valid text/media-send `2xx` JSON with a message id: `confirmed`, record `platform_message_id`.
 - Valid typing `2xx` JSON or empty success: `confirmed`, leave `platform_message_id` null.
 - Valid unsend `2xx` JSON with `success=true`, or empty `2xx/204` success: `confirmed`, record the
   target message id as `platform_message_id`.
@@ -311,18 +344,19 @@ are not persisted in command outcome metadata.
 
 ### Webhook Verification
 
-A settled `messages.sent` event may confirm `send_text_message_v1` commands in `in_flight` or
-`indeterminate` only when all of these hold:
+A settled `messages.sent` event may confirm `send_text_message_v1` or `send_media_message_v1`
+commands in `in_flight` or `indeterminate` only when all of these hold:
 
 1. OFAPI account and fan conversation match.
 2. Normalized webhook text exactly equals normalized command text.
-3. The event falls inside the bounded attempt-correlation window.
-4. Exactly one eligible command matches.
+3. For media sends only, webhook price and media count match the command payload.
+4. The event falls inside the bounded attempt-correlation window.
+5. Exactly one eligible command matches.
 
-Ambiguous, late, missing-text, non-text-kind, or multi-candidate events do not mutate command
-state. Successful HTTP response remains the primary confirmation path; webhook matching repairs
-text response-loss and worker-crash cases without an extra `GET /messages` that could affect read
-state or spend credits.
+Ambiguous, late, missing-id, missing-conversation, missing media-count for media sends,
+non-send-kind, or multi-candidate events do not mutate command state. Successful HTTP response
+remains the primary confirmation path; webhook matching repairs response-loss and worker-crash
+cases without an extra `GET /messages` that could affect read state or spend credits.
 
 ### Production Gate
 
@@ -331,7 +365,8 @@ The executor is first deployed and validated with execution off. Enabling it req
 - both runtime roles reporting outbox and execution enabled with no skipped overrides;
 - no pre-existing unintended `queued` rows;
 - one explicitly designated controlled test fan/conversation;
-- operator-approved harmless text for text sends or an owner-account typing beacon for typing;
+- operator-approved harmless text for text sends, an owner-account existing media id for media
+  sends, or an owner-account non-message mutation for other command kinds;
 - proof of exactly one OFAPI credit-ledger attempt, terminal command state, matching
   `messages.sent`/projection when validating text delivery, and no payload text in logs;
 - rollback proof that disabling execution leaves intake available and prevents new claims.
@@ -626,6 +661,55 @@ Owner-controlled `loravievip` to `loravie` validation completed on 2026-06-20:
    skipped overrides.
 7. The temporary validation key was revoked and the validation user has zero assigned pages and zero
    active keys.
+
+## C6b6 Media/PPV Send Command Slice
+
+Status: implemented, pending production validation.
+Decision owner: core Decision #61.
+
+### Contract
+
+- `send_media_message_v1` uses the same command outbox, page/chatter ACL, durable dedupe, state
+  machine, one-attempt executor, and staged rollback as text commands.
+- Payload accepts only caption text, integer price, media IDs, and preview IDs. It rejects URLs,
+  file bytes, filenames, reply-to fields, upload instructions, arbitrary vendor paths, and unknown
+  fields.
+- `price` is `0` or an integer from `3` through `200`. `mediaFiles` must be non-empty and bounded;
+  `previews` must be a bounded subset of `mediaFiles`.
+- `retryOfCommandId` is allowed only for owned same-kind media commands in a retryable terminal or
+  indeterminate state. A retry creates a new command row and cannot reattempt the original row.
+- `messages.sent` webhook verification can repair media commands only by account, conversation,
+  normalized caption text, price, media count, time window, and uniqueness. It never compares or
+  logs media IDs.
+
+### Implementation
+
+- Migration `0046_ofapi_command_send_media_message.sql` widens `ofapi_commands.kind` to include
+  `send_media_message_v1`; existing rows are not rewritten.
+- Core contracts use a discriminated schema with strict media ID regexes and preview-subset
+  validation. API status responses still omit the payload.
+- The core OFAPI client sends one
+  `POST /api/{accountId}/chats/{conversationId}/messages` request with JSON body containing text,
+  price, mediaFiles, optional previews, and derived `lockedText` for priced non-blank captions.
+- The operation records credit ledger rows under `ofapi_command_send_media`. Vendor success returns
+  only the platform message id to the executor.
+
+### Production Validation Plan
+
+Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
+
+1. Migration `0046` applied and API/worker heartbeats match the deployed source revision.
+2. Confirm an existing owner media id is available; if not, abort the live validation rather than
+   centralizing upload in this slice.
+3. Create one `send_media_message_v1` command through a chatter key assigned only to the owner page.
+4. Command reaches terminal `confirmed` with `attempt_count=1` and a platform message id.
+5. `ofapi_credit_ledger` has exactly one matching `ofapi_command_send_media` row.
+6. Command status APIs and API/worker logs contain no caption, media id, media URL, filename, signed
+   CDN field, or arbitrary vendor body.
+7. If a message was posted, unsend it through the already validated unsend command path.
+8. Stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false`, recreate API/worker, prove a fresh media
+   command remains `queued` with zero attempts and no new media ledger row, cancel it, then restore
+   execution if validation passes.
 
 ### 2026-06-19 Payload Redaction Production Evidence
 

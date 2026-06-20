@@ -129,6 +129,8 @@ function canExecuteCommandKind(
   switch (command.kind) {
     case "send_text_message_v1":
       return typeof app.ofapi?.sendTextMessage === "function";
+    case "send_media_message_v1":
+      return typeof app.ofapi?.sendMediaMessage === "function";
     case "typing_active_v1":
       return typeof app.ofapi?.startTyping === "function";
     case "unsend_message_v1":
@@ -144,6 +146,61 @@ function textPayload(command: OfapiCommandRow): { text: string } {
     throw new OfapiApiError("OFAPI text command payload is invalid", 422, null);
   }
   return { text: payload.text };
+}
+
+const MEDIA_ID_PATTERN = /^(?:[0-9]{1,30}|ofapi_media_[A-Za-z0-9_-]{1,128})$/;
+
+function mediaPayload(command: OfapiCommandRow): {
+  text: string;
+  price: number;
+  mediaFiles: string[];
+  previews: string[];
+} {
+  const payload = command.payload as {
+    text?: unknown;
+    price?: unknown;
+    mediaFiles?: unknown;
+    previews?: unknown;
+  };
+  const { text, price, mediaFiles, previews } = payload;
+  if (typeof text !== "string" || text.length > 10_000) {
+    throw new OfapiApiError("OFAPI media command text is invalid", 422, null);
+  }
+  if (
+    typeof price !== "number"
+    || !Number.isInteger(price)
+    || price < 0
+    || price > 200
+    || (price !== 0 && price < 3)
+  ) {
+    throw new OfapiApiError("OFAPI media command price is invalid", 422, null);
+  }
+  if (
+    !Array.isArray(mediaFiles)
+    || mediaFiles.length === 0
+    || mediaFiles.length > 50
+    || mediaFiles.some((id) => typeof id !== "string" || !MEDIA_ID_PATTERN.test(id))
+  ) {
+    throw new OfapiApiError("OFAPI media command media files are invalid", 422, null);
+  }
+  if (
+    !Array.isArray(previews)
+    || previews.length > 50
+    || previews.some((id) => typeof id !== "string" || !MEDIA_ID_PATTERN.test(id))
+  ) {
+    throw new OfapiApiError("OFAPI media command previews are invalid", 422, null);
+  }
+
+  const attached = new Set(mediaFiles);
+  if (attached.size !== mediaFiles.length) {
+    throw new OfapiApiError("OFAPI media command media files are invalid", 422, null);
+  }
+  const previewSet = new Set(previews);
+  if (previewSet.size !== previews.length || previews.some((id) => !attached.has(id))) {
+    throw new OfapiApiError("OFAPI media command previews are invalid", 422, null);
+  }
+
+  return { text, price, mediaFiles, previews };
 }
 
 function unsendPayload(command: OfapiCommandRow): { messageId: string } {
@@ -188,6 +245,14 @@ export async function executeOfapiCommand(
         command.ofapiAccountId,
         command.conversationId,
         textPayload(command),
+      );
+      platformMessageId = result.messageId;
+    } else if (command.kind === "send_media_message_v1") {
+      const result = await app.ofapi!.sendMediaMessage!(
+        { pageId: command.pageId },
+        command.ofapiAccountId,
+        command.conversationId,
+        mediaPayload(command),
       );
       platformMessageId = result.messageId;
     } else if (command.kind === "typing_active_v1") {
@@ -304,6 +369,33 @@ type SentWebhookRow = {
   receivedAt: Date;
 };
 
+function numberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && /^-?[0-9]+(?:\.[0-9]+)?$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function webhookMediaCount(payload: Record<string, unknown>): number | null {
+  for (const field of ["media", "medias", "mediaFiles"]) {
+    const value = payload[field];
+    if (Array.isArray(value)) {
+      return value.length;
+    }
+  }
+  for (const field of ["mediaCount", "media_count", "mediasCount"]) {
+    const value = numberValue(payload[field]);
+    if (value !== null && Number.isInteger(value) && value >= 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
 export async function verifyOfapiCommandFromSentWebhook(
   app: AppContext,
   row: SentWebhookRow,
@@ -319,7 +411,9 @@ export async function verifyOfapiCommandFromSentWebhook(
   const conversationId = idToString(asRecord(payload?.toUser)?.id);
   const platformMessageId = idToString(payload?.id);
   const text = normalizeDmMessageText(typeof payload?.text === "string" ? payload.text : "");
-  if (!conversationId || !platformMessageId || text.length === 0) {
+  const mediaCount = webhookMediaCount(payload ?? {});
+  const price = numberValue(payload?.price) ?? 0;
+  if (!conversationId || !platformMessageId || (text.length === 0 && (mediaCount ?? 0) === 0)) {
     return { status: "insufficient_payload" as const };
   }
 
@@ -330,11 +424,31 @@ export async function verifyOfapiCommandFromSentWebhook(
     attemptStartedTo: new Date(row.receivedAt.getTime() + WEBHOOK_CLOCK_SKEW_MS),
   });
   const matches = candidates.filter((candidate) => {
-    if (candidate.kind !== "send_text_message_v1") {
-      return false;
+    if (candidate.kind === "send_text_message_v1") {
+      const candidatePayload = candidate.payload as { text?: unknown };
+      return normalizeDmMessageText(
+        typeof candidatePayload.text === "string" ? candidatePayload.text : "",
+      ) === text;
     }
-    const payload = candidate.payload as { text?: unknown };
-    return normalizeDmMessageText(typeof payload.text === "string" ? payload.text : "") === text;
+    if (candidate.kind === "send_media_message_v1") {
+      if (mediaCount === null) {
+        return false;
+      }
+      const candidatePayload = candidate.payload as {
+        text?: unknown;
+        price?: unknown;
+        mediaFiles?: unknown;
+      };
+      const mediaFiles = Array.isArray(candidatePayload.mediaFiles)
+        ? candidatePayload.mediaFiles
+        : [];
+      return normalizeDmMessageText(
+        typeof candidatePayload.text === "string" ? candidatePayload.text : "",
+      ) === text
+        && candidatePayload.price === price
+        && mediaFiles.length === mediaCount;
+    }
+    return false;
   });
   if (matches.length !== 1) {
     if (matches.length > 1) {

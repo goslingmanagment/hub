@@ -171,6 +171,101 @@ describe("OFAPI text command client", () => {
   });
 });
 
+describe("OFAPI media command client", () => {
+  it("makes one paced POST with bounded media payload and reports spend", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        id: 987654322,
+        text: "<p>secret caption</p>",
+        media: [{ id: 1 }],
+      },
+      _meta: {
+        _credits: { used: 1, balance: 998 },
+      },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const observations: OfapiCreditSpendObservation[] = [];
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+      onCreditSpend: (observation) => {
+        observations.push(observation);
+      },
+    });
+
+    await expect(client.sendMediaMessage!(
+      { pageId: 42 },
+      ACCOUNT,
+      CONVERSATION,
+      {
+        text: "secret caption",
+        price: 25,
+        mediaFiles: ["3866342509", "ofapi_media_abc123"],
+        previews: ["3866342509"],
+      },
+    )).resolves.toEqual({ messageId: "987654322" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `https://ofapi.invalid/api/${ACCOUNT}/chats/${CONVERSATION}/messages`,
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      text: "secret caption",
+      price: 25,
+      mediaFiles: [3866342509, "ofapi_media_abc123"],
+      previews: [3866342509],
+      lockedText: true,
+    });
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      operation: "ofapi_command_send_media",
+      httpStatus: 200,
+      credits: 1,
+      estimated: false,
+      balanceAfter: 998,
+      pageId: 42,
+      attemptNumber: 1,
+    });
+  });
+
+  it("omits previews and lockedText for free captioned media sends", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: 987654323 },
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+    });
+
+    await expect(client.sendMediaMessage!(
+      { pageId: 42 },
+      ACCOUNT,
+      CONVERSATION,
+      {
+        text: "free caption",
+        price: 0,
+        mediaFiles: ["ofapi_media_abc123"],
+        previews: [],
+      },
+    )).resolves.toEqual({ messageId: "987654323" });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      text: "free caption",
+      price: 0,
+      mediaFiles: ["ofapi_media_abc123"],
+    });
+  });
+});
+
 describe("OFAPI typing command client", () => {
   it("makes one paced POST and reports zero fallback spend when _meta is absent", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({

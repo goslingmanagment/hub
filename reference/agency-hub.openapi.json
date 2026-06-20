@@ -21982,6 +21982,88 @@
                       "kind": {
                         "type": "string",
                         "enum": [
+                          "send_media_message_v1"
+                        ]
+                      },
+                      "payload": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string",
+                            "maxLength": 10000
+                          },
+                          "price": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 200
+                          },
+                          "mediaFiles": {
+                            "minItems": 1,
+                            "maxItems": 50,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^(?:[0-9]{1,30}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
+                            }
+                          },
+                          "previews": {
+                            "maxItems": 50,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^(?:[0-9]{1,30}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
+                            }
+                          }
+                        },
+                        "required": [
+                          "text",
+                          "price",
+                          "mediaFiles",
+                          "previews"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "retryOfCommandId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "clientCommandId",
+                      "accountId",
+                      "conversationId",
+                      "kind",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "clientCommandId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^acct_[A-Za-z0-9]+$"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "pattern": "^[0-9]{1,30}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
                           "typing_active_v1"
                         ]
                       },
@@ -22123,6 +22205,7 @@
                       "type": "string",
                       "enum": [
                         "send_text_message_v1",
+                        "send_media_message_v1",
                         "typing_active_v1",
                         "unsend_message_v1",
                         "mark_chat_read_v1"
@@ -22287,6 +22370,7 @@
                       "type": "string",
                       "enum": [
                         "send_text_message_v1",
+                        "send_media_message_v1",
                         "typing_active_v1",
                         "unsend_message_v1",
                         "mark_chat_read_v1"
@@ -22653,6 +22737,7 @@
                       "type": "string",
                       "enum": [
                         "send_text_message_v1",
+                        "send_media_message_v1",
                         "typing_active_v1",
                         "unsend_message_v1",
                         "mark_chat_read_v1"
@@ -22961,6 +23046,7 @@
                       "type": "string",
                       "enum": [
                         "send_text_message_v1",
+                        "send_media_message_v1",
                         "typing_active_v1",
                         "unsend_message_v1",
                         "mark_chat_read_v1"

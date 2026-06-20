@@ -24,10 +24,20 @@ import type { ConfigOverrideValue, RunningSnapshot } from "@agency_hub_core/shar
 
 export type OfapiCommandKind =
   | "send_text_message_v1"
+  | "send_media_message_v1"
   | "typing_active_v1"
   | "unsend_message_v1"
   | "mark_chat_read_v1";
-export type OfapiCommandPayload = { text: string } | { messageId: string } | Record<string, never>;
+export type OfapiCommandPayload =
+  | { text: string }
+  | {
+    text: string;
+    price: number;
+    mediaFiles: string[];
+    previews: string[];
+  }
+  | { messageId: string }
+  | Record<string, never>;
 
 export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
 export const syncRunOutcomeEnum = pgEnum("sync_run_outcome", [
@@ -1120,7 +1130,13 @@ export const ofapiCommands = pgTable(
       foreignColumns: [table.id],
     }).onDelete("restrict"),
     kindCheck: check("ofapi_commands_kind_check", sql`
-      ${table.kind} in ('send_text_message_v1', 'typing_active_v1', 'unsend_message_v1')
+      ${table.kind} in (
+        'send_text_message_v1',
+        'send_media_message_v1',
+        'typing_active_v1',
+        'unsend_message_v1',
+        'mark_chat_read_v1'
+      )
     `),
     stateCheck: check("ofapi_commands_state_check", sql`
       ${table.state} in (

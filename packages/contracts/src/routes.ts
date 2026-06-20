@@ -3143,6 +3143,7 @@ export const ofapiCommandStateSchema = z.enum([
 
 export const ofapiCommandKindSchema = z.enum([
   "send_text_message_v1",
+  "send_media_message_v1",
   "typing_active_v1",
   "unsend_message_v1",
   "mark_chat_read_v1",
@@ -3154,6 +3155,56 @@ const ofapiCommandBaseFields = {
   conversationId: z.string().regex(/^[0-9]{1,30}$/),
 };
 
+const ofapiCommandMediaIdSchema = z.string().regex(
+  /^(?:[0-9]{1,30}|ofapi_media_[A-Za-z0-9_-]{1,128})$/,
+);
+
+const ofapiCommandPriceSchema = z.number().int().min(0).max(200).refine(
+  (price) => price === 0 || price >= 3,
+  { message: "Price must be 0 or an integer from 3 to 200" },
+);
+
+const sendMediaMessagePayloadSchema = z.strictObject({
+  text: z.string().max(10_000),
+  price: ofapiCommandPriceSchema,
+  mediaFiles: z.array(ofapiCommandMediaIdSchema).min(1).max(50),
+  previews: z.array(ofapiCommandMediaIdSchema).max(50),
+}).superRefine((payload, ctx) => {
+  const attached = new Set<string>();
+  for (const id of payload.mediaFiles) {
+    if (attached.has(id)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["mediaFiles"],
+        message: "mediaFiles must not contain duplicates",
+      });
+      break;
+    }
+    attached.add(id);
+  }
+
+  const previews = new Set<string>();
+  for (const id of payload.previews) {
+    if (previews.has(id)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["previews"],
+        message: "previews must not contain duplicates",
+      });
+      break;
+    }
+    previews.add(id);
+    if (!attached.has(id)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["previews"],
+        message: "previews must be a subset of mediaFiles",
+      });
+      break;
+    }
+  }
+});
+
 export const createOfapiCommandBodySchema = z.discriminatedUnion("kind", [
   z.strictObject({
     ...ofapiCommandBaseFields,
@@ -3163,6 +3214,12 @@ export const createOfapiCommandBodySchema = z.discriminatedUnion("kind", [
         message: "Message text must not be blank",
       }),
     }),
+    retryOfCommandId: z.string().uuid().nullable().optional(),
+  }),
+  z.strictObject({
+    ...ofapiCommandBaseFields,
+    kind: z.literal("send_media_message_v1"),
+    payload: sendMediaMessagePayloadSchema,
     retryOfCommandId: z.string().uuid().nullable().optional(),
   }),
   z.strictObject({

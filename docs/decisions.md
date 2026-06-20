@@ -58,6 +58,7 @@
 | 58 | OFAPI Typing Command Custody | Empty-payload `typing_active_v1` command through the core outbox/executor; no retry, no webhook text matching, zero fallback credits, Direct rollback retained |
 | 59 | OFAPI Unsend Command Custody | Numeric-target `unsend_message_v1` command through the core outbox/executor; no retry, one DELETE attempt, bounded audit surface, Direct rollback retained |
 | 60 | OFAPI Mark-Read Command Custody | Empty-payload `mark_chat_read_v1` command through the core outbox/executor; no retry, one mark-as-read POST, bounded audit surface, Direct rollback retained |
+| 61 | OFAPI Media/PPV Send Command Custody | Bounded `send_media_message_v1` command for existing media IDs; one send attempt, same-kind retry lineage, webhook repair by text/price/media-count only, Direct rollback retained |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -732,6 +733,42 @@ execution `false`, recreated API/worker, proved command
 cancelled it, then restored execution `true`. Final heartbeats reported outbox `true`, execution
 `true`, AI gateway `true`, and zero skipped overrides. The temporary validation key was revoked and
 its page assignment removed.
+
+**Decision #61:** The next safe send-write slice after text/typing/unsend/mark-read is
+media/PPV message send using already-existing OFAPI media identifiers. It does not centralize
+desktop local file upload. Upload still requires a separate file-byte, storage, MIME, and audit
+design.
+
+- **Command kind:** `send_media_message_v1`, with the same `clientCommandId`, account,
+  conversation, page/chatter ACL, durable dedupe, one-attempt executor, and same-kind retry lineage
+  as text commands.
+- **Payload:** `text` may be empty; `price` is `0` or an integer from `3` through `200`;
+  `mediaFiles` is a non-empty bounded array of numeric vault IDs or `ofapi_media_*` IDs; `previews`
+  is a bounded subset of `mediaFiles`. Payload rejects URLs, file bytes, arbitrary vendor paths,
+  reply-to fields, and unknown fields.
+- **Vendor request:** one `POST /api/{accountId}/chats/{conversationId}/messages` through the core
+  OFAPI client. Core maps numeric vault IDs to numbers, preserves `ofapi_media_*` strings, omits
+  empty `previews`, and derives `lockedText=true` only when `price > 0` and caption text is
+  non-blank.
+- **Retry/recovery:** retry is allowed only from an owned terminal/indeterminate media command in
+  the same lane. A retry is a new command row and never a second attempt on the same row.
+- **Accounting:** operation `ofapi_command_send_media` records page-attributed OFAPI credit
+  observations from `_meta`; missing `_meta` follows the existing one-credit estimated REST
+  fallback.
+- **Verifier/privacy:** a `messages.sent` webhook may repair an in-flight/indeterminate media
+  command only when account, conversation, normalized caption text, price, media count, time
+  window, and uniqueness all match. APIs/logs may include command id, page id, kind, and platform
+  message id, but never payload text, media IDs, media URLs, file names, or arbitrary vendor body
+  fields.
+- **Rollback:** staging `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false` prevents new media command
+  claims. Desktop Direct write transport remains the rollback path until upload and any other
+  remaining write kinds are centralized and production-soaked.
+
+**Production validation plan:** deploy migration `0046_ofapi_command_send_media_message.sql`
+through the canonical dist-only path, validate only on the owner-controlled `loravievip` to
+`loravie` conversation, use an existing owner media id or abort without third-party action, prove
+one command attempt, one `ofapi_command_send_media` ledger row, redacted API/log surfaces, and a
+staged execution rollback that parks a fresh command with zero attempts.
 
 ## ChatMuse AI Gateway Contract (2026-06-19)
 
