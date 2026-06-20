@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AiGatewayStreamBody } from "@agency_hub_core/contracts";
 
 import type { AiGatewayProviderInput } from "../apps/runtime/src/services/ai-gateway.ts";
 import {
   createAnthropicAiGatewayProvider,
+  createAnthropicGatewayProxyFetch,
   type AnthropicGatewayClient,
 } from "../apps/runtime/src/services/ai-gateway-anthropic-provider.ts";
 
@@ -48,6 +49,12 @@ function providerInput(
       id: 11,
       label: "lora-of",
       platform: "onlyfans",
+      proxy: {
+        url: "socks5://proxy.example:1080",
+        username: "proxy-user",
+        password: "proxy-pass",
+      },
+      egressKey: "socks5://proxy.example:1080",
     },
     body: gatewayBody(),
     quota: {
@@ -171,5 +178,41 @@ describe("Anthropic AI gateway provider", () => {
       body: gatewayBody({ model: "openrouter:x-ai/grok-4.3" }),
     })))).rejects.toThrow("Unsupported Anthropic gateway model");
     expect(createCalls).toBe(0);
+  });
+
+  it("requires a page proxy when constructed from an API key", async () => {
+    const provider = createAnthropicAiGatewayProvider({ apiKey: "sk-ant-test" });
+
+    await expect(collect(provider.stream(providerInput({
+      page: {
+        id: 11,
+        label: "lora-of",
+        platform: "onlyfans",
+        proxy: null,
+        egressKey: "direct",
+      },
+    })))).rejects.toThrow("Anthropic AI gateway requires a configured page proxy");
+  });
+
+  it("attaches the page proxy dispatcher to Anthropic SDK fetch calls", async () => {
+    const originalFetch = globalThis.fetch;
+    const dispatcher = { close: async () => undefined };
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const proxiedFetch = createAnthropicGatewayProxyFetch(dispatcher as any);
+      await proxiedFetch("https://api.anthropic.test/v1/messages", { method: "POST" });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.anthropic.test/v1/messages",
+        expect.objectContaining({
+          method: "POST",
+          dispatcher,
+        }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

@@ -8,15 +8,17 @@ import type {
 } from "@agency_hub_core/contracts";
 import {
   finalizeAiGatewayUsageEvent,
-  findPageSummaryByLabel,
+  findPageByLabel,
   getAiGatewayDailyUsageTotals,
   markStaleAiGatewayReservationsFailed,
   reserveAiGatewayUsageEvent,
 } from "@agency_hub_core/db";
+import type { ProxyConfig } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
 import { ConflictError, NotFoundError, ServiceUnavailableError, TooManyRequestsError } from "./errors.ts";
+import { resolveStoredProxyConfig, resolveStoredProxyEgressKey } from "./page-context.ts";
 
 export const DEFAULT_AI_GATEWAY_DAILY_REQUEST_LIMIT = 200;
 export const DEFAULT_AI_GATEWAY_DAILY_MICRO_USD_LIMIT = 5_000_000;
@@ -35,6 +37,8 @@ export interface AiGatewayProviderInput {
     id: number;
     label: string;
     platform: AiGatewayStreamBody["platform"];
+    proxy: ProxyConfig | null;
+    egressKey: string;
   };
   body: AiGatewayStreamBody;
   quota: AiGatewayQuota;
@@ -128,9 +132,19 @@ export async function prepareAiGatewayStream(
     throw new ServiceUnavailableError("ChatMuse AI gateway is disabled");
   }
 
-  const page = await findPageSummaryByLabel(app.db, input.pageLabel);
-  if (!page || !canAccessPage(principal, page.id) || page.platform !== input.platform) {
+  const storedPage = await findPageByLabel(app.db, input.pageLabel);
+  if (
+    !storedPage ||
+    !canAccessPage(principal, storedPage.page.id) ||
+    storedPage.page.platform !== input.platform
+  ) {
     throw new NotFoundError("Page not found");
+  }
+  const page = storedPage.page;
+  const proxy = resolveStoredProxyConfig(app, storedPage.proxy);
+  const egressKey = resolveStoredProxyEgressKey(storedPage.proxy);
+  if (!proxy) {
+    throw new ServiceUnavailableError("ChatMuse AI gateway requires a configured page proxy");
   }
 
   const now = new Date();
@@ -201,6 +215,8 @@ export async function prepareAiGatewayStream(
           id: page.id,
           label: page.label,
           platform: page.platform,
+          proxy,
+          egressKey,
         },
         body: input,
         quota: quotaFrame,

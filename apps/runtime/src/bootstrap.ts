@@ -26,7 +26,10 @@ import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
 import type { OfapiClient } from "./services/ofapi.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
 import type { AiGatewayProvider } from "./services/ai-gateway.ts";
-import { createAnthropicAiGatewayProvider } from "./services/ai-gateway-anthropic-provider.ts";
+import {
+  createAnthropicAiGatewayProvider,
+  createPageProxyAnthropicClientResolver,
+} from "./services/ai-gateway-anthropic-provider.ts";
 import type { ProviderAdapter } from "./services/provider.ts";
 
 export type AdapterLike = ProviderAdapter<
@@ -174,7 +177,9 @@ export async function createAppContext(): Promise<AppContext> {
       })
       : undefined;
     const aiGatewayProvider = config.chatMuseAiGatewayEnabled && config.anthropicApiKey
-      ? createAnthropicAiGatewayProvider({ apiKey: config.anthropicApiKey })
+      ? createAnthropicAiGatewayProvider({
+        resolveClient: createPageProxyAnthropicClientResolver(config.anthropicApiKey),
+      })
       : undefined;
 
     return {

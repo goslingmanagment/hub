@@ -721,6 +721,14 @@ marker, gateway request/outcome/open-reservation counts, provider cost breakdown
 cost fields. The report remains metadata-only and does not expose prompts, generated replies, or
 raw provider bodies.
 
+**R4m proxy-routed Anthropic provider execution:** production Anthropic calls no longer use the
+server host IP. After chatter/page authorization, the gateway resolves the page's stored
+`egress_endpoints` proxy and passes an undici dispatcher-backed fetch to the Anthropic SDK for that
+request. Missing page proxy returns `503` before quota reservation, ledger insertion, or provider
+network, so there is no direct-host fallback. Production validation must prove SSE streaming,
+terminal ledger metadata, prompt/output log redaction, and staged flag rollback before desktop Hub
+AI becomes default.
+
 **R4l production rollout (2026-06-19):** revision `736d37c66549` is deployed default-off. API and
 worker labels match the revision, health checks pass, latest heartbeats still show
 `chatMuseAiGatewayEnabled=false` and `anthropicApiKey=unset`, and production reporting code
@@ -731,7 +739,8 @@ successfully returned the new cost/gateway fields against real data (`rowCount=5
 `claude-sonnet-4-6` model returned 200 from the operator workstation, but the same non-generating
 models probe from the production API container returned `403 Request not allowed`. One controlled
 gateway request therefore finalized as `failed` with zero tokens/cost and bounded metadata only.
-The production key and staged gateway flag were rolled back; desktop Direct AI remains active.
+The production key and staged gateway flag were rolled back; desktop Direct AI remains active. The
+next validation path is the R4m proxy-routed gateway, not direct production-host egress.
 
 ## DM Aggregate Analytics Groundwork (2026-06-20)
 

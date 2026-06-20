@@ -1,8 +1,10 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4b through R4l are implemented. Controlled production validation was attempted on
-2026-06-20 and rolled back because Anthropic rejects the production server egress with
-`403 Request not allowed`. Desktop Direct AI remains the active path.
+Status: R4b through R4m are implemented. Controlled direct-host production validation was attempted
+on 2026-06-20 and rolled back because Anthropic rejects the production server egress with
+`403 Request not allowed`. R4m changes provider execution to use the authenticated page's stored
+proxy route instead of the production host IP. Desktop Direct AI remains the active path until the
+proxy-routed production validation below passes.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -26,10 +28,11 @@ later gateway version and must preserve the same feature and output contracts.
 - Frame schema: each SSE `data:` payload is one `aiGatewayStreamFrameSchema` JSON object.
 - Runtime flag: `CHATMUSE_AI_GATEWAY_ENABLED`, default `false`, staged boot-applied. When the flag
   is off, return `503` before quota preflight, page lookup, or provider network. With the flag on,
-  the route authorizes page scope, recovers stale gateway reservations, applies the ledger-backed
-  daily quota preflight, and then requires an injected provider implementation. The production app
-  instantiates the Anthropic provider only when both the gateway flag and `ANTHROPIC_API_KEY` are
-  configured.
+  the route authorizes page scope, requires that the page has a configured stored proxy, recovers
+  stale gateway reservations, applies the ledger-backed daily quota preflight, and then requires an
+  injected provider implementation. The production app instantiates the Anthropic provider only
+  when both the gateway flag and `ANTHROPIC_API_KEY` are configured; runtime Anthropic calls are
+  routed through the request page's proxy dispatcher, not direct production-host egress.
 
 ## Request
 
@@ -91,6 +94,11 @@ return it as JSON on success.
 Core must resolve `pageLabel` through the authenticated chatter's current page assignments before
 any provider call. Unknown pages, unassigned pages, and platform mismatches fail as `404` or `403`
 without revealing page existence to other chatters.
+
+Provider egress is page-scoped. After authorization succeeds, core resolves the same stored
+`egress_endpoints` proxy used by page/account networking. A missing page proxy fails closed with
+`503` before quota reservation, ledger insertion, or provider network. This intentionally prevents
+falling back to the production host IP, because Anthropic has already rejected that egress.
 
 `platformUserId` and `conversationId` are audit and context-correlation fields. Version 1 may accept
 a fan that is not yet in the core fan table only after page authorization succeeds; it must not use
@@ -182,6 +190,13 @@ shows a compact Cost column plus gateway details in the expanded chatter row. Th
 only ledger metadata; they do not store or display prompt text, generated text, or raw provider
 bodies.
 
+R4m routes Anthropic provider calls through the authorized page proxy. The runtime provider creates
+an Anthropic SDK client with a proxy-backed `fetch` per gateway request, using the page's stored
+proxy config and closing the dispatcher after the stream. The direct `new Anthropic({ apiKey })`
+path remains available only for injected/unit-test clients; production bootstrap wires the
+proxy-resolving client instead. Missing page proxy is a pre-reservation `503`, so a bad page config
+does not create a quota row or accidentally call Anthropic from the production host IP.
+
 R4l production rollout (2026-06-19): revision `736d37c66549` was deployed with
 `scripts/deploy-production.sh --mode dist-only` and verified against `https://gosling-agency.ru`.
 API and worker labels reported `agency-hub.source-revision=736d37c66549`; the production reporting
@@ -250,6 +265,8 @@ Before runtime implementation:
   R4k before quota preflight on the next authorized gateway request**;
 - expose gateway cost/outcome metadata in owner usage reporting before live enablement; **done in
   R4l**;
+- route Anthropic provider calls through the authorized page/account proxy instead of direct
+  production-host egress; **done in R4m, with missing proxy fail-closed before reservation**;
 - document the production validation command/API/log/DB evidence; **default-off deploy evidence is
   recorded above; live provider validation remains pending**.
 
@@ -275,5 +292,6 @@ Production validation must use a small approved prompt and must not send any pla
 - Rollback restored the prior `.env.production`, staged gateway `false` at version 2, and recreated
   API/worker. Current heartbeats report gateway `false`, key `unset`, and zero skipped overrides.
 
-The gateway must not become the desktop default until the production egress/IP is accepted by
-Anthropic or a separately contracted provider adapter is implemented and validated.
+The gateway must not become the desktop default until proxy-routed production validation proves a
+streamed response, terminal usage/cost ledger row, no prompt/output text in logs or APIs, and staged
+flag rollback. Direct production-host Anthropic egress must not be used as a fallback.

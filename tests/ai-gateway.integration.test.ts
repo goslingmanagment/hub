@@ -4,10 +4,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   createFanslyPage,
+  deleteProxyConfig,
   insertAiUsageEvents,
   createModel,
   createOnlyFansPage,
   reserveAiGatewayUsageEvent,
+  storeProxyConfig,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -59,6 +61,12 @@ beforeEach(async (context) => {
     label: "lora-of",
   });
   onlyFansPageId = onlyFansPage.id;
+  await storeProxyConfig(appContext.db, onlyFansPage.id, {
+    url: "socks5://proxy.example:1080",
+    encryptedAuth: null,
+    keyVersion: null,
+    rateLimitScopeKey: "shared-ai-proxy",
+  });
   await createOnlyFansPage(appContext.db, {
     modelId: model.id,
     label: "lora-vip-of",
@@ -181,6 +189,29 @@ describe("ChatMuse AI gateway runtime gate", () => {
     expect(usageRows.rows[0]?.count).toBe(0);
   });
 
+  it("fails closed before quota reservation when the assigned page has no proxy", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        throw new Error("provider should not be called");
+      },
+    };
+    await deleteProxyConfig(appContext.db, onlyFansPageId);
+
+    const response = await streamGateway(gatewayBody());
+
+    expect(response.statusCode, response.body).toBe(503);
+    expect(response.json()).toMatchObject({
+      error: "service_unavailable",
+      message: "ChatMuse AI gateway requires a configured page proxy",
+    });
+    const usageRows = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ai_usage_events",
+    );
+    expect(usageRows.rows[0]?.count).toBe(0);
+  });
+
   it("rejects over-quota requests before provider execution without writing a new ledger row", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
     appContext.config.chatMuseAiGatewayDailyRequestLimit = 1;
@@ -290,6 +321,12 @@ describe("ChatMuse AI gateway runtime gate", () => {
         id: onlyFansPageId,
         label: "lora-of",
         platform: "onlyfans",
+        proxy: {
+          url: "socks5://proxy.example:1080",
+          username: null,
+          password: null,
+        },
+        egressKey: "shared-ai-proxy",
       },
       quota: {
         accepted: true,

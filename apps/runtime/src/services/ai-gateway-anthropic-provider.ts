@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { Dispatcher } from "undici";
 
 import type { AiGatewayStreamFrame } from "@agency_hub_core/contracts";
+import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
 
 import type { AiGatewayProvider, AiGatewayProviderInput } from "./ai-gateway.ts";
 import {
@@ -23,7 +25,17 @@ export interface AnthropicGatewayClient {
 export interface CreateAnthropicAiGatewayProviderOptions {
   apiKey?: string;
   client?: AnthropicGatewayClient;
+  resolveClient?: AnthropicGatewayClientResolver;
 }
+
+export interface AnthropicGatewayClientResolution {
+  client: AnthropicGatewayClient;
+  release?: () => Promise<void> | void;
+}
+
+export type AnthropicGatewayClientResolver = (
+  input: AiGatewayProviderInput,
+) => AnthropicGatewayClientResolution | Promise<AnthropicGatewayClientResolution>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -89,8 +101,18 @@ function usageFrame(
   };
 }
 
-function createSdkClient(apiKey: string): AnthropicGatewayClient {
-  const client = new Anthropic({ apiKey });
+export function createAnthropicGatewayProxyFetch(dispatcher: Dispatcher): typeof fetch {
+  return (input, init) => fetch(input, {
+    ...init,
+    dispatcher,
+  } as RequestInit & { dispatcher: Dispatcher });
+}
+
+function createSdkClient(apiKey: string, fetchImpl?: typeof fetch): AnthropicGatewayClient {
+  const client = new Anthropic({
+    apiKey,
+    ...(fetchImpl ? { fetch: fetchImpl } : {}),
+  });
   return {
     messages: {
       async create(body, options) {
@@ -100,11 +122,36 @@ function createSdkClient(apiKey: string): AnthropicGatewayClient {
   };
 }
 
+export function createPageProxyAnthropicClientResolver(
+  apiKey: string,
+): AnthropicGatewayClientResolver {
+  return (input) => {
+    const proxy = input.page.proxy;
+    if (!proxy) {
+      throw new Error("Anthropic AI gateway requires a configured page proxy");
+    }
+
+    const dispatcher = createProxyRequestDispatcher(proxy);
+    return {
+      client: createSdkClient(apiKey, createAnthropicGatewayProxyFetch(dispatcher)),
+      async release() {
+        await dispatcher.close().catch(() => undefined);
+      },
+    };
+  };
+}
+
 export function createAnthropicAiGatewayProvider(
   options: CreateAnthropicAiGatewayProviderOptions,
 ): AiGatewayProvider {
-  const client = options.client ?? (options.apiKey ? createSdkClient(options.apiKey) : null);
-  if (!client) {
+  const resolveClient: AnthropicGatewayClientResolver | null = options.client
+    ? () => ({ client: options.client! })
+    : options.resolveClient
+      ? options.resolveClient
+      : options.apiKey
+        ? createPageProxyAnthropicClientResolver(options.apiKey)
+        : null;
+  if (!resolveClient) {
     throw new Error("Anthropic AI gateway provider requires an API key or injected client");
   }
 
@@ -112,52 +159,58 @@ export function createAnthropicAiGatewayProvider(
     provider: "anthropic",
     async *stream(input) {
       const request = buildAnthropicGatewayStreamRequest(input.body);
-      const events = await client.messages.create(request, { signal: input.signal });
+      const clientResolution = await resolveClient(input);
       let providerResponseId: string | null = null;
       let stopReason: string | null = null;
       let lastUsage: AnthropicGatewayUsageLike | null = null;
       let usageEmitted = false;
 
-      for await (const rawEvent of events) {
-        if (!isRecord(rawEvent) || typeof rawEvent.type !== "string") {
-          continue;
+      try {
+        const events = await clientResolution.client.messages.create(request, { signal: input.signal });
+
+        for await (const rawEvent of events) {
+          if (!isRecord(rawEvent) || typeof rawEvent.type !== "string") {
+            continue;
+          }
+
+          if (rawEvent.type === "message_start") {
+            providerResponseId = extractProviderResponseId(rawEvent) ?? providerResponseId;
+            const message = rawEvent.message;
+            if (isRecord(message) && isRecord(message.usage)) {
+              lastUsage = message.usage;
+            }
+            continue;
+          }
+
+          if (rawEvent.type === "content_block_delta") {
+            const text = extractTextDelta(rawEvent);
+            if (text) {
+              yield { type: "content_delta", text };
+            }
+            const reasoning = extractReasoningDelta(rawEvent);
+            if (reasoning) {
+              yield { type: "reasoning_delta", text: reasoning };
+            }
+            continue;
+          }
+
+          if (rawEvent.type === "message_delta") {
+            stopReason = extractStopReason(rawEvent) ?? stopReason;
+            if (isRecord(rawEvent.usage)) {
+              lastUsage = rawEvent.usage;
+              usageEmitted = true;
+              yield usageFrame(input, rawEvent.usage, providerResponseId);
+            }
+          }
         }
 
-        if (rawEvent.type === "message_start") {
-          providerResponseId = extractProviderResponseId(rawEvent) ?? providerResponseId;
-          const message = rawEvent.message;
-          if (isRecord(message) && isRecord(message.usage)) {
-            lastUsage = message.usage;
-          }
-          continue;
+        if (lastUsage && !usageEmitted) {
+          yield usageFrame(input, lastUsage, providerResponseId);
         }
-
-        if (rawEvent.type === "content_block_delta") {
-          const text = extractTextDelta(rawEvent);
-          if (text) {
-            yield { type: "content_delta", text };
-          }
-          const reasoning = extractReasoningDelta(rawEvent);
-          if (reasoning) {
-            yield { type: "reasoning_delta", text: reasoning };
-          }
-          continue;
-        }
-
-        if (rawEvent.type === "message_delta") {
-          stopReason = extractStopReason(rawEvent) ?? stopReason;
-          if (isRecord(rawEvent.usage)) {
-            lastUsage = rawEvent.usage;
-            usageEmitted = true;
-            yield usageFrame(input, rawEvent.usage, providerResponseId);
-          }
-        }
+        yield { type: "done", stopReason };
+      } finally {
+        await clientResolution.release?.();
       }
-
-      if (lastUsage && !usageEmitted) {
-        yield usageFrame(input, lastUsage, providerResponseId);
-      }
-      yield { type: "done", stopReason };
     },
   };
 }

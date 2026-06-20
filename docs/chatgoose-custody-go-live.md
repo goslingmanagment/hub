@@ -9,8 +9,10 @@ credit truth, spend projection, and forward-only DM archive. Desktop keeps its e
 cache and explicit Direct controls as rollback for still-unsupported command kinds. Historical DM
 bulk backfill is prohibited.
 
-AI is the exception: production Anthropic egress currently returns `403 Request not allowed`, so
-the core AI gateway is staged off and desktop Direct AI remains active.
+AI is the exception: the earlier direct production-host Anthropic egress returned
+`403 Request not allowed`, so the core AI gateway is staged off and desktop Direct AI remains
+active. The next rollout must use the proxy-routed AI gateway path only: Anthropic calls go through
+the authorized page/account proxy, and missing proxy config fails closed before quota reservation.
 
 ## Required Running State
 
@@ -28,7 +30,7 @@ Verify from `runtime_instances.running`, not repository defaults:
 - `ofapiDesktopReadGatewayEnabled=true`
 - `ofapiDesktopCommandOutboxEnabled=true`
 - `ofapiDesktopCommandExecutionEnabled=true`
-- `chatMuseAiGatewayEnabled=false` until provider egress is fixed
+- `chatMuseAiGatewayEnabled=false` until proxy-routed provider validation passes
 - `skippedOverrides=[]` for both API and worker
 
 Desktop production defaults are Hub read, Hub text write, hourly spend reconcile, and Direct AI.
@@ -134,6 +136,25 @@ Privacy checks:
 - cold archive media JSON must not contain `http`, `url`, signatures, or signed CDN fields;
 - aggregate tables contain counts/money/timestamps only.
 
+AI gateway proxy validation:
+
+```sql
+select p.id,
+       p.label,
+       p.platform,
+       ee.url is not null as has_proxy,
+       coalesce(ee.rate_limit_scope_key, canonical_proxy_egress_key(ee.url)) as egress_key
+from pages p
+left join egress_endpoints ee on ee.platform_account_id = p.id
+where p.label in ('lora-of', 'lora-vip-of')
+order by p.label;
+```
+
+Before staging `chatMuseAiGatewayEnabled=true`, verify the selected test page has `has_proxy=true`.
+The gateway must not fall back to direct host egress. After the controlled request, verify one
+terminal `ai_usage_events` gateway row for the client request id with provider/cost/outcome
+metadata and no prompt/output fields.
+
 ## Rollback Matrix
 
 | Failure | Server rollback | Desktop rollback |
@@ -143,7 +164,7 @@ Privacy checks:
 | Spend projection mismatch | stage transaction ingest off; retain shadow comparison | set legacy 10-minute sweep on |
 | DM archive issue | stage cold archive off; keep hot projection/SSE running | no desktop change |
 | Snapshot issue | keep SSE degraded and polling active; do not advance cursor | force polling, then retry snapshot after fix |
-| AI gateway/provider issue | stage gateway off; remove/revert provider key; recreate API/worker | keep AI transport Direct |
+| AI gateway/provider issue | stage gateway off; remove/revert provider key; recreate API/worker; keep page proxies unchanged | keep AI transport Direct |
 | Analytics rebuild issue | unschedule/stop `ofapi.dm-analytics.rebuild`; table is disposable derived state | no desktop change |
 
 Never rollback by deleting audit/ledger/journal rows. Never retry an indeterminate command
