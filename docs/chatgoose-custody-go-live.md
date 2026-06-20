@@ -9,10 +9,11 @@ credit truth, spend projection, and forward-only DM archive. Desktop keeps its e
 cache and explicit Direct controls as rollback for still-unsupported command kinds. Historical DM
 bulk backfill is prohibited.
 
-AI is the exception: the earlier direct production-host Anthropic egress returned
-`403 Request not allowed`, so the core AI gateway is staged off and desktop Direct AI remains
-active. The next rollout must use the proxy-routed AI gateway path only: Anthropic calls go through
-the authorized page/account proxy, and missing proxy config fails closed before quota reservation.
+AI gateway execution is enabled only through the proxy-routed core path. The earlier direct
+production-host Anthropic egress returned `403 Request not allowed`, so direct production-host
+provider egress is prohibited. Anthropic calls go through the authorized page/account proxy, and
+missing proxy config fails closed before quota reservation. Desktop Direct AI remains the explicit
+fallback/default until the desktop gateway rollout is accepted.
 
 ## Required Running State
 
@@ -30,11 +31,12 @@ Verify from `runtime_instances.running`, not repository defaults:
 - `ofapiDesktopReadGatewayEnabled=true`
 - `ofapiDesktopCommandOutboxEnabled=true`
 - `ofapiDesktopCommandExecutionEnabled=true`
-- `chatMuseAiGatewayEnabled=false` until proxy-routed provider validation passes
+- `chatMuseAiGatewayEnabled=true`
 - `skippedOverrides=[]` for both API and worker
 
-Desktop production defaults are Hub read, Hub text write, hourly spend reconcile, and Direct AI.
-Support rollback controls are Direct read/write and the legacy 10-minute spend sweep.
+Desktop production defaults are Hub read, Hub text write, hourly spend reconcile, and Direct AI
+until the desktop gateway rollout is accepted. Support rollback controls are Direct read/write,
+Direct AI, and the legacy 10-minute spend sweep.
 
 ## Canonical Deploy
 
@@ -155,6 +157,25 @@ The gateway must not fall back to direct host egress. After the controlled reque
 terminal `ai_usage_events` gateway row for the client request id with provider/cost/outcome
 metadata and no prompt/output fields.
 
+2026-06-20 production proxy validation evidence:
+
+- Deployed revision `1ff3ebc42d55`; API/worker image labels matched that source revision and
+  dependency checksum `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`.
+- `lora-vip-of` was bound to an existing stored proxy route. Runtime `page proxy-ip` showed proxy
+  exit IP `171.22.220.242`, direct exit IP `45.8.230.111`, and `Differs from direct: yes`.
+- `POST /api/v1/ai/gateway/stream` for owner-controlled page `lora-vip-of` / conversation
+  `518588958` returned HTTP 200 with SSE counts `meta=1`, `content_delta=2`, `usage=1`,
+  `done=1`, `error=0`.
+- Ledger row `8f6d988c-86bd-48dd-b8c8-7370dd7970a8` recorded provider `anthropic`, model
+  `anthropic:claude-sonnet-4-6`, outcome `completed`, `39` input tokens, `19` output tokens,
+  `402` micro-USD, quota accepted, and no prompt/output columns beyond `provider_response_id`.
+- API/worker logs had zero matches for the validation canary and prompt phrase.
+- Rollback drill staged gateway `false` and recreated API/worker; a valid request returned `503`
+  `ChatMuse AI gateway is disabled` and wrote zero ledger rows. Gateway was restored to staged
+  `true`, API/worker were recreated healthy, and final heartbeats showed read gateway `true`,
+  command execution `true`, AI gateway `true`, and zero skipped overrides.
+- Temporary validation chatter key was revoked and page assignment removed after the test.
+
 ## Rollback Matrix
 
 | Failure | Server rollback | Desktop rollback |
@@ -164,7 +185,7 @@ metadata and no prompt/output fields.
 | Spend projection mismatch | stage transaction ingest off; retain shadow comparison | set legacy 10-minute sweep on |
 | DM archive issue | stage cold archive off; keep hot projection/SSE running | no desktop change |
 | Snapshot issue | keep SSE degraded and polling active; do not advance cursor | force polling, then retry snapshot after fix |
-| AI gateway/provider issue | stage gateway off; remove/revert provider key; recreate API/worker; keep page proxies unchanged | keep AI transport Direct |
+| AI gateway/provider issue | stage gateway off; optionally restore `.env.production.pre-ai-gateway-proxy-20260620T023316Z` to remove the provider key; recreate API/worker; keep page proxies unchanged unless the proxy itself is faulty | keep AI transport Direct |
 | Analytics rebuild issue | unschedule/stop `ofapi.dm-analytics.rebuild`; table is disposable derived state | no desktop change |
 
 Never rollback by deleting audit/ledger/journal rows. Never retry an indeterminate command

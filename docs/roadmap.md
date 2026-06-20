@@ -15,7 +15,7 @@
 | 4c | Fan Intelligence | **Done** | AI summaries, version history, cross-page spender analytics |
 | 5 | Telegram Notifications | **Done** | Daily reports, incident alerts, test messages |
 | 6 | Backups + Ops | **At Risk** | Job queue + monitoring done. Automated off-server backups missing |
-| 7 | ChatMuse Backend | **On Track** | Real-time track shipped (OFAPI webhooks → SSE, decision #48); AI proxy, fan context injection, cost tracking not started |
+| 7 | ChatMuse Backend | **On Track** | Real-time track shipped (OFAPI webhooks → SSE, decision #48); proxy-routed AI gateway + cost ledger validated; fan context injection still pending |
 | 8 | Team Management | **Not Started** | Staff profiles, schedules, chatter performance display |
 | 9 | Chatter Payroll | **Not Started** | Payout calculation, shift reports |
 | 10 | Internal TODO | **Not Started** | Task manager for agency ops |
@@ -291,7 +291,7 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
 - ✅ D6 desktop spend-sweep reduction: core C3 shadow+apply is production-clean for `transactions.new` over 30 days (11/11 matched, mismatch buckets zero). Policy is accepted: matched transactions are authoritative, PPV unlock remains estimated-only, and `tips.received` remains blocked pending a live fixture. Desktop reconciles hourly; its support rollback restores the legacy 10-minute sweep.
 - ✅ ChatMuse pre-P4 prerequisites: profile PUT auto-creates OnlyFans fans; AI-usage batch skips invalid events per-event (`invalidCount`)
 - 🟡 Admin UI for the OFAPI webhook flow (API-only today; register via `POST /api/v1/admin/ofapi/webhook`)
-- 🟡 AI proxy with streaming responses — R4a contract schemas/docs define the default-off
+- ✅ AI proxy with streaming responses — R4a contract schemas/docs define the default-off
   prompt-streaming gateway; R4b adds the default-off route/config gate; R4c adds gateway ledger
   storage/repository fields; R4d adds ledger-backed daily quota preflight; R4e adds Anthropic
   pricing for terminal usage rows; R4f adds Anthropic request-building and usage normalization
@@ -299,14 +299,12 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
   for provider-seam streams; R4i reserves
   request ids before provider execution to prevent duplicate paid attempts; R4j adds the real
   Anthropic streaming adapter default-off; R4k recovers stale null-outcome reservations before new
-  authorized provider attempts; R4l adds owner usage reporting for gateway cost/outcomes. Revision
-  `736d37c66549` is deployed default-off with api/worker healthy,
-  `chatMuseAiGatewayEnabled=false`, `anthropicApiKey=unset`, no gateway ledger rows, and
-  production reporting code returning the new cost/gateway fields. A controlled 2026-06-20
-  rollout proved the key/model from the operator workstation, but Anthropic returned
-  `403 Request not allowed` from the production container. The failed attempt is terminal in the
-  ledger with zero tokens/cost; the staged flag and production key were rolled back. Desktop
-  remains on Direct AI until production egress is accepted.
+  authorized provider attempts; R4l adds owner usage reporting for gateway cost/outcomes; R4m
+  routes Anthropic through the authorized page proxy. Revision `1ff3ebc42d55` is deployed with
+  api/worker healthy, `chatMuseAiGatewayEnabled=true`, zero skipped overrides, a completed
+  proxy-routed SSE validation row (`8f6d988c-86bd-48dd-b8c8-7370dd7970a8`), and a tested staged
+  rollback (`503` disabled response, zero ledger rows). Desktop Direct AI remains the fallback
+  until the desktop gateway rollout is accepted.
 - ✅ DM analytics groundwork: migration 0042 adds aggregate-only UTC daily message facts over the
   governed cold archive. An exclusive hourly worker rebuilds a bounded 32-day window
   idempotently, corrects tombstones, and stores no transcript, media URL, or fan identifier.
@@ -420,7 +418,7 @@ Items from TODO.md that affect shipped phases:
 ## Changes This Update (2026-06-11)
 
 **Statuses updated:**
-- Phase 7: → **On Track** — the real-time track shipped (decision #48): OFAPI webhook receiver (raw-body HMAC, idempotency-key dedupe, `ofapi_webhook_events` journal, pg-boss async processing, admin registration flow) and SSE fanout `GET /api/v1/events/stream` (chatter-key auth, page-filtered `SyncEvent` frames, `Last-Event-ID` replay, 7-day retention), integration-tested end-to-end against the live-captured OFAPI fixtures. AI gateway scope remains untouched.
+- Phase 7: → **On Track** — the real-time track shipped (decision #48): OFAPI webhook receiver (raw-body HMAC, idempotency-key dedupe, `ofapi_webhook_events` journal, pg-boss async processing, admin registration flow) and SSE fanout `GET /api/v1/events/stream` (chatter-key auth, page-filtered `SyncEvent` frames, `Last-Event-ID` replay, 7-day retention), integration-tested end-to-end against the live-captured OFAPI fixtures. AI gateway R4 is now production-validated through the page proxy path; fan context injection remains.
 
 **Items added:**
 - Phase 7 pre-P4 prerequisites for the ChatGoose desktop: OnlyFans fan auto-create on profile PUT, per-event skip in AI-usage batch ingestion

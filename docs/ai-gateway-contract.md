@@ -1,10 +1,10 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4b through R4m are implemented. Controlled direct-host production validation was attempted
-on 2026-06-20 and rolled back because Anthropic rejects the production server egress with
-`403 Request not allowed`. R4m changes provider execution to use the authenticated page's stored
-proxy route instead of the production host IP. Desktop Direct AI remains the active path until the
-proxy-routed production validation below passes.
+Status: R4b through R4m are implemented and proxy-routed production validation passed on
+2026-06-20. Controlled direct-host validation was attempted first and rolled back because
+Anthropic rejected the production server egress with `403 Request not allowed`; the validated path
+now uses the authenticated page's stored proxy route instead of the production host IP. Desktop
+Direct AI remains the explicit fallback path until the desktop gateway rollout is accepted.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -267,12 +267,12 @@ Before runtime implementation:
   R4l**;
 - route Anthropic provider calls through the authorized page/account proxy instead of direct
   production-host egress; **done in R4m, with missing proxy fail-closed before reservation**;
-- document the production validation command/API/log/DB evidence; **default-off deploy evidence is
-  recorded above; live provider validation remains pending**.
+- document the production validation command/API/log/DB evidence; **proxy-routed live provider
+  validation is recorded below**.
 
 Production validation must use a small approved prompt and must not send any platform message.
 
-## 2026-06-20 Controlled Production Validation
+## 2026-06-20 Direct-Host Blocker
 
 - The operator workstation used the configured key to call Anthropic `/v1/models` successfully;
   `claude-sonnet-4-6` was available. The same minimal Messages request returned HTTP 200 and the
@@ -292,6 +292,41 @@ Production validation must use a small approved prompt and must not send any pla
 - Rollback restored the prior `.env.production`, staged gateway `false` at version 2, and recreated
   API/worker. Current heartbeats report gateway `false`, key `unset`, and zero skipped overrides.
 
-The gateway must not become the desktop default until proxy-routed production validation proves a
-streamed response, terminal usage/cost ledger row, no prompt/output text in logs or APIs, and staged
-flag rollback. Direct production-host Anthropic egress must not be used as a fallback.
+## 2026-06-20 Proxy-Routed Production Validation
+
+- Revision `1ff3ebc42d55` was deployed with
+  `scripts/deploy-production.sh --mode dist-only root@45.8.230.111 --verify-url https://gosling-agency.ru`.
+  API and worker labels reported `agency-hub.source-revision=1ff3ebc42d55` and dependency checksum
+  `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`; both containers were healthy.
+- The controlled test page `lora-vip-of` was bound to an existing stored proxy route already used by
+  `lora-1`, preserving the same `rate_limit_scope_key`. Runtime `page proxy-ip --page lora-vip-of`
+  reported proxy exit IP `171.22.220.242`, direct exit IP `45.8.230.111`, and `Differs from direct:
+  yes`.
+- `ANTHROPIC_API_KEY` was installed server-side only in `.env.production` with backup
+  `.env.production.pre-ai-gateway-proxy-20260620T023316Z`. The staged flag
+  `chatMuseAiGatewayEnabled=true` was applied at config version 3, then API/worker were recreated.
+  Fresh runtime heartbeats showed gateway `true` and zero skipped overrides.
+- One owner-scoped, non-mutating gateway request used temporary chatter
+  `codex-ai-validation-20260620`, page `lora-vip-of`, conversation id `518588958`, and client
+  request id `8f6d988c-86bd-48dd-b8c8-7370dd7970a8`. It returned HTTP 200 with
+  `Content-Type: text/event-stream` and SSE frame counts `meta=1`, `content_delta=2`, `usage=1`,
+  `done=1`, `error=0`.
+- The terminal ledger row for that client request id recorded provider `anthropic`, model
+  `anthropic:claude-sonnet-4-6`, outcome `completed`, provider response id present, `39` input
+  tokens, `19` output tokens, `402` micro-USD, quota accepted, duration `1739` ms, and page
+  `lora-vip-of`. A schema check for prompt/text/message/media/url/body/content/transcript/response
+  fields in `ai_usage_events` returned only `provider_response_id`.
+- API/worker logs since the request contained zero matches for the validation canary and zero
+  matches for the prompt phrase. They contained gateway/provider metadata lines only.
+- Rollback by staged flag was tested: gateway was staged `false` at config version 4 and API/worker
+  were recreated. A valid gateway request returned `503` with message
+  `ChatMuse AI gateway is disabled` and wrote zero ledger rows. The flag was then restored to
+  `true` at config version 5 and API/worker were recreated healthy.
+- Final production snapshot after cleanup: API and worker heartbeats show read gateway `true`,
+  command execution `true`, AI gateway `true`, and zero skipped overrides. Gateway ledger totals
+  show one completed gateway row and zero open reservations. The temporary validation key was
+  revoked and its page assignment removed.
+
+The gateway must not fall back to direct production-host Anthropic egress. Desktop Direct AI remains
+the rollback path until desktop gateway rollout is accepted and any later desktop default flip has
+its own staged rollback.

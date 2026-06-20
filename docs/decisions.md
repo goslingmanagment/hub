@@ -698,7 +698,8 @@ row.
 behind the default-off gateway. It is instantiated only when `CHATMUSE_AI_GATEWAY_ENABLED=true` and
 `ANTHROPIC_API_KEY` is configured, maps provider text/thinking/usage events into gateway frames,
 uses the same abort signal as the SSE route, and relies on the R4i reservation plus R4h finalizer
-for ledger state. Production validation remains pending and must use a small approved prompt.
+for ledger state. Direct-host production validation was blocked by provider egress policy; the
+proxy-routed R4m path below is the validated production route.
 
 **R4k stale reservation recovery:** before quota preflight on an authorized gateway request, core
 marks null-outcome gateway reservations older than 30 minutes as terminal `failed` rows with
@@ -725,9 +726,9 @@ raw provider bodies.
 server host IP. After chatter/page authorization, the gateway resolves the page's stored
 `egress_endpoints` proxy and passes an undici dispatcher-backed fetch to the Anthropic SDK for that
 request. Missing page proxy returns `503` before quota reservation, ledger insertion, or provider
-network, so there is no direct-host fallback. Production validation must prove SSE streaming,
-terminal ledger metadata, prompt/output log redaction, and staged flag rollback before desktop Hub
-AI becomes default.
+network, so there is no direct-host fallback. Production validation proved SSE streaming, terminal
+ledger metadata, prompt/output log redaction, and staged flag rollback; desktop Hub AI still needs a
+separate desktop rollout/default decision.
 
 **R4l production rollout (2026-06-19):** revision `736d37c66549` is deployed default-off. API and
 worker labels match the revision, health checks pass, latest heartbeats still show
@@ -741,6 +742,19 @@ models probe from the production API container returned `403 Request not allowed
 gateway request therefore finalized as `failed` with zero tokens/cost and bounded metadata only.
 The production key and staged gateway flag were rolled back; desktop Direct AI remains active. The
 next validation path is the R4m proxy-routed gateway, not direct production-host egress.
+
+**2026-06-20 proxy-routed validation outcome:** revision `1ff3ebc42d55` was deployed and API/worker
+labels matched the source revision. The controlled page `lora-vip-of` was bound to an existing
+stored proxy route; runtime proxy diagnostics showed proxy exit IP `171.22.220.242` versus direct
+host IP `45.8.230.111`. With `chatMuseAiGatewayEnabled=true`, one owner-scoped non-mutating SSE
+request (`8f6d988c-86bd-48dd-b8c8-7370dd7970a8`) completed with frame counts `meta=1`,
+`content_delta=2`, `usage=1`, `done=1`, `error=0`. Its ledger row recorded provider `anthropic`,
+model `anthropic:claude-sonnet-4-6`, outcome `completed`, provider response id present, `39` input
+tokens, `19` output tokens, `402` micro-USD, quota accepted, and page `lora-vip-of`; schema/log
+checks showed no prompt or generated text persisted. The staged rollback drill set gateway `false`
+and a valid request returned `503` with zero ledger rows, then gateway was restored to staged
+`true`. Final heartbeats show read gateway `true`, command execution `true`, AI gateway `true`, and
+zero skipped overrides. The temporary validation chatter key was revoked after the test.
 
 ## DM Aggregate Analytics Groundwork (2026-06-20)
 
