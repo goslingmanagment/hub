@@ -1,9 +1,8 @@
 # OFAPI Desktop Command Outbox Contract
 
 Status: C6b1 intake/read/cancel, C6b2 executor, terminal payload redaction, desktop recovery
-transport, controlled text execution, and the core typing/unsend/mark-read command slices are
-implemented and production-validated as of 2026-06-20. The bounded media/PPV send command slice is
-implemented pending production validation.
+transport, controlled text execution, and the core typing/unsend/mark-read/media-send command
+slices are implemented and production-validated as of 2026-06-20.
 Decision owner: core Decisions #55, #56, #58, #59, #60, and #61.
 
 ## Boundary
@@ -664,7 +663,7 @@ Owner-controlled `loravievip` to `loravie` validation completed on 2026-06-20:
 
 ## C6b6 Media/PPV Send Command Slice
 
-Status: implemented, pending production validation.
+Status: implemented and production-validated on 2026-06-20.
 Decision owner: core Decision #61.
 
 ### Contract
@@ -694,22 +693,34 @@ Decision owner: core Decision #61.
 - The operation records credit ledger rows under `ofapi_command_send_media`. Vendor success returns
   only the platform message id to the executor.
 
-### Production Validation Plan
+### 2026-06-20 Production Validation Evidence
 
-Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
-
-1. Migration `0046` applied and API/worker heartbeats match the deployed source revision.
-2. Confirm an existing owner media id is available; if not, abort the live validation rather than
-   centralizing upload in this slice.
-3. Create one `send_media_message_v1` command through a chatter key assigned only to the owner page.
-4. Command reaches terminal `confirmed` with `attempt_count=1` and a platform message id.
-5. `ofapi_credit_ledger` has exactly one matching `ofapi_command_send_media` row.
-6. Command status APIs and API/worker logs contain no caption, media id, media URL, filename, signed
-   CDN field, or arbitrary vendor body.
-7. If a message was posted, unsend it through the already validated unsend command path.
-8. Stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false`, recreate API/worker, prove a fresh media
-   command remains `queued` with zero attempts and no new media ledger row, cancel it, then restore
-   execution if validation passes.
+- Canonical dist-only deploy reached revision `2dbb5f407c52`; API and worker image labels matched
+  that revision and dependency checksum `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`.
+- Migration `0046_ofapi_command_send_media_message.sql` was applied at
+  `2026-06-20 05:02:06.041099+00`.
+- The controlled route was owner-only: `lora-vip-of` page 9 to `loravie` conversation `518588958`.
+  A governed archive lookup provided an existing owner media id without exposing media URLs.
+- Free media command `8360d753-3c2a-420d-9621-6221e1d65cf0` reached `confirmed` with
+  `attempt_count=1`, `price=0`, one media id, zero previews, and platform message id
+  `10091143135310`.
+- `ofapi_credit_ledger` row `20` recorded `ofapi_command_send_media`, page 9, HTTP 200, one credit,
+  `estimated=false`, and `{"attemptNumber":1}`.
+- Cleanup used unsend command `c4a8ef8d-8ab7-4f7a-ac90-225bde2ce746`, which confirmed with one
+  attempt and target/platform message id `10091143135310`. Ledger row `21` recorded the cleanup
+  DELETE. Webhook journal rows `16680`-`16683` projected `messages.sent`, `messages.received`, and
+  paired `messages.deleted` events with fanout seq `16617` through `16620`.
+- API/worker log searches over the validation window found no caption canary, media id,
+  `mediaFiles`, `mediaUrl`, signed/CDN/download URL, filename, or arbitrary vendor body fields.
+- Rollback drill: staged `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false` at config version 10,
+  recreated API/worker, and fresh heartbeats reported execution `false` with outbox `true`,
+  AI gateway `true`, and zero skipped overrides. New media command
+  `756d2124-4d23-4ad6-9367-ddd5709f97dc` stayed `queued` with `attempt_count=0` and no new media
+  ledger row (`ofapi_command_send_media` remained one row, max id `20`), then was cancelled.
+- Restore drill: staged execution back to `true` at config version 11, recreated API/worker, and
+  final heartbeats reported execution `true`, outbox `true`, AI gateway `true`, zero skipped
+  overrides, and zero nonterminal commands. The temporary validation key was revoked and its page
+  assignment removed; it has zero active keys and no assigned pages.
 
 ### 2026-06-19 Payload Redaction Production Evidence
 

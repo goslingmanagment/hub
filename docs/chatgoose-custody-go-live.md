@@ -34,10 +34,10 @@ Verify from `runtime_instances.running`, not repository defaults:
 - `chatMuseAiGatewayEnabled=true`
 - `skippedOverrides=[]` for both API and worker
 
-Desktop production defaults are Hub read, Hub write for text/typing/unsend/mark-read, hourly spend
-reconcile, and Direct AI until the desktop gateway rollout is accepted. Media/PPV send hub write is
-implemented pending production validation and desktop release. Support rollback controls are Direct
-read/write, Direct AI, and the legacy 10-minute spend sweep.
+Desktop production defaults are Hub read, Hub write for text/typing/unsend/mark-read/media-send,
+hourly spend reconcile, and Direct AI until the desktop gateway rollout is accepted. Upload and
+unsupported writes still need Direct. Support rollback controls are Direct read/write, Direct AI,
+and the legacy 10-minute spend sweep.
 
 ## Canonical Deploy
 
@@ -350,21 +350,31 @@ order by id desc
 limit 5;
 ```
 
-Pending validation for migration `0046_ofapi_command_send_media_message.sql`:
+Production media/PPV send validation completed on 2026-06-20:
 
-- Validate only on the owner-controlled `loravievip`/`loravie` route and only with an existing owner
-  media id. If no existing media id is available, abort rather than implementing upload in this
-  slice.
-- The command payload may contain caption, price, media IDs, and preview IDs, but API responses and
-  logs must not echo caption text, media IDs, filenames, media URLs, signed CDN fields, or arbitrary
-  vendor body fields.
-- The command must reach a terminal state after exactly one vendor attempt, write exactly one
-  `ofapi_command_send_media` ledger row, and record the platform message id when confirmed.
-- If a live message is posted, clean it up only through the already validated owner-only unsend
-  command path.
-- Rollback drill: stage command execution `false`, recreate API/worker, prove a fresh media command
-  stays `queued` with zero attempts and no new media ledger row, cancel it, and restore execution
-  only if validation passes.
+- Canonical dist-only deploy reached revision `2dbb5f407c52`; API and worker image labels matched
+  that revision and dependency checksum `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`.
+  Migration `0046_ofapi_command_send_media_message.sql` was applied at
+  `2026-06-20 05:02:06.041099+00`.
+- The owner-only validation route was `lora-vip-of` page 9 to `loravie` conversation `518588958`.
+  A governed archive query found an existing owner media id without exposing media URLs.
+- Free media command `8360d753-3c2a-420d-9621-6221e1d65cf0` confirmed with one attempt, platform
+  message id `10091143135310`, `price=0`, one media id, and zero previews.
+- Ledger row `20` recorded `ofapi_command_send_media`, page 9, HTTP 200, one credit,
+  `estimated=false`, and `{"attemptNumber":1}`.
+- Cleanup unsend command `c4a8ef8d-8ab7-4f7a-ac90-225bde2ce746` confirmed with one attempt;
+  ledger row `21` recorded the DELETE. Webhook rows `16680`-`16683` projected
+  `messages.sent`, `messages.received`, and paired `messages.deleted` events with fanout seq
+  `16617` through `16620`.
+- API/worker log searches for the validation window found no caption canary, media id,
+  `mediaFiles`, `mediaUrl`, signed/CDN/download URL, filename, or arbitrary vendor body fields.
+- Rollback drill staged command execution `false` at config version 10, recreated API/worker, and
+  proved media command `756d2124-4d23-4ad6-9367-ddd5709f97dc` remained queued/cancelled with zero
+  attempts and no new media ledger row. Execution was restored to `true` at config version 11;
+  final API/worker heartbeats reported command outbox `true`, execution `true`, AI gateway `true`,
+  zero skipped overrides, and zero nonterminal commands.
+- The temporary validation key was revoked and its page assignment removed. The validation user has
+  zero active keys and no assigned pages.
 
 ## Rollback Matrix
 

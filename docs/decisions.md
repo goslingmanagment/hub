@@ -764,11 +764,25 @@ design.
   claims. Desktop Direct write transport remains the rollback path until upload and any other
   remaining write kinds are centralized and production-soaked.
 
-**Production validation plan:** deploy migration `0046_ofapi_command_send_media_message.sql`
-through the canonical dist-only path, validate only on the owner-controlled `loravievip` to
-`loravie` conversation, use an existing owner media id or abort without third-party action, prove
-one command attempt, one `ofapi_command_send_media` ledger row, redacted API/log surfaces, and a
-staged execution rollback that parks a fresh command with zero attempts.
+**Production validation:** revision `2dbb5f407c52` deployed through the canonical dist-only path
+with migration `0046_ofapi_command_send_media_message.sql` applied at
+`2026-06-20 05:02:06.041099+00`; API and worker image labels matched the revision and dependency
+checksum `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`. The owner-only route
+was `lora-vip-of` page 9 to `loravie` conversation `518588958`. A governed archive lookup found an
+existing owner media id without URLs. Free media command `8360d753-3c2a-420d-9621-6221e1d65cf0`
+confirmed after one attempt, `price=0`, `media_count=1`, `preview_count=0`, and platform message id
+`10091143135310`. Ledger row `20` recorded `ofapi_command_send_media`, page 9, HTTP 200, one
+credit, `estimated=false`, and `attemptNumber=1`. Cleanup used already validated unsend command
+`c4a8ef8d-8ab7-4f7a-ac90-225bde2ce746`; ledger row `21` recorded the DELETE and webhooks
+`16680`-`16683` projected sent/received/deleted evidence for platform message id `10091143135310`.
+API/worker log checks over the validation window found no caption canary, media id, `mediaFiles`,
+`mediaUrl`, signed/CDN/download URL, or filename fields. The rollback drill staged execution
+`false` at config version 10, recreated API/worker, proved media command
+`756d2124-4d23-4ad6-9367-ddd5709f97dc` stayed queued with `attempt_count=0` and no new media ledger
+row, cancelled it, then restored execution `true` at version 11. Final heartbeats reported outbox
+`true`, execution `true`, AI gateway `true`, zero skipped overrides, and zero nonterminal commands.
+The temporary validation key was revoked and its page assignment removed; the validation user has
+zero active keys and no assigned pages.
 
 ## ChatMuse AI Gateway Contract (2026-06-19)
 
