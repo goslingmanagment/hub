@@ -281,6 +281,9 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
 **Features:**
 - ✅ OFAPI webhook receiver: raw-body HMAC verify, `x-ofapi-idempotency-key` dedupe, event journal, async pg-boss processing, owner admin flow to register the webhook + map accounts to pages
 - ✅ SSE event fanout `GET /api/v1/events/stream`: chatter-key auth, page-filtered `SyncEvent` frames, `Last-Event-ID` replay, ~7-day journal retention; stale cursors receive `409 sync_snapshot_required`
+- ✅ Webhook queue throughput hardening: `ofapi.events.process.v2` uses exclusive event-id
+  dedupe and sequential batches of 100, replacing the duplicate-prone one-job polling queue
+  without changing settle-order `fanout_seq` semantics.
 - ✅ Chatter-scoped `GET /api/v1/events/snapshot`: paginated durable chat/message/tombstone/account-auth state with a snapshot cursor for replay-gap recovery
 - ✅ C6 custody slice: default-off, chatter-key `GET /api/v1/ofapi/read/*` proxies only the desktop's allowlisted account-scoped GETs through the core OFAPI client, with assigned-page ACL and page-attributed credit ledger; desktop switching and all write commands remain pending
 - ✅ C6 command intake: Decision #55 + migration 0038 add the core command outbox and chatter-key create/read/cancel API for strict `send_text_message_v1` intake. Exact client-id dedupe, mismatch conflicts, retry lineage, page/chatter ACLs, explicit terminal/indeterminate states, and one-in-flight-per-lane are defined. Revision `ea81511d92de` was production-validated default-off, then enabled through audited staged config; the validation command ended cancelled with zero attempts and zero credit-ledger movement.

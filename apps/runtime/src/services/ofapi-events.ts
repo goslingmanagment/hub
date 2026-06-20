@@ -50,9 +50,15 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export { ofapiWebhookEnvelopeSchema, type OfapiWebhookEnvelope } from "./ofapi-payloads.ts";
 
-export const OFAPI_EVENT_PROCESS_QUEUE = "ofapi.events.process";
+// v2 replaces the original standard-policy queue. The old queue accepted duplicate
+// singleton keys, so the minutely safety sweep could enqueue the same pending event
+// repeatedly while a batchSize=1 worker fell behind. A new name lets production create
+// the queue with the correct exclusive-per-event policy without deleting live pg-boss
+// metadata in place.
+export const OFAPI_EVENT_PROCESS_QUEUE = "ofapi.events.process.v2";
 export const OFAPI_EVENT_SWEEP_QUEUE = "ofapi.events.sweep";
 export const OFAPI_EVENT_CLEANUP_QUEUE = "ofapi.events.cleanup";
+export const OFAPI_EVENT_PROCESS_BATCH_SIZE = 100;
 
 // Postgres NOTIFY channel carrying journal row ids from the worker's event
 // processor to the API process's SSE fanout (services/events-stream.ts).
@@ -66,6 +72,12 @@ const SWEEP_BATCH_LIMIT = 200;
 
 export interface OfapiEventProcessPayload {
   eventId: number;
+}
+
+export function sortOfapiEventJobs<T extends { data: OfapiEventProcessPayload }>(
+  jobs: readonly T[],
+): T[] {
+  return [...jobs].sort((left, right) => left.data.eventId - right.data.eventId);
 }
 
 type SettledOfapiEventRow = Parameters<typeof runOfapiDmColdArchiveForSettledRow>[1] &
@@ -210,7 +222,9 @@ export async function ensureOfapiQueues(
 ) {
   await Promise.all([
     ensureQueueCreated(boss, OFAPI_EVENT_PROCESS_QUEUE, {
-      policy: "standard",
+      // Every job supplies singletonKey=eventId. Exclusive therefore permits many
+      // different events while preventing duplicate queued/active jobs for one event.
+      policy: "exclusive",
       retryLimit: 2,
       retryDelay: 30,
       retryBackoff: true,
@@ -360,9 +374,14 @@ type OfapiWorkerBoss = Pick<PgBoss, "send" | "work">;
 export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBoss) {
   await boss.work<OfapiEventProcessPayload>(
     OFAPI_EVENT_PROCESS_QUEUE,
-    { batchSize: 1 },
+    // One handler still settles rows sequentially, preserving the single-worker
+    // fanout-order invariant. Fetching a batch avoids pg-boss's idle poll delay between
+    // every event and keeps sustained webhook traffic from outrunning the worker.
+    { batchSize: OFAPI_EVENT_PROCESS_BATCH_SIZE },
     async (jobs) => {
-      for (const job of jobs) {
+      // pg-boss does not promise the returned batch array is journal-ordered.
+      // Restore receive order explicitly before assigning settle-order fanout_seq.
+      for (const job of sortOfapiEventJobs(jobs)) {
         await processOfapiWebhookEvent(app, job.data.eventId);
       }
     },
