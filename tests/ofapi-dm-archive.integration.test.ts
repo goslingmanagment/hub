@@ -20,6 +20,7 @@ import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   archiveOfapiDmEvent,
   cleanupExpiredDmMessageArchive,
+  sweepOfapiDmColdArchives,
 } from "../apps/runtime/src/services/ofapi-dm-archive.ts";
 import { sweepOfapiDmProjections } from "../apps/runtime/src/services/ofapi-dm-projection.ts";
 import { processOfapiWebhookEvent } from "../apps/runtime/src/services/ofapi-events.ts";
@@ -119,6 +120,23 @@ async function archiveCount() {
     "select count(*)::int as count from dm_message_archive",
   );
   return Number(rows[0]!.count);
+}
+
+async function archiveJournalStatus(eventId: number) {
+  const { rows } = await testDb!.pool.query<{
+    archive_status: string;
+    archive_attempts: number;
+    archive_error: string | null;
+    archived_at: Date | null;
+  }>(`
+    select archive_status,
+           archive_attempts::int,
+           archive_error,
+           archived_at
+    from ofapi_webhook_events
+    where id = $1
+  `, [eventId]);
+  return rows[0]!;
 }
 
 beforeAll(async () => {
@@ -233,6 +251,35 @@ describe("OFAPI DM cold archive", () => {
     expect((await getOfapiWebhookEventById(appContext.db, eventId))!.projectionStatus)
       .toBe("projected");
     expect(await archiveRow(RECEIVED_ACCOUNT, "1000006")).toBeNull();
+  });
+
+  it("records archive failures and retries them from the sweep", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    appContext.config.ofapiDmColdArchiveRetentionDays = Number.MAX_SAFE_INTEGER;
+    await seedOnlyFansPage("archive-retry", RECEIVED_ACCOUNT);
+    const eventId = await deliverAndProcess(await loadFixtureEnvelope("messages_received.json"));
+
+    expect(await archiveCount()).toBe(0);
+    expect(await archiveJournalStatus(eventId)).toMatchObject({
+      archive_status: "failed",
+      archive_attempts: 1,
+      archived_at: null,
+    });
+    expect((await archiveJournalStatus(eventId)).archive_error).toEqual(expect.any(String));
+
+    appContext.config.ofapiDmColdArchiveRetentionDays = 30;
+    expect(await sweepOfapiDmColdArchives(appContext)).toBe(1);
+
+    expect(await archiveRow(RECEIVED_ACCOUNT, "1000006")).not.toBeNull();
+    expect(await archiveJournalStatus(eventId)).toMatchObject({
+      archive_status: "archived",
+      archive_attempts: 2,
+    });
+    expect((await archiveJournalStatus(eventId)).archived_at).not.toBeNull();
   });
 
   it("records delete events as tombstones and preserves them when the message arrives later", async (context) => {

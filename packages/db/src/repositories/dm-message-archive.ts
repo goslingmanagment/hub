@@ -232,14 +232,35 @@ export async function getDmMessageArchiveStatus(
     last_archived_at: Date | string | null;
     last_source_received_at: Date | string | null;
     next_purge_at: Date | string | null;
+    archive_pending_count: number | string;
+    archive_failed_count: number | string;
+    last_archive_error: string | null;
   }>(sql`
-    select
-      count(*)::int as row_count,
-      count(*) filter (where deleted_at is not null)::int as tombstone_count,
-      max(archived_at) as last_archived_at,
-      max(source_received_at) as last_source_received_at,
-      min(retain_until) as next_purge_at
-    from dm_message_archive
+    with archive_rows as (
+      select
+        count(*)::int as row_count,
+        count(*) filter (where deleted_at is not null)::int as tombstone_count,
+        max(archived_at) as last_archived_at,
+        max(source_received_at) as last_source_received_at,
+        min(retain_until) as next_purge_at
+      from dm_message_archive
+    ), journal_status as (
+      select
+        count(*) filter (where archive_status = 'pending')::int as archive_pending_count,
+        count(*) filter (where archive_status = 'failed')::int as archive_failed_count,
+        (
+          select archive_error
+          from ofapi_webhook_events
+          where archive_status = 'failed'
+            and archive_error is not null
+          order by id desc
+          limit 1
+        ) as last_archive_error
+      from ofapi_webhook_events
+    )
+    select *
+    from archive_rows
+    cross join journal_status
   `);
   const row = result.rows[0];
   const lastSourceReceivedAt = row?.last_source_received_at
@@ -253,5 +274,8 @@ export async function getDmMessageArchiveStatus(
     lastSourceReceivedAt,
     nextPurgeAt: row?.next_purge_at ? new Date(row.next_purge_at) : null,
     archiveLagMs: lastSourceReceivedAt ? Math.max(0, now.getTime() - lastSourceReceivedAt.getTime()) : null,
+    archivePendingCount: Number(row?.archive_pending_count ?? 0),
+    archiveFailedCount: Number(row?.archive_failed_count ?? 0),
+    lastArchiveError: row?.last_archive_error ?? null,
   };
 }

@@ -2,6 +2,9 @@ import {
   deleteExpiredDmMessageArchiveRows,
   findPageByOfapiAccountId,
   getDmMessageArchiveStatus,
+  listOfapiWebhookEventsForDmColdArchive,
+  markOfapiWebhookEventArchive,
+  markOfapiWebhookEventArchivePending,
   tombstoneDmMessageArchive,
   upsertDmMessageArchive,
   type DmMessageArchiveMediaItem,
@@ -16,6 +19,8 @@ import {
 } from "./ofapi-payloads.ts";
 
 const DEFAULT_DM_COLD_ARCHIVE_RETENTION_DAYS = 3650;
+const OFAPI_DM_COLD_ARCHIVE_MAX_ATTEMPTS = 5;
+const OFAPI_DM_COLD_ARCHIVE_SWEEP_LIMIT = 200;
 const DM_COLD_ARCHIVE_EVENT_TYPES = [
   "messages.received",
   "messages.sent",
@@ -33,6 +38,8 @@ export interface OfapiDmColdArchiveProjectableRow {
   payload: Record<string, unknown>;
   fanoutSeq: number | null;
   receivedAt: Date;
+  archiveStatus?: string;
+  archiveAttempts?: number;
 }
 
 interface ParsedArchiveMessage {
@@ -261,20 +268,83 @@ export async function runOfapiDmColdArchiveForSettledRow(
   app: AppContext,
   row: OfapiDmColdArchiveProjectableRow,
 ) {
+  if (!isOfapiDmColdArchiveEnabled(app.config) || !isDmColdArchiveEventType(row.eventType)) {
+    return;
+  }
+  if (
+    row.archiveStatus !== undefined &&
+    row.archiveStatus !== "none" &&
+    row.archiveStatus !== "pending" &&
+    row.archiveStatus !== "failed"
+  ) {
+    return;
+  }
+  if (
+    row.archiveStatus === "failed" &&
+    typeof row.archiveAttempts === "number" &&
+    row.archiveAttempts >= OFAPI_DM_COLD_ARCHIVE_MAX_ATTEMPTS
+  ) {
+    return;
+  }
+
+  const claimed = await markOfapiWebhookEventArchivePending(app.db, { id: row.id });
+  if (!claimed) {
+    return;
+  }
+
   try {
     const outcome = await archiveOfapiDmEvent(app, row);
     if (outcome.status === "archived") {
+      await markOfapiWebhookEventArchive(app.db, {
+        id: row.id,
+        status: "archived",
+        archivedAt: new Date(),
+      });
       app.logger.info(
         { eventId: row.id, eventType: row.eventType },
         "OFAPI DM cold archive stored webhook event",
       );
+    } else {
+      await markOfapiWebhookEventArchive(app.db, {
+        id: row.id,
+        status: "skipped",
+        error: outcome.reason,
+      });
     }
   } catch (error) {
     app.logger.warn(
       { err: error, eventId: row.id, eventType: row.eventType },
-      "OFAPI DM cold archive failed; event fanout/projection remains settled",
+      "OFAPI DM cold archive failed; sweep will retry",
     );
+    await markOfapiWebhookEventArchive(app.db, {
+      id: row.id,
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    }).catch((markError) => {
+      app.logger.warn(
+        { err: markError, eventId: row.id },
+        "Failed to record OFAPI DM cold archive failure",
+      );
+    });
   }
+}
+
+export async function sweepOfapiDmColdArchives(app: AppContext) {
+  if (!isOfapiDmColdArchiveEnabled(app.config)) {
+    return 0;
+  }
+
+  const rows = await listOfapiWebhookEventsForDmColdArchive(app.db, {
+    eventTypes: DM_COLD_ARCHIVE_EVENT_TYPES,
+    maxAttempts: OFAPI_DM_COLD_ARCHIVE_MAX_ATTEMPTS,
+    limit: OFAPI_DM_COLD_ARCHIVE_SWEEP_LIMIT,
+  });
+
+  for (const row of rows) {
+    await runOfapiDmColdArchiveForSettledRow(app, row);
+  }
+
+  return rows.length;
 }
 
 export async function cleanupExpiredDmMessageArchive(app: AppContext, now = new Date()) {
@@ -296,6 +366,10 @@ export async function getOfapiDmColdArchiveStatus(app: AppContext, now = new Dat
     lastSourceReceivedAt: maybeIso(status.lastSourceReceivedAt),
     nextPurgeAt: maybeIso(status.nextPurgeAt),
     archiveLagMs: status.archiveLagMs,
+    archivePendingCount: status.archivePendingCount,
+    archiveFailedCount: status.archiveFailedCount,
+    lastArchiveError: status.lastArchiveError,
+    maxArchiveAttempts: OFAPI_DM_COLD_ARCHIVE_MAX_ATTEMPTS,
     acl: "owner_admin_endpoint_only" as const,
     audit: "source_journal_metadata_on_each_row" as const,
     purgePolicy: "daily_retention_purge_by_retain_until" as const,

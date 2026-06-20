@@ -93,6 +93,7 @@ export async function settleOfapiWebhookEvent(
 }
 
 export type OfapiEventProjectionStatus = "none" | "pending" | "projected" | "skipped" | "failed";
+export type OfapiEventArchiveStatus = "none" | "pending" | "archived" | "skipped" | "failed";
 
 /**
  * Records a DM-projection attempt's outcome. Separate from settle bookkeeping —
@@ -155,6 +156,83 @@ export async function listOfapiWebhookEventsForDmProjection(
         or (
           ${ofapiWebhookEvents.projectionStatus} = 'failed'
           and ${ofapiWebhookEvents.projectionAttempts} < ${input.maxAttempts}
+        )
+      )`,
+    ))
+    .orderBy(asc(ofapiWebhookEvents.id))
+    .limit(input.limit);
+}
+
+export async function markOfapiWebhookEventArchivePending(
+  db: Database,
+  input: {
+    id: number;
+  },
+) {
+  const updated = await db
+    .update(ofapiWebhookEvents)
+    .set({
+      archiveStatus: "pending",
+      archiveError: null,
+    })
+    .where(and(
+      eq(ofapiWebhookEvents.id, input.id),
+      inArray(ofapiWebhookEvents.archiveStatus, ["none", "pending", "failed"]),
+    ))
+    .returning({ id: ofapiWebhookEvents.id });
+
+  return updated.length > 0;
+}
+
+export async function markOfapiWebhookEventArchive(
+  db: Database,
+  input: {
+    id: number;
+    status: Exclude<OfapiEventArchiveStatus, "none" | "pending">;
+    error?: string | null;
+    archivedAt?: Date;
+  },
+) {
+  const updated = await db
+    .update(ofapiWebhookEvents)
+    .set({
+      archiveStatus: input.status,
+      archiveError: input.error ?? null,
+      archiveAttempts: sql`${ofapiWebhookEvents.archiveAttempts} + 1`,
+      archivedAt: input.status === "archived" ? input.archivedAt ?? new Date() : null,
+    })
+    .where(and(
+      eq(ofapiWebhookEvents.id, input.id),
+      inArray(ofapiWebhookEvents.archiveStatus, ["pending", "failed"]),
+    ))
+    .returning({ id: ofapiWebhookEvents.id });
+
+  return updated.length > 0;
+}
+
+export async function listOfapiWebhookEventsForDmColdArchive(
+  db: Database,
+  input: {
+    eventTypes: readonly string[];
+    maxAttempts: number;
+    limit: number;
+  },
+) {
+  if (input.eventTypes.length === 0) {
+    return [];
+  }
+
+  return db
+    .select()
+    .from(ofapiWebhookEvents)
+    .where(and(
+      inArray(ofapiWebhookEvents.eventType, [...input.eventTypes]),
+      sql`${ofapiWebhookEvents.status} <> 'pending'`,
+      sql`(
+        ${ofapiWebhookEvents.archiveStatus} = 'pending'
+        or (
+          ${ofapiWebhookEvents.archiveStatus} = 'failed'
+          and ${ofapiWebhookEvents.archiveAttempts} < ${input.maxAttempts}
         )
       )`,
     ))

@@ -18,6 +18,7 @@ import { runOfapiCreditBurnMonitor } from "./ofapi-credits.ts";
 import {
   cleanupExpiredDmMessageArchive,
   runOfapiDmColdArchiveForSettledRow,
+  sweepOfapiDmColdArchives,
 } from "./ofapi-dm-archive.ts";
 import {
   runOfapiDmProjectionForSettledRow,
@@ -395,6 +396,10 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
     const projected = await sweepOfapiDmProjections(app);
     if (projected > 0) {
       app.logger.info({ projected }, "OFAPI DM projection sweep processed journal rows");
+    }
+    const archived = await sweepOfapiDmColdArchives(app);
+    if (archived > 0) {
+      app.logger.info({ archived }, "OFAPI DM cold archive sweep processed journal rows");
     }
     const subscriptionProjected = await sweepOfapiSubscriptionProjections(app);
     if (subscriptionProjected > 0) {

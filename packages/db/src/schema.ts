@@ -2129,6 +2129,10 @@ export const ofapiWebhookEvents = pgTable(
     projectionError: text("projection_error"),
     projectionAttempts: integer("projection_attempts").default(0).notNull(),
     projectedAt: timestamp("projected_at", { withTimezone: true }),
+    archiveStatus: text("archive_status").default("none").notNull(),
+    archiveError: text("archive_error"),
+    archiveAttempts: integer("archive_attempts").default(0).notNull(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
     processedAt: timestamp("processed_at", { withTimezone: true }),
   },
@@ -2139,12 +2143,18 @@ export const ofapiWebhookEvents = pgTable(
     projectionIdx: index("ofapi_webhook_events_projection_idx")
       .on(table.projectionStatus, table.id)
       .where(sql`${table.projectionStatus} in ('pending', 'failed')`),
+    archiveIdx: index("ofapi_webhook_events_archive_idx")
+      .on(table.archiveStatus, table.id)
+      .where(sql`${table.archiveStatus} in ('pending', 'failed')`),
     fanoutSeqUniq: uniqueIndex("ofapi_webhook_events_fanout_seq_uniq")
       .on(table.fanoutSeq)
       .where(sql`${table.fanoutSeq} is not null`),
     replayIdx: index("ofapi_webhook_events_replay_idx")
       .on(table.platformAccountId, table.fanoutSeq)
       .where(sql`${table.fanoutSeq} is not null`),
+    archiveStatusCheck: check("ofapi_webhook_events_archive_status_check", sql`
+      ${table.archiveStatus} in ('none', 'pending', 'archived', 'skipped', 'failed')
+    `),
   }),
 );
 
