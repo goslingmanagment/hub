@@ -285,10 +285,10 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
   dedupe and sequential batches of 100, replacing the duplicate-prone one-job polling queue
   without changing settle-order `fanout_seq` semantics.
 - ✅ Chatter-scoped `GET /api/v1/events/snapshot`: paginated durable chat/message/tombstone/account-auth state with a snapshot cursor for replay-gap recovery
-- ✅ C6 custody slice: default-off, chatter-key `GET /api/v1/ofapi/read/*` proxies only the desktop's allowlisted account-scoped GETs through the core OFAPI client, with assigned-page ACL and page-attributed credit ledger; desktop switching and all write commands remain pending
+- ✅ C6 read custody: chatter-key `GET /api/v1/ofapi/read/*` proxies the desktop's allowlisted account-scoped GETs through the core OFAPI client, with assigned-page ACL and page-attributed credit ledger. Production and desktop now use Hub as the default, with Direct retained as the explicit rollback.
 - ✅ C6 command intake: Decision #55 + migration 0038 add the core command outbox and chatter-key create/read/cancel API for strict `send_text_message_v1` intake. Exact client-id dedupe, mismatch conflicts, retry lineage, page/chatter ACLs, explicit terminal/indeterminate states, and one-in-flight-per-lane are defined. Revision `ea81511d92de` was production-validated default-off, then enabled through audited staged config; the validation command ended cancelled with zero attempts and zero credit-ledger movement.
-- 🟡 C6 command execution: the separately flagged, default-off text executor is implemented with one-attempt claims, zero queue retries, stale-attempt recovery to `indeterminate`, page-attributed credit accounting, response confirmation, conservative `messages.sent` repair, and terminal payload redaction from the command sweep. Revision `bbd42e844f36` is production-validated with execution disabled, payload redaction migration applied, zero command-send ledger rows, and no vendor send path active. Controlled test-fan enablement and desktop command transport/recovery UI remain pending.
-- 🟡 D6 desktop spend-sweep reduction: core C3 shadow+apply is production-clean for `transactions.new` over 30 days as of 2026-06-19 22:55 UTC (11/11 matched, mismatch buckets zero), and desktop has the rollback flag to restore the legacy 10-minute sweep. Reduction remains blocked until PPV/tips policy is explicitly accepted; PPV unlocks are still estimated-only and `tips.received` still needs a live verified fixture.
+- ✅ C6 text command execution: the one-attempt executor, payload purge, and desktop recovery transport are live. The 2026-06-20 owner-account acceptance made exactly one vendor attempt and one ledger row, reached `confirmed` with a platform message id, received the paired webhooks, then unsent the message. Production now has audited staged execution enabled; setting the staged flag back to `false` parks new claims without disabling intake.
+- ✅ D6 desktop spend-sweep reduction: core C3 shadow+apply is production-clean for `transactions.new` over 30 days (11/11 matched, mismatch buckets zero). Policy is accepted: matched transactions are authoritative, PPV unlock remains estimated-only, and `tips.received` remains blocked pending a live fixture. Desktop reconciles hourly; its support rollback restores the legacy 10-minute sweep.
 - ✅ ChatMuse pre-P4 prerequisites: profile PUT auto-creates OnlyFans fans; AI-usage batch skips invalid events per-event (`invalidCount`)
 - 🟡 Admin UI for the OFAPI webhook flow (API-only today; register via `POST /api/v1/admin/ofapi/webhook`)
 - 🟡 AI proxy with streaming responses — R4a contract schemas/docs define the default-off
@@ -302,8 +302,16 @@ Chatters using the ChatMuse extension get live fan context, AI-assisted replies 
   authorized provider attempts; R4l adds owner usage reporting for gateway cost/outcomes. Revision
   `736d37c66549` is deployed default-off with api/worker healthy,
   `chatMuseAiGatewayEnabled=false`, `anthropicApiKey=unset`, no gateway ledger rows, and
-  production reporting code returning the new cost/gateway fields. Live provider validation and
-  desktop switch remain pending
+  production reporting code returning the new cost/gateway fields. A controlled 2026-06-20
+  rollout proved the key/model from the operator workstation, but Anthropic returned
+  `403 Request not allowed` from the production container. The failed attempt is terminal in the
+  ledger with zero tokens/cost; the staged flag and production key were rolled back. Desktop
+  remains on Direct AI until production egress is accepted.
+- ✅ DM analytics groundwork: migration 0042 adds aggregate-only UTC daily message facts over the
+  governed cold archive. An exclusive hourly worker rebuilds a bounded 32-day window
+  idempotently, corrects tombstones, and stores no transcript, media URL, or fan identifier.
+  Response-time pairing, PPV unlock funnels, revenue attribution, and AI-to-send correlation stay
+  deferred until their identity contracts are explicit; dashboards must not infer them by time.
 - Fan context injection: spending (page + total), notes, AI summary, subscription status, flags in one panel
 - Fan notes via the app: chatters create and read notes visible to others on the same page
 - AI-generated fan summaries from chat history; version history preserved

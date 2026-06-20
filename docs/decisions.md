@@ -53,6 +53,8 @@
 | 48 | OFAPI Real-Time Pipeline | OFAPI webhook receiver (raw-body HMAC, header-based dedupe, journal table) + pg-boss async processing + SSE fanout `GET /api/v1/events/stream` with `Last-Event-ID` replay; pages map to OFAPI accounts via `pages.ofapi_account_id`; ChatMuse profile PUT auto-creates OnlyFans fans |
 | 54 | OFAPI Desktop Read Gateway | Default-off chatter-key `GET /api/v1/ofapi/read/*` compatibility gateway with assigned-page ACL, strict path/query allowlist, central credit ledger, and no write/upload/send routes |
 | 55 | OFAPI Command Outbox | Core-owned, default-off command intake with stable client ids, page/chatter dedupe, explicit indeterminate outcomes, retry lineage, and a separate execution flag; no generic write proxy |
+| 56 | OFAPI Command Executor | Separately staged one-attempt text execution with no automatic retry, page-attributed credit accounting, webhook repair, and terminal payload redaction |
+| 57 | DM Aggregate Analytics | Replaceable aggregate-only UTC daily facts over the governed cold archive; no transcript text, media URLs, or fan identifiers |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -724,3 +726,27 @@ worker labels match the revision, health checks pass, latest heartbeats still sh
 `chatMuseAiGatewayEnabled=false` and `anthropicApiKey=unset`, and production reporting code
 successfully returned the new cost/gateway fields against real data (`rowCount=5`, `activeRows=2`,
 `totalGatewayRequests=0`, `openReservations=0`).
+
+**2026-06-20 live validation outcome:** the configured Anthropic key and
+`claude-sonnet-4-6` model returned 200 from the operator workstation, but the same non-generating
+models probe from the production API container returned `403 Request not allowed`. One controlled
+gateway request therefore finalized as `failed` with zero tokens/cost and bounded metadata only.
+The production key and staged gateway flag were rolled back; desktop Direct AI remains active.
+
+## DM Aggregate Analytics Groundwork (2026-06-20)
+
+**Decision #57:** analytics starts with a replaceable aggregate-only table over the governed,
+forward-only cold archive. Migration `0042_dm_message_daily_aggregates.sql` adds one row per
+page/UTC day with inbound/outbound/deleted counts, distinct conversation count, paid outbound and
+tip counts/mills, message time bounds, and source fanout high-water. It stores no transcript text,
+media metadata/URLs, or fan identifiers.
+
+An exclusive `ofapi.dm-analytics.rebuild` worker rebuilds the latest 32 UTC days hourly. Rebuild is
+delete-and-replace inside one transaction, so webhook replay and tombstone changes converge without
+double counting. The table is disposable derived state; rollback pauses the schedule and leaves
+the archive untouched.
+
+This is groundwork, not permission to infer unsupported metrics. Response-time pairing, PPV
+unlock funnels, revenue attribution windows, and AI-generation-to-send linkage require explicit
+identity contracts before implementation. Historical DM `GET /messages` backfill remains out of
+scope.

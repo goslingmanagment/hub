@@ -998,6 +998,54 @@ export const dmMessageArchive = pgTable(
   }),
 );
 
+// Replaceable aggregate-only facts derived from dm_message_archive. This table
+// deliberately contains no transcript text, media metadata, or fan identifiers.
+export const dmMessageDailyAggregates = pgTable(
+  "dm_message_daily_aggregates",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    businessDate: date("business_date").notNull(),
+    archiveRows: integer("archive_rows").default(0).notNull(),
+    inboundMessages: integer("inbound_messages").default(0).notNull(),
+    outboundMessages: integer("outbound_messages").default(0).notNull(),
+    deletedMessages: integer("deleted_messages").default(0).notNull(),
+    distinctConversations: integer("distinct_conversations").default(0).notNull(),
+    paidOutboundMessages: integer("paid_outbound_messages").default(0).notNull(),
+    paidOutboundPriceMills: bigint("paid_outbound_price_mills", { mode: "bigint" })
+      .default(0n)
+      .notNull(),
+    tipMessages: integer("tip_messages").default(0).notNull(),
+    tipAmountMills: bigint("tip_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    firstMessageAt: timestamp("first_message_at", { withTimezone: true }),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+    sourceMaxFanoutSeq: bigint("source_max_fanout_seq", { mode: "number" }),
+    rebuiltAt: timestamp("rebuilt_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "dm_message_daily_aggregates_pkey",
+      columns: [table.platformAccountId, table.businessDate],
+    }),
+    dateIdx: index("dm_message_daily_aggregates_date_idx").on(
+      table.businessDate.desc(),
+      table.platformAccountId,
+    ),
+    countsNonnegativeCheck: check("dm_message_daily_aggregates_counts_nonnegative_check", sql`
+      ${table.archiveRows} >= 0
+      and ${table.inboundMessages} >= 0
+      and ${table.outboundMessages} >= 0
+      and ${table.deletedMessages} >= 0
+      and ${table.distinctConversations} >= 0
+      and ${table.paidOutboundMessages} >= 0
+      and ${table.paidOutboundPriceMills} >= 0
+      and ${table.tipMessages} >= 0
+      and ${table.tipAmountMills} >= 0
+    `),
+  }),
+);
+
 export const ofapiCommands = pgTable(
   "ofapi_commands",
   {

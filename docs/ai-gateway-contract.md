@@ -1,10 +1,8 @@
 # ChatMuse AI Gateway Contract
 
-Status: R4b through R4l are implemented: default-off runtime gate, ledger storage, quota preflight,
-pricing, Anthropic request-building/usage normalization, SSE provider seam, terminal ledger
-finalization, atomic reservation, real Anthropic provider adapter, stale-reservation recovery, and
-owner usage reporting for gateway cost/outcomes. The default-off runtime is deployed to production;
-live provider validation and desktop switch are still pending.
+Status: R4b through R4l are implemented. Controlled production validation was attempted on
+2026-06-20 and rolled back because Anthropic rejects the production server egress with
+`403 Request not allowed`. Desktop Direct AI remains the active path.
 Decision owner: core Decision #26.
 
 ## Boundary
@@ -256,3 +254,26 @@ Before runtime implementation:
   recorded above; live provider validation remains pending**.
 
 Production validation must use a small approved prompt and must not send any platform message.
+
+## 2026-06-20 Controlled Production Validation
+
+- The operator workstation used the configured key to call Anthropic `/v1/models` successfully;
+  `claude-sonnet-4-6` was available. The same minimal Messages request returned HTTP 200 and the
+  expected short output, proving key/model/request compatibility.
+- Production was changed reversibly: `.env.production` was backed up, the same key was installed
+  without printing it, `chatMuseAiGatewayEnabled=true` was written through the audited staged
+  config, and API/worker were recreated. Both heartbeats reported gateway `true`, key `set`, and
+  zero skipped overrides.
+- One gateway request reserved client id `d98c86d8-8215-47e7-9450-4e25054970c8`. The SSE stream
+  emitted `meta,error`; the ledger finalized it as `failed` with zero tokens, zero cost, and a
+  bounded duration. No platform message was sent.
+- A non-generating `/v1/models` probe from inside the production API container returned
+  `403 forbidden: Request not allowed`, while the workstation probe returned 200. This isolates
+  the blocker to production egress/IP acceptance rather than the gateway contract, key, model,
+  quota, or request builder.
+- Core logs contained request ids and `errorName` only; they did not contain prompt or output text.
+- Rollback restored the prior `.env.production`, staged gateway `false` at version 2, and recreated
+  API/worker. Current heartbeats report gateway `false`, key `unset`, and zero skipped overrides.
+
+The gateway must not become the desktop default until the production egress/IP is accepted by
+Anthropic or a separately contracted provider adapter is implemented and validated.

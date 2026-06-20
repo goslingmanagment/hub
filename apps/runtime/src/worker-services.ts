@@ -23,6 +23,11 @@ import {
   startOfapiCommandWorker,
 } from "./services/ofapi-command-executor.ts";
 import {
+  ensureOfapiDmAnalyticsQueues,
+  ensureOfapiDmAnalyticsSchedules,
+  startOfapiDmAnalyticsWorker,
+} from "./services/ofapi-dm-analytics.ts";
+import {
   ensureOfapiQueues,
   ensureOfapiSchedules,
   startOfapiEventWorker,
@@ -130,6 +135,7 @@ export async function startWorkerServices(
   await ensureOfapiQueues(boss, createdQueues);
   await ensureOfapiCreditQueues(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
+  await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
@@ -138,6 +144,7 @@ export async function startWorkerServices(
     ensureOfapiSchedules(boss),
     ensureOfapiCreditSchedules(boss),
     ensureOfapiCommandSchedules(boss),
+    ensureOfapiDmAnalyticsSchedules(boss),
   ]);
 
   await boss.work(SYNC_PLANNER_QUEUE, {
@@ -173,6 +180,7 @@ export async function startWorkerServices(
   await startOfapiEventWorker(app, boss);
   await startOfapiCreditWorker(app, boss);
   await startOfapiCommandWorker(app, boss);
+  await startOfapiDmAnalyticsWorker(app, boss);
 
   await boss.work(TELEGRAM_DAILY_REPORT_QUEUE, { batchSize: 1 }, async () => {
     const now = new Date();

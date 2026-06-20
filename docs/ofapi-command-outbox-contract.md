@@ -1,7 +1,7 @@
 # OFAPI Desktop Command Outbox Contract
 
-Status: C6b1 intake/read/cancel, C6b2 default-off executor, and terminal payload redaction
-implemented on 2026-06-19. Live execution remains blocked on the controlled-send gate.
+Status: C6b1 intake/read/cancel, C6b2 executor, terminal payload redaction, desktop recovery
+transport, and controlled production execution are live as of 2026-06-20.
 Decision owner: core Decision #55.
 
 ## Boundary
@@ -10,12 +10,12 @@ Core owns command ids, dedupe, authorization, durable state, and eventual vendor
 Desktop owns draft text, optimistic UI, and its local outbox until a core command is accepted.
 OFAPI remains unreachable through arbitrary methods or paths.
 
-The first implementation is deliberately non-executing:
+The v1 boundary remains deliberately narrow:
 
 - `OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED` gates intake/read/cancel.
-- `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED` will gate vendor execution and requires the outbox flag.
-- Intake can be production-validated without sending, typing, marking read, uploading, liking, or
-  mutating OnlyFans in any way.
+- `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED` gates vendor execution and requires the outbox flag.
+- Only `send_text_message_v1` can execute. Typing, marking read, uploading, liking, unsend,
+  media, and PPV remain outside this command version.
 
 ## Version 1 Command
 
@@ -123,10 +123,9 @@ desktop-local state. Core status responses never return the payload text needed 
   visible human decision after checking the platform/conversation when possible.
 - `cancelled`: queued command cancelled before any vendor attempt.
 
-Desktop command transport remains blocked until this UX is implemented around the existing status
-endpoint. Recovery must not add a `GET /messages` body read solely to decide command outcome; the
-core response path and `messages.sent` webhook verifier are the non-read-state-changing evidence
-sources.
+Desktop implements this UX around the status endpoint. Recovery does not add a `GET /messages`
+body read solely to decide command outcome; the core response path and `messages.sent` webhook
+verifier are the non-read-state-changing evidence sources.
 
 ## Dedupe and Retention
 
@@ -193,8 +192,8 @@ controlled test fan and a new rollout decision.
   one existing chatter credential and did not create an artificial second user/key solely for
   validation.
 
-The separately flagged executor is now implemented default-off. Controlled test-fan send and
-desktop command transport/recovery UI remain pending.
+The historical intake-only evidence above remains useful, but the separate controlled execution
+gate has now passed; see the 2026-06-20 evidence below.
 
 ## C6b2 Executor Contract
 
@@ -308,6 +307,27 @@ implementation exists, and command status/recovery UI is implemented.
 This proves the deployed executor is present but inert while execution remains disabled. The live
 send gate remains blocked on a designated controlled test fan/conversation and explicit operator
 approval for one harmless message.
+
+### 2026-06-20 Controlled Live Execution Evidence
+
+- The owner-designated route was `loravievip` to the owner-controlled `loravie` conversation
+  (`platform user id 518588958`) with the approved text `hi`; no third-party fan was involved.
+- Core command `f7fa35d4-f3a2-486a-8d62-73246fc21195` reached `confirmed` after exactly one
+  vendor attempt. It recorded platform message id `10088948367788`.
+- `ofapi_credit_ledger` contains exactly one matching `ofapi_command_send_text` row: page 9,
+  one credit, HTTP 200, non-estimated, attempt number 1.
+- The sent message produced `messages.sent` and `messages.received` journal rows; the subsequent
+  owner-authorized unsend produced the paired `messages.deleted` rows. All four settled and
+  projected.
+- Command API responses omitted payload text. Focused API/worker log checks contained command ids
+  and bounded outcome metadata, but no payload text.
+- The acceptance initially rolled execution back to staged `false`. After desktop recovery
+  transport and Hub write default were committed, production staged version 3 enabled execution
+  again with zero nonterminal commands. Current API and worker heartbeats report outbox/execution
+  enabled with `skippedOverrides=[]`.
+- Rollback remains: stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false` and recreate API/worker.
+  Intake remains available and queued commands stay parked; Direct desktop write transport is the
+  client rollback.
 
 ### 2026-06-19 Payload Redaction Production Evidence
 
