@@ -1,8 +1,8 @@
 # OFAPI Desktop Command Outbox Contract
 
 Status: C6b1 intake/read/cancel, C6b2 executor, terminal payload redaction, desktop recovery
-transport, controlled text execution, and the core typing command slice are implemented as of
-2026-06-20.
+transport, controlled text execution, and the core typing command slice are implemented and
+production-validated as of 2026-06-20.
 Decision owner: core Decisions #55, #56, and #58.
 
 ## Boundary
@@ -217,8 +217,8 @@ gate has now passed; see the 2026-06-20 evidence below.
 
 ## C6b2 Executor Contract
 
-Status: default-off executor implemented and production-validated with execution disabled on
-2026-06-19; live enablement pending.
+Status: executor implemented, live-enabled through audited staged config, and production-validated
+for text and typing command slices.
 Decision owner: core Decision #56.
 
 ### Flag and Queue Boundary
@@ -360,7 +360,7 @@ approval for one harmless message.
 
 ## C6b3 Typing Command Slice
 
-Status: implemented, pending production deploy/validation.
+Status: implemented and production-validated on 2026-06-20.
 Decision owner: core Decision #58.
 
 ### Contract
@@ -403,6 +403,43 @@ Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
    canary appears.
 6. Stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false`, recreate API/worker, prove a new typing
    command remains `queued`/unclaimed, then restore execution if validation passes.
+
+### 2026-06-20 Production Validation Evidence
+
+- Canonical deploy revision: `405fe9e41bff`; API and worker image labels matched that revision
+  and dependency checksum `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`.
+  API health was OK. `/api/v1/health/sync` stayed 503 for the known pre-existing workload/page
+  state, not this deploy.
+- Migration `0043_ofapi_command_typing_active.sql` is applied in production
+  (`2026-06-20 03:12:58.929366+00`). The pre-validation command table contained only previous
+  text rows: two `cancelled` and one `confirmed`.
+- Active runtime heartbeats reported command outbox `true`, command execution `true`, AI gateway
+  `true`, and zero skipped overrides for both API and worker.
+- The controlled route was owner-only: page `lora-vip-of` (page id 9,
+  account `acct_b92980e0650b49d09a8312fa12f36a58`) to the owner-controlled `loravie`
+  conversation `518588958`. A temporary validation chatter was assigned only to `lora-vip-of`.
+- API create returned HTTP 202 for client command `0a287250-23e1-4a7b-9ed8-7b7ac2407764`, core
+  command `729fb32c-c313-4481-9c7c-c64963ec8df3`, kind `typing_active_v1`, state `queued`,
+  `attemptCount=0`, `platformMessageId=null`, and no payload in the response.
+- The command row reached `confirmed` with `attempt_count=1`, `platform_message_id=null`,
+  `last_error_code=null`, `last_error_class=null`, payload `{}`, and verifier metadata
+  `{"source":"ofapi_response","commandKind":"typing_active_v1"}`.
+- `ofapi_credit_ledger` row `13` recorded operation `ofapi_command_typing_active`, page 9,
+  HTTP 200, `credits_used=0`, `estimated=false`, idempotency key
+  `ofapi_command_typing_active:3fb61930-6296-4d8b-9943-650a5ef4fdcb`, and
+  `attemptNumber=1`.
+- Worker logs for the bounded validation window contained only command id/page/kind/platform-id
+  outcome metadata for the command. Focused searches found no validation key, payload, media URL,
+  signed CDN field, conversation id, or provider failure text.
+- Rollback drill: staged `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false` at config version 4,
+  recreated API/worker, and fresh heartbeats reported execution `false` with zero skipped
+  overrides. A new typing command `e2d9024f-84e7-44df-a8e4-cd768d58ee49` stayed `queued` with
+  `attempt_count=0`, no error, no platform id, and no additional
+  `ofapi_command_typing_active` ledger row. The parked command was cancelled before restore.
+- Restore drill: staged execution back to `true` at config version 5, recreated API/worker, and
+  final heartbeats reported outbox `true`, execution `true`, AI gateway `true`, and zero skipped
+  overrides. The temporary validation key was revoked and the temporary chatter's page assignment
+  was removed; it has zero active keys and no assigned pages.
 
 ### 2026-06-19 Payload Redaction Production Evidence
 

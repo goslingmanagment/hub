@@ -176,6 +176,56 @@ metadata and no prompt/output fields.
   command execution `true`, AI gateway `true`, and zero skipped overrides.
 - Temporary validation chatter key was revoked and page assignment removed after the test.
 
+Typing command validation:
+
+```sql
+select id,
+       kind,
+       state,
+       attempt_count,
+       platform_message_id,
+       payload,
+       verifier_result
+from ofapi_commands
+where id = '729fb32c-c313-4481-9c7c-c64963ec8df3';
+
+select id,
+       operation,
+       page_id,
+       http_status,
+       credits_used,
+       estimated,
+       metadata
+from ofapi_credit_ledger
+where operation = 'ofapi_command_typing_active'
+order by id desc
+limit 5;
+```
+
+2026-06-20 production typing validation evidence:
+
+- Deployed revision `405fe9e41bff`; API/worker image labels matched that source revision and
+  dependency checksum `b9e2460cf2e038b7d75ad5c310424990b748fa30d55b19ad2c6b0d31a89a0227`.
+  Migration `0043_ofapi_command_typing_active.sql` was applied at
+  `2026-06-20 03:12:58.929366+00`.
+- The owner-controlled validation route was `lora-vip-of` page 9 to `loravie` conversation
+  `518588958`. The temporary validation chatter was assigned only to `lora-vip-of`.
+- API create returned HTTP 202 for `typing_active_v1` command
+  `729fb32c-c313-4481-9c7c-c64963ec8df3`. The terminal row was `confirmed`,
+  `attempt_count=1`, payload `{}`, `platform_message_id=null`, and verifier source
+  `ofapi_response`.
+- Ledger row `13` recorded `ofapi_command_typing_active`, page 9, HTTP 200, `credits_used=0`,
+  `estimated=false`, and `attemptNumber=1`.
+- Bounded production log checks contained command/page/kind/outcome metadata only and no validation
+  key, payload, media URL, signed CDN field, or provider failure text.
+- Rollback drill staged command execution `false`, recreated API/worker, and proved typing command
+  `e2d9024f-84e7-44df-a8e4-cd768d58ee49` remained `queued` with zero attempts and no new typing
+  ledger row. The parked command was cancelled, execution was restored to staged `true`, and final
+  API/worker heartbeats reported command outbox `true`, command execution `true`, AI gateway
+  `true`, and zero skipped overrides.
+- The temporary validation key was revoked and its page assignment removed. The validation user has
+  zero active keys and no assigned pages.
+
 ## Rollback Matrix
 
 | Failure | Server rollback | Desktop rollback |

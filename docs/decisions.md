@@ -641,6 +641,18 @@ typing beacon. It extends the existing command outbox instead of adding a generi
   just like text commands. Desktop Direct write transport remains the rollback path until all write
   kinds are centralized and production-soaked.
 
+**Production validation:** revision `405fe9e41bff` deployed through the canonical dist-only path
+with migration `0043_ofapi_command_typing_active.sql` applied. The owner-only route
+`lora-vip-of` to the `loravie` conversation `518588958` created command
+`729fb32c-c313-4481-9c7c-c64963ec8df3`, which reached `confirmed` after one vendor attempt,
+kept payload `{}`, kept `platform_message_id=null`, and wrote one `ofapi_credit_ledger` row under
+`ofapi_command_typing_active` with HTTP 200, zero credits, and `estimated=false`. Bounded log/API
+checks contained only command/page/kind/outcome metadata. The rollback drill staged execution
+`false`, recreated API/worker, proved command `e2d9024f-84e7-44df-a8e4-cd768d58ee49` stayed
+queued with zero attempts and no new ledger row, cancelled it, then restored execution `true`.
+Final API/worker heartbeats reported outbox `true`, execution `true`, AI gateway `true`, and zero
+skipped overrides. The temporary validation key was revoked and its page assignment removed.
+
 ## ChatMuse AI Gateway Contract (2026-06-19)
 
 **Decision #26 update:** The first ChatMuse AI gateway slice is a default-off, chatter-key,
