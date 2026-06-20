@@ -19,6 +19,7 @@ export function createTestAppContext(
     ofapi?: AppContext["ofapi"];
     aiGatewayProvider?: AppContext["aiGatewayProvider"];
     ofapiEventRetentionDays?: number;
+    ofapiEventWorkerReplicas?: number;
     ofapiDmProjectionEnabled?: boolean;
     ofapiDmSyncEnabled?: boolean;
     ofapiDmColdArchiveEnabled?: boolean;
@@ -94,6 +95,7 @@ export function createTestAppContext(
       telegramEnabled: false,
       telegramReportHourUtc: 9,
       ofapiEventRetentionDays: overrides?.ofapiEventRetentionDays ?? 7,
+      ofapiEventWorkerReplicas: overrides?.ofapiEventWorkerReplicas ?? 1,
       ofapiDmProjectionEnabled: overrides?.ofapiDmProjectionEnabled ?? false,
       ofapiDmSyncEnabled: overrides?.ofapiDmSyncEnabled ?? false,
       ofapiDmColdArchiveEnabled: overrides?.ofapiDmColdArchiveEnabled ?? false,

@@ -207,6 +207,7 @@ export interface AppConfig {
   ofapiBaseUrl?: string;
   ofapiApiKey?: string | null;
   ofapiEventRetentionDays?: number;
+  ofapiEventWorkerReplicas?: number;
   ofapiDmProjectionEnabled?: boolean;
   ofapiDmSyncEnabled?: boolean;
   ofapiDmColdArchiveEnabled?: boolean;
