@@ -254,6 +254,35 @@ describe("ChatMuse AI gateway runtime gate", () => {
     expect(usageRows.rows[0]?.count).toBe(1);
   });
 
+  it("rejects requests whose estimated provider cost exceeds the per-request ceiling", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.config.chatMuseAiGatewayRequestMicroUsdLimit = 1_000;
+    let providerCalls = 0;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        providerCalls += 1;
+        yield { type: "done", stopReason: "end_turn" };
+      },
+    };
+
+    const response = await streamGateway(gatewayBody({
+      model: "anthropic:claude-opus-4-8",
+      maxTokens: 100_000,
+    }));
+
+    expect(response.statusCode, response.body).toBe(429);
+    expect(response.json()).toMatchObject({
+      error: "rate_limit_exceeded",
+      message: "ChatMuse AI gateway request cost ceiling exceeded",
+    });
+    expect(providerCalls).toBe(0);
+    const usageRows = await testDb!.pool.query<{ count: number }>(
+      "select count(*)::int as count from ai_usage_events",
+    );
+    expect(usageRows.rows[0]?.count).toBe(0);
+  });
+
   it("streams SSE frames from an injected provider after auth and quota pass", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
     const providerCapture: { current?: AiGatewayProviderInput } = {};

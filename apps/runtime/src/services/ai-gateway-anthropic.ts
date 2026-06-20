@@ -5,8 +5,8 @@ import type {
 } from "@agency_hub_core/contracts";
 import type { AiUsageFeature } from "@agency_hub_core/shared";
 
-import type { AiGatewayCostUsage } from "./ai-gateway-pricing.ts";
-import { resolveAnthropicGatewayModel } from "./ai-gateway-pricing.ts";
+import type { AiGatewayCostEstimate, AiGatewayCostUsage } from "./ai-gateway-pricing.ts";
+import { estimateAiGatewayUsageCost, resolveAnthropicGatewayModel } from "./ai-gateway-pricing.ts";
 
 type GatewayOperationFeature = AiUsageFeature;
 
@@ -94,6 +94,8 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "hi-greeting": 8000,
 };
 
+const APPROX_CHARS_PER_TOKEN = 4;
+
 function isAdaptiveAnthropicModel(providerModelId: string) {
   return ANTHROPIC_ADAPTIVE_THINKING_MODELS.has(providerModelId);
 }
@@ -106,6 +108,29 @@ function nonnegativeInt(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : 0;
+}
+
+function estimateTextTokens(text: string) {
+  return Math.max(1, Math.ceil(text.length / APPROX_CHARS_PER_TOKEN));
+}
+
+function estimatePromptCostTokens(blocks: readonly AiGatewayPromptBlock[]) {
+  let inputTokens = 0;
+  let cacheWrite5mTokens = 0;
+  let cacheWrite1hTokens = 0;
+
+  for (const block of blocks) {
+    const tokens = estimateTextTokens(block.text);
+    if (block.cache === "5m") {
+      cacheWrite5mTokens += tokens;
+    } else if (block.cache === "1h") {
+      cacheWrite1hTokens += tokens;
+    } else {
+      inputTokens += tokens;
+    }
+  }
+
+  return { inputTokens, cacheWrite5mTokens, cacheWrite1hTokens };
 }
 
 export function toAnthropicGatewayTextBlocks(
@@ -182,6 +207,36 @@ export function buildAnthropicGatewayStreamRequest(
     ...(tuning.thinking ? { thinking: tuning.thinking } : {}),
     ...(tuning.outputConfig ? { output_config: tuning.outputConfig } : {}),
     ...(tuning.temperature !== undefined ? { temperature: tuning.temperature } : {}),
+  };
+}
+
+export function estimateAnthropicGatewayRequestCost(
+  input: AiGatewayStreamBody,
+): AiGatewayCostEstimate {
+  const model = resolveAnthropicGatewayModel(input.model);
+  const temperature = input.temperature ?? getAnthropicGatewayFeatureTemperature(input.feature);
+  const tuning = resolveAnthropicGatewayRequestTuning({
+    providerModelId: model.providerModelId,
+    feature: input.feature,
+    temperature,
+    reasoningEffort: input.reasoningEffort,
+  });
+  const systemTokens = estimatePromptCostTokens(input.prompt.systemBlocks);
+  const userTokens = estimatePromptCostTokens(input.prompt.userBlocks);
+  const cacheWrite5mTokens = systemTokens.cacheWrite5mTokens + userTokens.cacheWrite5mTokens;
+  const cacheWrite1hTokens = systemTokens.cacheWrite1hTokens + userTokens.cacheWrite1hTokens;
+  const estimate = estimateAiGatewayUsageCost(input.model, {
+    inputTokens: systemTokens.inputTokens + userTokens.inputTokens,
+    outputTokens: input.maxTokens ?? tuning.maxTokens,
+    cacheWriteTokens: cacheWrite5mTokens + cacheWrite1hTokens,
+    cacheReadTokens: 0,
+    cacheWrite5mTokens,
+    cacheWrite1hTokens,
+  });
+
+  return {
+    ...estimate,
+    costApproximate: true,
   };
 }
 

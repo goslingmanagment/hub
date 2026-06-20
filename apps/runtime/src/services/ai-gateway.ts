@@ -17,11 +17,13 @@ import type { ProxyConfig } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
-import { ConflictError, NotFoundError, ServiceUnavailableError, TooManyRequestsError } from "./errors.ts";
+import { BadRequestError, ConflictError, NotFoundError, ServiceUnavailableError, TooManyRequestsError } from "./errors.ts";
+import { estimateAnthropicGatewayRequestCost } from "./ai-gateway-anthropic.ts";
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey } from "./page-context.ts";
 
 export const DEFAULT_AI_GATEWAY_DAILY_REQUEST_LIMIT = 200;
 export const DEFAULT_AI_GATEWAY_DAILY_MICRO_USD_LIMIT = 5_000_000;
+export const DEFAULT_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT = 5_000_000;
 export const AI_GATEWAY_STALE_RESERVATION_MS = 30 * 60 * 1000;
 
 export interface AiGatewayQuotaSnapshot {
@@ -169,6 +171,19 @@ export async function prepareAiGatewayStream(
   }
   if (!app.aiGatewayProvider) {
     throw new ServiceUnavailableError("ChatMuse AI gateway provider execution is not configured");
+  }
+  const requestMicroUsdLimit = resolveNonnegativeLimit(
+    app.config.chatMuseAiGatewayRequestMicroUsdLimit,
+    DEFAULT_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT,
+  );
+  let estimatedRequestCostMicroUsd = 0;
+  try {
+    estimatedRequestCostMicroUsd = estimateAnthropicGatewayRequestCost(input).costMicroUsd;
+  } catch {
+    throw new BadRequestError("Unsupported ChatMuse AI gateway model");
+  }
+  if (requestMicroUsdLimit <= 0 || estimatedRequestCostMicroUsd > requestMicroUsdLimit) {
+    throw new TooManyRequestsError("ChatMuse AI gateway request cost ceiling exceeded");
   }
   const reserved = await reserveAiGatewayUsageEvent(app.db, {
     userId: principal.user.id,

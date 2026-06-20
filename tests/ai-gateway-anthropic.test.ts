@@ -6,6 +6,7 @@ import type { AiGatewayStreamBody } from "@agency_hub_core/contracts";
 
 import {
   buildAnthropicGatewayStreamRequest,
+  estimateAnthropicGatewayRequestCost,
   normalizeAnthropicGatewayUsage,
   resolveAnthropicGatewayRequestTuning,
   toAnthropicGatewayTextBlocks,
@@ -115,6 +116,18 @@ describe("Anthropic AI gateway request builder", () => {
         model: "openrouter:x-ai/grok-4.3",
       }))
     ).toThrow("Unsupported Anthropic gateway model");
+  });
+
+  it("estimates worst-case request cost from prompt cache writes and output cap", () => {
+    expect(estimateAnthropicGatewayRequestCost(body({
+      model: "anthropic:claude-opus-4-8",
+      maxTokens: 100_000,
+    }))).toMatchObject({
+      provider: "anthropic",
+      providerModelId: "claude-opus-4-8",
+      costMicroUsd: 2_500_064,
+      costApproximate: true,
+    });
   });
 });
 

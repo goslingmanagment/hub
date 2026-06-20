@@ -54,6 +54,7 @@ describe("config", () => {
     expect(config.trustProxy).toBe(false);
     expect(config.chatMuseAiGatewayDailyRequestLimit).toBe(200);
     expect(config.chatMuseAiGatewayDailyMicroUsdLimit).toBe(5_000_000);
+    expect(config.chatMuseAiGatewayRequestMicroUsdLimit).toBe(5_000_000);
     expect(config.ofapiEventWorkerReplicas).toBe(1);
   });
 
