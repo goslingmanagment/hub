@@ -22,7 +22,12 @@ export function isOfapiSpendTransactionIngestEnabled(
 
 function mapCategoryToTransactionType(
   category: OfapiSpendProjectionTransactionIngestRow["category"],
+  status: OfapiSpendProjectionTransactionIngestRow["eventStatus"],
 ): TransactionType {
+  if (status === "reversed") {
+    return "refund";
+  }
+
   switch (category) {
     case "message":
       return "message_purchase";
@@ -44,10 +49,18 @@ function mapEventStatusToTransactionState(
 ): TransactionState {
   switch (status) {
     case "settled":
+    case "reversed":
       return "posted";
     case "pending":
       return "pending";
   }
+}
+
+function normalizeEventAmountMills(
+  status: OfapiSpendProjectionTransactionIngestRow["eventStatus"],
+  amountMills: bigint,
+) {
+  return status === "reversed" && amountMills > 0n ? -amountMills : amountMills;
 }
 
 function groupByPage(rows: OfapiSpendProjectionTransactionIngestRow[]) {
@@ -90,6 +103,11 @@ async function applyPageRows(
     let applied = 0;
 
     for (const row of rows) {
+      const grossAmountMills = normalizeEventAmountMills(row.eventStatus, row.grossAmountMills);
+      const creatorNetAmountMills = normalizeEventAmountMills(
+        row.eventStatus,
+        row.creatorNetAmountMills,
+      );
       await upsertTransaction(db, {
         platformAccountId: pageId,
         fanId: fanIdByPlatformUserId.get(row.fanPlatformUserId) ?? null,
@@ -97,12 +115,12 @@ async function applyPageRows(
         accountId: row.ofapiAccountId,
         correlationAccountId: row.fanPlatformUserId,
         rawType: `ofapi:${row.category}`,
-        canonicalType: mapCategoryToTransactionType(row.category),
+        canonicalType: mapCategoryToTransactionType(row.category, row.eventStatus),
         transactionState: mapEventStatusToTransactionState(row.eventStatus),
         rawStatus: row.eventStatus,
-        grossAmountMills: row.grossAmountMills,
-        sourceDestinationAmountMills: row.grossAmountMills,
-        creatorNetAmountMills: row.creatorNetAmountMills,
+        grossAmountMills,
+        sourceDestinationAmountMills: grossAmountMills,
+        creatorNetAmountMills,
         senderId: row.fanPlatformUserId,
         occurredAt: row.occurredAt,
         sourceUpdatedAt: row.occurredAt,

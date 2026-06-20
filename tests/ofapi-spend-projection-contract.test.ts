@@ -67,6 +67,30 @@ describe("OFAPI spend projection contract mapper", () => {
     });
   });
 
+  it("maps documented new_subscription transaction type as subscription spend", async () => {
+    const fixture = await loadFixture("transactions_new.json");
+
+    const result = mapOfapiWebhookToSpendProjectionEvent({
+      context: projectionContext(fixture.account_id),
+      eventType: fixture.event,
+      payload: {
+        ...fixture.payload,
+        type: "new_subscription",
+        status: "done",
+      },
+    });
+
+    expect(result.status).toBe("projectable");
+    if (result.status !== "projectable") {
+      return;
+    }
+
+    expect(result.event).toMatchObject({
+      category: "subscription",
+      status: "settled",
+    });
+  });
+
   it("maps live messages.ppv.unlocked only as an estimated purchase signal", async () => {
     const fixture = await loadFixture("messages_ppv_unlocked.json");
 

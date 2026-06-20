@@ -312,14 +312,14 @@ export interface OfapiSpendProjectionTransactionIngestRow {
   category: "message" | "tip" | "subscription" | "post" | "stream" | "other";
   grossAmountMills: bigint;
   creatorNetAmountMills: bigint;
-  eventStatus: "pending" | "settled";
+  eventStatus: "settled" | "reversed";
   journalId: number;
 }
 
 /**
- * Forward-only C3 apply candidates. Rows already represented in core
- * transactions are intentionally skipped here; mismatches stay visible in the
- * comparison endpoint until a human-reviewed repair path exists.
+ * Terminal C3 apply candidates. Pending/loading rows stay shadow-only, while
+ * settled/reversed rows are selected until core transaction truth matches the
+ * normalized terminal state.
  */
 export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
   db: Database,
@@ -357,11 +357,55 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
         "stream",
         "other",
       ]),
-      inArray(ofapiSpendProjectionEvents.eventStatus, ["pending", "settled"]),
+      inArray(ofapiSpendProjectionEvents.eventStatus, ["settled", "reversed"]),
       sql`not exists (
         select 1 from ${transactions} tx
         where tx.platform_account_id = ${ofapiSpendProjectionEvents.pageId}
           and tx.transaction_id = ${ofapiSpendProjectionEvents.transactionId}
+          and tx.sender_id is not distinct from ${ofapiSpendProjectionEvents.fanPlatformUserId}
+          and tx.transaction_state::text = (
+            case ${ofapiSpendProjectionEvents.eventStatus}
+              when 'settled' then 'posted'
+              when 'reversed' then 'posted'
+              else ${ofapiSpendProjectionEvents.eventStatus}
+            end
+          )
+          and tx.raw_status = ${ofapiSpendProjectionEvents.eventStatus}
+          and tx.canonical_type::text = (
+            case
+              when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed' then 'refund'
+              when ${ofapiSpendProjectionEvents.category} = 'message' then 'message_purchase'
+              when ${ofapiSpendProjectionEvents.category} = 'tip' then 'tip'
+              when ${ofapiSpendProjectionEvents.category} = 'subscription' then 'subscription'
+              when ${ofapiSpendProjectionEvents.category} = 'post' then 'post_purchase'
+              when ${ofapiSpendProjectionEvents.category} = 'stream' then 'stream_tip'
+              else 'other'
+            end
+          )
+          and tx.gross_amount_mills = (
+            case
+              when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed'
+                and ${ofapiSpendProjectionEvents.grossAmountMills} > 0
+                then -${ofapiSpendProjectionEvents.grossAmountMills}
+              else ${ofapiSpendProjectionEvents.grossAmountMills}
+            end
+          )
+          and tx.source_destination_amount_mills = (
+            case
+              when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed'
+                and ${ofapiSpendProjectionEvents.grossAmountMills} > 0
+                then -${ofapiSpendProjectionEvents.grossAmountMills}
+              else ${ofapiSpendProjectionEvents.grossAmountMills}
+            end
+          )
+          and tx.creator_net_amount_mills = (
+            case
+              when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed'
+                and ${ofapiSpendProjectionEvents.creatorNetAmountMills} > 0
+                then -${ofapiSpendProjectionEvents.creatorNetAmountMills}
+              else ${ofapiSpendProjectionEvents.creatorNetAmountMills}
+            end
+          )
       )`,
     ))
     .orderBy(asc(ofapiSpendProjectionEvents.occurredAt), asc(ofapiSpendProjectionEvents.id))
@@ -468,8 +512,20 @@ const OFAPI_SPEND_COMPARISON_STATUS_SQL = sql`
     when p.source_event_type = 'transactions.new'
       and p.projection_status = 'projected'
       and (
-        t.gross_amount_mills is distinct from p.gross_amount_mills
-        or t.creator_net_amount_mills is distinct from p.creator_net_amount_mills
+        t.gross_amount_mills is distinct from (
+          case
+            when p.event_status = 'reversed' and p.gross_amount_mills > 0
+              then -p.gross_amount_mills
+            else p.gross_amount_mills
+          end
+        )
+        or t.creator_net_amount_mills is distinct from (
+          case
+            when p.event_status = 'reversed' and p.creator_net_amount_mills > 0
+              then -p.creator_net_amount_mills
+            else p.creator_net_amount_mills
+          end
+        )
       )
       then 'amount_mismatch'
     when p.source_event_type = 'transactions.new'
@@ -477,6 +533,7 @@ const OFAPI_SPEND_COMPARISON_STATUS_SQL = sql`
       and t.transaction_state::text is distinct from (
         case p.event_status
           when 'settled' then 'posted'
+          when 'reversed' then 'posted'
           when 'pending' then 'pending'
           else p.event_status
         end

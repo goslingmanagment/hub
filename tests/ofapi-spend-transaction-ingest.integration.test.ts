@@ -33,9 +33,10 @@ async function seedProjectedTransaction(input: {
   pageId: number;
   transactionId: string;
   fanPlatformUserId: string;
+  category?: "message" | "tip" | "subscription" | "post" | "stream" | "other";
   grossAmountMills: bigint;
   creatorNetAmountMills: bigint;
-  eventStatus: "pending" | "settled";
+  eventStatus: "pending" | "settled" | "reversed";
   occurredAt: Date;
 }) {
   journalId += 1;
@@ -50,7 +51,7 @@ async function seedProjectedTransaction(input: {
     fanPlatformUserId: input.fanPlatformUserId,
     transactionId: input.transactionId,
     occurredAt: input.occurredAt,
-    category: "message",
+    category: input.category ?? "message",
     currency: "USD",
     grossAmountMills: input.grossAmountMills,
     creatorNetAmountMills: input.creatorNetAmountMills,
@@ -166,7 +167,7 @@ describe("OFAPI spend transaction ingest", () => {
     }]);
   });
 
-  it("does not overwrite existing mismatched core transactions", async (context) => {
+  it("keeps pending out of truth and updates terminal state transitions", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -176,11 +177,79 @@ describe("OFAPI spend transaction ingest", () => {
     const occurredAt = new Date("2026-06-19T11:00:00.000Z");
     await seedProjectedTransaction({
       pageId: page.id,
-      transactionId: "tx-existing",
+      transactionId: "tx-transition",
       fanPlatformUserId: "1000004",
       grossAmountMills: 17_000n,
       creatorNetAmountMills: 13_600n,
       eventStatus: "pending",
+      occurredAt,
+    });
+
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
+
+    let count = await testDb.pool.query<{ count: number }>(
+      "select count(*)::int as count from transactions where platform_account_id = $1",
+      [page.id],
+    );
+    expect(count.rows).toEqual([{ count: 0 }]);
+
+    await seedProjectedTransaction({
+      pageId: page.id,
+      transactionId: "tx-transition",
+      fanPlatformUserId: "1000004",
+      grossAmountMills: 17_000n,
+      creatorNetAmountMills: 13_600n,
+      eventStatus: "settled",
+      occurredAt,
+    });
+
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(1);
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
+
+    const { rows } = await testDb.pool.query<{
+      transaction_state: string;
+      raw_status: string;
+      gross_amount_mills: string;
+      creator_net_amount_mills: string;
+      lifetime_net: string;
+    }>(`
+      select t.transaction_state,
+             t.raw_status,
+             t.gross_amount_mills::text,
+             t.creator_net_amount_mills::text,
+             coalesce(slp.creator_net_amount_mills, 0)::text as lifetime_net
+      from transactions t
+      left join fan_spend_lifetime slp
+        on slp.platform_account_id = t.platform_account_id
+       and slp.fan_id = t.fan_id
+      where t.platform_account_id = $1
+        and t.transaction_id = 'tx-transition'
+    `, [page.id]);
+
+    expect(rows).toEqual([{
+      transaction_state: "posted",
+      raw_status: "settled",
+      gross_amount_mills: "17000",
+      creator_net_amount_mills: "13600",
+      lifetime_net: "13600",
+    }]);
+  });
+
+  it("updates existing core transactions from terminal OFAPI projections", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedPage("existing-of");
+    const occurredAt = new Date("2026-06-19T11:15:00.000Z");
+    await seedProjectedTransaction({
+      pageId: page.id,
+      transactionId: "tx-existing",
+      fanPlatformUserId: "1000004",
+      grossAmountMills: 17_000n,
+      creatorNetAmountMills: 13_600n,
+      eventStatus: "settled",
       occurredAt,
     });
     await upsertTransaction(appContext.db, {
@@ -197,15 +266,29 @@ describe("OFAPI spend transaction ingest", () => {
       occurredAt,
     });
 
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(1);
     expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
 
-    const { rows } = await testDb.pool.query<{ gross_amount_mills: string }>(`
-      select gross_amount_mills::text
+    const { rows } = await testDb.pool.query<{
+      transaction_state: string;
+      raw_status: string;
+      gross_amount_mills: string;
+      creator_net_amount_mills: string;
+    }>(`
+      select transaction_state,
+             raw_status,
+             gross_amount_mills::text,
+             creator_net_amount_mills::text
       from transactions
       where platform_account_id = $1
         and transaction_id = 'tx-existing'
     `, [page.id]);
-    expect(rows).toEqual([{ gross_amount_mills: "9000" }]);
+    expect(rows).toEqual([{
+      transaction_state: "posted",
+      raw_status: "settled",
+      gross_amount_mills: "17000",
+      creator_net_amount_mills: "13600",
+    }]);
 
     const comparison = await summarizeOfapiSpendProjectionComparison(appContext.db, {
       from: new Date("2026-06-19T00:00:00.000Z"),
@@ -213,7 +296,93 @@ describe("OFAPI spend transaction ingest", () => {
       sampleLimit: 10,
     });
     expect(comparison.map((row) => ({ status: row.status, count: row.count }))).toEqual([
-      { status: "amount_mismatch", count: 1 },
+      { status: "matched", count: 1 },
+    ]);
+  });
+
+  it("applies reversed terminal rows as negative refund adjustments", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedPage("refund-of");
+    const purchaseAt = new Date("2026-06-19T11:30:00.000Z");
+    const refundAt = new Date("2026-06-19T12:00:00.000Z");
+    await seedProjectedTransaction({
+      pageId: page.id,
+      transactionId: "tx-settled-for-refund",
+      fanPlatformUserId: "1000006",
+      grossAmountMills: 17_000n,
+      creatorNetAmountMills: 13_600n,
+      eventStatus: "settled",
+      occurredAt: purchaseAt,
+    });
+    await seedProjectedTransaction({
+      pageId: page.id,
+      transactionId: "tx-refund",
+      fanPlatformUserId: "1000006",
+      grossAmountMills: 5_000n,
+      creatorNetAmountMills: 4_000n,
+      eventStatus: "reversed",
+      occurredAt: refundAt,
+    });
+
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(2);
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
+
+    const { rows } = await testDb.pool.query<{
+      transaction_id: string;
+      canonical_type: string;
+      transaction_state: string;
+      raw_status: string;
+      gross_amount_mills: string;
+      creator_net_amount_mills: string;
+      lifetime_net: string;
+      refund_revenue_net: string;
+    }>(`
+      select t.transaction_id,
+             t.canonical_type,
+             t.transaction_state,
+             t.raw_status,
+             t.gross_amount_mills::text,
+             t.creator_net_amount_mills::text,
+             coalesce(slp.creator_net_amount_mills, 0)::text as lifetime_net,
+             coalesce(rd.creator_net_amount_mills, 0)::text as refund_revenue_net
+      from transactions t
+      left join fan_spend_lifetime slp
+        on slp.platform_account_id = t.platform_account_id
+       and slp.fan_id = t.fan_id
+      left join revenue_daily rd
+        on rd.platform_account_id = t.platform_account_id
+       and rd.business_date = '2026-06-19'::date
+       and rd.canonical_type = 'refund'
+       and rd.transaction_state = 'posted'
+      where t.platform_account_id = $1
+      order by t.transaction_id
+    `, [page.id]);
+
+    expect(rows).toEqual([
+      {
+        transaction_id: "tx-refund",
+        canonical_type: "refund",
+        transaction_state: "posted",
+        raw_status: "reversed",
+        gross_amount_mills: "-5000",
+        creator_net_amount_mills: "-4000",
+        lifetime_net: "9600",
+        refund_revenue_net: "-4000",
+      },
+      {
+        transaction_id: "tx-settled-for-refund",
+        canonical_type: "message_purchase",
+        transaction_state: "posted",
+        raw_status: "settled",
+        gross_amount_mills: "17000",
+        creator_net_amount_mills: "13600",
+        lifetime_net: "9600",
+        refund_revenue_net: "-4000",
+      },
     ]);
   });
 

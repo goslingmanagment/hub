@@ -115,6 +115,7 @@ function mapTransactionCategory(rawType: unknown): OfapiSpendProjectionCategory 
       return "tip";
     case "subscription":
     case "subscribe":
+    case "new_subscription":
     case "recurring_subscription":
       return "subscription";
     case "post":
