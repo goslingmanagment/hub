@@ -45,15 +45,9 @@ function mapCategoryToTransactionType(
 }
 
 function mapEventStatusToTransactionState(
-  status: OfapiSpendProjectionTransactionIngestRow["eventStatus"],
+  _status: OfapiSpendProjectionTransactionIngestRow["eventStatus"],
 ): TransactionState {
-  switch (status) {
-    case "settled":
-    case "reversed":
-      return "posted";
-    case "pending":
-      return "pending";
-  }
+  return "posted";
 }
 
 function normalizeEventAmountMills(
