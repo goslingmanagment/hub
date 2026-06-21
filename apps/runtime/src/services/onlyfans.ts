@@ -12,6 +12,12 @@ const ONLYFANS_INTERNAL_METADATA_KEYS = [
   ONLYFANS_ACCOUNT_CREATED_AT_METADATA_KEY,
   ONLYFANS_TRANSACTION_BACKFILL_LOWER_BOUND_METADATA_KEY,
 ] as const;
+const ONLYFANS_SIGNED_AVATAR_QUERY_KEYS = new Set([
+  "expires",
+  "key-pair-id",
+  "policy",
+  "signature",
+]);
 
 // Bound the account-lookup pagination so a misbehaving upstream cursor that
 // never terminates (or repeats) cannot spin forever.
@@ -42,6 +48,94 @@ function parseOnlyFansMetadataDate(
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function isOnlyFansHostname(hostname: string) {
+  const normalized = hostname.toLowerCase();
+  return normalized === "onlyfans.com" || normalized.endsWith(".onlyfans.com");
+}
+
+export function normalizeOnlyFansAvatarUrl(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+
+  if (url.protocol !== "https:" || !isOnlyFansHostname(url.hostname)) {
+    return null;
+  }
+
+  for (const key of url.searchParams.keys()) {
+    if (ONLYFANS_SIGNED_AVATAR_QUERY_KEYS.has(key.toLowerCase())) {
+      return null;
+    }
+  }
+
+  return url.toString();
+}
+
+function resolveOnlyFansAvatarUrl(
+  account: OnlyMonsterAccount,
+  existingMetadata?: Record<string, unknown> | null,
+) {
+  return normalizeOnlyFansAvatarUrl(account.avatar)
+    ?? normalizeOnlyFansAvatarUrl(existingMetadata?.avatarUrl)
+    ?? null;
+}
+
+function normalizeOnlyFansName(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function comparableOnlyFansName(value: string | null | undefined) {
+  return normalizeOnlyFansName(value)?.replace(/^@+/, "").toLowerCase() ?? null;
+}
+
+function isGenericOnlyFansDisplayName(
+  displayName: string | null | undefined,
+  username: string | null | undefined,
+) {
+  const normalizedDisplayName = comparableOnlyFansName(displayName);
+  if (!normalizedDisplayName) {
+    return true;
+  }
+
+  const normalizedUsername = comparableOnlyFansName(username);
+  return normalizedUsername !== null && normalizedDisplayName === normalizedUsername;
+}
+
+export function resolveOnlyFansDisplayName(
+  account: Pick<OnlyMonsterAccount, "name" | "username">,
+  existingPage?: {
+    displayName?: string | null;
+    username?: string | null;
+  },
+) {
+  const nextDisplayName = normalizeOnlyFansName(account.name);
+  if (!isGenericOnlyFansDisplayName(nextDisplayName, account.username)) {
+    return nextDisplayName;
+  }
+
+  const existingDisplayName = normalizeOnlyFansName(existingPage?.displayName);
+  if (!isGenericOnlyFansDisplayName(
+    existingDisplayName,
+    existingPage?.username ?? account.username,
+  )) {
+    return existingDisplayName;
+  }
+
+  return nextDisplayName ?? normalizeOnlyFansName(account.username);
+}
+
 export function buildOnlyFansMetadata(
   account: OnlyMonsterAccount,
   existingMetadata?: Record<string, unknown> | null,
@@ -51,7 +145,7 @@ export function buildOnlyFansMetadata(
     provider: "onlymonster",
     onlyMonsterAccountId: account.id,
     platform: account.platform,
-    avatarUrl: account.avatar,
+    avatarUrl: resolveOnlyFansAvatarUrl(account, existingMetadata),
     email: account.email,
     organisationId: account.organisation_id,
     subscribePriceMills: account.subscribe_price === null

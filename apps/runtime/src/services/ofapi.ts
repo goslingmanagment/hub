@@ -11,6 +11,8 @@ import {
   type HttpRequestObserver,
 } from "@agency_hub_core/shared";
 
+import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
+
 const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
 const OFAPI_DEFAULT_REST_DELAY_MS = 500;
 const OFAPI_OBSERVED_RETRIES = 3;
@@ -47,6 +49,10 @@ export interface OfapiWebhookRecord {
 export interface OfapiAccountRecord {
   id: string;
   username: string | null;
+  displayName: string | null;
+  onlyfansName: string | null;
+  onlyfansUserId: string | null;
+  avatarUrl: string | null;
 }
 
 export interface OfapiRequestContext {
@@ -249,6 +255,27 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function asNonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function asStringId(value: unknown) {
+  const text = typeof value === "number" && Number.isFinite(value)
+    ? String(value)
+    : asNonEmptyString(value);
+  return text && text.length > 0 ? text : null;
+}
+
+function firstNonEmptyString(...values: unknown[]) {
+  for (const value of values) {
+    const text = asNonEmptyString(value);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
 // OFAPI wraps most responses in {data}; tolerate both wrapped and bare shapes.
 function unwrapData(value: unknown): unknown {
   const record = asRecord(value);
@@ -281,10 +308,31 @@ function toAccountRecords(value: unknown): OfapiAccountRecord[] {
       continue;
     }
 
-    const username = record?.onlyfans_username;
+    const onlyfansUserData = asRecord(record?.onlyfans_user_data)
+      ?? asRecord(record?.onlyfansUserData);
     accounts.push({
       id,
-      username: typeof username === "string" && username.length > 0 ? username : null,
+      username: firstNonEmptyString(
+        record?.onlyfans_username,
+        record?.onlyfansUsername,
+        onlyfansUserData?.username,
+        record?.username,
+      ),
+      displayName: firstNonEmptyString(record?.display_name, record?.displayName),
+      onlyfansName: firstNonEmptyString(onlyfansUserData?.name, record?.name),
+      onlyfansUserId: asStringId(
+        onlyfansUserData?.id
+          ?? record?.onlyfans_user_id
+          ?? record?.onlyfansUserId,
+      ),
+      avatarUrl: normalizeOnlyFansAvatarUrl(firstNonEmptyString(
+        record?.avatar,
+        record?.avatar_url,
+        record?.avatarUrl,
+        onlyfansUserData?.avatar,
+        onlyfansUserData?.avatar_url,
+        onlyfansUserData?.avatarUrl,
+      )),
     });
   }
 

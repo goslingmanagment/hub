@@ -659,6 +659,47 @@ export async function updatePageMetadata(
   return updated;
 }
 
+export async function updateOnlyFansPageIdentityFromOfapi(
+  db: Database,
+  platformAccountId: number,
+  input: {
+    ofapiAccountId: string;
+    username: string | null;
+    displayName: string | null;
+    metadata: Record<string, unknown>;
+  },
+) {
+  const existingPage = await db.query.pages.findFirst({
+    where: eq(pages.id, platformAccountId),
+  });
+  if (!existingPage) {
+    throw new Error(`Platform account ${platformAccountId} was not found`);
+  }
+  if (existingPage.platform !== "onlyfans") {
+    throw new Error(`Page "${existingPage.label}" is not an OnlyFans page`);
+  }
+  if (existingPage.ofapiAccountId !== input.ofapiAccountId) {
+    throw new Error(
+      `Page "${existingPage.label}" is not mapped to OFAPI account "${input.ofapiAccountId}"`,
+    );
+  }
+
+  const now = new Date();
+  const [updated] = await db
+    .update(pages)
+    .set({
+      username: input.username,
+      displayName: input.displayName,
+      metadata: input.metadata,
+      lastVerifiedAt: now,
+      updatedAt: now,
+    })
+    .where(eq(pages.id, platformAccountId))
+    .returning();
+
+  return updated;
+}
+
 export async function mergePageMetadata(
   db: Database,
   platformAccountId: number,

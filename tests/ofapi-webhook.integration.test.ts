@@ -376,8 +376,22 @@ describe("OFAPI webhook admin flow", () => {
 
     const ofapi = fakeOfapiClient({
       listAccounts: vi.fn(async () => [
-        { id: "acct_lora", username: "LoraVie" },
-        { id: "acct_unknown", username: "somebody-else" },
+        {
+          id: "acct_lora",
+          username: "LoraVie",
+          displayName: null,
+          onlyfansName: null,
+          onlyfansUserId: null,
+          avatarUrl: null,
+        },
+        {
+          id: "acct_unknown",
+          username: "somebody-else",
+          displayName: null,
+          onlyfansName: null,
+          onlyfansUserId: null,
+          avatarUrl: null,
+        },
       ]),
     });
     appContext = createTestAppContext(testDb, { ofapi });

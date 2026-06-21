@@ -117,7 +117,7 @@ beforeEach(async (context) => {
          display_name = case when id = $1 then 'Lora Free' else 'Lora VIP' end,
          ofapi_auth_status = case when id = $1 then 'connected' else 'authentication_failed' end,
          metadata = case when id = $1
-           then '{"avatarUrl":"https://images.example/lora.jpg"}'::jsonb
+           then '{"avatarUrl":"https://public.onlyfans.com/files/lora/avatar.jpg"}'::jsonb
            else '{}'::jsonb
          end
      where id in ($1, $2)`,
@@ -164,7 +164,7 @@ describe("OFAPI read gateway integration", () => {
       onlyfans_user_data: {
         name: "Lora Free",
         username: "loravie",
-        avatar: "https://images.example/lora.jpg",
+        avatar: "https://public.onlyfans.com/files/lora/avatar.jpg",
       },
     }]);
 

@@ -14,7 +14,11 @@ import {
   type ResolvedPageContext,
 } from "../page-context.ts";
 import { buildFanslyMetadata } from "../fansly.ts";
-import { buildOnlyFansMetadata, getOnlyMonsterAccountId } from "../onlyfans.ts";
+import {
+  buildOnlyFansMetadata,
+  getOnlyMonsterAccountId,
+  resolveOnlyFansDisplayName,
+} from "../onlyfans.ts";
 import type { NormalizedSyncError } from "./errors.ts";
 import { SyncPayloadPersistenceError } from "./errors.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
@@ -327,7 +331,10 @@ export async function refreshPageMetadata(
   await updatePageMetadata(app.db, pageContext.page.id, {
     platformAccountIdValue: account.parsed.account.platform_account_id,
     username: account.parsed.account.username,
-    displayName: account.parsed.account.name,
+    displayName: resolveOnlyFansDisplayName(account.parsed.account, {
+      displayName: pageContext.page.displayName,
+      username: pageContext.page.username,
+    }),
     followerCount: null,
     subscriberCount: null,
     earningsBalanceMills: 0n,

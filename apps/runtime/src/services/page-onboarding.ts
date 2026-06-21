@@ -24,7 +24,11 @@ import type { OnlyMonsterAccount } from "@agency_hub_core/onlyfans";
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { buildFanslyMetadata } from "./fansly.ts";
-import { buildOnlyFansMetadata, findOnlyFansAccountByUsername } from "./onlyfans.ts";
+import {
+  buildOnlyFansMetadata,
+  findOnlyFansAccountByUsername,
+  resolveOnlyFansDisplayName,
+} from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
@@ -210,7 +214,7 @@ export async function onboardOnlyFansPage(
       await updatePageMetadata(dbTx, created.id, {
         platformAccountIdValue: verified.platform_account_id,
         username: verified.username,
-        displayName: verified.name,
+        displayName: resolveOnlyFansDisplayName(verified),
         followerCount: null,
         subscriberCount: null,
         earningsBalanceMills: 0n,

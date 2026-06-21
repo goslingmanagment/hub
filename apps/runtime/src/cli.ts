@@ -25,6 +25,7 @@ import {
 import { createAppContext } from "./bootstrap.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
+import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-backfill.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import {
@@ -782,6 +783,44 @@ export function buildProgram() {
         console.log(`Proxy exit IP: ${proxyIp}`);
         console.log(`Direct exit IP: ${directIp}`);
         console.log(`Differs from direct: ${proxyIp !== directIp ? "yes" : "no"}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("onlyfans-page-metadata-backfill")
+    .option("--page <label>", "restrict to one page label", collectStringOption, [])
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await backfillOnlyFansPageMetadata(app, {
+          pageLabels: options.page,
+        });
+
+        printRows(
+          [
+            "page_label",
+            "status",
+            "username",
+            "display_name",
+            "avatar_url",
+            "error",
+          ],
+          result.pages.map((page) => [
+            page.pageLabel,
+            page.status,
+            page.username,
+            page.displayName,
+            page.avatarUrl,
+            page.error,
+          ]),
+        );
+
+        console.log("");
+        console.log(`pages=${result.totalPages}`);
+        console.log(`updated=${result.updatedPages}`);
+        console.log(`failed=${result.failedPages}`);
       } finally {
         await app.close();
       }

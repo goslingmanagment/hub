@@ -1358,7 +1358,7 @@ describe("db write safety", () => {
       platform: "onlyfans",
       name: "Lora OF",
       email: "lora@example.com",
-      avatar: "https://example.com/lora.png",
+      avatar: "https://public.onlyfans.com/files/lora/avatar.jpg",
       username: "lora_of",
       organisation_id: "org-1",
       subscribe_price: 12.5,
@@ -1406,6 +1406,7 @@ describe("db write safety", () => {
       earnings_balance_mills: 0n,
     });
     expect(JSON.parse(pageRows.rows[0]?.metadata ?? "{}")).toMatchObject({
+      avatarUrl: "https://public.onlyfans.com/files/lora/avatar.jpg",
       onlyMonsterAccountId: 42,
       subscribePriceMills: 12500,
     });

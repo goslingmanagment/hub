@@ -45,6 +45,55 @@ describe("OFAPI command failure classification", () => {
   });
 });
 
+describe("OFAPI account client", () => {
+  it("maps account identity fields and keeps only portable avatar URLs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [{
+        id: "acct_lora",
+        onlyfans_username: "loravie",
+        display_name: "LoraVie FREE",
+        onlyfans_user_data: {
+          id: 123,
+          name: "Lora Vie",
+          avatar: "https://public.onlyfans.com/files/lora/avatar.jpg",
+        },
+      }, {
+        id: "acct_signed",
+        onlyfans_username: "signed",
+        display_name: "Signed",
+        onlyfans_user_data: {
+          avatar: "https://public.onlyfans.com/files/signed/avatar.jpg?Policy=ip-locked&Signature=sig",
+        },
+      }],
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+    });
+
+    await expect(client.listAccounts()).resolves.toEqual([{
+      id: "acct_lora",
+      username: "loravie",
+      displayName: "LoraVie FREE",
+      onlyfansName: "Lora Vie",
+      onlyfansUserId: "123",
+      avatarUrl: "https://public.onlyfans.com/files/lora/avatar.jpg",
+    }, {
+      id: "acct_signed",
+      username: "signed",
+      displayName: "Signed",
+      onlyfansName: null,
+      onlyfansUserId: null,
+      avatarUrl: null,
+    }]);
+  });
+});
+
 describe("OFAPI text command client", () => {
   it("makes one paced POST, returns only message id, and reports page-attributed spend", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
