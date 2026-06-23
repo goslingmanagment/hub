@@ -3,6 +3,7 @@ import { listOfapiMappedPages } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import type { AuthPrincipal } from "./auth.ts";
 import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
+import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { OfapiApiError } from "./ofapi.ts";
 import {
   BadRequestError,
@@ -404,8 +405,16 @@ export async function executeOfapiReadGatewayRequest(
     throw new NotFoundError("OFAPI account is not assigned to this chatter");
   }
 
+  const egress = await resolveOfapiEgressContext(app, {
+    pageId: page.id,
+    ofapiAccountId: request.accountId,
+  });
   try {
-    return await app.ofapi.proxyRead({ pageId: page.id }, {
+    return await app.ofapi.proxyRead({
+      pageId: page.id,
+      dispatcher: egress.dispatcher,
+      egressKey: egress.egressKey,
+    }, {
       operation: request.operation,
       pathname: request.pathname,
       query: request.query,
@@ -417,5 +426,11 @@ export async function executeOfapiReadGatewayRequest(
       throw new ServiceUnavailableError("OFAPI upstream is unavailable");
     }
     throw error;
+  } finally {
+    try {
+      await egress.close();
+    } catch (error) {
+      app.logger.warn({ error }, "Failed to close OFAPI egress dispatcher");
+    }
   }
 }

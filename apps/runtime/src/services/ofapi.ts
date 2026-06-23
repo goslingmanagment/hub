@@ -10,10 +10,12 @@ import {
   executeObservedRequest,
   type HttpRequestObserver,
 } from "@agency_hub_core/shared";
+import type { Dispatcher } from "undici";
 
 import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
 
 const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
+const OFAPI_PROXY_READ_TIMEOUT_MS = 60_000;
 const OFAPI_DEFAULT_REST_DELAY_MS = 500;
 const OFAPI_OBSERVED_RETRIES = 3;
 // fans/active hard-caps limit at 20 per the OpenAPI validation text.
@@ -57,6 +59,10 @@ export interface OfapiAccountRecord {
 
 export interface OfapiRequestContext {
   requestObserver?: HttpRequestObserver | null;
+  // Account-scoped OFAPI reads must use the page egress dispatcher so large
+  // response bodies do not go through the hub VPS direct route.
+  dispatcher?: Dispatcher | null;
+  egressKey?: string | null;
   // Attributes the request's credit spend to a page in the ledger (D2);
   // admin/account-global calls leave it unset.
   pageId?: number | null;
@@ -668,14 +674,18 @@ export function createOfapiClient(input: {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      const init: RequestInit & { dispatcher?: Dispatcher } = {
         method: "GET",
         headers: {
           authorization: `Bearer ${input.apiKey}`,
           accept: "application/json",
         },
-        signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
-      });
+        signal: AbortSignal.timeout(OFAPI_PROXY_READ_TIMEOUT_MS),
+      };
+      if (context.dispatcher) {
+        init.dispatcher = context.dispatcher;
+      }
+      response = await fetch(url, init);
     } catch (error) {
       throw new OfapiApiError(
         `OFAPI request failed: GET ${options.pathname}: ${
@@ -686,7 +696,18 @@ export function createOfapiClient(input: {
       );
     }
 
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      throw new OfapiApiError(
+        `OFAPI response body read failed: GET ${options.pathname}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        null,
+        null,
+      );
+    }
     let body: unknown = null;
     if (text.length > 0) {
       try {
