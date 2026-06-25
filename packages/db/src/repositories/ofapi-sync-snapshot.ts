@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
@@ -24,6 +24,7 @@ export interface OfapiSyncSnapshotThread {
   partnerUsername: string | null;
   partnerDisplayName: string | null;
   unreadCount: number;
+  hasUnreadTips: boolean;
   lastMessageId: string | null;
   lastMessageAt: Date | null;
   lastMessageSenderRole: "fan" | "model" | "system" | "unknown";
@@ -109,6 +110,22 @@ export async function listOfapiSyncSnapshotThreads(
       partnerUsername: pageDmThreads.partnerUsername,
       partnerDisplayName: pageDmThreads.partnerDisplayName,
       unreadCount: pageDmThreads.unreadCount,
+      hasUnreadTips: sql<boolean>`exists (
+        select 1
+        from (
+          select
+            ${pageDmMessages.totalTipAmountCents} as total_tip_amount_cents,
+            row_number() over (
+              order by ${pageDmMessages.createdAt} desc, ${pageDmMessages.id} desc
+            ) as unread_rank
+          from ${pageDmMessages}
+          where ${pageDmMessages.conversationId} = ${pageDmThreads.id}
+            and ${pageDmMessages.deletedAt} is null
+            and ${pageDmMessages.senderRole} = 'fan'
+        ) unread_fan_messages
+        where unread_fan_messages.unread_rank <= ${pageDmThreads.unreadCount}
+          and unread_fan_messages.total_tip_amount_cents > 0
+      )`,
       lastMessageId: pageDmThreads.lastMessageId,
       lastMessageAt: pageDmThreads.lastMessageAt,
       lastMessageSenderRole: pageDmThreads.lastMessageSenderRole,

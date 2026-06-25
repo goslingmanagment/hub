@@ -154,6 +154,8 @@ describe("OFAPI sync snapshot", () => {
       return;
     }
     const first = await loadReceivedFixture();
+    first.payload.isTip = true;
+    first.payload.price = 10;
     await deliverAndProcess(first);
     const second = await loadReceivedFixture();
     second.payload.id = 2000006;
@@ -189,6 +191,11 @@ describe("OFAPI sync snapshot", () => {
       },
     });
     expect(bodyOne.threads).toHaveLength(1);
+    expect(bodyOne.threads[0]).toMatchObject({
+      chatId: "1000005",
+      unreadCount: 1,
+      hasUnreadTips: true,
+    });
     expect(bodyOne.unresolvedTombstones).toEqual([]);
     expect(bodyOne.nextPageCursor).not.toBeNull();
     expect(bodyOne.threads[0].messages[0]).toMatchObject({

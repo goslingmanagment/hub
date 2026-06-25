@@ -256,6 +256,7 @@ export async function getOfapiSyncSnapshot(
         ?? thread.partnerPlatformUserId
         ?? thread.platformConversationId,
       unreadCount: Math.max(0, thread.unreadCount),
+      hasUnreadTips: thread.hasUnreadTips,
       lastMessageId: thread.lastMessageId,
       lastMessageAt: thread.lastMessageAt ? serializeTimestamp(thread.lastMessageAt) : null,
       lastMessageIsSentByMe: thread.lastMessageSenderRole === "model",

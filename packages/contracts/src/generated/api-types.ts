@@ -6416,6 +6416,7 @@ export interface paths {
                                 chatId: string;
                                 fanName: string;
                                 unreadCount: number;
+                                hasUnreadTips: boolean;
                                 lastMessageId: string | null;
                                 lastMessageAt: string | null;
                                 lastMessageIsSentByMe: boolean;

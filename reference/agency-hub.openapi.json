@@ -20556,6 +20556,9 @@
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "hasUnreadTips": {
+                            "type": "boolean"
+                          },
                           "lastMessageId": {
                             "anyOf": [
                               {
@@ -20799,6 +20802,7 @@
                           "chatId",
                           "fanName",
                           "unreadCount",
+                          "hasUnreadTips",
                           "lastMessageId",
                           "lastMessageAt",
                           "lastMessageIsSentByMe",

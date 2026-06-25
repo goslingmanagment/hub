@@ -2925,6 +2925,7 @@ export const syncSnapshotThreadSchema = z.object({
   chatId: syncEventIdSchema,
   fanName: z.string(),
   unreadCount: z.number().int().nonnegative(),
+  hasUnreadTips: z.boolean(),
   lastMessageId: syncEventIdSchema.nullable(),
   lastMessageAt: isoTimestamp.nullable(),
   lastMessageIsSentByMe: z.boolean(),
