@@ -22,8 +22,10 @@ import {
   isOfapiSpendTransactionIngestEnabled,
 } from "./ofapi-spend-transaction-ingest.ts";
 import {
+  mapOfapiTransactionStatusForSpendProjection,
   mapOfapiWebhookToSpendProjectionEvent,
   OFAPI_TIPS_RECEIVED_BLOCKED_REASON,
+  ofapiSpendProjectionTransactionDomainKey,
   type CoreSpendProjectionEvent,
   type OfapiSpendProjectionContext,
   type OfapiSpendProjectionEventType,
@@ -89,7 +91,12 @@ function domainKeyFor(
   switch (eventType) {
     case "transactions.new": {
       const transactionId = idToString(payload.id);
-      return transactionId ? `ofapi:${ofapiAccountId}:tx:${transactionId}` : null;
+      if (!transactionId) {
+        return null;
+      }
+
+      const status = mapOfapiTransactionStatusForSpendProjection(payload.status);
+      return ofapiSpendProjectionTransactionDomainKey({ ofapiAccountId, transactionId, status });
     }
     case "messages.ppv.unlocked": {
       const notificationId = idToString(payload.id);

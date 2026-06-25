@@ -129,14 +129,24 @@ function mapTransactionCategory(rawType: unknown): OfapiSpendProjectionCategory 
   }
 }
 
-function mapTransactionStatus(rawStatus: unknown): Exclude<OfapiSpendProjectionStatus, "estimated"> {
-  switch (typeof rawStatus === "string" ? rawStatus.toLowerCase() : "") {
+function normalizeTransactionStatus(rawStatus: unknown) {
+  return typeof rawStatus === "string"
+    ? rawStatus.trim().toLowerCase().replace(/[\s-]+/g, "_")
+    : "";
+}
+
+export function mapOfapiTransactionStatusForSpendProjection(
+  rawStatus: unknown,
+): Exclude<OfapiSpendProjectionStatus, "estimated"> {
+  switch (normalizeTransactionStatus(rawStatus)) {
     case "done":
     case "paid":
     case "posted":
     case "settled":
     case "completed":
       return "settled";
+    case "undo":
+    case "pending_return":
     case "refunded":
     case "reversed":
     case "chargeback":
@@ -149,6 +159,24 @@ function mapTransactionStatus(rawStatus: unknown): Exclude<OfapiSpendProjectionS
     default:
       return "pending";
   }
+}
+
+export function ofapiSpendProjectionTransactionId(
+  transactionId: string,
+  status: Exclude<OfapiSpendProjectionStatus, "estimated">,
+) {
+  return status === "reversed" ? `${transactionId}:reversal` : transactionId;
+}
+
+export function ofapiSpendProjectionTransactionDomainKey(input: {
+  ofapiAccountId: string;
+  transactionId: string;
+  status: Exclude<OfapiSpendProjectionStatus, "estimated">;
+}) {
+  const keyKind = input.status === "reversed" ? "tx-reversal" : "tx";
+  return `ofapi:${input.ofapiAccountId}:${keyKind}:${
+    ofapiSpendProjectionTransactionId(input.transactionId, input.status)
+  }`;
 }
 
 function baseEvent(
@@ -203,19 +231,21 @@ function mapTransactionsNew(
     return { status: "skipped", reason: "transactions_new_unsupported_currency" };
   }
 
+  const status = mapOfapiTransactionStatusForSpendProjection(payload.status);
+
   return {
     status: "projectable",
     event: {
       ...baseEvent(context, "transactions.new"),
       fanPlatformUserId,
-      transactionId,
+      transactionId: ofapiSpendProjectionTransactionId(transactionId, status),
       messageId: null,
       occurredAt,
       category: mapTransactionCategory(payload.type),
       currency: "USD",
       grossAmountMills,
       creatorNetAmountMills,
-      status: mapTransactionStatus(payload.status),
+      status,
     },
   };
 }

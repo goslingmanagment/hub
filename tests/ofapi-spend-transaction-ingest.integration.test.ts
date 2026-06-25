@@ -386,6 +386,78 @@ describe("OFAPI spend transaction ingest", () => {
     ]);
   });
 
+  it("keeps same-provider-id reversals separate from the original settled row", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedPage("same-id-refund-of");
+    const occurredAt = new Date("2026-06-19T13:00:00.000Z");
+    await seedProjectedTransaction({
+      pageId: page.id,
+      transactionId: "tx-same-id",
+      fanPlatformUserId: "1000007",
+      grossAmountMills: 17_000n,
+      creatorNetAmountMills: 13_600n,
+      eventStatus: "settled",
+      occurredAt,
+    });
+    await seedProjectedTransaction({
+      pageId: page.id,
+      transactionId: "tx-same-id:reversal",
+      fanPlatformUserId: "1000007",
+      grossAmountMills: 17_000n,
+      creatorNetAmountMills: 13_600n,
+      eventStatus: "reversed",
+      occurredAt: new Date("2026-06-19T13:05:00.000Z"),
+    });
+
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(2);
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
+
+    const { rows } = await testDb.pool.query<{
+      transaction_id: string;
+      canonical_type: string;
+      raw_status: string;
+      gross_amount_mills: string;
+      creator_net_amount_mills: string;
+      lifetime_net: string;
+    }>(`
+      select t.transaction_id,
+             t.canonical_type,
+             t.raw_status,
+             t.gross_amount_mills::text,
+             t.creator_net_amount_mills::text,
+             coalesce(slp.creator_net_amount_mills, 0)::text as lifetime_net
+      from transactions t
+      left join fan_spend_lifetime slp
+        on slp.platform_account_id = t.platform_account_id
+       and slp.fan_id = t.fan_id
+      where t.platform_account_id = $1
+      order by t.transaction_id
+    `, [page.id]);
+
+    expect(rows).toEqual([
+      {
+        transaction_id: "tx-same-id",
+        canonical_type: "message_purchase",
+        raw_status: "settled",
+        gross_amount_mills: "17000",
+        creator_net_amount_mills: "13600",
+        lifetime_net: "0",
+      },
+      {
+        transaction_id: "tx-same-id:reversal",
+        canonical_type: "refund",
+        raw_status: "reversed",
+        gross_amount_mills: "-17000",
+        creator_net_amount_mills: "-13600",
+        lifetime_net: "0",
+      },
+    ]);
+  });
+
   it("stays disabled unless the apply flag is set", async (context) => {
     if (!testDb) {
       context.skip();

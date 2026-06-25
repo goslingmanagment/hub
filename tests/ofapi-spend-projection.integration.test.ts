@@ -179,6 +179,52 @@ describe("OFAPI spend shadow projection", () => {
     expect(await listOfapiSpendProjectionEvents(appContext.db)).toHaveLength(1);
   });
 
+  it("keeps same-id undo redelivery as a separate reversal projection", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await seedOnlyFansPage({ label: "refund-of", ofapiAccountId: LIVE_SPEND_ACCOUNT });
+    const settledEnvelope = await loadFixtureEnvelope("transactions_new.json");
+    settledEnvelope.payload.status = "done";
+    const undoEnvelope = {
+      ...settledEnvelope,
+      payload: {
+        ...settledEnvelope.payload,
+        status: "undo",
+      },
+    };
+
+    await deliverAndProcess(settledEnvelope);
+    await deliverAndProcess(undoEnvelope);
+
+    const rows = await listOfapiSpendProjectionEvents(appContext.db);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => ({
+      domainKey: row.domainKey,
+      transactionId: row.transactionId,
+      eventStatus: row.eventStatus,
+      grossAmountMills: row.grossAmountMills,
+      creatorNetAmountMills: row.creatorNetAmountMills,
+    }))).toEqual([
+      {
+        domainKey: "ofapi:acct_02000000000000000000000000000000:tx:e940b5fb905ba0815d5842a7bde1118c",
+        transactionId: "e940b5fb905ba0815d5842a7bde1118c",
+        eventStatus: "settled",
+        grossAmountMills: 17_000n,
+        creatorNetAmountMills: 13_600n,
+      },
+      {
+        domainKey: "ofapi:acct_02000000000000000000000000000000:tx-reversal:e940b5fb905ba0815d5842a7bde1118c:reversal",
+        transactionId: "e940b5fb905ba0815d5842a7bde1118c:reversal",
+        eventStatus: "reversed",
+        grossAmountMills: 17_000n,
+        creatorNetAmountMills: 13_600n,
+      },
+    ]);
+  });
+
   it("projects ppv unlock only as estimated, not settled revenue", async (context) => {
     if (!testDb || !server) {
       context.skip();

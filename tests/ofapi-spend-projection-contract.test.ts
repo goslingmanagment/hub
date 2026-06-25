@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   mapOfapiWebhookToSpendProjectionEvent,
   OFAPI_TIPS_RECEIVED_BLOCKED_REASON,
+  ofapiSpendProjectionTransactionDomainKey,
   type OfapiSpendProjectionContext,
 } from "../apps/runtime/src/services/ofapi-spend-projection-contract.ts";
 
@@ -90,6 +91,39 @@ describe("OFAPI spend projection contract mapper", () => {
       status: "settled",
     });
   });
+
+  it.each(["undo", "pending_return", "pending return"])(
+    "maps %s transaction status as a separate reversed adjustment",
+    async (status) => {
+      const fixture = await loadFixture("transactions_new.json");
+
+      const result = mapOfapiWebhookToSpendProjectionEvent({
+        context: projectionContext(fixture.account_id),
+        eventType: fixture.event,
+        payload: {
+          ...fixture.payload,
+          status,
+        },
+      });
+
+      expect(result.status).toBe("projectable");
+      if (result.status !== "projectable") {
+        return;
+      }
+
+      expect(result.event).toMatchObject({
+        transactionId: "e940b5fb905ba0815d5842a7bde1118c:reversal",
+        status: "reversed",
+      });
+      expect(ofapiSpendProjectionTransactionDomainKey({
+        ofapiAccountId: fixture.account_id,
+        transactionId: "e940b5fb905ba0815d5842a7bde1118c",
+        status: "reversed",
+      })).toBe(
+        "ofapi:acct_02000000000000000000000000000000:tx-reversal:e940b5fb905ba0815d5842a7bde1118c:reversal",
+      );
+    },
+  );
 
   it("maps live messages.ppv.unlocked only as an estimated purchase signal", async () => {
     const fixture = await loadFixture("messages_ppv_unlocked.json");
