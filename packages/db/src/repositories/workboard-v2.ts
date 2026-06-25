@@ -147,6 +147,7 @@ export async function loadWorkboardSignalRows(
           extract(epoch from (created_at - lag(created_at) over (partition by conversation_id order by created_at))) / 3600.0 as gap_hours
         from page_dm_messages
         where platform_account_id = ${platformAccountId}
+          and deleted_at is null
           ${cqFanScope}
       ) m
       group by conversation_id
@@ -698,6 +699,7 @@ export async function listClosingClassificationCandidates(
           select id, sender_role::text as sender_role, content, created_at
           from page_dm_messages
           where conversation_id = t.id
+            and deleted_at is null
           order by created_at desc, id desc
           limit ${CLOSING_CONTEXT_WINDOW}
         ) x
@@ -712,7 +714,7 @@ export async function listClosingClassificationCandidates(
       ${ctxSelect} as context
     from page_dm_threads t
     join fans f on f.id = t.fan_id and f.deleted_detected_at is null
-    left join page_dm_messages m on m.conversation_id = t.id and m.platform_message_id = t.last_message_id
+    left join page_dm_messages m on m.conversation_id = t.id and m.platform_message_id = t.last_message_id and m.deleted_at is null
     left join workboard_state ws on ws.platform_account_id = t.platform_account_id and ws.fan_id = t.fan_id
     left join wb_closing_cache cc on cc.platform_account_id = t.platform_account_id and cc.platform_message_id = t.last_message_id
     ${ctxJoin}

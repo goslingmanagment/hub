@@ -153,6 +153,7 @@ export async function listOfapiSyncSnapshotHotMessages(
     .where(and(
       eq(pageDmMessages.platformAccountId, input.platformAccountId),
       inArray(pageDmMessages.conversationId, input.conversationIds),
+      isNull(pageDmMessages.deletedAt),
     ))
     .orderBy(
       asc(pageDmMessages.conversationId),

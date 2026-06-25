@@ -923,6 +923,7 @@ export const pageDmMessages = pgTable(
     inReplyToRootMessageId: text("in_reply_to_root_message_id"),
     // When the fan unlocked this message as PPV (OFAPI messages.ppv.unlocked).
     purchasedAt: timestamp("purchased_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({

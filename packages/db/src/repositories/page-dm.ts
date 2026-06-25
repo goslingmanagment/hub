@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
@@ -423,6 +423,7 @@ export async function upsertPageDmMessages(
     })))
     .onConflictDoUpdate({
       target: [pageDmMessages.conversationId, pageDmMessages.platformMessageId],
+      setWhere: isNull(pageDmMessages.deletedAt),
       set: {
         senderPlatformUserId: sql`excluded.sender_platform_user_id`,
         senderRole: sql`excluded.sender_role`,
@@ -461,6 +462,7 @@ export async function findPageDmMessageByPlatformMessageId(
     where: and(
       eq(pageDmMessages.platformAccountId, input.platformAccountId),
       eq(pageDmMessages.platformMessageId, input.platformMessageId),
+      isNull(pageDmMessages.deletedAt),
     ),
   });
 
@@ -476,7 +478,7 @@ export async function findPageDmMessageByPlatformMessageId(
     : null;
 }
 
-/** Deletes a stored DM message; returns its conversation id when a row was removed. */
+/** Tombstones a stored DM message; returns its conversation id when a live row was removed. */
 export async function deletePageDmMessageByPlatformMessageId(
   db: Database,
   input: {
@@ -485,10 +487,20 @@ export async function deletePageDmMessageByPlatformMessageId(
   },
 ) {
   const [deleted] = await db
-    .delete(pageDmMessages)
+    .update(pageDmMessages)
+    .set({
+      deletedAt: new Date(),
+      content: "",
+      totalTipAmountCents: 0,
+      inReplyToMessageId: null,
+      inReplyToRootMessageId: null,
+      purchasedAt: null,
+      syncedAt: new Date(),
+    })
     .where(and(
       eq(pageDmMessages.platformAccountId, input.platformAccountId),
       eq(pageDmMessages.platformMessageId, input.platformMessageId),
+      isNull(pageDmMessages.deletedAt),
     ))
     .returning({ conversationId: pageDmMessages.conversationId });
 
@@ -510,6 +522,7 @@ export async function markPageDmMessagePurchased(
       eq(pageDmMessages.platformAccountId, input.platformAccountId),
       eq(pageDmMessages.platformMessageId, input.platformMessageId),
       sql`${pageDmMessages.purchasedAt} is null`,
+      isNull(pageDmMessages.deletedAt),
     ))
     .returning({ conversationId: pageDmMessages.conversationId });
 
@@ -537,6 +550,7 @@ export async function raisePageDmMessageTipAmount(
     .where(and(
       eq(pageDmMessages.platformAccountId, input.platformAccountId),
       eq(pageDmMessages.platformMessageId, input.platformMessageId),
+      isNull(pageDmMessages.deletedAt),
     ))
     .returning({ conversationId: pageDmMessages.conversationId });
 
@@ -563,6 +577,7 @@ export async function prunePageDmMessagesToLimit(
              ) as rn
       from page_dm_messages
       where conversation_id = ${input.conversationId}
+        and deleted_at is null
     ),
     deleted as (
       delete from page_dm_messages
@@ -635,6 +650,7 @@ async function getPageDmMessageWindowSummary(
              ) as rn_asc
       from page_dm_messages
       where conversation_id = ${conversationId}
+        and deleted_at is null
     )
     select count(*)::int as "storedMessageCount",
            max(case when rn_desc = 1 then platform_message_id end) as "newestStoredMessageId",
@@ -677,7 +693,10 @@ async function getNewestStoredPageDmMessage(db: Database, conversationId: number
       content: pageDmMessages.content,
     })
     .from(pageDmMessages)
-    .where(eq(pageDmMessages.conversationId, conversationId))
+    .where(and(
+      eq(pageDmMessages.conversationId, conversationId),
+      isNull(pageDmMessages.deletedAt),
+    ))
     .orderBy(
       desc(pageDmMessages.createdAt),
       desc(pageDmMessages.platformMessageId),
@@ -1274,6 +1293,7 @@ export async function getPageConversationMessages(
     from page_dm_messages
     where conversation_id = ${conversation.id}
       and platform_account_id = ${input.platformAccountId}
+      and deleted_at is null
     order by created_at desc, platform_message_id desc, id desc
     limit ${limit}
   `);
@@ -1359,6 +1379,7 @@ export async function getPageConversationPreview(
         from page_dm_messages
         where conversation_id = ${conversation.id}
           and platform_account_id = ${input.platformAccountId}
+          and deleted_at is null
         order by created_at desc, platform_message_id desc, id desc
         limit ${limit}
       ) newest

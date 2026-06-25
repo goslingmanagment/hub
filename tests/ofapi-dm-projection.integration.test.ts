@@ -141,11 +141,27 @@ async function getStoredMessages(conversationId: number) {
     purchased_at: Date | null;
   }>(
     `select platform_message_id, sender_role, content, total_tip_amount_cents, purchased_at
-     from page_dm_messages where conversation_id = $1
+     from page_dm_messages
+     where conversation_id = $1
+       and deleted_at is null
      order by created_at asc, platform_message_id asc`,
     [conversationId],
   );
   return rows;
+}
+
+async function getStoredMessageTombstone(conversationId: number, platformMessageId: string) {
+  const { rows } = await testDb!.pool.query<{
+    deleted_at: Date | null;
+    content: string;
+  }>(
+    `select deleted_at, content
+     from page_dm_messages
+     where conversation_id = $1
+       and platform_message_id = $2`,
+    [conversationId, platformMessageId],
+  );
+  return rows[0] ?? null;
 }
 
 beforeAll(async () => {
@@ -343,10 +359,51 @@ describe("OFAPI DM projection", () => {
     expect(conversation!.storedMessageCount).toBe(0);
     expect(conversation!.newestStoredMessageId).toBeNull();
     expect(await getStoredMessages(conversation!.id)).toHaveLength(0);
+    expect(await getStoredMessageTombstone(conversation!.id, RECEIVED_MESSAGE_ID)).toMatchObject({
+      deleted_at: expect.any(Date),
+      content: "",
+    });
     // Deleting the only (head) message must not leave its preview behind (B10).
     expect(conversation!.lastMessageId).toBeNull();
     expect(conversation!.lastMessageAt).toBeNull();
     expect(conversation!.lastMessagePreview).toBeNull();
+  });
+
+  it("does not resurrect a tombstoned message from a later replay", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOnlyFansPage({ label: "resurrection-of", ofapiAccountId: RECEIVED_ACCOUNT });
+    const original = await loadFixtureEnvelope("messages_received.json");
+    await deliverAndProcess(original);
+
+    let conversation = await getConversation(page.id, RECEIVED_FAN_ID);
+    expect(await getStoredMessages(conversation!.id)).toHaveLength(1);
+
+    await deliverAndProcess({
+      event: "messages.deleted",
+      account_id: RECEIVED_ACCOUNT,
+      payload: { id: RECEIVED_MESSAGE_ID },
+    });
+    conversation = await getConversation(page.id, RECEIVED_FAN_ID);
+    expect(await getStoredMessages(conversation!.id)).toHaveLength(0);
+
+    const replay = await loadFixtureEnvelope("messages_received.json");
+    replay.payload = {
+      ...replay.payload,
+      text: "<p>resurrected text must not be stored</p>",
+    };
+    await deliverAndProcess(replay);
+
+    conversation = await getConversation(page.id, RECEIVED_FAN_ID);
+    expect(conversation!.storedMessageCount).toBe(0);
+    expect(await getStoredMessages(conversation!.id)).toHaveLength(0);
+    expect(await getStoredMessageTombstone(conversation!.id, RECEIVED_MESSAGE_ID)).toMatchObject({
+      deleted_at: expect.any(Date),
+      content: "",
+    });
   });
 
   it("rebuilds the conversation head when the head message is deleted (audit B10)", async (context) => {

@@ -5,10 +5,12 @@ import {
   PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT,
   createFanslyPage,
   createModel,
+  deletePageDmMessageByPlatformMessageId,
   finalizePageDmConversationMessageSync,
   getPageDmSyncCoverage,
   getPageConversationPreview,
   getPageConversationMessages,
+  refreshPageDmConversationWindow,
   selectNextPageDmMessageDeepBackfillCandidate,
   selectNextPageDmMessageSyncCandidate,
   upsertFans,
@@ -714,6 +716,7 @@ describe("page DM repository integration", () => {
         select count(*)::text as count
         from page_dm_messages
         where conversation_id = $1
+          and deleted_at is null
       `,
       [conversation.id],
     );
@@ -738,6 +741,102 @@ describe("page DM repository integration", () => {
     expect(preview?.messages[9]?.totalTipAmountCents).toBe(500);
     expect(newestFirst?.messages.map((message) => message.messageId)).toEqual([...expectedPreviewIds].reverse());
     expect(newestFirst?.messages[0]?.tipAmountCents).toBe(500);
+  });
+
+  it("keeps a hot tombstone from being resurrected by a later message upsert", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createTestPage(testDb, "page-dm-tombstone");
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-tombstone",
+      username: "fan_tombstone",
+      displayName: "Fan Tombstone",
+    }]);
+    const conversation = await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformConversationId: "tombstone-conversation",
+      partnerPlatformUserId: "fan-tombstone",
+      partnerUsername: "fan_tombstone",
+      partnerDisplayName: "Fan Tombstone",
+      conversationFlags: 0,
+      unreadCount: 1,
+      subscriptionTierId: null,
+      lastMessageId: "msg-deleted",
+      lastUnreadMessageId: "msg-deleted",
+      lastMessageAt: new Date("2026-03-17T15:00:00.000Z"),
+      lastMessageSenderId: "fan-tombstone",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "delete me",
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    await upsertPageDmMessages(testDb.db, [{
+      conversationId: conversation.id,
+      platformAccountId: page.id,
+      platformMessageId: "msg-deleted",
+      senderPlatformUserId: "fan-tombstone",
+      senderRole: "fan",
+      createdAt: new Date("2026-03-17T15:00:00.000Z"),
+      content: "delete me",
+      totalTipAmountCents: 100,
+      inReplyToMessageId: null,
+      inReplyToRootMessageId: null,
+    }]);
+    await refreshPageDmConversationWindow(testDb.db, { conversationId: conversation.id });
+
+    expect(await deletePageDmMessageByPlatformMessageId(testDb.db, {
+      platformAccountId: page.id,
+      platformMessageId: "msg-deleted",
+    })).toMatchObject({ conversationId: conversation.id });
+    await refreshPageDmConversationWindow(testDb.db, {
+      conversationId: conversation.id,
+      rebuildHeadForDeletedMessageId: "msg-deleted",
+    });
+
+    await upsertPageDmMessages(testDb.db, [{
+      conversationId: conversation.id,
+      platformAccountId: page.id,
+      platformMessageId: "msg-deleted",
+      senderPlatformUserId: "fan-tombstone",
+      senderRole: "fan",
+      createdAt: new Date("2026-03-17T15:00:00.000Z"),
+      content: "resurrected content",
+      totalTipAmountCents: 500,
+      inReplyToMessageId: null,
+      inReplyToRootMessageId: null,
+    }]);
+    const refreshed = await refreshPageDmConversationWindow(testDb.db, {
+      conversationId: conversation.id,
+    });
+    const rows = await testDb.pool.query<{
+      live_count: string;
+      tombstone_count: string;
+      content: string | null;
+      deleted_at: Date | null;
+    }>(`
+      select count(*) filter (where deleted_at is null)::text as live_count,
+             count(*) filter (where deleted_at is not null)::text as tombstone_count,
+             max(content) as content,
+             max(deleted_at) as deleted_at
+      from page_dm_messages
+      where conversation_id = $1
+        and platform_message_id = 'msg-deleted'
+    `, [conversation.id]);
+
+    expect(refreshed.summary.storedMessageCount).toBe(0);
+    expect(rows.rows[0]).toMatchObject({
+      live_count: "0",
+      tombstone_count: "1",
+      content: "",
+      deleted_at: expect.any(Date),
+    });
   });
 
   it(`prunes spender message history to ${PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT}`, async (context) => {
@@ -831,6 +930,7 @@ describe("page DM repository integration", () => {
                max(platform_message_id) as newest
         from page_dm_messages
         where conversation_id = $1
+          and deleted_at is null
       `,
       [conversation.id],
     );

@@ -222,7 +222,9 @@ async function getStoredMessages(conversationId: number) {
     total_tip_amount_cents: number;
   }>(
     `select platform_message_id, sender_role, content, total_tip_amount_cents
-     from page_dm_messages where conversation_id = $1
+     from page_dm_messages
+     where conversation_id = $1
+       and deleted_at is null
      order by created_at desc, platform_message_id desc`,
     [conversationId],
   );
