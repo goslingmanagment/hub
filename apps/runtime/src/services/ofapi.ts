@@ -31,6 +31,7 @@ export class OfapiApiError extends Error {
     message: string,
     readonly status: number | null,
     readonly body: string | null,
+    readonly upstreamStatus: number | null = null,
   ) {
     super(message);
     this.name = "OfapiApiError";
@@ -259,6 +260,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function wrappedOnlyFansStatus(value: unknown): number | null {
+  const record = asRecord(value);
+  if (record?.error !== "ONLYFANS_COM_ERROR") {
+    return null;
+  }
+  const onlyFansResponse = asRecord(record.onlyfans_response);
+  const status = onlyFansResponse?.status;
+  return typeof status === "number" && Number.isInteger(status) ? status : null;
 }
 
 function asNonEmptyString(value: unknown) {
@@ -817,10 +828,12 @@ export function createOfapiClient(input: {
     });
 
     if (!response.ok) {
+      const upstreamStatus = wrappedOnlyFansStatus(responseBody);
       throw new OfapiApiError(
         `OFAPI command rejected: POST ${pathname} returned ${response.status}`,
         response.status,
         null,
+        upstreamStatus,
       );
     }
     if (!bodyIsJson) {

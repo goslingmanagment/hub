@@ -42,7 +42,9 @@ export type OfapiCommandFailure = {
 };
 
 export function classifyOfapiCommandFailure(error: unknown): OfapiCommandFailure {
-  const status = error instanceof OfapiApiError ? error.status : null;
+  const status = error instanceof OfapiApiError
+    ? error.upstreamStatus ?? error.status
+    : null;
   if (status === 429) {
     return {
       state: "failed_retryable",

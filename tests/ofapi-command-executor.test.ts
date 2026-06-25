@@ -172,6 +172,50 @@ describe("OFAPI text command client", () => {
     expect(JSON.stringify(error)).not.toContain("secret command text");
   });
 
+  it("classifies a wrapper 4xx carrying an upstream 5xx as indeterminate", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "ONLYFANS_COM_ERROR",
+      message: "Bad Gateway from wrapped upstream",
+      onlyfans_response: {
+        status: 503,
+        body: {
+          error: { message: "secret command text may or may not have been delivered" },
+        },
+      },
+    }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+    });
+
+    const error = await client.sendTextMessage!(
+      { pageId: 42 },
+      ACCOUNT,
+      CONVERSATION,
+      { text: "secret command text" },
+    ).catch((caught) => caught);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(OfapiApiError);
+    expect(error).toMatchObject({
+      status: 400,
+      upstreamStatus: 503,
+      body: null,
+    });
+    expect(classifyOfapiCommandFailure(error)).toMatchObject({
+      state: "indeterminate",
+      errorCode: "ofapi_http_503",
+      errorClass: "indeterminate",
+      httpStatus: 503,
+    });
+    expect(JSON.stringify(error)).not.toContain("secret command text");
+  });
+
   it("does not retry an unknown transport outcome", async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error("timeout"));
     vi.stubGlobal("fetch", fetchMock);
