@@ -12,6 +12,7 @@ export type TelegramDeliveryKind =
   | "incident_opened"
   | "incident_resolved"
   | "incident_manually_resolved";
+export type TelegramDeliveryStatus = "sent" | "failed" | "skipped";
 
 export async function getTelegramSettings(
   db: Database,
@@ -61,7 +62,7 @@ export async function insertDeliveryAttempt(
   db: Database,
   input: {
     kind: TelegramDeliveryKind;
-    status: "sent" | "failed";
+    status: TelegramDeliveryStatus;
     notificationIncidentId?: number | null;
     reportDate?: string | null;
     messageId?: number | null;

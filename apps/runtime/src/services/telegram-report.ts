@@ -376,6 +376,11 @@ export async function sendDailyRevenueTelegramReport(
     defaultReportHourUtc: app.config.telegramReportHourUtc,
   });
   if (!settings.enabled || !settings.dailyReportEnabled) {
+    await insertDeliveryAttempt(app.db, {
+      kind: "daily_report_scheduled",
+      status: "skipped",
+      error: "disabled",
+    });
     return {
       delivery: {
         status: "skipped",
@@ -391,15 +396,17 @@ export async function sendDailyRevenueTelegramReport(
     parseMode: report.parseMode,
   });
 
-  if (delivery.status === "sent" || delivery.status === "failed") {
-    await insertDeliveryAttempt(app.db, {
-      kind: "daily_report_scheduled",
-      status: delivery.status,
-      reportDate: report.reportDate,
-      messageId: delivery.status === "sent" ? delivery.messageId : null,
-      error: delivery.status === "failed" ? delivery.error : null,
-    });
-  }
+  await insertDeliveryAttempt(app.db, {
+    kind: "daily_report_scheduled",
+    status: delivery.status,
+    reportDate: report.reportDate,
+    messageId: delivery.status === "sent" ? delivery.messageId : null,
+    error: delivery.status === "failed"
+      ? delivery.error
+      : delivery.status === "skipped"
+        ? delivery.reason
+        : null,
+  });
 
   return {
     delivery,
@@ -420,15 +427,17 @@ export async function sendManualDailyRevenueTelegramReport(
     parseMode: report.parseMode,
   });
 
-  if (delivery.status === "sent" || delivery.status === "failed") {
-    await insertDeliveryAttempt(app.db, {
-      kind: "daily_report_manual",
-      status: delivery.status,
-      reportDate: report.reportDate,
-      messageId: delivery.status === "sent" ? delivery.messageId : null,
-      error: delivery.status === "failed" ? delivery.error : null,
-    });
-  }
+  await insertDeliveryAttempt(app.db, {
+    kind: "daily_report_manual",
+    status: delivery.status,
+    reportDate: report.reportDate,
+    messageId: delivery.status === "sent" ? delivery.messageId : null,
+    error: delivery.status === "failed"
+      ? delivery.error
+      : delivery.status === "skipped"
+        ? delivery.reason
+        : null,
+  });
 
   return {
     delivery,

@@ -139,6 +139,66 @@ describe("health service", () => {
     });
   });
 
+  it("does not degrade sync health for pages whose supported streams are intentionally paused", async () => {
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 9,
+        label: "paused-onlyfans",
+        platform: "onlyfans",
+        modelSlug: "paused",
+        modelName: "Paused",
+        connectionStatus: "unverified",
+        lastLightSyncAt: null,
+        lastFollowerSyncAt: null,
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      pages: [{
+        pageId: 9,
+        pageLabel: "paused-onlyfans",
+        platform: "onlyfans",
+        modelSlug: "paused",
+        modelName: "Paused",
+        blocks: {
+          connection: { state: "paused", statusReason: null, error: null },
+          financials: { state: "paused", statusReason: null, error: null },
+          audience: { state: "not_available", statusReason: null, error: null },
+          messages_live: { state: "paused", statusReason: null, error: null },
+          messages_history: { state: "paused", statusReason: null, error: null },
+        },
+      }],
+    });
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toMatchObject({
+      status: "ok",
+      overall: {
+        pageCount: 1,
+        unhealthyPageCount: 0,
+      },
+      pages: [
+        {
+          pageId: 9,
+          status: "ok",
+          connectionStatus: "unverified",
+          issues: [],
+        },
+      ],
+    });
+  });
+
   it("sanitizes database probe failures in the public health response", async () => {
     const app = {
       pool: {

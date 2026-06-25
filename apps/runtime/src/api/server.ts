@@ -3245,14 +3245,16 @@ export async function buildApiServer(appContext: AppContext) {
 
     const result = await sendTelegramTestMessage(appContext);
 
-    if (result.status === "sent" || result.status === "failed") {
-      await insertDeliveryAttempt(appContext.db, {
-        kind: "test",
-        status: result.status,
-        messageId: result.status === "sent" ? result.messageId : null,
-        error: result.status === "failed" ? result.error : null,
-      });
-    }
+    await insertDeliveryAttempt(appContext.db, {
+      kind: "test",
+      status: result.status,
+      messageId: result.status === "sent" ? result.messageId : null,
+      error: result.status === "failed"
+        ? result.error
+        : result.status === "skipped"
+          ? result.reason
+          : null,
+    });
 
     return {
       status: result.status,
@@ -3320,15 +3322,17 @@ export async function buildApiServer(appContext: AppContext) {
         text: `✅ Manually resolved\nIncident: ${incidentKey}`,
       });
 
-      if (delivery.status === "sent" || delivery.status === "failed") {
-        await insertDeliveryAttempt(appContext.db, {
-          kind: "incident_manually_resolved",
-          status: delivery.status,
-          notificationIncidentId: incidentId,
-          messageId: delivery.status === "sent" ? delivery.messageId : null,
-          error: delivery.status === "failed" ? delivery.error : null,
-        });
-      }
+      await insertDeliveryAttempt(appContext.db, {
+        kind: "incident_manually_resolved",
+        status: delivery.status,
+        notificationIncidentId: incidentId,
+        messageId: delivery.status === "sent" ? delivery.messageId : null,
+        error: delivery.status === "failed"
+          ? delivery.error
+          : delivery.status === "skipped"
+            ? delivery.reason
+            : null,
+      });
     }
 
     return { ok: true as const };

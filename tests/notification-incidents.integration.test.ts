@@ -16,6 +16,7 @@ import {
   getNotificationIncidentByKey,
   getPageSyncState,
   insertSyncRequestAttempt,
+  listDeliveryAttempts,
   listNotificationIncidents,
   markPageSyncAuthBlocked,
   openNotificationIncident,
@@ -129,6 +130,48 @@ describe("notification incidents integration", () => {
     expect(incident?.status).toBe("open");
     expect(incident?.resolvedAt).toBeNull();
     expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it("records skipped Telegram attempts when an opened incident has no destination", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    telegramMocks.sendTelegramMessage.mockResolvedValue({
+      status: "skipped",
+      reason: "unconfigured",
+    });
+
+    const model = await createModel(testDb.db, {
+      slug: "unconfigured-alert-model",
+      name: "Unconfigured Alert Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "unconfigured-alert-page",
+    });
+    const app = createTestAppContext(testDb);
+
+    await notifyAuthFailedIncident(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      errorSummary: "session expired",
+    });
+
+    const incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
+    expect(incident?.status).toBe("open");
+
+    const attempts = await listDeliveryAttempts(testDb.db, {
+      kind: ["incident_opened"],
+    });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      status: "skipped",
+      error: "unconfigured",
+      notificationIncidentId: incident?.id,
+    });
   });
 
   it("classifies proxied transport failures separately and opens stream incidents exactly at the third failure", async (context) => {

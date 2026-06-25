@@ -12,7 +12,7 @@ import {
 import { redactSensitiveText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { sendTelegramMessage } from "./telegram.ts";
+import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
 
 const STREAM_FAILURE_THRESHOLD = 3;
 
@@ -107,6 +107,18 @@ function resolveMessageForIncident(
   ].join("\n");
 }
 
+function deliveryAttemptFields(delivery: TelegramSendResult) {
+  return {
+    status: delivery.status,
+    messageId: delivery.status === "sent" ? delivery.messageId : null,
+    error: delivery.status === "failed"
+      ? delivery.error
+      : delivery.status === "skipped"
+        ? delivery.reason
+        : null,
+  };
+}
+
 async function openIncidentAndNotify(
   app: Pick<AppContext, "db" | "logger" | "config">,
   input: {
@@ -155,15 +167,11 @@ async function openIncidentAndNotify(
       }),
     });
 
-    if (delivery.status === "sent" || delivery.status === "failed") {
-      await insertDeliveryAttempt(app.db, {
-        kind: "incident_opened",
-        status: delivery.status,
-        notificationIncidentId: result.incident.id,
-        messageId: delivery.status === "sent" ? delivery.messageId : null,
-        error: delivery.status === "failed" ? delivery.error : null,
-      });
-    }
+    await insertDeliveryAttempt(app.db, {
+      kind: "incident_opened",
+      notificationIncidentId: result.incident.id,
+      ...deliveryAttemptFields(delivery),
+    });
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,
@@ -219,15 +227,11 @@ async function resolveIncidentAndNotify(
       text: resolveMessageForIncident(input),
     });
 
-    if (delivery.status === "sent" || delivery.status === "failed") {
-      await insertDeliveryAttempt(app.db, {
-        kind: "incident_resolved",
-        status: delivery.status,
-        notificationIncidentId: resolved.id,
-        messageId: delivery.status === "sent" ? delivery.messageId : null,
-        error: delivery.status === "failed" ? delivery.error : null,
-      });
-    }
+    await insertDeliveryAttempt(app.db, {
+      kind: "incident_resolved",
+      notificationIncidentId: resolved.id,
+      ...deliveryAttemptFields(delivery),
+    });
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,

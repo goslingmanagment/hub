@@ -124,6 +124,7 @@ export async function getPublicSyncHealth(
     const page = snapshotPagesById.get(pageId);
     const connection = connectionsById.get(pageId);
     const blocks = page ? Object.values(page.blocks).filter((block) => block.state !== "not_available") : [];
+    const allSupportedBlocksPaused = blocks.length > 0 && blocks.every((block) => block.state === "paused");
     const lightAge = ageMinutes(connection?.lastLightSyncAt ?? null, now);
     const followerAge = (page?.platform ?? connection?.platform) === "fansly"
       ? ageMinutes(connection?.lastFollowerSyncAt ?? null, now)
@@ -139,21 +140,23 @@ export async function getPublicSyncHealth(
     ).length;
     const issues: string[] = [];
 
-    if (!connection || connection.connectionStatus !== "active") {
-      issues.push(`connection:${connection?.connectionStatus ?? "missing"}`);
-    }
+    if (!allSupportedBlocksPaused) {
+      if (!connection || connection.connectionStatus !== "active") {
+        issues.push(`connection:${connection?.connectionStatus ?? "missing"}`);
+      }
 
-    if (lightAge === null) {
-      issues.push("light_sync_missing");
-    } else if (lightAge > thresholds.lightMaxAgeMinutes) {
-      issues.push("light_sync_stale");
-    }
+      if (lightAge === null) {
+        issues.push("light_sync_missing");
+      } else if (lightAge > thresholds.lightMaxAgeMinutes) {
+        issues.push("light_sync_stale");
+      }
 
-    if ((page?.platform ?? connection?.platform) === "fansly") {
-      if (followerAge === null) {
-        issues.push("follower_sync_missing");
-      } else if (followerAge > thresholds.followerMaxAgeMinutes) {
-        issues.push("follower_sync_stale");
+      if ((page?.platform ?? connection?.platform) === "fansly") {
+        if (followerAge === null) {
+          issues.push("follower_sync_missing");
+        } else if (followerAge > thresholds.followerMaxAgeMinutes) {
+          issues.push("follower_sync_stale");
+        }
       }
     }
 
