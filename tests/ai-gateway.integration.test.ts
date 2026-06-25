@@ -490,12 +490,87 @@ describe("ChatMuse AI gateway runtime gate", () => {
     }]);
   });
 
+  it("records streamed content without provider usage as failed instead of zero-cost completed", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        yield { type: "content_delta", text: "billable content" };
+        yield { type: "done", stopReason: "end_turn" };
+      },
+    };
+
+    const response = await streamGateway(gatewayBody());
+
+    expect(response.statusCode, response.body).toBe(200);
+    const frames = parseAiSseFrames(response.body);
+    expect(frames.map((frame) => frame.data.type)).toEqual([
+      "meta",
+      "content_delta",
+      "error",
+    ]);
+    expect(frames[2]?.data).toEqual({
+      type: "error",
+      code: "provider_usage_missing",
+      message: "AI gateway provider ended without usage metadata",
+      retryAfterMs: null,
+    });
+
+    const usageRows = await testDb!.pool.query<{
+      inputTokens: number;
+      outputTokens: number;
+      costMicroUsd: number;
+      gatewayOutcome: string | null;
+    }>(
+      `select input_tokens::int as "inputTokens",
+              output_tokens::int as "outputTokens",
+              cost_micro_usd::int as "costMicroUsd",
+              gateway_outcome as "gatewayOutcome"
+       from ai_usage_events`,
+    );
+    expect(usageRows.rows).toEqual([{
+      inputTokens: 0,
+      outputTokens: 0,
+      costMicroUsd: 0,
+      gatewayOutcome: "failed",
+    }]);
+  });
+
+  it("allows an empty stream without usage to complete as zero cost", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        yield { type: "done", stopReason: "end_turn" };
+      },
+    };
+
+    const response = await streamGateway(gatewayBody());
+
+    expect(response.statusCode, response.body).toBe(200);
+    const frames = parseAiSseFrames(response.body);
+    expect(frames.map((frame) => frame.data.type)).toEqual(["meta", "done"]);
+  });
+
   it("recovers stale gateway reservations before a new provider attempt", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
     appContext.aiGatewayProvider = {
       provider: "anthropic",
       async *stream() {
         yield { type: "content_delta", text: "ok" };
+        yield {
+          type: "usage",
+          providerResponseId: "msg_stale_recovery",
+          cacheHit: false,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 1,
+            cacheWriteTokens: 0,
+            cacheReadTokens: 0,
+            costMicroUsd: 33,
+            costApproximate: false,
+          },
+        };
         yield { type: "done", stopReason: "end_turn" };
       },
     };

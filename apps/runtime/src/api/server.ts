@@ -686,6 +686,8 @@ export async function buildApiServer(appContext: AppContext) {
     let terminalUsage: Parameters<typeof stream.recordTerminal>[0]["usage"] = null;
     let terminalProviderResponseId: string | null = null;
     let terminalCacheHit = false;
+    let streamedContent = false;
+    let terminalDoneFrame: Parameters<typeof serializeAiGatewaySseFrame>[0] | null = null;
     raw.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache, no-transform",
@@ -711,10 +713,29 @@ export async function buildApiServer(appContext: AppContext) {
           terminalUsage = frame.usage;
           terminalProviderResponseId = frame.providerResponseId;
           terminalCacheHit = frame.cacheHit;
+        } else if (frame.type === "content_delta" && frame.text.length > 0) {
+          streamedContent = true;
         } else if (frame.type === "error") {
           terminalOutcome = "failed";
+        } else if (frame.type === "done") {
+          terminalDoneFrame = frame;
+          continue;
         }
         writeFrame(frame);
+      }
+      if (terminalOutcome === "completed" && streamedContent && !terminalUsage) {
+        terminalOutcome = "failed";
+        request.log.warn({
+          requestId: stream.requestId,
+        }, "AI gateway provider stream ended without usage metadata");
+        writeFrame({
+          type: "error",
+          code: "provider_usage_missing",
+          message: "AI gateway provider ended without usage metadata",
+          retryAfterMs: null,
+        });
+      } else if (terminalDoneFrame) {
+        writeFrame(terminalDoneFrame);
       }
     } catch (error) {
       if (abort.signal.aborted) {
