@@ -45,6 +45,7 @@ let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let workerBoss: PgBoss | null = null;
+let releaseWorkerLock: (() => Promise<void>) | null = null;
 let baseUrl = "";
 let chatterKey = "";
 
@@ -253,10 +254,14 @@ beforeEach(async (context) => {
   workerBoss = new PgBoss({ connectionString: testDb.connectionString });
   await workerBoss.start();
   await ensureOfapiQueues(workerBoss);
-  await startOfapiEventWorker(appContext, workerBoss);
+  releaseWorkerLock = await startOfapiEventWorker(appContext, workerBoss);
 }, 60_000);
 
 afterEach(async () => {
+  if (releaseWorkerLock) {
+    await releaseWorkerLock();
+    releaseWorkerLock = null;
+  }
   if (workerBoss) {
     await workerBoss.stop();
     workerBoss = null;

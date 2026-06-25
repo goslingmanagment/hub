@@ -2056,8 +2056,7 @@ export const ofapiSpendProjectionEvents = pgTable(
     fanoutSeq: bigint("fanout_seq", { mode: "number" }),
     ofapiAccountId: text("ofapi_account_id").notNull(),
     pageId: bigint("page_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
-      .notNull(),
+      .references(() => pages.id, { onDelete: "set null" }),
     fanPlatformUserId: text("fan_platform_user_id"),
     transactionId: text("transaction_id"),
     messageId: text("message_id"),

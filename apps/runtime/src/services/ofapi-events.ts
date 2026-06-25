@@ -70,6 +70,8 @@ const DEFAULT_OFAPI_EVENT_RETENTION_DAYS = 7;
 // long enough that the normal receive-time enqueue always wins the race.
 const SWEEP_PENDING_GRACE_MS = 30_000;
 const SWEEP_BATCH_LIMIT = 200;
+const OFAPI_EVENT_WORKER_LOCK_NAMESPACE = 58211;
+const OFAPI_EVENT_WORKER_LOCK_KEY = 1;
 
 export interface OfapiEventProcessPayload {
   eventId: number;
@@ -380,68 +382,124 @@ function assertOfapiEventWorkerSingleton(app: Pick<AppContext, "config">) {
   }
 }
 
+export class OfapiEventWorkerLockError extends Error {
+  constructor() {
+    super("OFAPI event worker advisory lock is already held");
+    this.name = "OfapiEventWorkerLockError";
+  }
+}
+
+export async function acquireOfapiEventWorkerLock(app: Pick<AppContext, "pool" | "logger">) {
+  const client = await app.pool.connect();
+  let released = false;
+
+  try {
+    const result = await client.query<{ locked: boolean }>(
+      "select pg_try_advisory_lock($1, $2) as locked",
+      [OFAPI_EVENT_WORKER_LOCK_NAMESPACE, OFAPI_EVENT_WORKER_LOCK_KEY],
+    );
+    if (!result.rows[0]?.locked) {
+      throw new OfapiEventWorkerLockError();
+    }
+  } catch (error) {
+    client.release(error instanceof Error ? error : undefined);
+    throw error;
+  }
+
+  return async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    let releaseError: Error | undefined;
+    try {
+      const result = await client.query<{ unlocked: boolean }>(
+        "select pg_advisory_unlock($1, $2) as unlocked",
+        [OFAPI_EVENT_WORKER_LOCK_NAMESPACE, OFAPI_EVENT_WORKER_LOCK_KEY],
+      );
+      if (!result.rows[0]?.unlocked) {
+        throw new Error("OFAPI event worker advisory lock was not held by this session");
+      }
+    } catch (error) {
+      releaseError = error instanceof Error ? error : new Error(String(error));
+      app.logger.warn({ err: releaseError }, "Failed to release OFAPI event worker advisory lock");
+      throw releaseError;
+    } finally {
+      client.release(releaseError);
+    }
+  };
+}
+
 /** Registers the OFAPI event handlers; shared by the worker and integration tests. */
 export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBoss) {
   assertOfapiEventWorkerSingleton(app);
+  const releaseWorkerLock = await acquireOfapiEventWorkerLock(app);
 
-  await boss.work<OfapiEventProcessPayload>(
-    OFAPI_EVENT_PROCESS_QUEUE,
-    // One handler still settles rows sequentially, preserving the single-worker
-    // fanout-order invariant. Fetching a batch avoids pg-boss's idle poll delay between
-    // every event and keeps sustained webhook traffic from outrunning the worker.
-    { batchSize: OFAPI_EVENT_PROCESS_BATCH_SIZE },
-    async (jobs) => {
-      // pg-boss does not promise the returned batch array is journal-ordered.
-      // Restore receive order explicitly before assigning settle-order fanout_seq.
-      for (const job of sortOfapiEventJobs(jobs)) {
-        await processOfapiWebhookEvent(app, job.data.eventId);
+  try {
+    await boss.work<OfapiEventProcessPayload>(
+      OFAPI_EVENT_PROCESS_QUEUE,
+      // One handler still settles rows sequentially, preserving the single-worker
+      // fanout-order invariant. Fetching a batch avoids pg-boss's idle poll delay between
+      // every event and keeps sustained webhook traffic from outrunning the worker.
+      { batchSize: OFAPI_EVENT_PROCESS_BATCH_SIZE },
+      async (jobs) => {
+        // pg-boss does not promise the returned batch array is journal-ordered.
+        // Restore receive order explicitly before assigning settle-order fanout_seq.
+        for (const job of sortOfapiEventJobs(jobs)) {
+          await processOfapiWebhookEvent(app, job.data.eventId);
+        }
+      },
+    );
+
+    await boss.work(OFAPI_EVENT_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+      const requeued = await sweepPendingOfapiEvents(app, boss);
+      if (requeued > 0) {
+        app.logger.warn({ requeued }, "OFAPI event sweep re-enqueued pending webhook events");
       }
-    },
-  );
+      const projected = await sweepOfapiDmProjections(app);
+      if (projected > 0) {
+        app.logger.info({ projected }, "OFAPI DM projection sweep processed journal rows");
+      }
+      const archived = await sweepOfapiDmColdArchives(app);
+      if (archived > 0) {
+        app.logger.info({ archived }, "OFAPI DM cold archive sweep processed journal rows");
+      }
+      const subscriptionProjected = await sweepOfapiSubscriptionProjections(app);
+      if (subscriptionProjected > 0) {
+        app.logger.info(
+          { projected: subscriptionProjected },
+          "OFAPI subscription projection sweep processed journal rows",
+        );
+      }
+      const presenceProjected = await sweepOfapiPresenceProjections(app);
+      if (presenceProjected > 0) {
+        app.logger.info(
+          { projected: presenceProjected },
+          "OFAPI presence projection sweep processed journal rows",
+        );
+      }
+      const spendProjected = await sweepOfapiSpendProjections(app);
+      if (spendProjected > 0) {
+        app.logger.info(
+          { projected: spendProjected },
+          "OFAPI spend shadow projection sweep processed journal rows",
+        );
+      }
+      await runOfapiAccountHealthMonitor(app);
+      await runOfapiCreditBurnMonitor(app);
+    });
 
-  await boss.work(OFAPI_EVENT_SWEEP_QUEUE, { batchSize: 1 }, async () => {
-    const requeued = await sweepPendingOfapiEvents(app, boss);
-    if (requeued > 0) {
-      app.logger.warn({ requeued }, "OFAPI event sweep re-enqueued pending webhook events");
-    }
-    const projected = await sweepOfapiDmProjections(app);
-    if (projected > 0) {
-      app.logger.info({ projected }, "OFAPI DM projection sweep processed journal rows");
-    }
-    const archived = await sweepOfapiDmColdArchives(app);
-    if (archived > 0) {
-      app.logger.info({ archived }, "OFAPI DM cold archive sweep processed journal rows");
-    }
-    const subscriptionProjected = await sweepOfapiSubscriptionProjections(app);
-    if (subscriptionProjected > 0) {
-      app.logger.info(
-        { projected: subscriptionProjected },
-        "OFAPI subscription projection sweep processed journal rows",
-      );
-    }
-    const presenceProjected = await sweepOfapiPresenceProjections(app);
-    if (presenceProjected > 0) {
-      app.logger.info(
-        { projected: presenceProjected },
-        "OFAPI presence projection sweep processed journal rows",
-      );
-    }
-    const spendProjected = await sweepOfapiSpendProjections(app);
-    if (spendProjected > 0) {
-      app.logger.info(
-        { projected: spendProjected },
-        "OFAPI spend shadow projection sweep processed journal rows",
-      );
-    }
-    await runOfapiAccountHealthMonitor(app);
-    await runOfapiCreditBurnMonitor(app);
-  });
+    await boss.work(OFAPI_EVENT_CLEANUP_QUEUE, { batchSize: 1 }, async () => {
+      await cleanupExpiredOfapiEvents(app);
+      const purged = await cleanupExpiredDmMessageArchive(app);
+      if (purged > 0) {
+        app.logger.info({ purged }, "OFAPI DM cold archive retention purge complete");
+      }
+    });
+  } catch (error) {
+    await releaseWorkerLock().catch(() => undefined);
+    throw error;
+  }
 
-  await boss.work(OFAPI_EVENT_CLEANUP_QUEUE, { batchSize: 1 }, async () => {
-    await cleanupExpiredOfapiEvents(app);
-    const purged = await cleanupExpiredDmMessageArchive(app);
-    if (purged > 0) {
-      app.logger.info({ purged }, "OFAPI DM cold archive retention purge complete");
-    }
-  });
+  return releaseWorkerLock;
 }

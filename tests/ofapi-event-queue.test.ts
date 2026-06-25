@@ -22,10 +22,18 @@ describe("OFAPI event process queue", () => {
     );
 
     const work = vi.fn(async () => "worker-id");
-    await startOfapiEventWorker(
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ locked: true }] })
+      .mockResolvedValueOnce({ rows: [{ unlocked: true }] });
+    const release = vi.fn();
+    const releaseWorker = await startOfapiEventWorker(
       {
         config: {},
         logger: { info: vi.fn(), warn: vi.fn() },
+        pool: {
+          connect: vi.fn(async () => ({ query, release })),
+        },
       } as never,
       { work, send: vi.fn(async () => null) },
     );
@@ -41,6 +49,19 @@ describe("OFAPI event process queue", () => {
       { data: { eventId: 2 } },
       { data: { eventId: 5 } },
     ]).map((job) => job.data.eventId)).toEqual([2, 5, 9]);
+
+    await releaseWorker();
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      "select pg_try_advisory_lock($1, $2) as locked",
+      expect.any(Array),
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      "select pg_advisory_unlock($1, $2) as unlocked",
+      expect.any(Array),
+    );
+    expect(release).toHaveBeenCalledWith(undefined);
   });
 
   it("refuses multi-replica OFAPI event worker startup", async () => {
@@ -50,10 +71,35 @@ describe("OFAPI event process queue", () => {
       {
         config: { ofapiEventWorkerReplicas: 2 },
         logger: { info: vi.fn(), warn: vi.fn() },
+        pool: {
+          connect: vi.fn(),
+        },
       } as never,
       { work, send: vi.fn(async () => null) },
     )).rejects.toThrow("OFAPI event worker requires exactly one replica");
 
     expect(work).not.toHaveBeenCalled();
+  });
+
+  it("refuses a second distributed OFAPI event worker", async () => {
+    const work = vi.fn(async () => "worker-id");
+    const release = vi.fn();
+
+    await expect(startOfapiEventWorker(
+      {
+        config: {},
+        logger: { info: vi.fn(), warn: vi.fn() },
+        pool: {
+          connect: vi.fn(async () => ({
+            query: vi.fn(async () => ({ rows: [{ locked: false }] })),
+            release,
+          })),
+        },
+      } as never,
+      { work, send: vi.fn(async () => null) },
+    )).rejects.toThrow("OFAPI event worker advisory lock is already held");
+
+    expect(work).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledWith(expect.any(Error));
   });
 });

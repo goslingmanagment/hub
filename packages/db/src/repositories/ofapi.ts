@@ -177,7 +177,7 @@ export async function markOfapiWebhookEventArchivePending(
     })
     .where(and(
       eq(ofapiWebhookEvents.id, input.id),
-      inArray(ofapiWebhookEvents.archiveStatus, ["none", "pending", "failed"]),
+      inArray(ofapiWebhookEvents.archiveStatus, ["none", "failed"]),
     ))
     .returning({ id: ofapiWebhookEvents.id });
 
@@ -423,6 +423,7 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
     .where(and(
       eq(ofapiSpendProjectionEvents.sourceEventType, "transactions.new"),
       eq(ofapiSpendProjectionEvents.projectionStatus, "projected"),
+      isNotNull(ofapiSpendProjectionEvents.pageId),
       isNotNull(ofapiSpendProjectionEvents.fanPlatformUserId),
       isNotNull(ofapiSpendProjectionEvents.transactionId),
       isNotNull(ofapiSpendProjectionEvents.grossAmountMills),
@@ -489,19 +490,21 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
     .orderBy(asc(ofapiSpendProjectionEvents.occurredAt), asc(ofapiSpendProjectionEvents.id))
     .limit(input.limit);
 
-  return rows.map((row) => ({
-    id: row.id,
-    pageId: row.pageId,
-    ofapiAccountId: row.ofapiAccountId,
-    fanPlatformUserId: row.fanPlatformUserId!,
-    transactionId: row.transactionId!,
-    occurredAt: row.occurredAt,
-    category: row.category as OfapiSpendProjectionTransactionIngestRow["category"],
-    grossAmountMills: row.grossAmountMills!,
-    creatorNetAmountMills: row.creatorNetAmountMills!,
-    eventStatus: row.eventStatus as OfapiSpendProjectionTransactionIngestRow["eventStatus"],
-    journalId: row.journalId,
-  }));
+  return rows
+    .filter((row): row is typeof row & { pageId: number } => row.pageId !== null)
+    .map((row) => ({
+      id: row.id,
+      pageId: row.pageId,
+      ofapiAccountId: row.ofapiAccountId,
+      fanPlatformUserId: row.fanPlatformUserId!,
+      transactionId: row.transactionId!,
+      occurredAt: row.occurredAt,
+      category: row.category as OfapiSpendProjectionTransactionIngestRow["category"],
+      grossAmountMills: row.grossAmountMills!,
+      creatorNetAmountMills: row.creatorNetAmountMills!,
+      eventStatus: row.eventStatus as OfapiSpendProjectionTransactionIngestRow["eventStatus"],
+      journalId: row.journalId,
+    }));
 }
 
 export type OfapiSpendProjectionComparisonStatus =

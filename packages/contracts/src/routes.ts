@@ -3705,6 +3705,7 @@ export const routeSchemas = {
       200: ofapiWebhookAckResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
+      429: errorResponseSchema,
       503: errorResponseSchema,
     },
   },

@@ -1264,6 +1264,17 @@ export async function buildApiServer(appContext: AppContext) {
 
     instance.post("/api/v1/ofapi/webhook", {
       schema: routeSchemas.ofapiWebhookReceive,
+      config: {
+        rateLimit: {
+          max: appContext.config.ofapiWebhookRateLimitMax ?? 1000,
+          timeWindow: (appContext.config.ofapiWebhookRateLimitWindowSeconds ?? 60) * 1000,
+          errorResponseBuilder: () => ({
+            error: "rate_limit_exceeded",
+            message: "Too many OFAPI webhook deliveries",
+            statusCode: 429,
+          }),
+        },
+      },
     }, async (request) => {
       return receiveOfapiWebhook(appContext, boss, {
         rawBody: Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0),
@@ -1286,6 +1297,7 @@ export async function buildApiServer(appContext: AppContext) {
 
   const SSE_REPLAY_BATCH_SIZE = 500;
   const SSE_HEARTBEAT_INTERVAL_MS = 25_000;
+  const SSE_AUTH_REVALIDATE_INTERVAL_MS = 60_000;
   // Streams are bounded so revoked keys / changed page assignments take effect:
   // clients transparently reconnect (retry: 3000) and re-authenticate, resuming
   // via Last-Event-ID.
@@ -1293,12 +1305,29 @@ export async function buildApiServer(appContext: AppContext) {
   // A client this far behind is not consuming; drop it and let replay catch it up.
   const SSE_MAX_BUFFERED_BYTES = 1_000_000;
 
+  function sameNumberSet(left: ReadonlySet<number>, right: ReadonlySet<number>) {
+    if (left.size !== right.size) {
+      return false;
+    }
+    for (const value of left) {
+      if (!right.has(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   server.get("/api/v1/events/stream", {
     schema: routeSchemas.eventsStream,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
     const pageIds: ReadonlySet<number> = new Set(principal.assignedPageIds);
+    const authorization = request.headers.authorization;
+    const bearerMatch = typeof authorization === "string"
+      ? /^bearer\s+(.+)$/i.exec(authorization)
+      : null;
+    const apiKeyToken = bearerMatch?.[1]?.trim() ?? null;
 
     const lastEventIdHeader = request.headers["last-event-id"];
     const headerLastEventId = typeof lastEventIdHeader === "string"
@@ -1311,9 +1340,16 @@ export async function buildApiServer(appContext: AppContext) {
     if (lastEventId !== null) {
       const replayWindow = await getOfapiFanoutReplayWindow(appContext.db);
       if (lastEventId > replayWindow.latestSeq) {
-        throw new BadRequestError(
-          `Last-Event-ID ${lastEventId} is ahead of current fanout sequence ${replayWindow.latestSeq}`,
-        );
+        return reply.code(409).send({
+          error: "sync_snapshot_required",
+          message: "Requested event cursor is ahead of the current replay sequence",
+          statusCode: 409,
+          version: 1,
+          requestedSeq: lastEventId,
+          oldestAvailableSeq: replayWindow.oldestRetainedSeq,
+          currentSeq: replayWindow.latestSeq,
+          snapshotPath: "/api/v1/events/snapshot",
+        });
       }
       const replayGap = replayWindow.latestSeq > lastEventId
         && (
@@ -1395,6 +1431,30 @@ export async function buildApiServer(appContext: AppContext) {
       }
     }, SSE_HEARTBEAT_INTERVAL_MS);
     heartbeat.unref?.();
+    const authRevalidate = setInterval(() => {
+      void (async () => {
+        if (raw.writableEnded || raw.destroyed) {
+          return;
+        }
+        const refreshed = apiKeyToken
+          ? await authenticateApiKeyToken(appContext, apiKeyToken)
+          : null;
+        if (!refreshed) {
+          request.log.warn("SSE API key no longer authenticates; closing stream");
+          raw.end();
+          return;
+        }
+        const refreshedPageIds = new Set(refreshed.assignedPageIds);
+        if (!sameNumberSet(pageIds, refreshedPageIds)) {
+          request.log.warn("SSE page assignment changed; closing stream for re-auth");
+          raw.end();
+        }
+      })().catch((error) => {
+        request.log.warn({ err: error }, "SSE auth revalidation failed; closing stream");
+        raw.end();
+      });
+    }, SSE_AUTH_REVALIDATE_INTERVAL_MS);
+    authRevalidate.unref?.();
     const lifetimeTimer = setTimeout(() => {
       if (!raw.writableEnded && !raw.destroyed) {
         raw.end();
@@ -1404,6 +1464,7 @@ export async function buildApiServer(appContext: AppContext) {
 
     function cleanup() {
       clearInterval(heartbeat);
+      clearInterval(authRevalidate);
       clearTimeout(lifetimeTimer);
       unsubscribe();
       activeSseStreams.delete(raw);

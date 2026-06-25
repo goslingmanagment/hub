@@ -177,7 +177,7 @@ export async function startWorkerServices(
     app.logger.info(result, "Workboard v2 closing classification complete");
   });
 
-  await startOfapiEventWorker(app, boss);
+  const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);
   await startOfapiCreditWorker(app, boss);
   await startOfapiCommandWorker(app, boss);
   await startOfapiDmAnalyticsWorker(app, boss);
@@ -240,6 +240,11 @@ export async function startWorkerServices(
       await executorPromise.catch((error) => {
         app.logger.error({ err: error }, "Sync page executor failed during shutdown");
       });
+      if (releaseOfapiEventWorkerLock) {
+        await releaseOfapiEventWorkerLock().catch((error) => {
+          app.logger.error({ err: error }, "Failed to release OFAPI event worker lock");
+        });
+      }
       await boss.stop();
       await app.close();
     },

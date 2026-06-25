@@ -62,4 +62,15 @@ describe("database migration invariants", () => {
     expect(migration).toContain('"incident_key" text PRIMARY KEY');
     expect(migration).toContain('"recovered_at" timestamptz NOT NULL');
   });
+
+  it("keeps OFAPI spend projection history when a page is deleted", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0049_audit_final_l17_operational_edges.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain('ALTER COLUMN "page_id" DROP NOT NULL');
+    expect(migration).toContain("ON DELETE SET NULL");
+    expect(migration).not.toContain("ON DELETE CASCADE");
+  });
 });

@@ -114,6 +114,8 @@ const envSchema = z.object({
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
   OFAPI_BASE_URL: z.string().url().default("https://app.onlyfansapi.com/api"),
   OFAPI_API_KEY: optionalTrimmedStringSchema,
+  OFAPI_WEBHOOK_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(1000),
+  OFAPI_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
   OFAPI_EVENT_WORKER_REPLICAS: z.coerce.number().int().positive().default(1),
   OFAPI_DM_PROJECTION_ENABLED: booleanSchema.default(false),
@@ -206,6 +208,8 @@ export interface AppConfig {
   // loadConfig always populates them, so production behavior is exact.
   ofapiBaseUrl?: string;
   ofapiApiKey?: string | null;
+  ofapiWebhookRateLimitMax?: number;
+  ofapiWebhookRateLimitWindowSeconds?: number;
   ofapiEventRetentionDays?: number;
   ofapiEventWorkerReplicas?: number;
   ofapiDmProjectionEnabled?: boolean;
@@ -385,6 +389,8 @@ export function loadConfig(
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
     ofapiBaseUrl: parsed.OFAPI_BASE_URL,
     ofapiApiKey: parsed.OFAPI_API_KEY ?? null,
+    ofapiWebhookRateLimitMax: parsed.OFAPI_WEBHOOK_RATE_LIMIT_MAX,
+    ofapiWebhookRateLimitWindowSeconds: parsed.OFAPI_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
     ofapiEventRetentionDays: parsed.OFAPI_EVENT_RETENTION_DAYS,
     ofapiEventWorkerReplicas: parsed.OFAPI_EVENT_WORKER_REPLICAS,
     ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,
