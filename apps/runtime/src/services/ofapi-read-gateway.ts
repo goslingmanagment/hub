@@ -258,6 +258,12 @@ export function resolveOfapiReadGatewayRequest(
       limit: integerRule(1, 20),
       offset: OFFSET,
       query: textRule(200),
+      // Online surface (desktop variant C): filter[online]=1 + a >= dollar
+      // threshold filter[total_spent] for the «Только спендеры» snapshot.
+      // Fastify's default qs parser keeps these as flat bracket keys; proxyRead
+      // re-serializes them verbatim (filter%5Bonline%5D=1) to OFAPI.
+      "filter[online]": enumRule(["1"]),
+      "filter[total_spent]": integerRule(0, 1_000_000),
     }), `ofapi_gateway_fans_${segments[2]}`);
   }
 
