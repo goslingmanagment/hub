@@ -214,14 +214,29 @@ export function formatUsdCompact(mills: bigint): string {
 // contains one of these tokens, in THIS order; then everything else alphabetically.
 // Edit this list to change the order — e.g. put "free" before "vip" to flip them.
 export const REPORT_PAGE_TIER_ORDER = ["vip", "free", "main"] as const;
+const REPORT_PAGE_FREE_SUFFIX = "of";
+
+function labelTokens(label: string): string[] {
+  return label
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
 
 function pageOrderKey(label: string): { group: number; rank: number } {
-  const lower = label.toLowerCase();
-  const trailingNumber = lower.match(/(\d+)\s*$/);
+  const tokens = labelTokens(label);
+  const trailingNumber = tokens.at(-1)?.match(/^\d+$/);
   if (trailingNumber) {
-    return { group: 0, rank: Number(trailingNumber[1]) };
+    return { group: 0, rank: Number(trailingNumber[0]) };
   }
-  const tier = REPORT_PAGE_TIER_ORDER.findIndex((token) => lower.includes(token));
+  const explicitTier = REPORT_PAGE_TIER_ORDER.findIndex((tierName) => tokens.includes(tierName));
+  if (explicitTier >= 0) {
+    return { group: 1, rank: explicitTier };
+  }
+  // Bare "...-of" labels are the default/free OnlyFans page in the current catalog.
+  const tier = tokens.at(-1) === REPORT_PAGE_FREE_SUFFIX
+    ? REPORT_PAGE_TIER_ORDER.indexOf("free")
+    : -1;
   return tier >= 0 ? { group: 1, rank: tier } : { group: 2, rank: 0 };
 }
 

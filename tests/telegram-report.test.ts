@@ -5,6 +5,7 @@ import {
   formatDeltaCompact,
   formatReportDate,
   renderDailyRevenueTelegramReport,
+  groupPagesByModel,
 } from "../apps/runtime/src/services/telegram-report.ts";
 import {
   buildDailyRevenueReportHtml,
@@ -119,6 +120,24 @@ describe("renderDailyRevenueTelegramReport", () => {
     expect(text.indexOf("lora-3 ")).toBeLessThan(text.indexOf("lora-vip-of"));
     // vip tier ranks before a non-tier page.
     expect(text.indexOf("lora-vip-of")).toBeLessThan(text.indexOf("lora-of "));
+  });
+
+  it("treats a bare OnlyFans page suffix as the free tier before main", () => {
+    const pages = groupPagesByModel([
+      { modelLabel: "Lora Vie", label: "lora-main-of" },
+      { modelLabel: "Lora Vie", label: "lora-of" },
+      { modelLabel: "Lora Vie", label: "lora-vip-of" },
+      { modelLabel: "Lora Vie", label: "lora-2" },
+      { modelLabel: "Lora Vie", label: "lora-1" },
+    ]);
+
+    expect(pages.get("Lora Vie")?.map((page) => page.label)).toEqual([
+      "lora-1",
+      "lora-2",
+      "lora-vip-of",
+      "lora-of",
+      "lora-main-of",
+    ]);
   });
 });
 
