@@ -418,13 +418,22 @@ describe("telegram revenue report integration", () => {
     const attempts = await listDeliveryAttempts(testDb.db, {
       kind: ["daily_report_scheduled", "daily_report_manual"],
     });
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0]).toEqual(expect.objectContaining({
-      kind: "daily_report_manual",
-      status: "sent",
-      reportDate: "2026-03-19",
-      messageId: 88,
-      error: null,
-    }));
+    expect(attempts).toHaveLength(2);
+    expect(attempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "daily_report_scheduled",
+        status: "skipped",
+        reportDate: null,
+        messageId: null,
+        error: "disabled",
+      }),
+      expect.objectContaining({
+        kind: "daily_report_manual",
+        status: "sent",
+        reportDate: "2026-03-19",
+        messageId: 88,
+        error: null,
+      }),
+    ]));
   });
 });
