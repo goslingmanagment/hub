@@ -194,12 +194,18 @@ function createReportRow(
   };
 }
 
-function directionEmoji(deltaPct: number | null): string {
+function modelDot(deltaPct: number | null): string {
   if (deltaPct === null || Math.abs(deltaPct) < 0.05) {
-    return "";
+    return "⚪";
   }
+  return deltaPct > 0 ? "🟢" : "🔴";
+}
 
-  return deltaPct > 0 ? "🟢 " : "🔴 ";
+/** Whole-dollar amount (no cents) for the large trailing-window figures. */
+function formatUsdCompact(mills: bigint): string {
+  const dollars = Math.round(Number(mills) / 1000);
+  const sign = dollars < 0 ? "-" : "";
+  return `${sign}$${Math.abs(dollars).toLocaleString("en-US")}`;
 }
 
 const IDLE_NOTE_NAME_LIMIT = 4;
@@ -213,66 +219,23 @@ function formatIdleNote(labels: string[]): string {
   return `+${labels.length} idle: ${shown}${overflow}`;
 }
 
-interface ReportTableRow {
-  indent: number;
-  label: string;
-  amount: string;
-  delta: string;
-  trailing?: string;
-}
-
-type ReportTableElement =
-  | { kind: "row"; row: ReportTableRow }
-  | { kind: "note"; text: string }
-  | { kind: "blank" };
-
 /**
- * Renders rows into a fixed-column monospace table (for a Telegram <pre> block):
- * the amount and delta columns share one width across the whole report, so every
- * dollar figure lines up in a single vertical rule. Widths are computed on the
- * raw (pre-escape) label length so HTML-escaping never shifts the columns.
+ * Proportional (non-monospace) layout. Telegram renders <pre> as a "code block"
+ * with copy-button chrome, which reads as a pasted snippet rather than a report,
+ * so the body is plain text with bold names + colour dots instead of an aligned
+ * table. Without a monospace block, columns can't be aligned, so each entity is
+ * one self-contained line.
  */
-function renderReportTable(elements: ReportTableElement[]): string {
-  const labelCells = new Map<ReportTableRow, string>();
-  let labelWidth = 0;
-  let amountWidth = 0;
-  let deltaWidth = 0;
-  for (const element of elements) {
-    if (element.kind !== "row") continue;
-    const labelCell = " ".repeat(element.row.indent) + element.row.label;
-    labelCells.set(element.row, labelCell);
-    labelWidth = Math.max(labelWidth, labelCell.length);
-    amountWidth = Math.max(amountWidth, element.row.amount.length);
-    deltaWidth = Math.max(deltaWidth, element.row.delta.length);
-  }
-
-  return elements
-    .map((element) => {
-      if (element.kind === "blank") return "";
-      if (element.kind === "note") return element.text;
-      const row = element.row;
-      const labelCell = escapeHtml((labelCells.get(row) ?? "").padEnd(labelWidth));
-      const amountCell = row.amount.padStart(amountWidth);
-      const deltaCell = row.delta.padStart(deltaWidth);
-      const trailing = row.trailing ? `  ${row.trailing}` : "";
-      return `${labelCell}  ${amountCell}  ${deltaCell}${trailing}`;
-    })
-    .join("\n");
-}
-
 export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramReport, "text" | "parseMode">) {
-  const agencyYesterday = report.agency.metrics.yesterday;
+  const y = report.agency.metrics.yesterday;
+  const lines: string[] = [];
 
-  // Headline (outside the <pre> so it can be bold + carry a colour indicator).
-  const head = [
-    `📊 <b>Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</b>`,
-    `${directionEmoji(agencyYesterday.deltaPct)}<b>${formatUsdFromMills(agencyYesterday.currentMills)}</b> ${formatDeltaCompact(agencyYesterday)}`,
-  ];
-
-  const elements: ReportTableElement[] = [
-    { kind: "row", row: { indent: 0, label: "7-day", amount: formatUsdFromMills(report.agency.metrics.days7.currentMills), delta: formatDeltaCompact(report.agency.metrics.days7) } },
-    { kind: "row", row: { indent: 0, label: "30-day", amount: formatUsdFromMills(report.agency.metrics.days30.currentMills), delta: formatDeltaCompact(report.agency.metrics.days30) } },
-  ];
+  lines.push(`📊 <b>Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</b>`);
+  lines.push(`${modelDot(y.deltaPct)} <b>${formatUsdFromMills(y.currentMills)}</b> ${formatDeltaCompact(y)}`);
+  lines.push(
+    `<i>7d</i> ${formatUsdCompact(report.agency.metrics.days7.currentMills)} ${formatDeltaCompact(report.agency.metrics.days7)}`
+      + `  ·  <i>30d</i> ${formatUsdCompact(report.agency.metrics.days30.currentMills)} ${formatDeltaCompact(report.agency.metrics.days30)}`,
+  );
 
   const pagesByModel = new Map<string, typeof report.pages>();
   for (const page of report.pages) {
@@ -282,48 +245,55 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
   }
 
   if (report.models.length === 0) {
-    elements.push({ kind: "blank" }, { kind: "note", text: "No data" });
+    lines.push("");
+    lines.push("<i>No data</i>");
   } else {
     for (const model of report.models) {
-      const share = formatShare(model.metrics.yesterday.currentMills, agencyYesterday.currentMills);
-      elements.push({ kind: "blank" });
-      elements.push({ kind: "row", row: { indent: 0, label: model.label, amount: formatUsdFromMills(model.metrics.yesterday.currentMills), delta: formatDeltaCompact(model.metrics.yesterday), trailing: share } });
+      const share = formatShare(model.metrics.yesterday.currentMills, y.currentMills);
+      lines.push("");
+      lines.push(
+        `${modelDot(model.metrics.yesterday.deltaPct)} <b>${escapeHtml(model.label)}</b> `
+          + `${formatUsdFromMills(model.metrics.yesterday.currentMills)} ${formatDeltaCompact(model.metrics.yesterday)} · ${share}`,
+      );
 
-      const modelPages = pagesByModel.get(model.label) ?? [];
       const idle: string[] = [];
-      for (const page of modelPages) {
-        // Collapse pages with no revenue yesterday into a single "idle" line
-        // instead of a $0.00 row per dead page.
+      for (const page of pagesByModel.get(model.label) ?? []) {
+        // Collapse pages with no revenue yesterday into a single "idle" line.
         if (page.metrics.yesterday.currentMills === 0n) {
           idle.push(page.label);
           continue;
         }
-        elements.push({ kind: "row", row: { indent: 2, label: page.label, amount: formatUsdFromMills(page.metrics.yesterday.currentMills), delta: formatDeltaCompact(page.metrics.yesterday) } });
+        lines.push(
+          `   ${escapeHtml(page.label)} ${formatUsdFromMills(page.metrics.yesterday.currentMills)} ${formatDeltaCompact(page.metrics.yesterday)}`,
+        );
       }
       if (idle.length > 0) {
-        elements.push({ kind: "note", text: `  ${escapeHtml(formatIdleNote(idle))}` });
+        lines.push(`   💤 ${escapeHtml(formatIdleNote(idle))}`);
       }
     }
 
     if (report.modelOverflow) {
-      elements.push({ kind: "blank" });
-      elements.push({ kind: "row", row: { indent: 0, label: `+${report.modelOverflow.modelCount} more models`, amount: formatUsdFromMills(report.modelOverflow.metrics.yesterday.currentMills), delta: formatDeltaCompact(report.modelOverflow.metrics.yesterday) } });
+      lines.push("");
+      lines.push(
+        `<i>+${report.modelOverflow.modelCount} more models</i> ${formatUsdFromMills(report.modelOverflow.metrics.yesterday.currentMills)}`,
+      );
     }
   }
 
   if (report.overflow) {
-    elements.push({ kind: "row", row: { indent: 0, label: `+${report.overflow.pageCount} more`, amount: formatUsdFromMills(report.overflow.metrics.yesterday.currentMills), delta: formatDeltaCompact(report.overflow.metrics.yesterday) } });
+    lines.push(
+      `<i>+${report.overflow.pageCount} more pages</i> ${formatUsdFromMills(report.overflow.metrics.yesterday.currentMills)}`,
+    );
   }
 
-  // Windows are UTC calendar windows that exclude today — they intentionally
-  // differ from the dashboard's OnlyFans-specific windows (see the NOTE in
+  // Windows are UTC calendar windows that exclude today — intentionally
+  // different from the dashboard's OnlyFans-specific windows (see the NOTE in
   // buildDailyRevenueTelegramReport). Labeling avoids misreading without
   // changing the math.
-  return [
-    head.join("\n"),
-    `<pre>${renderReportTable(elements)}</pre>`,
-    "<i>Windows: UTC · excl. today</i>",
-  ].join("\n");
+  lines.push("");
+  lines.push("<i>Windows: UTC · excl. today</i>");
+
+  return lines.join("\n");
 }
 
 function sortByYesterday(left: ReportRow, right: ReportRow) {

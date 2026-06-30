@@ -252,10 +252,10 @@ describe("telegram revenue report integration", () => {
     expect(report.text).toContain("Revenue ·");
     // Date rendered with weekday, e.g. "… 19 Mar" (weekday-independent substring).
     expect(report.text).toContain("19 Mar");
-    // Aligned monospace table block.
-    expect(report.text).toContain("<pre>");
-    // Model + page rows live inside the table (plain text, space-aligned).
-    expect(report.text).toContain("Alpha Model");
+    // Proportional layout — never a <pre> code block (renders with copy chrome).
+    expect(report.text).not.toContain("<pre>");
+    // Model is a bold line; pages follow as plain indented lines.
+    expect(report.text).toContain("<b>Alpha Model</b>");
     expect(report.text).toContain("$200.00");
     expect(report.text).toContain("alpha-fansly");
     expect(report.text).toContain("$120.00");

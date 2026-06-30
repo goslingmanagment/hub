@@ -81,12 +81,17 @@ describe("renderDailyRevenueTelegramReport", () => {
 
   const text = renderDailyRevenueTelegramReport(report);
 
-  it("renders a bold headline, a monospace table, and the windows footer", () => {
+  it("renders a bold headline and the windows footer without a code block", () => {
     expect(text).toContain("📊 <b>Revenue · Mon 29 Jun</b>");
     expect(text).toContain("<b>$425.55</b> +44%");
-    expect(text).toContain("<pre>");
-    expect(text).toContain("</pre>");
     expect(text).toContain("<i>Windows: UTC · excl. today</i>");
+    // <pre> renders as a copy-able code block in Telegram — never use it here.
+    expect(text).not.toContain("<pre>");
+  });
+
+  it("marks each model with a bold name and a colour dot", () => {
+    expect(text).toContain("🟢 <b>Lora Vie</b>");
+    expect(text).toContain("🔴 <b>Lilly</b>");
   });
 
   it("tames an explosive delta into a multiplier", () => {
@@ -96,22 +101,8 @@ describe("renderDailyRevenueTelegramReport", () => {
   });
 
   it("collapses zero-yesterday pages into a single idle line", () => {
-    expect(text).toContain("+2 idle: lora-2, lora-of");
-    expect(text).toContain("+1 idle: lilly-2");
+    expect(text).toContain("💤 +2 idle: lora-2, lora-of");
+    expect(text).toContain("💤 +1 idle: lilly-2");
     expect(text).not.toContain("$0.00");
-  });
-
-  it("right-aligns every dollar amount to the same column", () => {
-    const pre = text.match(/<pre>([\s\S]*)<\/pre>/)?.[1] ?? "";
-    const amountEnds = pre
-      .split("\n")
-      .map((line) => {
-        const match = line.match(/\$[\d,]+\.\d{2}/);
-        return match ? match.index! + match[0].length : null;
-      })
-      .filter((end): end is number => end !== null);
-
-    expect(amountEnds.length).toBeGreaterThan(3);
-    expect(new Set(amountEnds).size).toBe(1);
   });
 });
