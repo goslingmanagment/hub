@@ -276,6 +276,9 @@ export const telegramSettings = pgTable("telegram_settings", {
   encryptedBotToken: text("encrypted_bot_token"),
   chatId: text("chat_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  // Bumped only when the bot token / chat id change (not on flag edits), so the
+  // connection status can ignore deliveries made with superseded credentials.
+  credentialsUpdatedAt: timestamp("credentials_updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const telegramDeliveryAttempts = pgTable(

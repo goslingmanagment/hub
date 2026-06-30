@@ -162,22 +162,41 @@ export async function discoverTelegramChats(botToken: string): Promise<TelegramD
 
 export type TelegramCredentialSource = "db" | "env" | "none";
 
-export function resolveTelegramBotToken(
+export type TelegramConnectionStatus =
+  | "not_configured"
+  | "untested"
+  | "connected"
+  | "last_message_failed";
+
+function resolveBotTokenWithSource(
   app: Pick<AppContext, "config">,
   settings: TelegramSettingsRow,
-): string | null {
+): { token: string | null; source: TelegramCredentialSource } {
   // Stored (DB) token wins over env, but only if it actually decrypts.
   if (settings.encryptedBotToken) {
     try {
-      return decryptJsonWithKeyVersion<string>(
-        settings.encryptedBotToken,
-        app.config.encryptionKeysByVersion,
-      );
+      return {
+        token: decryptJsonWithKeyVersion<string>(
+          settings.encryptedBotToken,
+          app.config.encryptionKeysByVersion,
+        ),
+        source: "db",
+      };
     } catch {
       // decryption failed — fall back to env for this field
     }
   }
-  return app.config.telegramBotToken ?? null;
+  if (app.config.telegramBotToken) {
+    return { token: app.config.telegramBotToken, source: "env" };
+  }
+  return { token: null, source: "none" };
+}
+
+export function resolveTelegramBotToken(
+  app: Pick<AppContext, "config">,
+  settings: TelegramSettingsRow,
+): string | null {
+  return resolveBotTokenWithSource(app, settings).token;
 }
 
 /**
@@ -211,9 +230,36 @@ export function resolveTelegramCredentialSources(
   settings: TelegramSettingsRow,
 ): { botTokenSource: TelegramCredentialSource; chatIdSource: TelegramCredentialSource } {
   return {
-    botTokenSource: settings.encryptedBotToken ? "db" : app.config.telegramBotToken ? "env" : "none",
+    // Derive the token source from the same resolver that actually picks the
+    // value, so a DB token that fails to decrypt is reported as "env" (the value
+    // really in use), not a misleading "db".
+    botTokenSource: resolveBotTokenWithSource(app, settings).source,
     chatIdSource: settings.chatId ? "db" : app.config.telegramChatId ? "env" : "none",
   };
+}
+
+/**
+ * The connection status only trusts a *real* delivery (sent/failed) made after
+ * the current credentials were saved. A stale success from a previous bot/chat,
+ * or a `skipped` attempt (nothing was actually sent), never reads as "connected".
+ */
+export function deriveTelegramConnectionState<T extends { status: string; createdAt: Date }>(
+  configured: boolean,
+  credentialsUpdatedAt: Date,
+  lastRealAttempt: T | null,
+): { status: TelegramConnectionStatus; recentAttempt: T | null } {
+  if (!configured) {
+    return { status: "not_configured", recentAttempt: null };
+  }
+  const recentAttempt = lastRealAttempt && lastRealAttempt.createdAt >= credentialsUpdatedAt
+    ? lastRealAttempt
+    : null;
+  const status: TelegramConnectionStatus = recentAttempt?.status === "sent"
+    ? "connected"
+    : recentAttempt?.status === "failed"
+      ? "last_message_failed"
+      : "untested";
+  return { status, recentAttempt };
 }
 
 export async function sendTelegramMessage(

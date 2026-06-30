@@ -126,7 +126,7 @@ import {
 } from "../services/errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "../services/notification-incidents.ts";
 import {
-  getLatestDeliveryAttempt,
+  getLatestRealDeliveryAttempt,
   getNotificationIncidentByKey,
   getTelegramSettings,
   insertDeliveryAttempt,
@@ -137,6 +137,7 @@ import {
   updateTelegramSettings,
 } from "@agency_hub_core/db";
 import {
+  deriveTelegramConnectionState,
   discoverTelegramChats,
   resolveTelegramBotToken,
   resolveTelegramCredentials,
@@ -3047,26 +3048,21 @@ export async function buildApiServer(appContext: AppContext) {
 
   function buildNotificationsSettingsResponse(
     settings: Awaited<ReturnType<typeof getTelegramSettings>>,
-    latest: Awaited<ReturnType<typeof getLatestDeliveryAttempt>>,
+    lastRealAttempt: Awaited<ReturnType<typeof getLatestRealDeliveryAttempt>>,
   ) {
     const creds = resolveTelegramCredentials(appContext, settings);
     const configured = creds !== null;
     const { botTokenSource, chatIdSource } = resolveTelegramCredentialSources(appContext, settings);
 
-    // "connected"/"last_message_failed" reflect a *real* delivery; until one has
-    // happened the state is "untested" rather than a misleading green. Saving new
-    // credentials triggers a verification send (client-side), which records the
-    // attempt that flips this away from "untested".
-    let connectionStatus: "not_configured" | "untested" | "connected" | "last_message_failed";
-    if (!configured) {
-      connectionStatus = "not_configured";
-    } else if (!latest) {
-      connectionStatus = "untested";
-    } else if (latest.status === "failed") {
-      connectionStatus = "last_message_failed";
-    } else {
-      connectionStatus = "connected";
-    }
+    // Only a real delivery (sent/failed) made AFTER the current credentials were
+    // saved counts toward the status — a stale success from a previous bot/chat,
+    // or a `skipped` attempt, must not read as "connected". `recentAttempt` is
+    // null when the latest real attempt predates the current credentials.
+    const { status: connectionStatus, recentAttempt } = deriveTelegramConnectionState(
+      configured,
+      settings.credentialsUpdatedAt,
+      lastRealAttempt,
+    );
 
     return {
       configured,
@@ -3079,8 +3075,8 @@ export async function buildApiServer(appContext: AppContext) {
       syncFailureAlertsEnabled: settings.syncFailureAlertsEnabled,
       reportHourUtc: settings.reportHourUtc,
       connectionStatus,
-      lastMessageAt: latest?.createdAt?.toISOString() ?? null,
-      lastMessageError: latest?.status === "failed" ? (latest.error ?? null) : null,
+      lastMessageAt: recentAttempt?.createdAt?.toISOString() ?? null,
+      lastMessageError: recentAttempt?.status === "failed" ? (recentAttempt.error ?? null) : null,
     };
   }
 
@@ -3093,8 +3089,8 @@ export async function buildApiServer(appContext: AppContext) {
     const settings = await getTelegramSettings(appContext.db, {
       defaultReportHourUtc: appContext.config.telegramReportHourUtc,
     });
-    const latest = await getLatestDeliveryAttempt(appContext.db);
-    return buildNotificationsSettingsResponse(settings, latest);
+    const lastRealAttempt = await getLatestRealDeliveryAttempt(appContext.db);
+    return buildNotificationsSettingsResponse(settings, lastRealAttempt);
   });
 
   server.get("/api/v1/admin/config", {
@@ -3334,8 +3330,8 @@ export async function buildApiServer(appContext: AppContext) {
     }
 
     const updated = await updateTelegramSettings(appContext.db, patch);
-    const latest = await getLatestDeliveryAttempt(appContext.db);
-    return buildNotificationsSettingsResponse(updated, latest);
+    const lastRealAttempt = await getLatestRealDeliveryAttempt(appContext.db);
+    return buildNotificationsSettingsResponse(updated, lastRealAttempt);
   });
 
   server.post("/api/v1/admin/notifications/test", {

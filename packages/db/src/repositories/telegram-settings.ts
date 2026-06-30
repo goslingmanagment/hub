@@ -46,11 +46,16 @@ export async function updateTelegramSettings(
     chatId?: string | null;
   },
 ): Promise<TelegramSettingsRow> {
+  // Bump the credential watermark only when the token/chat id actually appear in
+  // the patch — a flag or report-hour edit must not reset the verified status.
+  const credentialsChanged = patch.encryptedBotToken !== undefined || patch.chatId !== undefined;
+  const now = new Date();
   const [updated] = await db
     .update(telegramSettings)
     .set({
       ...patch,
-      updatedAt: new Date(),
+      updatedAt: now,
+      ...(credentialsChanged ? { credentialsUpdatedAt: now } : {}),
     })
     .where(eq(telegramSettings.id, 1))
     .returning();
@@ -108,6 +113,22 @@ export async function getLatestDeliveryAttempt(
   db: Database,
 ): Promise<TelegramDeliveryAttemptRow | null> {
   const row = await db.query.telegramDeliveryAttempts.findFirst({
+    orderBy: [desc(telegramDeliveryAttempts.createdAt)],
+  });
+
+  return row ?? null;
+}
+
+/**
+ * Latest delivery that actually hit Telegram (sent or failed), ignoring
+ * `skipped` attempts (unconfigured/disabled) which represent no real send. Used
+ * to derive the connection status.
+ */
+export async function getLatestRealDeliveryAttempt(
+  db: Database,
+): Promise<TelegramDeliveryAttemptRow | null> {
+  const row = await db.query.telegramDeliveryAttempts.findFirst({
+    where: inArray(telegramDeliveryAttempts.status, ["sent", "failed"]),
     orderBy: [desc(telegramDeliveryAttempts.createdAt)],
   });
 

@@ -75,8 +75,13 @@ export function NotificationsSettingsTab() {
     const botToken = botTokenRef.current?.value?.trim() || undefined;
     const chatId = chatIdRef.current?.value?.trim() || undefined;
 
-    if (!settings.configured && (!botToken || !chatId)) {
-      toast.error("Both fields are required");
+    // A field is satisfied if it's already stored (DB or env) or entered now, so
+    // a partial env config (e.g. token in env) lets the operator supply just the
+    // missing piece instead of being forced to re-paste both.
+    const haveToken = settings.botTokenSet || !!botToken;
+    const haveChat = !!settings.chatId || !!chatId;
+    if (!haveToken || !haveChat) {
+      toast.error("Bot token and Chat ID are both required");
       return;
     }
 
@@ -177,6 +182,11 @@ export function NotificationsSettingsTab() {
               />
               {botUsername && (
                 <p className="mt-1 text-[12px] text-green">Bot verified: @{botUsername}</p>
+              )}
+              {settings.botTokenSet && (
+                <p className="mt-1 text-[12px] text-text-muted">
+                  A bot token is already configured{settings.botTokenSource === "env" ? " via environment" : ""} — leave blank to keep it.
+                </p>
               )}
             </div>
             <ChatIdField

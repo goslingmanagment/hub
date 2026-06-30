@@ -205,6 +205,72 @@ describe("notifications dashboard", () => {
     expect(body.status).toBe("skipped");
   });
 
+  it("ignores skipped delivery attempts when deriving connection status", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const { server, cookie, appContext } = await buildServer();
+
+    await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/notifications/settings",
+      headers: { cookie },
+      payload: {
+        botToken: "7123456789:AAHabcdefghijklmnopqrstuvwxyz0123456",
+        chatId: "123456789",
+      },
+    });
+
+    // A skipped attempt (e.g. disabled report) is not a real delivery and must
+    // not flip the status to connected.
+    await insertDeliveryAttempt(appContext.db, { kind: "test", status: "skipped", error: "unconfigured" });
+
+    const res = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/notifications/settings",
+      headers: { cookie },
+    });
+    const body = res.json();
+    expect(body.configured).toBe(true);
+    expect(body.connectionStatus).toBe("untested");
+  });
+
+  it("does not treat a delivery made with previous credentials as connected", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const { server, cookie, appContext } = await buildServer();
+
+    await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/notifications/settings",
+      headers: { cookie },
+      payload: {
+        botToken: "7123456789:AAHabcdefghijklmnopqrstuvwxyz0123456",
+        chatId: "123456789",
+      },
+    });
+
+    // Pin the credential watermark, then record a success just after it.
+    await testDb.pool.query("update telegram_settings set credentials_updated_at = $1 where id = 1", ["2026-01-01T00:00:00Z"]);
+    const sent = await insertDeliveryAttempt(appContext.db, { kind: "test", status: "sent", messageId: 1 });
+    await testDb.pool.query("update telegram_delivery_attempts set created_at = $1 where id = $2", ["2026-01-01T01:00:00Z", sent.id]);
+
+    const connectedRes = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/notifications/settings",
+      headers: { cookie },
+    });
+    expect(connectedRes.json().connectionStatus).toBe("connected");
+
+    // Simulate a later credential change: the watermark now post-dates the send.
+    await testDb.pool.query("update telegram_settings set credentials_updated_at = $1 where id = 1", ["2026-01-01T02:00:00Z"]);
+
+    const staleRes = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/notifications/settings",
+      headers: { cookie },
+    });
+    expect(staleRes.json().connectionStatus).toBe("untested");
+    expect(staleRes.json().lastMessageAt).toBe(null);
+  });
+
   it("incidents list with filters and resolve", async (context) => {
     if (!testDb) { context.skip(); return; }
     const { server, cookie } = await buildServer();
