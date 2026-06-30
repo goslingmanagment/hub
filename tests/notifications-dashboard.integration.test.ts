@@ -83,6 +83,8 @@ describe("notifications dashboard", () => {
     expect(body.configured).toBe(false);
     expect(body.botTokenSet).toBe(false);
     expect(body.chatId).toBe(null);
+    expect(body.botTokenSource).toBe("none");
+    expect(body.chatIdSource).toBe("none");
     expect(body.connectionStatus).toBe("not_configured");
     expect(body.enabled).toBe(true);
     expect(body.dailyReportEnabled).toBe(true);
@@ -150,7 +152,7 @@ describe("notifications dashboard", () => {
       url: "/api/v1/admin/notifications/settings",
       headers: { cookie },
       payload: {
-        botToken: "7123456789:AAH-test-token",
+        botToken: "7123456789:AAHabcdefghijklmnopqrstuvwxyz0123456",
         chatId: "-1001234567890",
       },
     });
@@ -159,6 +161,10 @@ describe("notifications dashboard", () => {
     expect(setRes.json().configured).toBe(true);
     expect(setRes.json().botTokenSet).toBe(true);
     expect(setRes.json().chatId).toBe("-1001234567890");
+    expect(setRes.json().botTokenSource).toBe("db");
+    expect(setRes.json().chatIdSource).toBe("db");
+    // Stored but never delivered → not a misleading "connected".
+    expect(setRes.json().connectionStatus).toBe("untested");
 
     const clearRes = await server.inject({
       method: "PATCH",

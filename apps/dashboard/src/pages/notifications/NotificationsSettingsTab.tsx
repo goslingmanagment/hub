@@ -1,16 +1,30 @@
 import { useRef, useState } from "react";
 import type { RefObject } from "react";
 import { toast } from "sonner";
-import { useNotificationsSettings, useSendTestMessage, useUpdateNotificationsSettings } from "@/api/queries";
+import {
+  useDiscoverTelegramChats,
+  useNotificationsSettings,
+  useSendTestMessage,
+  useUpdateNotificationsSettings,
+} from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatRelativeTime } from "@/lib/format";
+
+type DiscoveredChat = { id: string; type: string; title: string };
+
+function apiErrorMessage(error: unknown): string | undefined {
+  return error instanceof Error && error.message ? error.message : undefined;
+}
 
 export function NotificationsSettingsTab() {
   const { data, isLoading, isError } = useNotificationsSettings();
   const updateSettings = useUpdateNotificationsSettings();
   const sendTest = useSendTestMessage();
+  const discoverChats = useDiscoverTelegramChats();
   const botTokenRef = useRef<HTMLInputElement>(null);
   const chatIdRef = useRef<HTMLInputElement>(null);
+  const [detectedChats, setDetectedChats] = useState<DiscoveredChat[] | null>(null);
+  const [botUsername, setBotUsername] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -41,6 +55,22 @@ export function NotificationsSettingsTab() {
     updateSettings.mutate({ reportHourUtc: hour });
   }
 
+  // After saving credentials, send a real test so the connection status reflects
+  // an actual delivery rather than "credentials exist". A single toast reports
+  // the connection outcome (and makes clear the creds were saved either way).
+  function verifyAfterSave() {
+    sendTest.mutate(undefined, {
+      onSuccess: (result) => {
+        if (result.status === "sent") {
+          toast.success("Connected — test message sent");
+        } else {
+          toast.error(result.error ?? "Saved, but the test message failed");
+        }
+      },
+      onError: () => toast.error("Saved, but the test message failed"),
+    });
+  }
+
   function handleSaveCredentials() {
     const botToken = botTokenRef.current?.value?.trim() || undefined;
     const chatId = chatIdRef.current?.value?.trim() || undefined;
@@ -57,22 +87,59 @@ export function NotificationsSettingsTab() {
 
     updateSettings.mutate({ botToken, chatId }, {
       onSuccess: () => {
-        toast.success("Credentials saved");
+        setDetectedChats(null);
         if (botTokenRef.current) botTokenRef.current.value = "";
+        verifyAfterSave();
       },
-      onError: () => toast.error("Failed to save credentials"),
+      onError: (error) => toast.error(apiErrorMessage(error) ?? "Failed to save credentials"),
     });
   }
 
   function handleClearCredentials() {
+    if (!window.confirm("Clear the stored Telegram bot token and chat ID? Notifications will stop until you reconnect.")) {
+      return;
+    }
     updateSettings.mutate({ botToken: null, chatId: null }, {
       onSuccess: () => {
         toast.success("Stored credentials cleared");
+        setDetectedChats(null);
+        setBotUsername(null);
         if (botTokenRef.current) botTokenRef.current.value = "";
         if (chatIdRef.current) chatIdRef.current.value = "";
       },
       onError: () => toast.error("Failed to clear credentials"),
     });
+  }
+
+  // Ask the backend to call getMe + getUpdates so the operator picks their chat
+  // from a menu instead of hand-copying it out of a raw getUpdates URL.
+  function handleDetectChats() {
+    const botToken = botTokenRef.current?.value?.trim() || undefined;
+    discoverChats.mutate({ botToken }, {
+      onSuccess: (result) => {
+        setBotUsername(result.botUsername);
+        if (result.chats.length === 0) {
+          setDetectedChats(null);
+          toast.message("No chats yet — open the bot in Telegram, send it any message, then Detect again.");
+          return;
+        }
+        if (result.chats.length === 1) {
+          const only = result.chats[0]!;
+          if (chatIdRef.current) chatIdRef.current.value = only.id;
+          setDetectedChats(null);
+          toast.success(`Found ${only.title}`);
+          return;
+        }
+        setDetectedChats(result.chats);
+        toast.success(`Found ${result.chats.length} chats — pick one`);
+      },
+      onError: (error) => toast.error(apiErrorMessage(error) ?? "Could not reach Telegram"),
+    });
+  }
+
+  function handlePickChat(id: string) {
+    if (chatIdRef.current) chatIdRef.current.value = id;
+    setDetectedChats(null);
   }
 
   function handleSendTest() {
@@ -88,14 +155,16 @@ export function NotificationsSettingsTab() {
     });
   }
 
+  const savePending = updateSettings.isPending || sendTest.isPending;
+
   return (
     <div className="space-y-4">
       {!settings.configured ? (
         <div className="rounded-xl border border-border bg-card p-5">
           <h3 className="mb-1 text-sm font-semibold text-text-primary">Connect Telegram</h3>
           <p className="mb-4 text-[12px] text-text-muted">
-            Create a bot via @BotFather, paste the token below. Send any message to the bot, then find your chat ID at{" "}
-            <span className="font-mono">https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</span>
+            Create a bot via @BotFather and paste its token below. Send the bot any message in Telegram,
+            then click <span className="font-medium text-text-secondary">Detect</span> to pick your chat automatically.
           </p>
           <div className="max-w-md space-y-3">
             <div>
@@ -106,23 +175,24 @@ export function NotificationsSettingsTab() {
                 placeholder="7123456789:AAH..."
                 className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
               />
+              {botUsername && (
+                <p className="mt-1 text-[12px] text-green">Bot verified: @{botUsername}</p>
+              )}
             </div>
-            <div>
-              <label className="mb-1 block text-[12px] font-medium text-text-secondary">Chat ID</label>
-              <input
-                ref={chatIdRef}
-                type="text"
-                defaultValue={settings.chatId ?? ""}
-                placeholder="123456789 or -100..."
-                className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
-              />
-            </div>
+            <ChatIdField
+              chatIdRef={chatIdRef}
+              defaultValue={settings.chatId ?? ""}
+              onDetect={handleDetectChats}
+              isDetecting={discoverChats.isPending}
+              detectedChats={detectedChats}
+              onPick={handlePickChat}
+            />
             <button
               onClick={handleSaveCredentials}
-              disabled={updateSettings.isPending}
+              disabled={savePending}
               className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40"
             >
-              {updateSettings.isPending ? "Saving..." : "Save & Connect"}
+              {updateSettings.isPending ? "Saving..." : sendTest.isPending ? "Connecting..." : "Save & Connect"}
             </button>
           </div>
         </div>
@@ -136,17 +206,23 @@ export function NotificationsSettingsTab() {
             }`} />
             <div>
               <span className="text-sm font-medium text-text-primary">
-                {settings.connectionStatus === "connected" ? "Connected" : "Last message failed"}
+                {settings.connectionStatus === "connected" ? "Connected"
+                  : settings.connectionStatus === "last_message_failed" ? "Last message failed"
+                  : "Not tested yet"}
               </span>
               {settings.chatId && (
                 <span className="ml-2 text-[12px] text-text-muted">
                   Chat {settings.chatId}
+                  {settings.chatIdSource === "env" && " (from env)"}
                 </span>
               )}
               {settings.lastMessageAt && (
                 <span className="ml-2 text-[12px] text-text-muted">
                   &middot; {formatRelativeTime(settings.lastMessageAt)}
                 </span>
+              )}
+              {settings.connectionStatus === "untested" && (
+                <p className="mt-0.5 text-[12px] text-text-muted">Send a test message to verify delivery.</p>
               )}
               {settings.lastMessageError && (
                 <p className="mt-0.5 text-[12px] text-danger">{settings.lastMessageError}</p>
@@ -160,7 +236,12 @@ export function NotificationsSettingsTab() {
               onSave={handleSaveCredentials}
               botTokenRef={botTokenRef}
               chatIdRef={chatIdRef}
-              isPending={updateSettings.isPending}
+              isPending={savePending}
+              onDetect={handleDetectChats}
+              isDetecting={discoverChats.isPending}
+              detectedChats={detectedChats}
+              onPick={handlePickChat}
+              botUsername={botUsername}
             />
             <button
               onClick={handleSendTest}
@@ -213,6 +294,60 @@ export function NotificationsSettingsTab() {
   );
 }
 
+function ChatIdField({
+  chatIdRef,
+  defaultValue,
+  onDetect,
+  isDetecting,
+  detectedChats,
+  onPick,
+}: {
+  chatIdRef: RefObject<HTMLInputElement | null>;
+  defaultValue: string;
+  onDetect: () => void;
+  isDetecting: boolean;
+  detectedChats: DiscoveredChat[] | null;
+  onPick: (id: string) => void;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-[12px] font-medium text-text-secondary">Chat ID</label>
+      <div className="flex gap-2">
+        <input
+          ref={chatIdRef}
+          type="text"
+          defaultValue={defaultValue}
+          placeholder="123456789 or -100..."
+          className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={onDetect}
+          disabled={isDetecting}
+          className="shrink-0 rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-text-secondary hover:bg-hover disabled:opacity-40"
+        >
+          {isDetecting ? "Detecting..." : "Detect"}
+        </button>
+      </div>
+      {detectedChats && detectedChats.length > 0 && (
+        <div className="mt-2 space-y-1 rounded-lg border border-border bg-card p-2">
+          {detectedChats.map((chat) => (
+            <button
+              key={chat.id}
+              type="button"
+              onClick={() => onPick(chat.id)}
+              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-hover"
+            >
+              <span className="font-medium text-text-primary">{chat.title}</span>
+              <span className="text-text-muted">{chat.type} · {chat.id}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CredentialsEdit({
   chatId,
   onClear,
@@ -220,6 +355,11 @@ function CredentialsEdit({
   botTokenRef,
   chatIdRef,
   isPending,
+  onDetect,
+  isDetecting,
+  detectedChats,
+  onPick,
+  botUsername,
 }: {
   chatId: string | null;
   onClear: () => void;
@@ -227,6 +367,11 @@ function CredentialsEdit({
   botTokenRef: RefObject<HTMLInputElement | null>;
   chatIdRef: RefObject<HTMLInputElement | null>;
   isPending: boolean;
+  onDetect: () => void;
+  isDetecting: boolean;
+  detectedChats: DiscoveredChat[] | null;
+  onPick: (id: string) => void;
+  botUsername: string | null;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -254,17 +399,18 @@ function CredentialsEdit({
               placeholder="Paste new token (leave empty to keep current)"
               className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
             />
+            {botUsername && (
+              <p className="mt-1 text-[12px] text-green">Bot verified: @{botUsername}</p>
+            )}
           </div>
-          <div>
-            <label className="mb-1 block text-[12px] font-medium text-text-secondary">Chat ID</label>
-            <input
-              ref={chatIdRef}
-              type="text"
-              defaultValue={chatId ?? ""}
-              placeholder="123456789"
-              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
-            />
-          </div>
+          <ChatIdField
+            chatIdRef={chatIdRef}
+            defaultValue={chatId ?? ""}
+            onDetect={onDetect}
+            isDetecting={isDetecting}
+            detectedChats={detectedChats}
+            onPick={onPick}
+          />
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <button

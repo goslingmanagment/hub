@@ -32,9 +32,10 @@ export interface ResolvedTelegramCredentials {
 
 const TELEGRAM_SEND_TIMEOUT_MS = 10_000;
 const TELEGRAM_SEND_MAX_RETRIES = 2;
+const TELEGRAM_DISCOVER_TIMEOUT_MS = 10_000;
 
-function buildTelegramSendMessageUrl(botToken: string) {
-  return `https://api.telegram.org/bot${botToken}/sendMessage`;
+function buildTelegramApiUrl(botToken: string, method: string) {
+  return `https://api.telegram.org/bot${botToken}/${method}`;
 }
 
 function describeTelegramFailure(error: unknown) {
@@ -45,29 +46,174 @@ function shouldRetryTelegramResponse(status: number) {
   return status === 429 || status >= 500;
 }
 
+/**
+ * Maps raw Telegram API failures to operator-friendly, actionable text. Falls
+ * back to the (redacted) raw description so we never hide an unexpected error.
+ */
+export function friendlyTelegramError(status: number, description: string | null): string {
+  const raw = (description ?? "").toLowerCase();
+  if (status === 401 || raw.includes("unauthorized")) {
+    return "Invalid bot token — re-check the token from @BotFather.";
+  }
+  if (raw.includes("chat not found")) {
+    return "Chat not found — send the bot a message first, then re-detect the Chat ID.";
+  }
+  if (raw.includes("bot was blocked")) {
+    return "The bot was blocked by this chat — unblock it in Telegram and try again.";
+  }
+  if (raw.includes("can't initiate") || raw.includes("can't talk")) {
+    return "Send the bot a message first — bots cannot start a conversation.";
+  }
+  if (raw.includes("not enough rights") || raw.includes("need administrator")) {
+    return "The bot needs admin rights to post in this channel/group.";
+  }
+  if (raw.includes("chat_id is empty") || raw.includes("can't parse") || raw.includes("invalid")) {
+    return "Invalid Chat ID — use a numeric id (e.g. 123456789 or -100…).";
+  }
+  return redactSensitiveText(description ?? `Telegram request failed with HTTP ${status}`);
+}
+
+export class TelegramDiscoveryError extends Error {}
+
+export interface DiscoveredTelegramChat {
+  id: string;
+  type: string;
+  title: string;
+}
+
+export interface TelegramDiscoveryResult {
+  botUsername: string | null;
+  chats: DiscoveredTelegramChat[];
+}
+
+interface TelegramChatPayload {
+  id?: number;
+  type?: string;
+  title?: string;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+}
+
+function describeTelegramChat(chat: TelegramChatPayload): string {
+  if (chat.title) return chat.title;
+  if (chat.username) return `@${chat.username}`;
+  const name = [chat.first_name, chat.last_name].filter(Boolean).join(" ").trim();
+  if (name) return name;
+  return String(chat.id ?? "");
+}
+
+/**
+ * Validates the token via `getMe` and lists the chats that have interacted with
+ * the bot via `getUpdates`, so the operator can pick their Chat ID from a menu
+ * instead of hand-copying it out of a raw `getUpdates` URL (which also leaks the
+ * token into browser history). Calling `getUpdates` without an offset only peeks
+ * pending updates — it does not consume them.
+ */
+export async function discoverTelegramChats(botToken: string): Promise<TelegramDiscoveryResult> {
+  let meResponse: Response;
+  try {
+    meResponse = await fetch(buildTelegramApiUrl(botToken, "getMe"), {
+      signal: AbortSignal.timeout(TELEGRAM_DISCOVER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new TelegramDiscoveryError(describeTelegramFailure(error));
+  }
+  const meBody = await meResponse.json().catch(() => null) as
+    | { ok?: boolean; description?: string; result?: { username?: string } }
+    | null;
+  if (!meResponse.ok || meBody?.ok !== true) {
+    throw new TelegramDiscoveryError(friendlyTelegramError(meResponse.status, meBody?.description ?? null));
+  }
+  const botUsername = meBody.result?.username ?? null;
+
+  let updatesResponse: Response;
+  try {
+    updatesResponse = await fetch(buildTelegramApiUrl(botToken, "getUpdates"), {
+      signal: AbortSignal.timeout(TELEGRAM_DISCOVER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new TelegramDiscoveryError(describeTelegramFailure(error));
+  }
+  const updatesBody = await updatesResponse.json().catch(() => null) as
+    | { ok?: boolean; description?: string; result?: Array<Record<string, { chat?: TelegramChatPayload }>> }
+    | null;
+  if (!updatesResponse.ok || updatesBody?.ok !== true) {
+    throw new TelegramDiscoveryError(friendlyTelegramError(updatesResponse.status, updatesBody?.description ?? null));
+  }
+
+  const updates = Array.isArray(updatesBody.result) ? updatesBody.result : [];
+  const byId = new Map<string, DiscoveredTelegramChat>();
+  for (const update of updates) {
+    const chat = update.message?.chat
+      ?? update.edited_message?.chat
+      ?? update.channel_post?.chat
+      ?? update.my_chat_member?.chat
+      ?? update.chat_member?.chat;
+    if (!chat || typeof chat.id !== "number") continue;
+    const id = String(chat.id);
+    if (!byId.has(id)) {
+      byId.set(id, { id, type: String(chat.type ?? "unknown"), title: describeTelegramChat(chat) });
+    }
+  }
+
+  return { botUsername, chats: [...byId.values()] };
+}
+
+export type TelegramCredentialSource = "db" | "env" | "none";
+
+export function resolveTelegramBotToken(
+  app: Pick<AppContext, "config">,
+  settings: TelegramSettingsRow,
+): string | null {
+  // Stored (DB) token wins over env, but only if it actually decrypts.
+  if (settings.encryptedBotToken) {
+    try {
+      return decryptJsonWithKeyVersion<string>(
+        settings.encryptedBotToken,
+        app.config.encryptionKeysByVersion,
+      );
+    } catch {
+      // decryption failed — fall back to env for this field
+    }
+  }
+  return app.config.telegramBotToken ?? null;
+}
+
+/**
+ * Per-field precedence: a stored token/chatId each independently wins over its
+ * env counterpart. This mirrors how `buildNotificationsSettingsResponse` renders
+ * the fields, so the UI and the actual send target can never silently disagree
+ * (previously a DB chatId set without a DB token was shown in the UI but ignored
+ * at send time, which kept using the env chatId).
+ */
 export function resolveTelegramCredentials(
   app: Pick<AppContext, "config">,
   settings: TelegramSettingsRow,
 ): ResolvedTelegramCredentials | null {
-  // DB credentials take priority over env vars
-  if (settings.encryptedBotToken && settings.chatId) {
-    try {
-      const botToken = decryptJsonWithKeyVersion<string>(
-        settings.encryptedBotToken,
-        app.config.encryptionKeysByVersion,
-      );
-      return { botToken, chatId: settings.chatId };
-    } catch {
-      // decryption failed — fall through to env vars
-    }
-  }
+  const botToken = resolveTelegramBotToken(app, settings);
+  const chatId = settings.chatId ?? app.config.telegramChatId ?? null;
 
-  // Fall back to env vars
-  if (app.config.telegramBotToken && app.config.telegramChatId) {
-    return { botToken: app.config.telegramBotToken, chatId: app.config.telegramChatId };
+  if (botToken && chatId) {
+    return { botToken, chatId };
   }
 
   return null;
+}
+
+/**
+ * Where each credential field is sourced from, for honest UI display. Reflects
+ * where the value is stored (DB column set → "db", else env → "env", else
+ * "none"); kept in lockstep with `resolveTelegramCredentials`'s precedence.
+ */
+export function resolveTelegramCredentialSources(
+  app: Pick<AppContext, "config">,
+  settings: TelegramSettingsRow,
+): { botTokenSource: TelegramCredentialSource; chatIdSource: TelegramCredentialSource } {
+  return {
+    botTokenSource: settings.encryptedBotToken ? "db" : app.config.telegramBotToken ? "env" : "none",
+    chatIdSource: settings.chatId ? "db" : app.config.telegramChatId ? "env" : "none",
+  };
 }
 
 export async function sendTelegramMessage(
@@ -94,7 +240,7 @@ export async function sendTelegramMessage(
 
   for (let attemptNumber = 1; attemptNumber <= TELEGRAM_SEND_MAX_RETRIES + 1; attemptNumber += 1) {
     try {
-      const response = await fetch(buildTelegramSendMessageUrl(creds.botToken), {
+      const response = await fetch(buildTelegramApiUrl(creds.botToken, "sendMessage"), {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -125,10 +271,7 @@ export async function sendTelegramMessage(
         };
       }
 
-      const error = redactSensitiveText(
-        body?.description ??
-          `Telegram sendMessage failed with HTTP ${response.status}`,
-      );
+      const error = friendlyTelegramError(response.status, body?.description ?? null);
       const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
         && shouldRetryTelegramResponse(response.status);
 

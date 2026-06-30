@@ -43926,6 +43926,22 @@
                         }
                       ]
                     },
+                    "botTokenSource": {
+                      "type": "string",
+                      "enum": [
+                        "db",
+                        "env",
+                        "none"
+                      ]
+                    },
+                    "chatIdSource": {
+                      "type": "string",
+                      "enum": [
+                        "db",
+                        "env",
+                        "none"
+                      ]
+                    },
                     "enabled": {
                       "type": "boolean"
                     },
@@ -43944,6 +43960,7 @@
                       "type": "string",
                       "enum": [
                         "not_configured",
+                        "untested",
                         "connected",
                         "last_message_failed"
                       ]
@@ -43973,6 +43990,8 @@
                     "configured",
                     "botTokenSet",
                     "chatId",
+                    "botTokenSource",
+                    "chatIdSource",
                     "enabled",
                     "dailyReportEnabled",
                     "syncFailureAlertsEnabled",
@@ -44076,7 +44095,7 @@
                     "anyOf": [
                       {
                         "type": "string",
-                        "minLength": 1
+                        "pattern": "^\\d{5,}:[A-Za-z0-9_-]{30,}$"
                       },
                       {
                         "type": "null"
@@ -44087,7 +44106,7 @@
                     "anyOf": [
                       {
                         "type": "string",
-                        "minLength": 1
+                        "pattern": "^(-?\\d+|@[A-Za-z0-9_]{5,32})$"
                       },
                       {
                         "type": "null"
@@ -44128,6 +44147,22 @@
                         }
                       ]
                     },
+                    "botTokenSource": {
+                      "type": "string",
+                      "enum": [
+                        "db",
+                        "env",
+                        "none"
+                      ]
+                    },
+                    "chatIdSource": {
+                      "type": "string",
+                      "enum": [
+                        "db",
+                        "env",
+                        "none"
+                      ]
+                    },
                     "enabled": {
                       "type": "boolean"
                     },
@@ -44146,6 +44181,7 @@
                       "type": "string",
                       "enum": [
                         "not_configured",
+                        "untested",
                         "connected",
                         "last_message_failed"
                       ]
@@ -44175,6 +44211,8 @@
                     "configured",
                     "botTokenSet",
                     "chatId",
+                    "botTokenSource",
+                    "chatIdSource",
                     "enabled",
                     "dailyReportEnabled",
                     "syncFailureAlertsEnabled",
@@ -45424,6 +45462,174 @@
                   "required": [
                     "status",
                     "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/notifications/discover-chats": {
+      "post": {
+        "summary": "Discover Telegram chats that have messaged the bot",
+        "tags": [
+          "notifications"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "botToken": {
+                    "type": "string",
+                    "pattern": "^\\d{5,}:[A-Za-z0-9_-]{30,}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "botUsername": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "chats": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "title"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "botUsername",
+                    "chats"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
                   ],
                   "additionalProperties": false
                 }

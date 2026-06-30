@@ -2519,7 +2519,28 @@ export const adminIncidentsResponseSchema = z.object({
 });
 
 // --- Notifications dashboard schemas ---
-const notificationConnectionStatusEnum = z.enum(["not_configured", "connected", "last_message_failed"]);
+const notificationConnectionStatusEnum = z.enum([
+  "not_configured",
+  "untested",
+  "connected",
+  "last_message_failed",
+]);
+
+const notificationCredentialSourceEnum = z.enum(["db", "env", "none"]);
+
+// Telegram bot token: `<bot_id>:<35-char secret>` from @BotFather. The bound is
+// lenient (>=30) to tolerate future token-length changes while still rejecting a
+// chat id / random text pasted into the token field.
+const telegramBotTokenSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{5,}:[A-Za-z0-9_-]{30,}$/, "Expected a Telegram bot token like 7123456789:AA…");
+
+// Chat id: a numeric id (negative / -100… for groups & channels) or an @username.
+const telegramChatIdSchema = z
+  .string()
+  .trim()
+  .regex(/^(-?\d+|@[A-Za-z0-9_]{5,32})$/, "Expected a numeric chat id (e.g. 123456789 or -100…) or @username");
 const notificationIncidentKindEnum = z.enum([
   "auth_blocked",
   "proxy_failed",
@@ -2543,6 +2564,8 @@ export const notificationsSettingsResponseSchema = z.object({
   configured: z.boolean(),
   botTokenSet: z.boolean(),
   chatId: z.string().nullable(),
+  botTokenSource: notificationCredentialSourceEnum,
+  chatIdSource: notificationCredentialSourceEnum,
   enabled: z.boolean(),
   dailyReportEnabled: z.boolean(),
   syncFailureAlertsEnabled: z.boolean(),
@@ -2557,13 +2580,30 @@ export const notificationsSettingsUpdateBodySchema = z.object({
   dailyReportEnabled: z.boolean().optional(),
   syncFailureAlertsEnabled: z.boolean().optional(),
   reportHourUtc: z.number().int().min(0).max(23).optional(),
-  botToken: z.string().min(1).nullable().optional(),
-  chatId: z.string().min(1).nullable().optional(),
+  botToken: telegramBotTokenSchema.nullable().optional(),
+  chatId: telegramChatIdSchema.nullable().optional(),
 });
 
 export const notificationsTestMessageResponseSchema = z.object({
   status: z.string(),
   error: z.string().nullable(),
+});
+
+export const notificationsDiscoverChatsBodySchema = z.object({
+  // Optional: test a token the operator has typed but not yet saved. When
+  // omitted, the stored/env token is used.
+  botToken: telegramBotTokenSchema.optional(),
+});
+
+export const notificationsDiscoverChatsResponseSchema = z.object({
+  botUsername: z.string().nullable(),
+  chats: z.array(
+    z.object({
+      id: z.string(),
+      type: z.string(),
+      title: z.string(),
+    }),
+  ),
 });
 
 export const notificationsIncidentItemSchema = z.object({
@@ -5113,6 +5153,18 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  notificationsDiscoverChats: {
+    tags: ["notifications"],
+    summary: "Discover Telegram chats that have messaged the bot",
+    security: cookieOnlySecurity,
+    body: notificationsDiscoverChatsBodySchema,
+    response: {
+      200: notificationsDiscoverChatsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   notificationsIncidents: {
     tags: ["notifications"],
     summary: "List notification incidents with page context",
@@ -5375,6 +5427,8 @@ export type ConfigStagedResponse = z.infer<typeof configStagedResponseSchema>;
 export type NotificationsSettingsResponse = z.infer<typeof notificationsSettingsResponseSchema>;
 export type NotificationsSettingsUpdateBody = z.infer<typeof notificationsSettingsUpdateBodySchema>;
 export type NotificationsTestMessageResponse = z.infer<typeof notificationsTestMessageResponseSchema>;
+export type NotificationsDiscoverChatsBody = z.infer<typeof notificationsDiscoverChatsBodySchema>;
+export type NotificationsDiscoverChatsResponse = z.infer<typeof notificationsDiscoverChatsResponseSchema>;
 export type NotificationsIncidentsQuery = z.infer<typeof notificationsIncidentsQuerySchema>;
 export type NotificationsIncidentsResponse = z.infer<typeof notificationsIncidentsResponseSchema>;
 export type NotificationsIncidentItem = z.infer<typeof notificationsIncidentItemSchema>;

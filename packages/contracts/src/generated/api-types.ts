@@ -13562,12 +13562,16 @@ export interface paths {
                             configured: boolean;
                             botTokenSet: boolean;
                             chatId: string | null;
+                            /** @enum {string} */
+                            botTokenSource: "db" | "env" | "none";
+                            /** @enum {string} */
+                            chatIdSource: "db" | "env" | "none";
                             enabled: boolean;
                             dailyReportEnabled: boolean;
                             syncFailureAlertsEnabled: boolean;
                             reportHourUtc: number;
                             /** @enum {string} */
-                            connectionStatus: "not_configured" | "connected" | "last_message_failed";
+                            connectionStatus: "not_configured" | "untested" | "connected" | "last_message_failed";
                             lastMessageAt: string | null;
                             lastMessageError: string | null;
                         };
@@ -13637,12 +13641,16 @@ export interface paths {
                             configured: boolean;
                             botTokenSet: boolean;
                             chatId: string | null;
+                            /** @enum {string} */
+                            botTokenSource: "db" | "env" | "none";
+                            /** @enum {string} */
+                            chatIdSource: "db" | "env" | "none";
                             enabled: boolean;
                             dailyReportEnabled: boolean;
                             syncFailureAlertsEnabled: boolean;
                             reportHourUtc: number;
                             /** @enum {string} */
-                            connectionStatus: "not_configured" | "connected" | "last_message_failed";
+                            connectionStatus: "not_configured" | "untested" | "connected" | "last_message_failed";
                             lastMessageAt: string | null;
                             lastMessageError: string | null;
                         };
@@ -14123,6 +14131,94 @@ export interface paths {
                         "application/json": {
                             status: string;
                             error: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notifications/discover-chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Discover Telegram chats that have messaged the bot */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        botToken?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            botUsername: string | null;
+                            chats: {
+                                id: string;
+                                type: string;
+                                title: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
                         };
                     };
                 };

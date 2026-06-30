@@ -14,7 +14,12 @@ vi.mock("@agency_hub_core/shared", async () => {
 
 import { encryptJson } from "@agency_hub_core/shared";
 
-import { resolveTelegramCredentials, sendTelegramMessage } from "../apps/runtime/src/services/telegram.ts";
+import {
+  discoverTelegramChats,
+  friendlyTelegramError,
+  resolveTelegramCredentials,
+  sendTelegramMessage,
+} from "../apps/runtime/src/services/telegram.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -47,6 +52,81 @@ describe("telegram service", () => {
       botToken: "123:abc",
       chatId: "6065935464",
     });
+  });
+
+  it("applies a stored chatId on top of the env bot token (per-field precedence)", () => {
+    // Regression: a DB chatId set without a DB token must not silently fall back
+    // to the env chatId at send time while the UI shows the new one.
+    const resolved = resolveTelegramCredentials({
+      config: {
+        encryptionKey: Buffer.alloc(32, 7),
+        encryptionKeyVersion: 1,
+        encryptionKeysByVersion: new Map([[1, Buffer.alloc(32, 7)]]),
+        telegramBotToken: "111:env-token",
+        telegramChatId: "env-chat",
+      },
+    } as never, {
+      encryptedBotToken: null,
+      chatId: "db-chat",
+    } as never);
+
+    expect(resolved).toEqual({ botToken: "111:env-token", chatId: "db-chat" });
+  });
+
+  it("returns null when only one credential field is resolvable", () => {
+    const resolved = resolveTelegramCredentials({
+      config: {
+        encryptionKeysByVersion: new Map([[1, Buffer.alloc(32, 7)]]),
+        telegramBotToken: null,
+        telegramChatId: "env-chat",
+      },
+    } as never, {
+      encryptedBotToken: null,
+      chatId: null,
+    } as never);
+
+    expect(resolved).toBeNull();
+  });
+
+  it("maps common Telegram API errors to operator-friendly text", () => {
+    expect(friendlyTelegramError(401, "Unauthorized")).toContain("Invalid bot token");
+    expect(friendlyTelegramError(400, "Bad Request: chat not found")).toContain("Chat not found");
+    expect(friendlyTelegramError(403, "Forbidden: bot was blocked by the user")).toContain("blocked");
+  });
+
+  it("discovers unique chats from getMe + getUpdates", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        result: { username: "mybot" },
+      }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        result: [
+          { message: { chat: { id: 111, type: "private", first_name: "Dima" } } },
+          { message: { chat: { id: 111, type: "private", first_name: "Dima" } } },
+          { my_chat_member: { chat: { id: -1009, type: "channel", title: "Alerts" } } },
+        ],
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    const result = await discoverTelegramChats("123:abc");
+
+    expect(result.botUsername).toBe("mybot");
+    expect(result.chats).toEqual([
+      { id: "111", type: "private", title: "Dima" },
+      { id: "-1009", type: "channel", title: "Alerts" },
+    ]);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws a friendly discovery error when the token is rejected", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+      ok: false,
+      description: "Unauthorized",
+    }), { status: 401, headers: { "content-type": "application/json" } }));
+
+    await expect(discoverTelegramChats("bad-token")).rejects.toThrow(/Invalid bot token/);
   });
 
   it("redacts Telegram bot tokens from transport failures", async () => {

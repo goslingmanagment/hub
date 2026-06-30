@@ -136,7 +136,15 @@ import {
   resolveNotificationIncident,
   updateTelegramSettings,
 } from "@agency_hub_core/db";
-import { resolveTelegramCredentials, sendTelegramMessage, sendTelegramTestMessage } from "../services/telegram.ts";
+import {
+  discoverTelegramChats,
+  resolveTelegramBotToken,
+  resolveTelegramCredentials,
+  resolveTelegramCredentialSources,
+  sendTelegramMessage,
+  sendTelegramTestMessage,
+  TelegramDiscoveryError,
+} from "../services/telegram.ts";
 import { buildDailyRevenueTelegramReport, sendManualDailyRevenueTelegramReport } from "../services/telegram-report.ts";
 import { resolvePageContext } from "../services/page-context.ts";
 import {
@@ -3043,18 +3051,29 @@ export async function buildApiServer(appContext: AppContext) {
   ) {
     const creds = resolveTelegramCredentials(appContext, settings);
     const configured = creds !== null;
+    const { botTokenSource, chatIdSource } = resolveTelegramCredentialSources(appContext, settings);
 
-    let connectionStatus: "not_configured" | "connected" | "last_message_failed" = "connected";
+    // "connected"/"last_message_failed" reflect a *real* delivery; until one has
+    // happened the state is "untested" rather than a misleading green. Saving new
+    // credentials triggers a verification send (client-side), which records the
+    // attempt that flips this away from "untested".
+    let connectionStatus: "not_configured" | "untested" | "connected" | "last_message_failed";
     if (!configured) {
       connectionStatus = "not_configured";
-    } else if (latest?.status === "failed") {
+    } else if (!latest) {
+      connectionStatus = "untested";
+    } else if (latest.status === "failed") {
       connectionStatus = "last_message_failed";
+    } else {
+      connectionStatus = "connected";
     }
 
     return {
       configured,
       botTokenSet: !!settings.encryptedBotToken || !!appContext.config.telegramBotToken,
       chatId: settings.chatId ?? appContext.config.telegramChatId ?? null,
+      botTokenSource,
+      chatIdSource,
       enabled: settings.enabled,
       dailyReportEnabled: settings.dailyReportEnabled,
       syncFailureAlertsEnabled: settings.syncFailureAlertsEnabled,
@@ -3342,6 +3361,34 @@ export async function buildApiServer(appContext: AppContext) {
       status: result.status,
       error: result.status === "failed" ? result.error : null,
     };
+  });
+
+  server.post("/api/v1/admin/notifications/discover-chats", {
+    schema: routeSchemas.notificationsDiscoverChats,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    // Prefer the just-typed token (not yet saved); otherwise use the stored/env one.
+    let botToken = request.body.botToken ?? null;
+    if (!botToken) {
+      const settings = await getTelegramSettings(appContext.db, {
+        defaultReportHourUtc: appContext.config.telegramReportHourUtc,
+      });
+      botToken = resolveTelegramBotToken(appContext, settings);
+    }
+    if (!botToken) {
+      throw new BadRequestError("Enter a bot token first");
+    }
+
+    try {
+      return await discoverTelegramChats(botToken);
+    } catch (error) {
+      if (error instanceof TelegramDiscoveryError) {
+        throw new BadRequestError(error.message);
+      }
+      throw error;
+    }
   });
 
   server.get("/api/v1/admin/notifications/incidents", {

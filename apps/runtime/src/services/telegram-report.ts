@@ -236,6 +236,13 @@ function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramRepor
     lines.push(`<i>+${report.overflow.pageCount} more</i> ${formatMetric(report.overflow.metrics.yesterday)}`);
   }
 
+  // Make the windowing explicit: these are UTC calendar windows that exclude
+  // today, which differ from the dashboard's OnlyFans-specific windows (see the
+  // NOTE in buildDailyRevenueTelegramReport). Labeling avoids misreading the
+  // numbers as today-inclusive without changing the math.
+  lines.push("");
+  lines.push("<i>Windows: UTC, excluding today</i>");
+
   return lines.join("\n");
 }
 

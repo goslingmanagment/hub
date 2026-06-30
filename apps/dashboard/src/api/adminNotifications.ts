@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  NotificationsDiscoverChatsBody,
+  NotificationsDiscoverChatsResponse,
   NotificationsIncidentsResponse,
   NotificationsReportHistoryResponse,
   NotificationsReportPreviewResponse,
@@ -34,6 +36,14 @@ export function useSendTestMessage() {
     meta: { suppressGlobalError: true },
     mutationFn: () => api.post<NotificationsTestMessageResponse>("/api/v1/admin/notifications/test"),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications", "settings"] }),
+  });
+}
+
+export function useDiscoverTelegramChats() {
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: NotificationsDiscoverChatsBody) =>
+      api.post<NotificationsDiscoverChatsResponse>("/api/v1/admin/notifications/discover-chats", body),
   });
 }
 
