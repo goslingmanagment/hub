@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   type DailyRevenueTelegramReport,
   formatDeltaCompact,
+  formatPageLabel,
   formatReportDate,
   renderDailyRevenueTelegramReport,
   groupPagesByModel,
@@ -73,6 +74,19 @@ describe("formatDeltaCompact", () => {
   });
 });
 
+describe("formatPageLabel", () => {
+  it("drops the -of platform suffix and names the bare OnlyFans page -free", () => {
+    expect(formatPageLabel("lora-vip-of")).toBe("lora-vip");
+    expect(formatPageLabel("lora-of")).toBe("lora-free");
+    expect(formatPageLabel("lora-main-of")).toBe("lora-main");
+  });
+
+  it("leaves labels without a platform suffix unchanged", () => {
+    expect(formatPageLabel("lora-1")).toBe("lora-1");
+    expect(formatPageLabel("lilly-2")).toBe("lilly-2");
+  });
+});
+
 describe("formatReportDate", () => {
   it("formats an ISO date as weekday day month (UTC)", () => {
     expect(formatReportDate("2026-06-29")).toBe("Mon 29 Jun");
@@ -105,21 +119,23 @@ describe("renderDailyRevenueTelegramReport", () => {
     expect(text).not.toContain("2110");
   });
 
-  it("shows zero-revenue pages inline as $0.00", () => {
+  it("shows zero-revenue pages inline as $0.00 with display names", () => {
     expect(text).toContain("lora-2 $0.00");
-    expect(text).toContain("lora-of $0.00");
+    // "lora-of" renders as the friendly "lora-free".
+    expect(text).toContain("lora-free $0.00");
     expect(text).toContain("lilly-2 $0.00");
     expect(text).not.toContain("idle");
+    expect(text).not.toContain("lora-of ");
   });
 
   it("orders pages by a fixed rule (numbered first, then tiers), not by revenue", () => {
     // Numbered pages first, ascending.
     expect(text.indexOf("lora-1 ")).toBeLessThan(text.indexOf("lora-2 "));
     expect(text.indexOf("lora-2 ")).toBeLessThan(text.indexOf("lora-3 "));
-    // Then named tiers — lora-vip-of out-earns lora-1 but still comes after it.
-    expect(text.indexOf("lora-3 ")).toBeLessThan(text.indexOf("lora-vip-of"));
-    // vip tier ranks before a non-tier page.
-    expect(text.indexOf("lora-vip-of")).toBeLessThan(text.indexOf("lora-of "));
+    // Then named tiers — lora-vip out-earns lora-1 but still comes after it.
+    expect(text.indexOf("lora-3 ")).toBeLessThan(text.indexOf("lora-vip "));
+    // vip tier ranks before the free page.
+    expect(text.indexOf("lora-vip ")).toBeLessThan(text.indexOf("lora-free "));
   });
 
   it("treats a bare OnlyFans page suffix as the free tier before main", () => {
@@ -164,7 +180,7 @@ describe("buildDailyRevenueReportHtml", () => {
     expect(html).toContain("$176.80");
     expect(html).toContain("22x");
     expect(html).toContain("$0.00");
-    expect(html).toContain("lora-of");
+    expect(html).toContain("lora-free");
     expect(html).toContain("lilly-2");
     expect(html).not.toContain("idle");
   });

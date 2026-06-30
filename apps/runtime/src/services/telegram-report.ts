@@ -249,6 +249,20 @@ function comparePagesForDisplay(a: { label: string }, b: { label: string }): num
 }
 
 /**
+ * Display name for a page: drops the trailing "-of" platform suffix and renders
+ * the bare OnlyFans page as "-free" — so "lora-vip-of" -> "lora-vip" and
+ * "lora-of" -> "lora-free". Ordering still keys off the raw label (pageOrderKey).
+ */
+export function formatPageLabel(label: string): string {
+  const suffix = `-${REPORT_PAGE_FREE_SUFFIX}`;
+  if (!label.toLowerCase().endsWith(suffix)) {
+    return label;
+  }
+  const stripped = label.slice(0, -suffix.length);
+  return stripped.includes("-") ? stripped : `${stripped}-free`;
+}
+
+/**
  * Groups pages under their model and orders each model's pages by a fixed,
  * configurable rule (see comparePagesForDisplay / REPORT_PAGE_TIER_ORDER), NOT by
  * revenue — so a page keeps the same position every day instead of jumping around
@@ -305,7 +319,7 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
         // Fixed label order (see groupPagesByModel); zero-revenue pages show
         // inline as $0.00 in their usual position rather than collapsed.
         lines.push(
-          `   ${escapeHtml(page.label)} ${formatUsdFromMills(page.metrics.yesterday.currentMills)} ${formatDeltaCompact(page.metrics.yesterday)}`,
+          `   ${escapeHtml(formatPageLabel(page.label))} ${formatUsdFromMills(page.metrics.yesterday.currentMills)} ${formatDeltaCompact(page.metrics.yesterday)}`,
         );
       }
     }

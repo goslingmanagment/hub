@@ -3,6 +3,7 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 import {
   type DailyRevenueTelegramReport,
   formatDeltaCompact,
+  formatPageLabel,
   formatReportDate,
   formatShare,
   formatUsdCompact,
@@ -63,7 +64,7 @@ export function buildDailyRevenueReportHtml(report: ReportData): string {
       for (const page of pagesByModel.get(model.label) ?? []) {
         // Fixed label order (see groupPagesByModel); zeros show inline as $0.00.
         rows.push(
-          `<tr class="page"><td>${escapeHtml(page.label)}</td>`
+          `<tr class="page"><td>${escapeHtml(formatPageLabel(page.label))}</td>`
             + `<td class="num">${formatUsdFromMills(page.metrics.yesterday.currentMills)}</td>`
             + `${deltaCell(page.metrics.yesterday)}<td></td></tr>`,
         );
