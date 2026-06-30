@@ -4,4 +4,12 @@
 -- keep reading as connected after the credentials are rotated.
 
 ALTER TABLE "telegram_settings"
-  ADD COLUMN "credentials_updated_at" timestamp with time zone DEFAULT now() NOT NULL;
+  ADD COLUMN "credentials_updated_at" timestamp with time zone;
+
+UPDATE "telegram_settings"
+SET "credentials_updated_at" = "updated_at"
+WHERE "credentials_updated_at" IS NULL;
+
+ALTER TABLE "telegram_settings"
+  ALTER COLUMN "credentials_updated_at" SET DEFAULT now(),
+  ALTER COLUMN "credentials_updated_at" SET NOT NULL;

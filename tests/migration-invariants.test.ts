@@ -73,4 +73,17 @@ describe("database migration invariants", () => {
     expect(migration).toContain("ON DELETE SET NULL");
     expect(migration).not.toContain("ON DELETE CASCADE");
   });
+
+  it("backfills Telegram credential watermarks from the existing settings timestamp", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0050_telegram_credentials_updated_at.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain('ADD COLUMN "credentials_updated_at" timestamp with time zone;');
+    expect(migration).toContain('SET "credentials_updated_at" = "updated_at"');
+    expect(migration).toContain('ALTER COLUMN "credentials_updated_at" SET DEFAULT now()');
+    expect(migration).toContain('ALTER COLUMN "credentials_updated_at" SET NOT NULL');
+    expect(migration).not.toContain('ADD COLUMN "credentials_updated_at" timestamp with time zone DEFAULT now() NOT NULL');
+  });
 });
