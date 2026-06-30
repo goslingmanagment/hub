@@ -111,11 +111,14 @@ describe("renderDailyRevenueTelegramReport", () => {
     expect(text).not.toContain("idle");
   });
 
-  it("orders pages by label (fixed), not by revenue", () => {
-    // By revenue, lora-vip-of ($234) would lead; by label, lora-1 comes first.
-    expect(text.indexOf("lora-1 ")).toBeLessThan(text.indexOf("lora-vip-of"));
+  it("orders pages by a fixed rule (numbered first, then tiers), not by revenue", () => {
+    // Numbered pages first, ascending.
     expect(text.indexOf("lora-1 ")).toBeLessThan(text.indexOf("lora-2 "));
     expect(text.indexOf("lora-2 ")).toBeLessThan(text.indexOf("lora-3 "));
+    // Then named tiers — lora-vip-of out-earns lora-1 but still comes after it.
+    expect(text.indexOf("lora-3 ")).toBeLessThan(text.indexOf("lora-vip-of"));
+    // vip tier ranks before a non-tier page.
+    expect(text.indexOf("lora-vip-of")).toBeLessThan(text.indexOf("lora-of "));
   });
 });
 

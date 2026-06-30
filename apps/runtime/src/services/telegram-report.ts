@@ -209,10 +209,35 @@ export function formatUsdCompact(mills: bigint): string {
   return `${sign}$${Math.abs(dollars).toLocaleString("en-US")}`;
 }
 
+// Display priority for named (non-numbered) pages within a model. Numbered pages
+// (…-1, …-2, …) always come first in numeric order; then pages whose label
+// contains one of these tokens, in THIS order; then everything else alphabetically.
+// Edit this list to change the order — e.g. put "free" before "vip" to flip them.
+export const REPORT_PAGE_TIER_ORDER = ["vip", "free", "main"] as const;
+
+function pageOrderKey(label: string): { group: number; rank: number } {
+  const lower = label.toLowerCase();
+  const trailingNumber = lower.match(/(\d+)\s*$/);
+  if (trailingNumber) {
+    return { group: 0, rank: Number(trailingNumber[1]) };
+  }
+  const tier = REPORT_PAGE_TIER_ORDER.findIndex((token) => lower.includes(token));
+  return tier >= 0 ? { group: 1, rank: tier } : { group: 2, rank: 0 };
+}
+
+function comparePagesForDisplay(a: { label: string }, b: { label: string }): number {
+  const ka = pageOrderKey(a.label);
+  const kb = pageOrderKey(b.label);
+  if (ka.group !== kb.group) return ka.group - kb.group;
+  if (ka.group !== 2 && ka.rank !== kb.rank) return ka.rank - kb.rank;
+  return a.label.localeCompare(b.label, "en", { numeric: true, sensitivity: "base" });
+}
+
 /**
- * Groups pages under their model and orders each model's pages by label (natural,
- * numeric-aware: page-1, page-2, page-10), NOT by revenue — so a page keeps the
- * same position every day instead of jumping around as its daily revenue changes.
+ * Groups pages under their model and orders each model's pages by a fixed,
+ * configurable rule (see comparePagesForDisplay / REPORT_PAGE_TIER_ORDER), NOT by
+ * revenue — so a page keeps the same position every day instead of jumping around
+ * as its daily revenue changes.
  */
 export function groupPagesByModel<T extends { modelLabel: string; label: string }>(
   pages: readonly T[],
@@ -224,7 +249,7 @@ export function groupPagesByModel<T extends { modelLabel: string; label: string 
     byModel.set(page.modelLabel, existing);
   }
   for (const list of byModel.values()) {
-    list.sort((a, b) => a.label.localeCompare(b.label, "en", { numeric: true, sensitivity: "base" }));
+    list.sort(comparePagesForDisplay);
   }
   return byModel;
 }
