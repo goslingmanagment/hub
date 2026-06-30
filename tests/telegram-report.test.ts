@@ -105,8 +105,8 @@ describe("renderDailyRevenueTelegramReport", () => {
   });
 
   it("collapses zero-yesterday pages into a single idle line", () => {
-    expect(text).toContain("💤 +2 idle: lora-2, lora-of");
-    expect(text).toContain("💤 +1 idle: lilly-2");
+    expect(text).toContain("💤 2 pages at $0: lora-2, lora-of");
+    expect(text).toContain("💤 1 page at $0: lilly-2");
     expect(text).not.toContain("$0.00");
   });
 });
@@ -133,8 +133,8 @@ describe("buildDailyRevenueReportHtml", () => {
     expect(html).toContain("$425.55");
     expect(html).toContain("$176.80");
     expect(html).toContain("22x");
-    expect(html).toContain("2 idle: lora-2, lora-of");
-    expect(html).toContain("1 idle: lilly-2");
+    expect(html).toContain("2 pages at $0: lora-2, lora-of");
+    expect(html).toContain("1 page at $0: lilly-2");
     expect(html).not.toContain("$0.00");
   });
 

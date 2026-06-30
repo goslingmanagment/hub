@@ -211,13 +211,14 @@ export function formatUsdCompact(mills: bigint): string {
 
 const IDLE_NOTE_NAME_LIMIT = 4;
 
-/** "  +2 idle: lora-2, lora-of" — collapses zero-yesterday pages into one line. */
+/** "2 pages at $0: lora-2, lora-of" — collapses zero-yesterday pages into one line. */
 export function formatIdleNote(labels: string[]): string {
   const shown = labels.slice(0, IDLE_NOTE_NAME_LIMIT).join(", ");
   const overflow = labels.length > IDLE_NOTE_NAME_LIMIT
-    ? `, +${labels.length - IDLE_NOTE_NAME_LIMIT}`
+    ? `, +${labels.length - IDLE_NOTE_NAME_LIMIT} more`
     : "";
-  return `+${labels.length} idle: ${shown}${overflow}`;
+  const noun = labels.length === 1 ? "page" : "pages";
+  return `${labels.length} ${noun} at $0: ${shown}${overflow}`;
 }
 
 /**
