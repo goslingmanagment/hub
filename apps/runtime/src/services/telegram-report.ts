@@ -70,20 +70,39 @@ function escapeHtml(text: string) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function formatDelta(deltaPct: number | null) {
-  if (deltaPct === null) {
-    return "—";
-  }
+const DELTA_MULTIPLIER_THRESHOLD = 10;
 
-  if (Math.abs(deltaPct) < 0.05) {
-    return "↔0.0%";
+/**
+ * Compact, alignment-safe delta for the monospace report. Tames the two noisy
+ * cases the old `↑44.2%` formatter produced: explosive growth from a near-zero
+ * base (shown as a multiplier like `22x`, or `new` when the base was 0) and rows
+ * with no prior baseline. Uses ASCII `+`/`-`/`x` so it stays one column wide.
+ */
+export function formatDeltaCompact(metric: RevenueMetric): string {
+  if (metric.previousMills === 0n) {
+    return metric.currentMills > 0n ? "new" : "—";
   }
-
-  return `${deltaPct > 0 ? "↑" : "↓"}${Math.abs(deltaPct).toFixed(1)}%`;
+  const ratio = Number(metric.currentMills) / Number(metric.previousMills);
+  if (ratio >= DELTA_MULTIPLIER_THRESHOLD) {
+    return `${Math.round(ratio)}x`;
+  }
+  const rounded = Math.round(metric.deltaPct ?? 0);
+  if (rounded === 0) {
+    return "0%";
+  }
+  return `${rounded > 0 ? "+" : "-"}${Math.abs(rounded)}%`;
 }
 
-function formatMetric(metric: RevenueMetric) {
-  return `${formatUsdFromMills(metric.currentMills)} ${formatDelta(metric.deltaPct)}`;
+const REPORT_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const REPORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "2026-06-29" -> "Mon 29 Jun" (UTC), so the date reads at a glance. */
+export function formatReportDate(reportDate: string): string {
+  const parsed = new Date(`${reportDate}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return reportDate;
+  }
+  return `${REPORT_WEEKDAYS[parsed.getUTCDay()]} ${parsed.getUTCDate()} ${REPORT_MONTHS[parsed.getUTCMonth()]}`;
 }
 
 function formatShare(partMills: bigint, totalMills: bigint): string {
@@ -183,24 +202,78 @@ function directionEmoji(deltaPct: number | null): string {
   return deltaPct > 0 ? "🟢 " : "🔴 ";
 }
 
-function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramReport, "text" | "parseMode">) {
-  const lines: string[] = [];
+const IDLE_NOTE_NAME_LIMIT = 4;
+
+/** "  +2 idle: lora-2, lora-of" — collapses zero-yesterday pages into one line. */
+function formatIdleNote(labels: string[]): string {
+  const shown = labels.slice(0, IDLE_NOTE_NAME_LIMIT).join(", ");
+  const overflow = labels.length > IDLE_NOTE_NAME_LIMIT
+    ? `, +${labels.length - IDLE_NOTE_NAME_LIMIT}`
+    : "";
+  return `+${labels.length} idle: ${shown}${overflow}`;
+}
+
+interface ReportTableRow {
+  indent: number;
+  label: string;
+  amount: string;
+  delta: string;
+  trailing?: string;
+}
+
+type ReportTableElement =
+  | { kind: "row"; row: ReportTableRow }
+  | { kind: "note"; text: string }
+  | { kind: "blank" };
+
+/**
+ * Renders rows into a fixed-column monospace table (for a Telegram <pre> block):
+ * the amount and delta columns share one width across the whole report, so every
+ * dollar figure lines up in a single vertical rule. Widths are computed on the
+ * raw (pre-escape) label length so HTML-escaping never shifts the columns.
+ */
+function renderReportTable(elements: ReportTableElement[]): string {
+  const labelCells = new Map<ReportTableRow, string>();
+  let labelWidth = 0;
+  let amountWidth = 0;
+  let deltaWidth = 0;
+  for (const element of elements) {
+    if (element.kind !== "row") continue;
+    const labelCell = " ".repeat(element.row.indent) + element.row.label;
+    labelCells.set(element.row, labelCell);
+    labelWidth = Math.max(labelWidth, labelCell.length);
+    amountWidth = Math.max(amountWidth, element.row.amount.length);
+    deltaWidth = Math.max(deltaWidth, element.row.delta.length);
+  }
+
+  return elements
+    .map((element) => {
+      if (element.kind === "blank") return "";
+      if (element.kind === "note") return element.text;
+      const row = element.row;
+      const labelCell = escapeHtml((labelCells.get(row) ?? "").padEnd(labelWidth));
+      const amountCell = row.amount.padStart(amountWidth);
+      const deltaCell = row.delta.padStart(deltaWidth);
+      const trailing = row.trailing ? `  ${row.trailing}` : "";
+      return `${labelCell}  ${amountCell}  ${deltaCell}${trailing}`;
+    })
+    .join("\n");
+}
+
+export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramReport, "text" | "parseMode">) {
   const agencyYesterday = report.agency.metrics.yesterday;
 
-  // Header
-  lines.push("📊 <b>Revenue Report</b>");
-  lines.push(report.reportDate);
-  lines.push("");
+  // Headline (outside the <pre> so it can be bold + carry a colour indicator).
+  const head = [
+    `📊 <b>Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</b>`,
+    `${directionEmoji(agencyYesterday.deltaPct)}<b>${formatUsdFromMills(agencyYesterday.currentMills)}</b> ${formatDeltaCompact(agencyYesterday)}`,
+  ];
 
-  // Agency total with color indicator
-  lines.push(
-    `${directionEmoji(agencyYesterday.deltaPct)}<b>${formatUsdFromMills(agencyYesterday.currentMills)}</b> ${formatDelta(agencyYesterday.deltaPct)}`,
-  );
-  lines.push(
-    `7d ${formatMetric(report.agency.metrics.days7)} · 30d ${formatMetric(report.agency.metrics.days30)}`,
-  );
+  const elements: ReportTableElement[] = [
+    { kind: "row", row: { indent: 0, label: "7-day", amount: formatUsdFromMills(report.agency.metrics.days7.currentMills), delta: formatDeltaCompact(report.agency.metrics.days7) } },
+    { kind: "row", row: { indent: 0, label: "30-day", amount: formatUsdFromMills(report.agency.metrics.days30.currentMills), delta: formatDeltaCompact(report.agency.metrics.days30) } },
+  ];
 
-  // Group pages by model
   const pagesByModel = new Map<string, typeof report.pages>();
   for (const page of report.pages) {
     const existing = pagesByModel.get(page.modelLabel) ?? [];
@@ -208,42 +281,49 @@ function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegramRepor
     pagesByModel.set(page.modelLabel, existing);
   }
 
-  // Each model as a section with its pages nested below
   if (report.models.length === 0) {
-    lines.push("");
-    lines.push("No models");
+    elements.push({ kind: "blank" }, { kind: "note", text: "No data" });
   } else {
     for (const model of report.models) {
       const share = formatShare(model.metrics.yesterday.currentMills, agencyYesterday.currentMills);
-      lines.push("");
-      lines.push(`<b>${escapeHtml(model.label)}</b> (${share}) ${formatMetric(model.metrics.yesterday)}`);
-      lines.push(`  7d ${formatMetric(model.metrics.days7)} · 30d ${formatMetric(model.metrics.days30)}`);
+      elements.push({ kind: "blank" });
+      elements.push({ kind: "row", row: { indent: 0, label: model.label, amount: formatUsdFromMills(model.metrics.yesterday.currentMills), delta: formatDeltaCompact(model.metrics.yesterday), trailing: share } });
 
       const modelPages = pagesByModel.get(model.label) ?? [];
+      const idle: string[] = [];
       for (const page of modelPages) {
-        lines.push(`  ${escapeHtml(page.label)} ${formatMetric(page.metrics.yesterday)}`);
+        // Collapse pages with no revenue yesterday into a single "idle" line
+        // instead of a $0.00 row per dead page.
+        if (page.metrics.yesterday.currentMills === 0n) {
+          idle.push(page.label);
+          continue;
+        }
+        elements.push({ kind: "row", row: { indent: 2, label: page.label, amount: formatUsdFromMills(page.metrics.yesterday.currentMills), delta: formatDeltaCompact(page.metrics.yesterday) } });
+      }
+      if (idle.length > 0) {
+        elements.push({ kind: "note", text: `  ${escapeHtml(formatIdleNote(idle))}` });
       }
     }
 
     if (report.modelOverflow) {
-      lines.push("");
-      lines.push(`<i>+${report.modelOverflow.modelCount} more models</i> ${formatMetric(report.modelOverflow.metrics.yesterday)}`);
+      elements.push({ kind: "blank" });
+      elements.push({ kind: "row", row: { indent: 0, label: `+${report.modelOverflow.modelCount} more models`, amount: formatUsdFromMills(report.modelOverflow.metrics.yesterday.currentMills), delta: formatDeltaCompact(report.modelOverflow.metrics.yesterday) } });
     }
   }
 
   if (report.overflow) {
-    lines.push("");
-    lines.push(`<i>+${report.overflow.pageCount} more</i> ${formatMetric(report.overflow.metrics.yesterday)}`);
+    elements.push({ kind: "row", row: { indent: 0, label: `+${report.overflow.pageCount} more`, amount: formatUsdFromMills(report.overflow.metrics.yesterday.currentMills), delta: formatDeltaCompact(report.overflow.metrics.yesterday) } });
   }
 
-  // Make the windowing explicit: these are UTC calendar windows that exclude
-  // today, which differ from the dashboard's OnlyFans-specific windows (see the
-  // NOTE in buildDailyRevenueTelegramReport). Labeling avoids misreading the
-  // numbers as today-inclusive without changing the math.
-  lines.push("");
-  lines.push("<i>Windows: UTC, excluding today</i>");
-
-  return lines.join("\n");
+  // Windows are UTC calendar windows that exclude today — they intentionally
+  // differ from the dashboard's OnlyFans-specific windows (see the NOTE in
+  // buildDailyRevenueTelegramReport). Labeling avoids misreading without
+  // changing the math.
+  return [
+    head.join("\n"),
+    `<pre>${renderReportTable(elements)}</pre>`,
+    "<i>Windows: UTC · excl. today</i>",
+  ].join("\n");
 }
 
 function sortByYesterday(left: ReportRow, right: ReportRow) {

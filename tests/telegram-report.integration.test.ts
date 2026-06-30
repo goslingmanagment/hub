@@ -249,14 +249,18 @@ describe("telegram revenue report integration", () => {
     expect(report.pages[0]?.modelLabel).toBe("Alpha Model");
 
     expect(report.parseMode).toBe("HTML");
-    expect(report.text).toContain("📊 <b>Revenue Report</b>");
-    expect(report.text).toContain("2026-03-19");
-    // Models as section headers with pages grouped below
-    expect(report.text).toContain("<b>Alpha Model</b>");
+    expect(report.text).toContain("Revenue ·");
+    // Date rendered with weekday, e.g. "… 19 Mar" (weekday-independent substring).
+    expect(report.text).toContain("19 Mar");
+    // Aligned monospace table block.
+    expect(report.text).toContain("<pre>");
+    // Model + page rows live inside the table (plain text, space-aligned).
+    expect(report.text).toContain("Alpha Model");
     expect(report.text).toContain("$200.00");
-    expect(report.text).toContain("alpha-fansly $120.00");
+    expect(report.text).toContain("alpha-fansly");
+    expect(report.text).toContain("$120.00");
     expect(report.text).toContain(`+${report.overflow?.pageCount} more`);
-    expect(report.text).toContain("—");
+    expect(report.text).toContain("Windows: UTC");
     expect(report.text).not.toContain("$999.00");
   });
 
