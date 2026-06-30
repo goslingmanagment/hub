@@ -12,6 +12,22 @@ import {
   type OFAPI_CREDIT_LEDGER_SOURCES,
 } from "../schema.ts";
 
+const OFAPI_SPEND_TRANSACTION_PAGE_LOCK_NAMESPACE = 9_003_001;
+
+export async function withOfapiSpendTransactionPageLock<T>(
+  db: Database,
+  pageId: number,
+  run: (tx: Database) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    const dbTx = tx as Database;
+    await dbTx.execute(sql`
+      select pg_advisory_xact_lock(${OFAPI_SPEND_TRANSACTION_PAGE_LOCK_NAMESPACE}, ${pageId})
+    `);
+    return run(dbTx);
+  });
+}
+
 export interface InsertOfapiWebhookEventInput {
   idempotencyKey: string;
   eventType: string;
@@ -390,14 +406,16 @@ export interface OfapiSpendProjectionTransactionIngestRow {
   category: "message" | "tip" | "subscription" | "post" | "stream" | "other";
   grossAmountMills: bigint;
   creatorNetAmountMills: bigint;
-  eventStatus: "settled" | "reversed";
+  eventStatus: "pending" | "settled" | "reversed";
   journalId: number;
 }
 
 /**
- * Terminal C3 apply candidates. Pending/loading rows stay shadow-only, while
- * settled/reversed rows are selected until core transaction truth matches the
- * normalized terminal state.
+ * C3 apply candidates. OFAPI currently emits live transactions.new rows with a
+ * loading/pending status for real settled spend, and the rest of reporting
+ * already includes pending transactions. Pending rows therefore enter truth as
+ * pending and are selected again if a later projection transitions to a terminal
+ * settled/reversed state.
  */
 export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
   db: Database,
@@ -436,7 +454,7 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
         "stream",
         "other",
       ]),
-      inArray(ofapiSpendProjectionEvents.eventStatus, ["settled", "reversed"]),
+      inArray(ofapiSpendProjectionEvents.eventStatus, ["pending", "settled", "reversed"]),
       sql`not exists (
         select 1 from ${transactions} tx
         where tx.platform_account_id = ${ofapiSpendProjectionEvents.pageId}

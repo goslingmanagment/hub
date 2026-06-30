@@ -5,12 +5,16 @@ import {
   upsertFanPages,
   upsertFans,
   upsertTransaction,
-  withOwnedPageSyncTransaction,
+  withOfapiSpendTransactionPageLock,
   type OfapiSpendProjectionTransactionIngestRow,
 } from "@agency_hub_core/db";
-import type { TransactionState, TransactionType } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import {
+  mapOfapiSpendCategoryToTransactionType,
+  mapOfapiSpendStatusToTransactionState,
+  normalizeOfapiSpendAmountMills,
+} from "./ofapi-spend-transaction-mapping.ts";
 
 const OFAPI_SPEND_TRANSACTION_INGEST_LIMIT = 200;
 
@@ -18,43 +22,6 @@ export function isOfapiSpendTransactionIngestEnabled(
   config?: Pick<AppContext["config"], "ofapiSpendTransactionIngestEnabled">,
 ) {
   return config?.ofapiSpendTransactionIngestEnabled === true;
-}
-
-function mapCategoryToTransactionType(
-  category: OfapiSpendProjectionTransactionIngestRow["category"],
-  status: OfapiSpendProjectionTransactionIngestRow["eventStatus"],
-): TransactionType {
-  if (status === "reversed") {
-    return "refund";
-  }
-
-  switch (category) {
-    case "message":
-      return "message_purchase";
-    case "tip":
-      return "tip";
-    case "subscription":
-      return "subscription";
-    case "post":
-      return "post_purchase";
-    case "stream":
-      return "stream_tip";
-    case "other":
-      return "other";
-  }
-}
-
-function mapEventStatusToTransactionState(
-  _status: OfapiSpendProjectionTransactionIngestRow["eventStatus"],
-): TransactionState {
-  return "posted";
-}
-
-function normalizeEventAmountMills(
-  status: OfapiSpendProjectionTransactionIngestRow["eventStatus"],
-  amountMills: bigint,
-) {
-  return status === "reversed" && amountMills > 0n ? -amountMills : amountMills;
 }
 
 function groupByPage(rows: OfapiSpendProjectionTransactionIngestRow[]) {
@@ -79,7 +46,7 @@ async function applyPageRows(
     return 0;
   }
 
-  return withOwnedPageSyncTransaction(app.db, async (db) => {
+  return withOfapiSpendTransactionPageLock(app.db, pageId, async (db) => {
     const fanPlatformUserIds = Array.from(new Set(rows.map((row) => row.fanPlatformUserId)));
     const fanRows = await upsertFans(db, fanPlatformUserIds.map((platformUserId) => ({
       platform: "onlyfans",
@@ -97,8 +64,8 @@ async function applyPageRows(
     let applied = 0;
 
     for (const row of rows) {
-      const grossAmountMills = normalizeEventAmountMills(row.eventStatus, row.grossAmountMills);
-      const creatorNetAmountMills = normalizeEventAmountMills(
+      const grossAmountMills = normalizeOfapiSpendAmountMills(row.eventStatus, row.grossAmountMills);
+      const creatorNetAmountMills = normalizeOfapiSpendAmountMills(
         row.eventStatus,
         row.creatorNetAmountMills,
       );
@@ -109,8 +76,8 @@ async function applyPageRows(
         accountId: row.ofapiAccountId,
         correlationAccountId: row.fanPlatformUserId,
         rawType: `ofapi:${row.category}`,
-        canonicalType: mapCategoryToTransactionType(row.category, row.eventStatus),
-        transactionState: mapEventStatusToTransactionState(row.eventStatus),
+        canonicalType: mapOfapiSpendCategoryToTransactionType(row.category, row.eventStatus),
+        transactionState: mapOfapiSpendStatusToTransactionState(row.eventStatus),
         rawStatus: row.eventStatus,
         grossAmountMills,
         sourceDestinationAmountMills: grossAmountMills,

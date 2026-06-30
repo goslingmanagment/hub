@@ -81,6 +81,8 @@ export interface OfapiResponseMeta {
 export interface OfapiListPage {
   items: Record<string, unknown>[];
   hasNextPage: boolean;
+  nextMarker?: string | null;
+  nextPageUrl?: string | null;
   meta: OfapiResponseMeta | null;
 }
 
@@ -196,6 +198,16 @@ export interface OfapiClient {
     params: {
       limit?: number;
       offset?: number;
+      pageIndex?: number;
+    },
+  ): Promise<OfapiListPage>;
+  listTransactions?(
+    context: OfapiRequestContext,
+    accountId: string,
+    params: {
+      limit?: number;
+      startDate?: string;
+      marker?: string | null;
       pageIndex?: number;
     },
   ): Promise<OfapiListPage>;
@@ -386,17 +398,45 @@ function parseResponseMeta(body: unknown): OfapiResponseMeta | null {
   };
 }
 
+function parseNextMarker(pagination: Record<string, unknown> | null) {
+  const explicitMarker = pagination?.next_marker ?? pagination?.nextMarker;
+  const explicit = asStringId(explicitMarker);
+  if (explicit) {
+    return explicit;
+  }
+
+  const nextPage = pagination?.next_page;
+  if (typeof nextPage !== "string" || nextPage.length === 0) {
+    return null;
+  }
+  try {
+    return new URL(nextPage, "https://ofapi.local").searchParams.get("marker");
+  } catch {
+    return null;
+  }
+}
+
 function toListPage(body: unknown): OfapiListPage {
   const record = asRecord(body);
-  const data = Array.isArray(record?.data) ? record.data : [];
+  const dataRecord = asRecord(record?.data);
+  const data = Array.isArray(record?.data)
+    ? record.data
+    : Array.isArray(dataRecord?.list)
+      ? dataRecord.list
+      : [];
   const pagination = asRecord(record?._pagination);
   const nextPage = pagination?.next_page;
+  const nextMarker = parseNextMarker(dataRecord) ?? parseNextMarker(pagination);
   return {
     items: data.flatMap((item) => {
       const itemRecord = asRecord(item);
       return itemRecord ? [itemRecord] : [];
     }),
-    hasNextPage: typeof nextPage === "string" && nextPage.length > 0,
+    hasNextPage: typeof dataRecord?.hasMore === "boolean"
+      ? dataRecord.hasMore
+      : typeof nextPage === "string" && nextPage.length > 0,
+    nextMarker,
+    nextPageUrl: typeof nextPage === "string" && nextPage.length > 0 ? nextPage : null,
     meta: parseResponseMeta(body),
   };
 }
@@ -425,6 +465,8 @@ export function toFansListPage(body: unknown): OfapiListPage {
     hasNextPage: typeof dataRecord?.hasMore === "boolean"
       ? dataRecord.hasMore
       : typeof nextPage === "string" && nextPage.length > 0,
+    nextMarker: parseNextMarker(pagination),
+    nextPageUrl: typeof nextPage === "string" && nextPage.length > 0 ? nextPage : null,
     meta: parseResponseMeta(body),
   };
 }
@@ -1283,6 +1325,27 @@ export function createOfapiClient(input: {
         cursorPresent: offset > 0,
         requestMetadata: { limit, offset },
         mapResponse: toFansListPage,
+      });
+    },
+    async listTransactions(context, accountId, params) {
+      const limit = Math.min(params.limit ?? 100, 100);
+      return observedListRequest({
+        context,
+        operation: "ofapi_transactions",
+        endpointTemplate: "/:accountId/transactions",
+        pathname: `/${encodeURIComponent(accountId)}/transactions`,
+        query: {
+          limit: String(limit),
+          startDate: params.startDate,
+          marker: params.marker ?? undefined,
+        },
+        pageIndex: params.pageIndex ?? 0,
+        cursorPresent: params.marker != null,
+        requestMetadata: {
+          limit,
+          hasStartDate: params.startDate != null,
+          hasMarker: params.marker != null,
+        },
       });
     },
     async pingBalance(context, accountId) {

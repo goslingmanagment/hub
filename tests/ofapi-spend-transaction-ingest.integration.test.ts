@@ -4,12 +4,16 @@ import {
   createModel,
   createOnlyFansPage,
   summarizeOfapiSpendProjectionComparison,
+  setPageOfapiAccountId,
+  storePlatformCredentials,
   upsertOfapiSpendProjectionEvent,
   upsertTransaction,
 } from "@agency_hub_core/db";
 
 import { applyOfapiSpendProjectionTransactions } from "../apps/runtime/src/services/ofapi-spend-transaction-ingest.ts";
+import { runOfapiTransactionsBackfill } from "../apps/runtime/src/services/ofapi-transactions-backfill.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -27,6 +31,34 @@ async function seedPage(label = "lora-of") {
     name: `Model ${label}`,
   });
   return createOnlyFansPage(appContext.db, { modelId: model.id, label });
+}
+
+async function seedOfapiPage(label: string, ofapiAccountId: string) {
+  const page = await seedPage(label);
+  await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId });
+  return page;
+}
+
+function fakeOfapiTransactionsClient(input: {
+  rowsByAccount: Map<string, Record<string, unknown>[]>;
+  calls?: Array<{ accountId: string; marker: string | null }>;
+}): OfapiClient {
+  return {
+    async listTransactions(
+      _context: unknown,
+      accountId: string,
+      params: { marker?: string | null },
+    ): Promise<OfapiListPage> {
+      input.calls?.push({ accountId, marker: params.marker ?? null });
+      return {
+        items: input.rowsByAccount.get(accountId) ?? [],
+        hasNextPage: false,
+        nextMarker: null,
+        nextPageUrl: null,
+        meta: null,
+      };
+    },
+  } as unknown as OfapiClient;
 }
 
 async function seedProjectedTransaction(input: {
@@ -167,7 +199,7 @@ describe("OFAPI spend transaction ingest", () => {
     }]);
   });
 
-  it("keeps pending out of truth and updates terminal state transitions", async (context) => {
+  it("applies pending truth and updates terminal state transitions", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -185,13 +217,29 @@ describe("OFAPI spend transaction ingest", () => {
       occurredAt,
     });
 
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(1);
     expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
 
     let count = await testDb.pool.query<{ count: number }>(
       "select count(*)::int as count from transactions where platform_account_id = $1",
       [page.id],
     );
-    expect(count.rows).toEqual([{ count: 0 }]);
+    expect(count.rows).toEqual([{ count: 1 }]);
+    let pending = await testDb.pool.query<{
+      transaction_state: string;
+      raw_status: string;
+      gross_amount_mills: string;
+      creator_net_amount_mills: string;
+    }>(
+      "select transaction_state, raw_status, gross_amount_mills::text, creator_net_amount_mills::text from transactions where platform_account_id = $1",
+      [page.id],
+    );
+    expect(pending.rows).toEqual([{
+      transaction_state: "pending",
+      raw_status: "pending",
+      gross_amount_mills: "17000",
+      creator_net_amount_mills: "13600",
+    }]);
 
     await seedProjectedTransaction({
       pageId: page.id,
@@ -483,5 +531,243 @@ describe("OFAPI spend transaction ingest", () => {
 
     const { rows } = await testDb.pool.query("select count(*)::int as count from transactions");
     expect(rows).toEqual([{ count: 0 }]);
+  });
+});
+
+describe("OFAPI REST transactions backfill", () => {
+  it("dedupes against webhook truth and rebuilds revenue plus lifetime spend", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rest-dedupe-of", "acct_rest_dedupe");
+    const occurredAt = new Date("2026-06-26T22:36:00.000Z");
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      transactionId: "rest-tx-1",
+      rawType: "ofapi:message",
+      canonicalType: "message_purchase",
+      transactionState: "pending",
+      rawStatus: "pending",
+      grossAmountMills: 12_000n,
+      sourceDestinationAmountMills: 12_000n,
+      creatorNetAmountMills: 9_600n,
+      senderId: "fan-rest-1",
+      occurredAt,
+    });
+
+    appContext = {
+      ...appContext,
+      ofapi: fakeOfapiTransactionsClient({
+        rowsByAccount: new Map([[
+          "acct_rest_dedupe",
+          [{
+            id: "rest-tx-1",
+            type: "message",
+            status: "done",
+            amount: "45.00",
+            net: "36.00",
+            createdAt: "2026-06-26T22:36:00+00:00",
+            user: { id: "fan-rest-1" },
+          }],
+        ]]),
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-07-01T00:00:00.000Z"),
+      mode: "write",
+    });
+
+    expect(result.pages[0]).toMatchObject({
+      status: "written",
+      rawRows: 1,
+      normalizedRows: 1,
+      writtenRows: 1,
+    });
+
+    const { rows } = await testDb.pool.query<{
+      transaction_count: number;
+      raw_type: string;
+      transaction_state: string;
+      raw_status: string;
+      gross_amount_mills: string;
+      creator_net_amount_mills: string;
+      fan_platform_user_id: string;
+      lifetime_net: string;
+      revenue_count: number;
+      revenue_net: string;
+    }>(`
+      select count(*) over ()::int as transaction_count,
+             t.raw_type,
+             t.transaction_state,
+             t.raw_status,
+             t.gross_amount_mills::text,
+             t.creator_net_amount_mills::text,
+             f.platform_user_id as fan_platform_user_id,
+             coalesce(slp.creator_net_amount_mills, 0)::text as lifetime_net,
+             coalesce(rd.transaction_count, 0)::int as revenue_count,
+             coalesce(rd.creator_net_amount_mills, 0)::text as revenue_net
+      from transactions t
+      join fans f on f.id = t.fan_id
+      left join fan_spend_lifetime slp
+        on slp.platform_account_id = t.platform_account_id
+       and slp.fan_id = t.fan_id
+      left join revenue_daily rd
+        on rd.platform_account_id = t.platform_account_id
+       and rd.business_date = '2026-06-26'::date
+       and rd.canonical_type = 'message_purchase'
+       and rd.transaction_state = 'posted'
+      where t.platform_account_id = $1
+        and t.transaction_id = 'rest-tx-1'
+    `, [page.id]);
+
+    expect(rows).toEqual([{
+      transaction_count: 1,
+      raw_type: "ofapi:rest:message",
+      transaction_state: "posted",
+      raw_status: "settled",
+      gross_amount_mills: "45000",
+      creator_net_amount_mills: "36000",
+      fan_platform_user_id: "fan-rest-1",
+      lifetime_net: "36000",
+      revenue_count: 1,
+      revenue_net: "36000",
+    }]);
+  });
+
+  it("blocks pages with direct credentials or active non-OFAPI truth rows", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const credentialed = await seedOfapiPage("rest-creds-of", "acct_rest_creds");
+    await storePlatformCredentials(appContext.db, {
+      platformAccountId: credentialed.id,
+      encryptedSession: "encrypted",
+      keyVersion: 1,
+    });
+
+    const direct = await seedOfapiPage("rest-direct-of", "acct_rest_direct");
+    await upsertTransaction(appContext.db, {
+      platformAccountId: direct.id,
+      transactionId: "direct-tx-1",
+      rawType: "message",
+      canonicalType: "message_purchase",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 10_000n,
+      sourceDestinationAmountMills: 10_000n,
+      creatorNetAmountMills: 8_000n,
+      senderId: "direct-fan",
+      occurredAt: new Date("2026-06-10T12:00:00.000Z"),
+    });
+
+    const calls: Array<{ accountId: string; marker: string | null }> = [];
+    appContext = {
+      ...appContext,
+      ofapi: fakeOfapiTransactionsClient({
+        rowsByAccount: new Map(),
+        calls,
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [credentialed.label, direct.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-07-01T00:00:00.000Z"),
+      mode: "write",
+    });
+
+    expect(calls).toEqual([]);
+    expect(result.pages.map((page) => ({
+      label: page.pageLabel,
+      status: page.status,
+      reason: page.reason,
+    }))).toEqual([
+      { label: "rest-creds-of", status: "blocked", reason: "has_page_credentials" },
+      { label: "rest-direct-of", status: "blocked", reason: "active_non_ofapi_transactions" },
+    ]);
+  });
+
+  it("keeps same-id REST reversals separate from settled spend", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rest-reversal-of", "acct_rest_reversal");
+    appContext = {
+      ...appContext,
+      ofapi: fakeOfapiTransactionsClient({
+        rowsByAccount: new Map([[
+          "acct_rest_reversal",
+          [
+            {
+              id: "same-id",
+              type: "message",
+              status: "done",
+              amount: "50.00",
+              net: "40.00",
+              createdAt: "2026-06-20T10:00:00+00:00",
+              user: { id: "fan-rest-2" },
+            },
+            {
+              id: "same-id",
+              type: "message",
+              status: "refunded",
+              amount: "50.00",
+              net: "40.00",
+              createdAt: "2026-06-21T10:00:00+00:00",
+              user: { id: "fan-rest-2" },
+            },
+          ],
+        ]]),
+      }),
+    };
+
+    await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-07-01T00:00:00.000Z"),
+      mode: "write",
+    });
+
+    const { rows } = await testDb.pool.query<{
+      transaction_id: string;
+      canonical_type: string;
+      creator_net_amount_mills: string;
+      lifetime_net: string;
+    }>(`
+      select t.transaction_id,
+             t.canonical_type,
+             t.creator_net_amount_mills::text,
+             coalesce(slp.creator_net_amount_mills, 0)::text as lifetime_net
+      from transactions t
+      left join fan_spend_lifetime slp
+        on slp.platform_account_id = t.platform_account_id
+       and slp.fan_id = t.fan_id
+      where t.platform_account_id = $1
+      order by t.transaction_id
+    `, [page.id]);
+
+    expect(rows).toEqual([
+      {
+        transaction_id: "same-id",
+        canonical_type: "message_purchase",
+        creator_net_amount_mills: "40000",
+        lifetime_net: "0",
+      },
+      {
+        transaction_id: "same-id:reversal",
+        canonical_type: "refund",
+        creator_net_amount_mills: "-40000",
+        lifetime_net: "0",
+      },
+    ]);
   });
 });

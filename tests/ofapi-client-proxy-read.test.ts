@@ -42,6 +42,84 @@ async function listenOnLocalhost(serverToStart: Server): Promise<string> {
 }
 
 describe("OFAPI proxy read client", () => {
+  it("lists transactions with startDate/marker and reports credit spend", async () => {
+    const upstreamRequests: string[] = [];
+    server = createServer((request, response) => {
+      upstreamRequests.push(request.url ?? "");
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        data: [{ id: "tx-1" }],
+        _meta: {
+          _credits: { used: 2, balance: 998 },
+          _cache: { is_cached: false },
+        },
+        _pagination: {
+          next_page: `https://app.onlyfansapi.com/api/${ACCOUNT}/transactions?marker=456`,
+        },
+      }));
+    });
+    const baseUrl = await listenOnLocalhost(server);
+    const spend: Array<{ operation: string; credits: number; pageId: number | null }> = [];
+    const client = createOfapiClient({
+      baseUrl,
+      apiKey: "test-key",
+      restDelayMs: 0,
+      onCreditSpend: (observation) => {
+        spend.push({
+          operation: observation.operation,
+          credits: observation.credits,
+          pageId: observation.pageId,
+        });
+      },
+    });
+
+    const page = await client.listTransactions!({ pageId: 42 }, ACCOUNT, {
+      limit: 100,
+      startDate: "2026-06-01 00:00:00",
+      marker: "123",
+      pageIndex: 3,
+    });
+
+    expect(upstreamRequests).toEqual([
+      `/${ACCOUNT}/transactions?limit=100&startDate=2026-06-01+00%3A00%3A00&marker=123`,
+    ]);
+    expect(page.items).toEqual([{ id: "tx-1" }]);
+    expect(page.hasNextPage).toBe(true);
+    expect(page.nextMarker).toBe("456");
+    expect(spend).toEqual([{ operation: "ofapi_transactions", credits: 2, pageId: 42 }]);
+  });
+
+  it("parses transactions wrapped as data.list with a data nextMarker", async () => {
+    server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        data: {
+          list: [{ id: "tx-1" }, { id: "tx-2" }],
+          hasMore: true,
+          nextMarker: 1782465831,
+        },
+        _meta: {
+          _credits: { used: 1, balance: 997 },
+        },
+      }));
+    });
+    const baseUrl = await listenOnLocalhost(server);
+    const client = createOfapiClient({
+      baseUrl,
+      apiKey: "test-key",
+      restDelayMs: 0,
+    });
+
+    const page = await client.listTransactions!({ pageId: 42 }, ACCOUNT, {
+      limit: 3,
+      startDate: "2026-06-01 00:00:00",
+    });
+
+    expect(page.items).toEqual([{ id: "tx-1" }, { id: "tx-2" }]);
+    expect(page.hasNextPage).toBe(true);
+    expect(page.nextMarker).toBe("1782465831");
+  });
+
   it("routes proxy reads through the supplied dispatcher", async () => {
     const upstreamRequests: string[] = [];
     const proxyRequests: string[] = [];

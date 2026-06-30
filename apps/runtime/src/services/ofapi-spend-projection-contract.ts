@@ -104,7 +104,7 @@ function ppvEstimatedAmountMills(payload: Record<string, unknown>): number | nul
   return explicitAmount ?? parseAmountToken(payload.text);
 }
 
-function mapTransactionCategory(rawType: unknown): OfapiSpendProjectionCategory {
+export function mapTransactionCategory(rawType: unknown): OfapiSpendProjectionCategory {
   switch (typeof rawType === "string" ? rawType.toLowerCase() : "") {
     case "message":
     case "paid_message":

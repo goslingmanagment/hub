@@ -25,6 +25,10 @@ import {
 import { createAppContext } from "./bootstrap.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
+import {
+  runOfapiTransactionsBackfill,
+  type OfapiTransactionsBackfillResult,
+} from "./services/ofapi-transactions-backfill.ts";
 import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-backfill.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
@@ -496,6 +500,60 @@ function printRevenueTotals(
   }
 }
 
+function printOfapiTransactionsBackfillResult(result: OfapiTransactionsBackfillResult) {
+  console.log(`OFAPI transactions backfill (${result.mode})`);
+  console.log(`Window: ${result.from.toISOString()} -> ${result.to?.toISOString() ?? "open"}`);
+
+  for (const page of result.pages) {
+    console.log("");
+    console.log(`Page: ${page.pageLabel}`);
+    console.log(`  status=${page.status}${page.reason ? ` reason=${page.reason}` : ""}`);
+    console.log(`  page_id=${page.pageId ?? ""} ofapi_account_id=${page.ofapiAccountId ?? ""}`);
+    console.log(
+      `  has_credentials=${page.hasCredentials} active_non_ofapi_transactions=${page.activeNonOfapiTransactions}`,
+    );
+    console.log(
+      `  api_pages=${page.apiPages} raw_rows=${page.rawRows} normalized_rows=${page.normalizedRows} skipped_rows=${page.skippedRows} written_rows=${page.writtenRows}`,
+    );
+    console.log(
+      `  occurred_at=${page.minOccurredAt?.toISOString() ?? ""}..${page.maxOccurredAt?.toISOString() ?? ""}`,
+    );
+    console.log(
+      `  webhook_overlap=${page.overlap.matched}/${page.overlap.checked}`
+        + ` (${page.overlap.matchRate === null ? "n/a" : `${(page.overlap.matchRate * 100).toFixed(1)}%`})`,
+    );
+
+    const typeRows = Object.entries(page.typeHistogram)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([type, count]) => [type, count]);
+    if (typeRows.length > 0) {
+      console.log("  type histogram:");
+      printRows(["type", "count"], typeRows);
+    }
+
+    const skippedRows = Object.entries(page.skippedReasons)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([reason, count]) => [reason, count]);
+    if (skippedRows.length > 0) {
+      console.log("  skipped rows:");
+      printRows(["reason", "count"], skippedRows);
+    }
+
+    if (page.months.length > 0) {
+      console.log("  months:");
+      printRows(
+        ["month", "rows", "gross", "net"],
+        page.months.map((month) => [
+          month.month,
+          month.rows,
+          formatUsdFromMills(month.grossAmountMills),
+          formatUsdFromMills(month.creatorNetAmountMills),
+        ]),
+      );
+    }
+  }
+}
+
 export function buildProgram() {
   const program = new Command();
 
@@ -879,6 +937,34 @@ export function buildProgram() {
         console.log(`notes_deactivated=${result.totalNotesDeactivated}`);
         console.log(`aliases_set=${result.totalAliasesSet}`);
         console.log(`aliases_cleared=${result.totalAliasesCleared}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("ofapi-transactions-backfill")
+    .description("Dry-run or apply OFAPI REST transaction backfill for OFAPI-only OnlyFans pages")
+    .option("--page <label>", "page label; may be repeated", collectStringOption, [])
+    .requiredOption("--from <date>", "inclusive ISO start date", parseDateOption)
+    .option("--to <date>", "exclusive ISO end date", parseDateOption)
+    .option("--limit <n>", "OFAPI page size, max 100", parsePositiveInt, 100)
+    .option("--write", "write transactions after passing eligibility gates", false)
+    .action(async (options) => {
+      if (options.page.length === 0) {
+        throw new Error("At least one --page <label> is required");
+      }
+
+      const app = await createAppContext();
+      try {
+        const result = await runOfapiTransactionsBackfill(app, {
+          pageLabels: options.page,
+          from: options.from,
+          to: options.to ?? null,
+          limit: options.limit,
+          mode: options.write ? "write" : "dry-run",
+        });
+        printOfapiTransactionsBackfillResult(result);
       } finally {
         await app.close();
       }
