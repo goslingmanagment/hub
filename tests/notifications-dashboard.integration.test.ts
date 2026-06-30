@@ -110,6 +110,24 @@ describe("notifications dashboard", () => {
     expect(body.reportHourUtc).toBe(6);
   });
 
+  it("POST discover-chats reports a missing Telegram proxy page label", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const { server, cookie, appContext } = await buildServer();
+    appContext.config.telegramProxyPageLabel = "missing-page";
+
+    const res = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/notifications/discover-chats",
+      headers: { cookie },
+      payload: {
+        botToken: "7123456789:AAHabcdefghijklmnopqrstuvwxyz0123456",
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('Telegram proxy page "missing-page" was not found');
+  });
+
   it("PATCH settings updates and returns new values", async (context) => {
     if (!testDb) { context.skip(); return; }
     const { server, cookie } = await buildServer();

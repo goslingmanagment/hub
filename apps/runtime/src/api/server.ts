@@ -139,12 +139,15 @@ import {
 import {
   deriveTelegramConnectionState,
   discoverTelegramChats,
+  closeTelegramRequestOptions,
   resolveTelegramBotToken,
   resolveTelegramCredentials,
   resolveTelegramCredentialSources,
   sendTelegramMessage,
   sendTelegramTestMessage,
   TelegramDiscoveryError,
+  TelegramProxyConfigError,
+  resolveTelegramRequestOptions,
 } from "../services/telegram.ts";
 import { buildDailyRevenueTelegramReport, sendManualDailyRevenueTelegramReport } from "../services/telegram-report.ts";
 import { resolvePageContext } from "../services/page-context.ts";
@@ -3378,9 +3381,14 @@ export async function buildApiServer(appContext: AppContext) {
     }
 
     try {
-      return await discoverTelegramChats(botToken);
+      const requestOptions = await resolveTelegramRequestOptions(appContext);
+      try {
+        return await discoverTelegramChats(botToken, requestOptions);
+      } finally {
+        await closeTelegramRequestOptions(requestOptions);
+      }
     } catch (error) {
-      if (error instanceof TelegramDiscoveryError) {
+      if (error instanceof TelegramDiscoveryError || error instanceof TelegramProxyConfigError) {
         throw new BadRequestError(error.message);
       }
       throw error;

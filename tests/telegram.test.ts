@@ -154,6 +154,38 @@ describe("telegram service", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("uses a configured dispatcher for chat discovery requests", async () => {
+    const dispatcher = {
+      dispatch: vi.fn(),
+      close: vi.fn(),
+      destroy: vi.fn(),
+    } as never;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        result: { username: "mybot" },
+      }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        result: [],
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await discoverTelegramChats("123:abc", { dispatcher });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      1,
+      "https://api.telegram.org/bot123:abc/getMe",
+      expect.objectContaining({ dispatcher }),
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "https://api.telegram.org/bot123:abc/getUpdates",
+      expect.objectContaining({ dispatcher }),
+    );
+  });
+
   it("throws a friendly discovery error when the token is rejected", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
       ok: false,
@@ -161,6 +193,14 @@ describe("telegram service", () => {
     }), { status: 401, headers: { "content-type": "application/json" } }));
 
     await expect(discoverTelegramChats("bad-token")).rejects.toThrow(/Invalid bot token/);
+  });
+
+  it("throws a friendly discovery error when Telegram API times out", async () => {
+    const timeoutError = new Error("The operation was aborted due to timeout");
+    timeoutError.name = "TimeoutError";
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(timeoutError);
+
+    await expect(discoverTelegramChats("123:abc")).rejects.toThrow(/Telegram API request timed out/);
   });
 
   it("redacts Telegram bot tokens from transport failures", async () => {

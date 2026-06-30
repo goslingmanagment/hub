@@ -1,14 +1,17 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-import { getTelegramSettings, type TelegramSettingsRow } from "@agency_hub_core/db";
+import { findPageByLabel, getTelegramSettings, type TelegramSettingsRow } from "@agency_hub_core/db";
 import {
   classifyTransportError,
+  createProxyRequestDispatcher,
   decryptJsonWithKeyVersion,
   redactSensitiveText,
   resolveRetryDelayMs,
 } from "@agency_hub_core/shared";
+import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveStoredProxyConfig } from "./page-context.ts";
 
 export type TelegramSendResult =
   | {
@@ -34,11 +37,20 @@ const TELEGRAM_SEND_TIMEOUT_MS = 10_000;
 const TELEGRAM_SEND_MAX_RETRIES = 2;
 const TELEGRAM_DISCOVER_TIMEOUT_MS = 10_000;
 
+type TelegramRequestInit = RequestInit & { dispatcher?: Dispatcher };
+
+export interface TelegramRequestOptions {
+  dispatcher?: Dispatcher;
+}
+
 function buildTelegramApiUrl(botToken: string, method: string) {
   return `https://api.telegram.org/bot${botToken}/${method}`;
 }
 
 function describeTelegramFailure(error: unknown) {
+  if (classifyTransportError(error) === "timeout") {
+    return "Telegram API request timed out — configure a Telegram proxy page or retry later.";
+  }
   return redactSensitiveText(error instanceof Error ? error.message : String(error));
 }
 
@@ -74,6 +86,7 @@ export function friendlyTelegramError(status: number, description: string | null
 }
 
 export class TelegramDiscoveryError extends Error {}
+export class TelegramProxyConfigError extends Error {}
 
 export interface DiscoveredTelegramChat {
   id: string;
@@ -103,6 +116,57 @@ function describeTelegramChat(chat: TelegramChatPayload): string {
   return String(chat.id ?? "");
 }
 
+function withTelegramRequestOptions(
+  init: RequestInit,
+  options: TelegramRequestOptions,
+): TelegramRequestInit {
+  if (!options.dispatcher) {
+    return init;
+  }
+
+  return {
+    ...init,
+    dispatcher: options.dispatcher,
+  };
+}
+
+export async function closeTelegramRequestOptions(options: TelegramRequestOptions) {
+  await options.dispatcher?.close().catch(() => undefined);
+}
+
+export async function resolveTelegramRequestOptions(
+  app: Pick<AppContext, "config" | "db">,
+): Promise<TelegramRequestOptions> {
+  const pageLabel = app.config.telegramProxyPageLabel;
+  if (!pageLabel) {
+    return {};
+  }
+
+  const stored = await findPageByLabel(app.db, pageLabel);
+  if (!stored) {
+    throw new TelegramProxyConfigError(`Telegram proxy page "${pageLabel}" was not found`);
+  }
+  if (!stored.proxy) {
+    throw new TelegramProxyConfigError(`Telegram proxy page "${pageLabel}" has no proxy configured`);
+  }
+
+  try {
+    const proxy = resolveStoredProxyConfig(app, stored.proxy);
+    if (!proxy) {
+      throw new Error("stored proxy resolved to empty config");
+    }
+    return {
+      dispatcher: createProxyRequestDispatcher(proxy),
+    };
+  } catch (error) {
+    throw new TelegramProxyConfigError(
+      `Telegram proxy page "${pageLabel}" has invalid proxy config: ${redactSensitiveText(
+        error instanceof Error ? error.message : String(error),
+      )}`,
+    );
+  }
+}
+
 /**
  * Validates the token via `getMe` and lists the chats that have interacted with
  * the bot via `getUpdates`, so the operator can pick their Chat ID from a menu
@@ -110,12 +174,15 @@ function describeTelegramChat(chat: TelegramChatPayload): string {
  * token into browser history). Calling `getUpdates` without an offset only peeks
  * pending updates — it does not consume them.
  */
-export async function discoverTelegramChats(botToken: string): Promise<TelegramDiscoveryResult> {
+export async function discoverTelegramChats(
+  botToken: string,
+  options: TelegramRequestOptions = {},
+): Promise<TelegramDiscoveryResult> {
   let meResponse: Response;
   try {
-    meResponse = await fetch(buildTelegramApiUrl(botToken, "getMe"), {
+    meResponse = await fetch(buildTelegramApiUrl(botToken, "getMe"), withTelegramRequestOptions({
       signal: AbortSignal.timeout(TELEGRAM_DISCOVER_TIMEOUT_MS),
-    });
+    }, options));
   } catch (error) {
     throw new TelegramDiscoveryError(describeTelegramFailure(error));
   }
@@ -129,9 +196,9 @@ export async function discoverTelegramChats(botToken: string): Promise<TelegramD
 
   let updatesResponse: Response;
   try {
-    updatesResponse = await fetch(buildTelegramApiUrl(botToken, "getUpdates"), {
+    updatesResponse = await fetch(buildTelegramApiUrl(botToken, "getUpdates"), withTelegramRequestOptions({
       signal: AbortSignal.timeout(TELEGRAM_DISCOVER_TIMEOUT_MS),
-    });
+    }, options));
   } catch (error) {
     throw new TelegramDiscoveryError(describeTelegramFailure(error));
   }
@@ -284,77 +351,97 @@ export async function sendTelegramMessage(
     };
   }
 
-  for (let attemptNumber = 1; attemptNumber <= TELEGRAM_SEND_MAX_RETRIES + 1; attemptNumber += 1) {
-    try {
-      const response = await fetch(buildTelegramApiUrl(creds.botToken, "sendMessage"), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          chat_id: creds.chatId,
-          text: input.text,
-          ...(input.parseMode && { parse_mode: input.parseMode }),
-          disable_web_page_preview: true,
-        }),
-        signal: AbortSignal.timeout(TELEGRAM_SEND_TIMEOUT_MS),
-      });
-      const body = await response.json().catch(() => null) as
-        | {
-          ok?: boolean;
-          description?: string;
-          result?: {
-            message_id?: number;
+  let requestOptions: TelegramRequestOptions;
+  try {
+    requestOptions = await resolveTelegramRequestOptions(app);
+  } catch (error) {
+    const described = describeTelegramFailure(error);
+    app.logger.warn({
+      chatId: creds.chatId,
+      error: described,
+      err: error,
+    }, "Telegram notification proxy configuration failed; continuing");
+    return {
+      status: "failed",
+      error: described,
+    };
+  }
+
+  try {
+    for (let attemptNumber = 1; attemptNumber <= TELEGRAM_SEND_MAX_RETRIES + 1; attemptNumber += 1) {
+      try {
+        const response = await fetch(buildTelegramApiUrl(creds.botToken, "sendMessage"), withTelegramRequestOptions({
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            chat_id: creds.chatId,
+            text: input.text,
+            ...(input.parseMode && { parse_mode: input.parseMode }),
+            disable_web_page_preview: true,
+          }),
+          signal: AbortSignal.timeout(TELEGRAM_SEND_TIMEOUT_MS),
+        }, requestOptions));
+        const body = await response.json().catch(() => null) as
+          | {
+            ok?: boolean;
+            description?: string;
+            result?: {
+              message_id?: number;
+            };
+          }
+          | null;
+
+        if (response.ok && body?.ok === true) {
+          return {
+            status: "sent",
+            chatId: creds.chatId,
+            messageId: typeof body.result?.message_id === "number" ? body.result.message_id : null,
           };
         }
-        | null;
 
-      if (response.ok && body?.ok === true) {
-        return {
-          status: "sent",
+        const error = friendlyTelegramError(response.status, body?.description ?? null);
+        const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
+          && shouldRetryTelegramResponse(response.status);
+
+        if (canRetry) {
+          await delay(resolveRetryDelayMs(response.headers.get("retry-after"), attemptNumber));
+          continue;
+        }
+
+        app.logger.warn({
           chatId: creds.chatId,
-          messageId: typeof body.result?.message_id === "number" ? body.result.message_id : null,
+          httpStatus: response.status,
+          error,
+        }, "Telegram notification failed; continuing");
+        return {
+          status: "failed",
+          error,
+        };
+      } catch (error) {
+        const described = describeTelegramFailure(error);
+        const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
+          && (classifyTransportError(error) === "timeout" || classifyTransportError(error) === "transport");
+
+        if (canRetry) {
+          await delay(resolveRetryDelayMs(null, attemptNumber));
+          continue;
+        }
+
+        app.logger.warn({
+          chatId: creds.chatId,
+          error: described,
+          err: error,
+        }, "Telegram notification failed; continuing");
+        return {
+          status: "failed",
+          error: described,
         };
       }
-
-      const error = friendlyTelegramError(response.status, body?.description ?? null);
-      const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
-        && shouldRetryTelegramResponse(response.status);
-
-      if (canRetry) {
-        await delay(resolveRetryDelayMs(response.headers.get("retry-after"), attemptNumber));
-        continue;
-      }
-
-      app.logger.warn({
-        chatId: creds.chatId,
-        httpStatus: response.status,
-        error,
-      }, "Telegram notification failed; continuing");
-      return {
-        status: "failed",
-        error,
-      };
-    } catch (error) {
-      const described = describeTelegramFailure(error);
-      const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
-        && (classifyTransportError(error) === "timeout" || classifyTransportError(error) === "transport");
-
-      if (canRetry) {
-        await delay(resolveRetryDelayMs(null, attemptNumber));
-        continue;
-      }
-
-      app.logger.warn({
-        chatId: creds.chatId,
-        error: described,
-        err: error,
-      }, "Telegram notification failed; continuing");
-      return {
-        status: "failed",
-        error: described,
-      };
     }
+  } finally {
+    await closeTelegramRequestOptions(requestOptions);
   }
 
   return {

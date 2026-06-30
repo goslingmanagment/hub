@@ -112,6 +112,7 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
+  TELEGRAM_PROXY_PAGE_LABEL: optionalTrimmedStringSchema,
   OFAPI_BASE_URL: z.string().url().default("https://app.onlyfansapi.com/api"),
   OFAPI_API_KEY: optionalTrimmedStringSchema,
   OFAPI_WEBHOOK_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(1000),
@@ -206,6 +207,7 @@ export interface AppConfig {
   telegramReportHourUtc: number;
   // Optional so existing AppConfig literals (tests, codegen) need not enumerate them;
   // loadConfig always populates them, so production behavior is exact.
+  telegramProxyPageLabel?: string | null;
   ofapiBaseUrl?: string;
   ofapiApiKey?: string | null;
   ofapiWebhookRateLimitMax?: number;
@@ -387,6 +389,7 @@ export function loadConfig(
     telegramChatId,
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
+    telegramProxyPageLabel: parsed.TELEGRAM_PROXY_PAGE_LABEL ?? null,
     ofapiBaseUrl: parsed.OFAPI_BASE_URL,
     ofapiApiKey: parsed.OFAPI_API_KEY ?? null,
     ofapiWebhookRateLimitMax: parsed.OFAPI_WEBHOOK_RATE_LIMIT_MAX,

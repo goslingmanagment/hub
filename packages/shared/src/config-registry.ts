@@ -152,6 +152,7 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   // stored in telegram_settings and edited in Notifications — keeping it read-only
   // avoids two conflicting sources of truth (same rule as the Telegram secrets).
   { key: "telegramReportHourUtc", envName: "TELEGRAM_REPORT_HOUR", configField: "telegramReportHourUtc", kind: "number", subsystem: "Telegram", label: "Telegram report hour (UTC, default)", default: "9", editability: NEVER, runtimeApply: "none", comparable: true, min: 0, max: 23, note: "Default only; the operational value is managed in Notifications." },
+  { key: "telegramProxyPageLabel", envName: "TELEGRAM_PROXY_PAGE_LABEL", configField: "telegramProxyPageLabel", kind: "string", subsystem: "Telegram", label: "Telegram proxy page", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: true, note: "Optional page label whose stored proxy is used for Telegram Bot API egress." },
   { key: "telegramEnabled", envName: "TELEGRAM_ENABLED", configField: "telegramEnabled", kind: "derived", subsystem: "Telegram", label: "Telegram enabled", default: "false", editability: NEVER, runtimeApply: "none", comparable: true, note: "Derived: bot token AND chat id both set." },
 
   // ── OFAPI ─────────────────────────────────────────────────────────────────

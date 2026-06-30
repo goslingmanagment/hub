@@ -53,6 +53,7 @@ export function createTestAppContext(
     syncPageExecutorConcurrency?: number;
     syncSharedRateLimitEnabled?: boolean;
     healthSyncMonitoringToken?: string | null;
+    telegramProxyPageLabel?: string | null;
     trustProxy?: boolean;
   },
 ) {
@@ -94,6 +95,7 @@ export function createTestAppContext(
       telegramChatId: null,
       telegramEnabled: false,
       telegramReportHourUtc: 9,
+      telegramProxyPageLabel: overrides?.telegramProxyPageLabel ?? null,
       ofapiEventRetentionDays: overrides?.ofapiEventRetentionDays ?? 7,
       ofapiEventWorkerReplicas: overrides?.ofapiEventWorkerReplicas ?? 1,
       ofapiDmProjectionEnabled: overrides?.ofapiDmProjectionEnabled ?? false,

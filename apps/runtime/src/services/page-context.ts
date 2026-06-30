@@ -150,7 +150,7 @@ export async function removeProxy(
 }
 
 export function resolveStoredProxyConfig(
-  app: AppContext,
+  app: Pick<AppContext, "config">,
   storedProxy: NonNullable<Awaited<ReturnType<typeof findPageByLabel>>>["proxy"],
 ) {
   if (!storedProxy) {

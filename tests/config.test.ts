@@ -226,6 +226,7 @@ describe("config", () => {
     expect(config.telegramChatId).toBe("6065935464");
     expect(config.telegramEnabled).toBe(true);
     expect(config.telegramReportHourUtc).toBe(9);
+    expect(config.telegramProxyPageLabel).toBeNull();
   });
 
   it("treats blank Telegram values as unconfigured", () => {
@@ -239,6 +240,7 @@ describe("config", () => {
     expect(config.telegramChatId).toBeNull();
     expect(config.telegramEnabled).toBe(false);
     expect(config.telegramReportHourUtc).toBe(9);
+    expect(config.telegramProxyPageLabel).toBeNull();
   });
 
   it("treats blank optional sync env values as unset", () => {
@@ -249,11 +251,13 @@ describe("config", () => {
       FANSLY_GLOBAL_DELAY_MS: " ",
       FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "",
       HEALTH_SYNC_MONITORING_TOKEN: " ",
+      TELEGRAM_PROXY_PAGE_LABEL: " ",
     });
 
     expect(config.syncHttpTraceFile).toBeNull();
     expect(config.fanslyDefaultDelayMs).toBe(2500);
     expect(config.healthSyncMonitoringToken).toBeNull();
+    expect(config.telegramProxyPageLabel).toBeNull();
   });
 
   it("accepts an explicit sync health monitoring token", () => {
@@ -276,6 +280,15 @@ describe("config", () => {
     expect(config.telegramEnabled).toBe(true);
     expect(config.telegramChatId).toBe("-1001234567890");
     expect(config.telegramReportHourUtc).toBe(6);
+  });
+
+  it("accepts an explicit Telegram proxy page label", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      TELEGRAM_PROXY_PAGE_LABEL: "lilly-1",
+    });
+
+    expect(config.telegramProxyPageLabel).toBe("lilly-1");
   });
 
   it("rejects Telegram report hours outside the UTC 0-23 range", () => {
