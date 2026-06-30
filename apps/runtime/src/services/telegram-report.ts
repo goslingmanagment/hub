@@ -210,6 +210,26 @@ export function formatUsdCompact(mills: bigint): string {
 }
 
 /**
+ * Groups pages under their model and orders each model's pages by label (natural,
+ * numeric-aware: page-1, page-2, page-10), NOT by revenue — so a page keeps the
+ * same position every day instead of jumping around as its daily revenue changes.
+ */
+export function groupPagesByModel<T extends { modelLabel: string; label: string }>(
+  pages: readonly T[],
+): Map<string, T[]> {
+  const byModel = new Map<string, T[]>();
+  for (const page of pages) {
+    const existing = byModel.get(page.modelLabel) ?? [];
+    existing.push(page);
+    byModel.set(page.modelLabel, existing);
+  }
+  for (const list of byModel.values()) {
+    list.sort((a, b) => a.label.localeCompare(b.label, "en", { numeric: true, sensitivity: "base" }));
+  }
+  return byModel;
+}
+
+/**
  * Proportional (non-monospace) layout. Telegram renders <pre> as a "code block"
  * with copy-button chrome, which reads as a pasted snippet rather than a report,
  * so the body is plain text with bold names + colour dots instead of an aligned
@@ -227,12 +247,7 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
       + `  ·  <i>30d</i> ${formatUsdCompact(report.agency.metrics.days30.currentMills)} ${formatDeltaCompact(report.agency.metrics.days30)}`,
   );
 
-  const pagesByModel = new Map<string, typeof report.pages>();
-  for (const page of report.pages) {
-    const existing = pagesByModel.get(page.modelLabel) ?? [];
-    existing.push(page);
-    pagesByModel.set(page.modelLabel, existing);
-  }
+  const pagesByModel = groupPagesByModel(report.pages);
 
   if (report.models.length === 0) {
     lines.push("");
@@ -247,8 +262,8 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
       );
 
       for (const page of pagesByModel.get(model.label) ?? []) {
-        // Pages are already ordered by revenue, so zero-revenue pages sink to the
-        // bottom of each model; they show inline as $0.00 rather than collapsed.
+        // Fixed label order (see groupPagesByModel); zero-revenue pages show
+        // inline as $0.00 in their usual position rather than collapsed.
         lines.push(
           `   ${escapeHtml(page.label)} ${formatUsdFromMills(page.metrics.yesterday.currentMills)} ${formatDeltaCompact(page.metrics.yesterday)}`,
         );

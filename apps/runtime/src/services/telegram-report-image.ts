@@ -6,6 +6,7 @@ import {
   formatReportDate,
   formatShare,
   formatUsdCompact,
+  groupPagesByModel,
 } from "./telegram-report.ts";
 
 type ReportData = Omit<DailyRevenueTelegramReport, "text" | "parseMode">;
@@ -44,12 +45,7 @@ export function buildDailyRevenueReportHtml(report: ReportData): string {
     `<tr class="win"><td>30-day</td><td class="num">${formatUsdCompact(report.agency.metrics.days30.currentMills)}</td>${deltaCell(report.agency.metrics.days30)}<td></td></tr>`,
   );
 
-  const pagesByModel = new Map<string, typeof report.pages>();
-  for (const page of report.pages) {
-    const existing = pagesByModel.get(page.modelLabel) ?? [];
-    existing.push(page);
-    pagesByModel.set(page.modelLabel, existing);
-  }
+  const pagesByModel = groupPagesByModel(report.pages);
 
   if (report.models.length === 0) {
     rows.push(`<tr class="spacer"><td colspan="4"></td></tr><tr class="empty"><td colspan="4">No data</td></tr>`);
@@ -65,7 +61,7 @@ export function buildDailyRevenueReportHtml(report: ReportData): string {
       );
 
       for (const page of pagesByModel.get(model.label) ?? []) {
-        // Zero-revenue pages sink to the bottom of each model and show as $0.00.
+        // Fixed label order (see groupPagesByModel); zeros show inline as $0.00.
         rows.push(
           `<tr class="page"><td>${escapeHtml(page.label)}</td>`
             + `<td class="num">${formatUsdFromMills(page.metrics.yesterday.currentMills)}</td>`

@@ -110,6 +110,13 @@ describe("renderDailyRevenueTelegramReport", () => {
     expect(text).toContain("lilly-2 $0.00");
     expect(text).not.toContain("idle");
   });
+
+  it("orders pages by label (fixed), not by revenue", () => {
+    // By revenue, lora-vip-of ($234) would lead; by label, lora-1 comes first.
+    expect(text.indexOf("lora-1 ")).toBeLessThan(text.indexOf("lora-vip-of"));
+    expect(text.indexOf("lora-1 ")).toBeLessThan(text.indexOf("lora-2 "));
+    expect(text.indexOf("lora-2 ")).toBeLessThan(text.indexOf("lora-3 "));
+  });
 });
 
 describe("buildDailyRevenueReportHtml", () => {
