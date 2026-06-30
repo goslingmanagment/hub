@@ -472,53 +472,73 @@ export async function sendTelegramPhoto(
     return { status: "skipped", reason: "unconfigured" };
   }
 
-  for (let attemptNumber = 1; attemptNumber <= TELEGRAM_SEND_MAX_RETRIES + 1; attemptNumber += 1) {
-    try {
-      const form = new FormData();
-      form.set("chat_id", creds.chatId);
-      if (input.caption) form.set("caption", input.caption);
-      if (input.parseMode) form.set("parse_mode", input.parseMode);
-      form.set("photo", new Blob([new Uint8Array(input.photo)], { type: "image/png" }), "report.png");
+  let requestOptions: TelegramRequestOptions;
+  try {
+    requestOptions = await resolveTelegramRequestOptions(app);
+  } catch (error) {
+    const described = describeTelegramFailure(error);
+    app.logger.warn({
+      chatId: creds.chatId,
+      error: described,
+      err: error,
+    }, "Telegram notification proxy configuration failed; continuing");
+    return {
+      status: "failed",
+      error: described,
+    };
+  }
 
-      const response = await fetch(buildTelegramApiUrl(creds.botToken, "sendPhoto"), {
-        method: "POST",
-        body: form,
-        signal: AbortSignal.timeout(TELEGRAM_PHOTO_TIMEOUT_MS),
-      });
-      const body = await response.json().catch(() => null) as
-        | { ok?: boolean; description?: string; result?: { message_id?: number } }
-        | null;
+  try {
+    for (let attemptNumber = 1; attemptNumber <= TELEGRAM_SEND_MAX_RETRIES + 1; attemptNumber += 1) {
+      try {
+        const form = new FormData();
+        form.set("chat_id", creds.chatId);
+        if (input.caption) form.set("caption", input.caption);
+        if (input.parseMode) form.set("parse_mode", input.parseMode);
+        form.set("photo", new Blob([new Uint8Array(input.photo)], { type: "image/png" }), "report.png");
 
-      if (response.ok && body?.ok === true) {
-        return {
-          status: "sent",
-          chatId: creds.chatId,
-          messageId: typeof body.result?.message_id === "number" ? body.result.message_id : null,
-        };
+        const response = await fetch(buildTelegramApiUrl(creds.botToken, "sendPhoto"), withTelegramRequestOptions({
+          method: "POST",
+          body: form,
+          signal: AbortSignal.timeout(TELEGRAM_PHOTO_TIMEOUT_MS),
+        }, requestOptions));
+        const body = await response.json().catch(() => null) as
+          | { ok?: boolean; description?: string; result?: { message_id?: number } }
+          | null;
+
+        if (response.ok && body?.ok === true) {
+          return {
+            status: "sent",
+            chatId: creds.chatId,
+            messageId: typeof body.result?.message_id === "number" ? body.result.message_id : null,
+          };
+        }
+
+        const error = friendlyTelegramError(response.status, body?.description ?? null);
+        const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
+          && shouldRetryTelegramResponse(response.status);
+        if (canRetry) {
+          await delay(resolveRetryDelayMs(response.headers.get("retry-after"), attemptNumber));
+          continue;
+        }
+
+        app.logger.warn({ chatId: creds.chatId, httpStatus: response.status, error }, "Telegram photo failed; continuing");
+        return { status: "failed", error };
+      } catch (error) {
+        const described = describeTelegramFailure(error);
+        const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
+          && (classifyTransportError(error) === "timeout" || classifyTransportError(error) === "transport");
+        if (canRetry) {
+          await delay(resolveRetryDelayMs(null, attemptNumber));
+          continue;
+        }
+
+        app.logger.warn({ chatId: creds.chatId, error: described, err: error }, "Telegram photo failed; continuing");
+        return { status: "failed", error: described };
       }
-
-      const error = friendlyTelegramError(response.status, body?.description ?? null);
-      const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
-        && shouldRetryTelegramResponse(response.status);
-      if (canRetry) {
-        await delay(resolveRetryDelayMs(response.headers.get("retry-after"), attemptNumber));
-        continue;
-      }
-
-      app.logger.warn({ chatId: creds.chatId, httpStatus: response.status, error }, "Telegram photo failed; continuing");
-      return { status: "failed", error };
-    } catch (error) {
-      const described = describeTelegramFailure(error);
-      const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
-        && (classifyTransportError(error) === "timeout" || classifyTransportError(error) === "transport");
-      if (canRetry) {
-        await delay(resolveRetryDelayMs(null, attemptNumber));
-        continue;
-      }
-
-      app.logger.warn({ chatId: creds.chatId, error: described, err: error }, "Telegram photo failed; continuing");
-      return { status: "failed", error: described };
     }
+  } finally {
+    await closeTelegramRequestOptions(requestOptions);
   }
 
   return {

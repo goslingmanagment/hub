@@ -380,6 +380,57 @@ describe("telegram revenue report integration", () => {
     }));
   });
 
+  it("falls back to the text report when the rendered photo send fails", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: false,
+        description: "Bad Request: photo is too large",
+      }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message_id: 99,
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+
+    await seedTelegramDbCredentials(testDb);
+
+    const app = createTestAppContext(testDb);
+    const result = await sendManualDailyRevenueTelegramReport(app, new Date("2026-03-20T15:00:00.000Z"));
+
+    expect(result.delivery).toEqual({
+      status: "sent",
+      chatId: "6065935464",
+      messageId: 99,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://api.telegram.org/bot123:abc/sendPhoto");
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe("https://api.telegram.org/bot123:abc/sendMessage");
+
+    const attempts = await listDeliveryAttempts(testDb.db, {
+      kind: ["daily_report_manual"],
+    });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toEqual(expect.objectContaining({
+      kind: "daily_report_manual",
+      status: "sent",
+      reportDate: "2026-03-19",
+      messageId: 99,
+      error: null,
+    }));
+  });
+
   it("skips scheduled reports when disabled but still allows manual sends with DB-only credentials", async (context) => {
     if (!testDb) {
       context.skip();

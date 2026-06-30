@@ -1,13 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const sharedMocks = vi.hoisted(() => ({
+  createProxyRequestDispatcher: vi.fn(),
   resolveRetryDelayMs: vi.fn(() => 0),
 }));
+
+const dbMocks = vi.hoisted(() => ({
+  findPageByLabel: vi.fn(),
+}));
+
+vi.mock("@agency_hub_core/db", async () => {
+  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  return {
+    ...actual,
+    findPageByLabel: dbMocks.findPageByLabel,
+  };
+});
 
 vi.mock("@agency_hub_core/shared", async () => {
   const actual = await vi.importActual<typeof import("@agency_hub_core/shared")>("@agency_hub_core/shared");
   return {
     ...actual,
+    createProxyRequestDispatcher: sharedMocks.createProxyRequestDispatcher,
     resolveRetryDelayMs: sharedMocks.resolveRetryDelayMs,
   };
 });
@@ -21,10 +35,13 @@ import {
   resolveTelegramCredentials,
   resolveTelegramCredentialSources,
   sendTelegramMessage,
+  sendTelegramPhoto,
 } from "../apps/runtime/src/services/telegram.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  dbMocks.findPageByLabel.mockReset();
+  sharedMocks.createProxyRequestDispatcher.mockReset();
   sharedMocks.resolveRetryDelayMs.mockReset();
   sharedMocks.resolveRetryDelayMs.mockReturnValue(0);
 });
@@ -292,6 +309,83 @@ describe("telegram service", () => {
       chatId: "6065935464",
       messageId: 42,
     });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured page proxy dispatcher for photo sends and closes it", async () => {
+    const dispatcher = {
+      dispatch: vi.fn(),
+      close: vi.fn(async () => undefined),
+      destroy: vi.fn(),
+    };
+    sharedMocks.createProxyRequestDispatcher.mockReturnValue(dispatcher);
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: { id: 7, label: "lilly-1" },
+      credentials: null,
+      proxy: {
+        url: "socks5://proxy.example:1080",
+        encryptedAuth: null,
+        keyVersion: null,
+        rateLimitScopeKey: null,
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
+      ok: true,
+      result: {
+        message_id: 43,
+      },
+    }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+      },
+    }));
+    const logger = {
+      warn: vi.fn(),
+    };
+
+    const result = await sendTelegramPhoto({
+      db: {},
+      logger,
+      config: {
+        encryptionKey: Buffer.alloc(32, 7),
+        encryptionKeysByVersion: new Map([[1, Buffer.alloc(32, 7)]]),
+        telegramBotToken: null,
+        telegramChatId: null,
+        telegramReportHourUtc: 9,
+        telegramProxyPageLabel: "lilly-1",
+      },
+    } as never, {
+      photo: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      caption: "<b>Revenue</b>",
+      parseMode: "HTML",
+      credentials: {
+        botToken: "123:abc",
+        chatId: "6065935464",
+      },
+    });
+
+    expect(result).toEqual({
+      status: "sent",
+      chatId: "6065935464",
+      messageId: 43,
+    });
+    expect(dbMocks.findPageByLabel).toHaveBeenCalledWith({}, "lilly-1");
+    expect(sharedMocks.createProxyRequestDispatcher).toHaveBeenCalledWith({
+      url: "socks5://proxy.example:1080",
+      username: null,
+      password: null,
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://api.telegram.org/bot123:abc/sendPhoto",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.any(FormData),
+        dispatcher,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(dispatcher.close).toHaveBeenCalledTimes(1);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });

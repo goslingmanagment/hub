@@ -441,11 +441,16 @@ async function deliverDailyRevenueReport(
 ): Promise<TelegramSendResult> {
   try {
     const image = await renderDailyRevenueReportImage(report);
-    return await sendTelegramPhoto(app, {
+    const photoDelivery = await sendTelegramPhoto(app, {
       photo: image,
       caption: buildDailyRevenueReportCaption(report),
       parseMode: "HTML",
     });
+    if (photoDelivery.status !== "failed") {
+      return photoDelivery;
+    }
+    app.logger.warn({ error: photoDelivery.error }, "Revenue report image send failed; falling back to text");
+    return sendTelegramMessage(app, { text: report.text, parseMode: report.parseMode });
   } catch (error) {
     app.logger.warn({ err: error }, "Revenue report image render failed; falling back to text");
     return sendTelegramMessage(app, { text: report.text, parseMode: report.parseMode });

@@ -144,8 +144,12 @@ describe("buildDailyRevenueReportHtml", () => {
     let png: Buffer;
     try {
       png = await renderDailyRevenueReportImage(sampleReport);
-    } catch {
-      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/Cannot find package 'playwright'|Executable doesn't exist|playwright install/i.test(message)) {
+        return;
+      }
+      throw error;
     }
     expect(png.length).toBeGreaterThan(1000);
     expect(png.subarray(0, 4).toString("hex")).toBe("89504e47");
