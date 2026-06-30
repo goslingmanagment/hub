@@ -3,7 +3,6 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 import {
   type DailyRevenueTelegramReport,
   formatDeltaCompact,
-  formatIdleNote,
   formatReportDate,
   formatShare,
   formatUsdCompact,
@@ -53,7 +52,7 @@ export function buildDailyRevenueReportHtml(report: ReportData): string {
   }
 
   if (report.models.length === 0) {
-    rows.push(`<tr class="spacer"><td colspan="4"></td></tr><tr class="idle"><td colspan="4">No data</td></tr>`);
+    rows.push(`<tr class="spacer"><td colspan="4"></td></tr><tr class="empty"><td colspan="4">No data</td></tr>`);
   } else {
     for (const model of report.models) {
       const dir = metricDirection(model.metrics.yesterday);
@@ -65,20 +64,13 @@ export function buildDailyRevenueReportHtml(report: ReportData): string {
           + `<td class="share">${formatShare(model.metrics.yesterday.currentMills, y.currentMills)}</td></tr>`,
       );
 
-      const idle: string[] = [];
       for (const page of pagesByModel.get(model.label) ?? []) {
-        if (page.metrics.yesterday.currentMills === 0n) {
-          idle.push(page.label);
-          continue;
-        }
+        // Zero-revenue pages sink to the bottom of each model and show as $0.00.
         rows.push(
           `<tr class="page"><td>${escapeHtml(page.label)}</td>`
             + `<td class="num">${formatUsdFromMills(page.metrics.yesterday.currentMills)}</td>`
             + `${deltaCell(page.metrics.yesterday)}<td></td></tr>`,
         );
-      }
-      if (idle.length > 0) {
-        rows.push(`<tr class="idle"><td colspan="4">${escapeHtml(formatIdleNote(idle))}</td></tr>`);
       }
     }
 
@@ -119,7 +111,7 @@ td{padding:3px 0;vertical-align:baseline}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;vertical-align:1px}
 .dot.up{background:#22a35a}.dot.down{background:#e0483f}.dot.flat{background:#b7bac0}
 .page td{color:#52555c}.page td:first-child{padding-left:17px}
-.idle td{color:#a3a6ac;font-size:13px;padding-left:17px;padding-top:1px}
+.empty td{color:#a3a6ac;font-size:13px;padding-top:6px}
 .more td{color:#8a8d94;font-style:italic;font-size:14px;padding-top:8px}
 .spacer td{height:6px;padding:0}
 .foot{margin-top:16px;font-size:12px;color:#a3a6ac;font-style:italic}

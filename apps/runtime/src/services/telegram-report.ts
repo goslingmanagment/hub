@@ -209,18 +209,6 @@ export function formatUsdCompact(mills: bigint): string {
   return `${sign}$${Math.abs(dollars).toLocaleString("en-US")}`;
 }
 
-const IDLE_NOTE_NAME_LIMIT = 4;
-
-/** "2 pages at $0: lora-2, lora-of" — collapses zero-yesterday pages into one line. */
-export function formatIdleNote(labels: string[]): string {
-  const shown = labels.slice(0, IDLE_NOTE_NAME_LIMIT).join(", ");
-  const overflow = labels.length > IDLE_NOTE_NAME_LIMIT
-    ? `, +${labels.length - IDLE_NOTE_NAME_LIMIT} more`
-    : "";
-  const noun = labels.length === 1 ? "page" : "pages";
-  return `${labels.length} ${noun} at $0: ${shown}${overflow}`;
-}
-
 /**
  * Proportional (non-monospace) layout. Telegram renders <pre> as a "code block"
  * with copy-button chrome, which reads as a pasted snippet rather than a report,
@@ -258,19 +246,12 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
           + `${formatUsdFromMills(model.metrics.yesterday.currentMills)} ${formatDeltaCompact(model.metrics.yesterday)} · ${share}`,
       );
 
-      const idle: string[] = [];
       for (const page of pagesByModel.get(model.label) ?? []) {
-        // Collapse pages with no revenue yesterday into a single "idle" line.
-        if (page.metrics.yesterday.currentMills === 0n) {
-          idle.push(page.label);
-          continue;
-        }
+        // Pages are already ordered by revenue, so zero-revenue pages sink to the
+        // bottom of each model; they show inline as $0.00 rather than collapsed.
         lines.push(
           `   ${escapeHtml(page.label)} ${formatUsdFromMills(page.metrics.yesterday.currentMills)} ${formatDeltaCompact(page.metrics.yesterday)}`,
         );
-      }
-      if (idle.length > 0) {
-        lines.push(`   💤 ${escapeHtml(formatIdleNote(idle))}`);
       }
     }
 

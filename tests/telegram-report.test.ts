@@ -104,10 +104,11 @@ describe("renderDailyRevenueTelegramReport", () => {
     expect(text).not.toContain("2110");
   });
 
-  it("collapses zero-yesterday pages into a single idle line", () => {
-    expect(text).toContain("💤 2 pages at $0: lora-2, lora-of");
-    expect(text).toContain("💤 1 page at $0: lilly-2");
-    expect(text).not.toContain("$0.00");
+  it("shows zero-revenue pages inline as $0.00", () => {
+    expect(text).toContain("lora-2 $0.00");
+    expect(text).toContain("lora-of $0.00");
+    expect(text).toContain("lilly-2 $0.00");
+    expect(text).not.toContain("idle");
   });
 });
 
@@ -129,13 +130,14 @@ describe("buildDailyRevenueReportHtml", () => {
     expect(html).not.toContain("🔴");
   });
 
-  it("carries the same amounts, multiplier, and idle collapse as the text report", () => {
+  it("carries the same amounts and multiplier as the text report, zeros inline", () => {
     expect(html).toContain("$425.55");
     expect(html).toContain("$176.80");
     expect(html).toContain("22x");
-    expect(html).toContain("2 pages at $0: lora-2, lora-of");
-    expect(html).toContain("1 page at $0: lilly-2");
-    expect(html).not.toContain("$0.00");
+    expect(html).toContain("$0.00");
+    expect(html).toContain("lora-of");
+    expect(html).toContain("lilly-2");
+    expect(html).not.toContain("idle");
   });
 
   // End-to-end render — runs where the chromium binary is present (prod image,
