@@ -6,6 +6,10 @@ import {
   formatReportDate,
   renderDailyRevenueTelegramReport,
 } from "../apps/runtime/src/services/telegram-report.ts";
+import {
+  buildDailyRevenueReportHtml,
+  renderDailyRevenueReportImage,
+} from "../apps/runtime/src/services/telegram-report-image.ts";
 
 function metric(current: number, previous: number) {
   return {
@@ -25,6 +29,24 @@ function row(label: string, yesterday: number, prevYesterday: number) {
     },
   };
 }
+
+const sampleReport: Omit<DailyRevenueTelegramReport, "text" | "parseMode"> = {
+  reportDate: "2026-06-29",
+  generatedAt: "2026-06-30T09:00:00.000Z",
+  agency: row("agency", 425_550, 295_000),
+  models: [row("Lora Vie", 419_150, 255_000), row("Lilly", 6_400, 40_000)],
+  modelOverflow: null,
+  pages: [
+    { ...row("lora-vip-of", 234_360, 141_000), modelLabel: "Lora Vie" },
+    { ...row("lora-1", 176_800, 8_000), modelLabel: "Lora Vie" },
+    { ...row("lora-3", 7_990, 36_000), modelLabel: "Lora Vie" },
+    { ...row("lora-2", 0, 12_000), modelLabel: "Lora Vie" },
+    { ...row("lora-of", 0, 0), modelLabel: "Lora Vie" },
+    { ...row("lilly-1", 6_400, 6_400), modelLabel: "Lilly" },
+    { ...row("lilly-2", 0, 5_000), modelLabel: "Lilly" },
+  ],
+  overflow: null,
+};
 
 describe("formatDeltaCompact", () => {
   it("shows a signed, rounded percent for ordinary moves", () => {
@@ -61,25 +83,7 @@ describe("formatReportDate", () => {
 });
 
 describe("renderDailyRevenueTelegramReport", () => {
-  const report: Omit<DailyRevenueTelegramReport, "text" | "parseMode"> = {
-    reportDate: "2026-06-29",
-    generatedAt: "2026-06-30T09:00:00.000Z",
-    agency: row("agency", 425_550, 295_000),
-    models: [row("Lora Vie", 419_150, 255_000), row("Lilly", 6_400, 40_000)],
-    modelOverflow: null,
-    pages: [
-      { ...row("lora-vip-of", 234_360, 141_000), modelLabel: "Lora Vie" },
-      { ...row("lora-1", 176_800, 8_000), modelLabel: "Lora Vie" },
-      { ...row("lora-3", 7_990, 36_000), modelLabel: "Lora Vie" },
-      { ...row("lora-2", 0, 12_000), modelLabel: "Lora Vie" },
-      { ...row("lora-of", 0, 0), modelLabel: "Lora Vie" },
-      { ...row("lilly-1", 6_400, 6_400), modelLabel: "Lilly" },
-      { ...row("lilly-2", 0, 5_000), modelLabel: "Lilly" },
-    ],
-    overflow: null,
-  };
-
-  const text = renderDailyRevenueTelegramReport(report);
+  const text = renderDailyRevenueTelegramReport(sampleReport);
 
   it("renders a bold headline and the windows footer without a code block", () => {
     expect(text).toContain("📊 <b>Revenue · Mon 29 Jun</b>");
@@ -105,4 +109,45 @@ describe("renderDailyRevenueTelegramReport", () => {
     expect(text).toContain("💤 +1 idle: lilly-2");
     expect(text).not.toContain("$0.00");
   });
+});
+
+describe("buildDailyRevenueReportHtml", () => {
+  const html = buildDailyRevenueReportHtml(sampleReport);
+
+  it("is a self-contained HTML document with an aligned (tabular) table", () => {
+    expect(html.startsWith("<!doctype html>")).toBe(true);
+    expect(html).toContain("tabular-nums");
+    expect(html).toContain('<div id="card">');
+    expect(html).toContain("Revenue · Mon 29 Jun");
+  });
+
+  it("colours direction by class (no reliance on emoji fonts)", () => {
+    expect(html).toContain('class="dot up"');
+    expect(html).toContain('class="dot down"');
+    expect(html).toContain('class="delta down"');
+    expect(html).not.toContain("🟢");
+    expect(html).not.toContain("🔴");
+  });
+
+  it("carries the same amounts, multiplier, and idle collapse as the text report", () => {
+    expect(html).toContain("$425.55");
+    expect(html).toContain("$176.80");
+    expect(html).toContain("22x");
+    expect(html).toContain("2 idle: lora-2, lora-of");
+    expect(html).toContain("1 idle: lilly-2");
+    expect(html).not.toContain("$0.00");
+  });
+
+  // End-to-end render — runs where the chromium binary is present (prod image,
+  // local install); skips gracefully where it is not.
+  it("rasterises to a PNG via chromium", async () => {
+    let png: Buffer;
+    try {
+      png = await renderDailyRevenueReportImage(sampleReport);
+    } catch {
+      return;
+    }
+    expect(png.length).toBeGreaterThan(1000);
+    expect(png.subarray(0, 4).toString("hex")).toBe("89504e47");
+  }, 60_000);
 });

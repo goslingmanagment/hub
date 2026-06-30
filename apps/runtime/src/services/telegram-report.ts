@@ -15,7 +15,8 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
+import { sendTelegramMessage, sendTelegramPhoto, type TelegramSendResult } from "./telegram.ts";
+import { renderDailyRevenueReportImage } from "./telegram-report-image.ts";
 
 export const TOP_PAGE_LIMIT = 10;
 export const TOP_MODEL_LIMIT = 10;
@@ -105,7 +106,7 @@ export function formatReportDate(reportDate: string): string {
   return `${REPORT_WEEKDAYS[parsed.getUTCDay()]} ${parsed.getUTCDate()} ${REPORT_MONTHS[parsed.getUTCMonth()]}`;
 }
 
-function formatShare(partMills: bigint, totalMills: bigint): string {
+export function formatShare(partMills: bigint, totalMills: bigint): string {
   if (totalMills === 0n) {
     return "0%";
   }
@@ -202,7 +203,7 @@ function modelDot(deltaPct: number | null): string {
 }
 
 /** Whole-dollar amount (no cents) for the large trailing-window figures. */
-function formatUsdCompact(mills: bigint): string {
+export function formatUsdCompact(mills: bigint): string {
   const dollars = Math.round(Number(mills) / 1000);
   const sign = dollars < 0 ? "-" : "";
   return `${sign}$${Math.abs(dollars).toLocaleString("en-US")}`;
@@ -211,7 +212,7 @@ function formatUsdCompact(mills: bigint): string {
 const IDLE_NOTE_NAME_LIMIT = 4;
 
 /** "  +2 idle: lora-2, lora-of" — collapses zero-yesterday pages into one line. */
-function formatIdleNote(labels: string[]): string {
+export function formatIdleNote(labels: string[]): string {
   const shown = labels.slice(0, IDLE_NOTE_NAME_LIMIT).join(", ");
   const overflow = labels.length > IDLE_NOTE_NAME_LIMIT
     ? `, +${labels.length - IDLE_NOTE_NAME_LIMIT}`
@@ -422,6 +423,35 @@ export async function buildDailyRevenueTelegramReport(
   };
 }
 
+/** Short text caption that rides with the image (shown in the push preview). */
+function buildDailyRevenueReportCaption(report: DailyRevenueTelegramReport): string {
+  const y = report.agency.metrics.yesterday;
+  return `📊 <b>Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</b> — `
+    + `<b>${formatUsdFromMills(y.currentMills)}</b> ${formatDeltaCompact(y)}`;
+}
+
+/**
+ * Sends the report as a rendered image with a short caption; falls back to the
+ * plain-text message if image rendering fails (e.g. chromium unavailable), so a
+ * report always goes out.
+ */
+async function deliverDailyRevenueReport(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  report: DailyRevenueTelegramReport,
+): Promise<TelegramSendResult> {
+  try {
+    const image = await renderDailyRevenueReportImage(report);
+    return await sendTelegramPhoto(app, {
+      photo: image,
+      caption: buildDailyRevenueReportCaption(report),
+      parseMode: "HTML",
+    });
+  } catch (error) {
+    app.logger.warn({ err: error }, "Revenue report image render failed; falling back to text");
+    return sendTelegramMessage(app, { text: report.text, parseMode: report.parseMode });
+  }
+}
+
 export async function sendDailyRevenueTelegramReport(
   app: Pick<AppContext, "config" | "db" | "logger">,
   now = new Date(),
@@ -448,10 +478,7 @@ export async function sendDailyRevenueTelegramReport(
   }
 
   const report = await buildDailyRevenueTelegramReport(app, now);
-  const delivery = await sendTelegramMessage(app, {
-    text: report.text,
-    parseMode: report.parseMode,
-  });
+  const delivery = await deliverDailyRevenueReport(app, report);
 
   await insertDeliveryAttempt(app.db, {
     kind: "daily_report_scheduled",
@@ -479,10 +506,7 @@ export async function sendManualDailyRevenueTelegramReport(
   report: DailyRevenueTelegramReport | null;
 }> {
   const report = await buildDailyRevenueTelegramReport(app, now);
-  const delivery = await sendTelegramMessage(app, {
-    text: report.text,
-    parseMode: report.parseMode,
-  });
+  const delivery = await deliverDailyRevenueReport(app, report);
 
   await insertDeliveryAttempt(app.db, {
     kind: "daily_report_manual",
