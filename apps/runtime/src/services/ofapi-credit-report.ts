@@ -25,7 +25,7 @@ import {
   listOfapiOperationBreakdownBetween,
   listOfapiPageBreakdownBetween,
   listOfapiRefillsBetween,
-  sumOfapiCreditsSpentSince,
+  summarizeOfapiSpendWindowSince,
   sumOfapiRestCreditsForPagesBetween,
   sumOfapiRestCreditsForOperationsBetween,
   sumOfapiSpendBySourceBetween,
@@ -40,6 +40,10 @@ import { isOfapiCreditFloorBlocking } from "./sync/ofapi-dm-sync.ts";
 const DEFAULT_DM_DAILY_CREDIT_BUDGET = 500;
 const DEFAULT_AUDIENCE_DAILY_CREDIT_BUDGET = 300;
 const DEFAULT_CREDIT_FLOOR = 500;
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+// Trailing window (days) the runway forecast averages spend over.
+const RUNWAY_WINDOW_DAYS = 7;
 
 // Ledger operations attributed to the DM bootstrap/reconcile stream (decision #49)
 // and to the audience sweep (parity Phase 3).
@@ -71,6 +75,35 @@ function toSpendBySource(map: Map<OfapiCreditLedgerSource, number>): SpendBySour
 
 function spendTotal(bySource: SpendBySource) {
   return bySource.rest + bySource.webhookAccrual + bySource.external + bySource.adjustment;
+}
+
+/**
+ * Estimate the credit runway (A2). Average daily spend is the trailing-window net
+ * spend divided by the number of days actually OBSERVED — the span from the first
+ * spend row in the window to `now`, floored at 1 day and capped at the window —
+ * not a hard-coded 7. On a young or idle-then-active ledger this stops a few days
+ * of spend from being divided by 7, which would understate the burn rate and
+ * overstate the days-left runway right after launch.
+ */
+export function estimateOfapiRunway(input: {
+  lastBalance: number | null;
+  spendInWindow: number;
+  earliestSpendAt: Date | null;
+  now: Date;
+  windowDays?: number;
+}): { avgDailySpend: number; daysLeft: number | null } {
+  const windowDays = input.windowDays ?? RUNWAY_WINDOW_DAYS;
+  const observedDays = input.earliestSpendAt
+    ? Math.min(
+      windowDays,
+      Math.max(1, (input.now.getTime() - input.earliestSpendAt.getTime()) / MS_PER_DAY),
+    )
+    : windowDays;
+  const avgDailySpend = Math.round((Math.max(0, input.spendInWindow) / observedDays) * 10) / 10;
+  const daysLeft = input.lastBalance !== null && avgDailySpend > 0
+    ? Math.floor(input.lastBalance / avgDailySpend)
+    : null;
+  return { avgDailySpend, daysLeft };
 }
 
 async function getChatterSpendWindow(
@@ -165,6 +198,7 @@ export async function getOfapiCreditsSummary(
   const enabled = isOfapiCreditLedgerEnabled(app.config);
   const dayStart = utcDayStart(now);
   const nextDayStart = addUtcDays(dayStart, 1);
+  const spendWindowSince = new Date(now.getTime() - RUNWAY_WINDOW_DAYS * MS_PER_DAY);
 
   const [
     credit,
@@ -173,7 +207,7 @@ export async function getOfapiCreditsSummary(
     todaySpend,
     dmSpentToday,
     audienceSpentToday,
-    spend7d,
+    spendWindow,
     openIncidents,
     pendingWebhookEventCount,
   ] = await Promise.all([
@@ -191,9 +225,9 @@ export async function getOfapiCreditsSummary(
       from: dayStart,
       to: nextDayStart,
     }),
-    sumOfapiCreditsSpentSince(app.db, {
-      since: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
-    }),
+    // Net spend AND the earliest effective spend start share one query so the
+    // runway numerator and denominator use the same window semantics.
+    summarizeOfapiSpendWindowSince(app.db, { since: spendWindowSince }),
     listNotificationIncidents(app.db, { status: "open" }),
     enabled
       ? countOfapiWebhookEventsReceivedBetween(app.db, { from: dayStart, to: nextDayStart })
@@ -256,10 +290,12 @@ export async function getOfapiCreditsSummary(
       : []),
   ];
 
-  const avgDailySpend7d = Math.round((Math.max(0, spend7d) / 7) * 10) / 10;
-  const daysLeft = credit.lastBalance !== null && avgDailySpend7d > 0
-    ? Math.floor(credit.lastBalance / avgDailySpend7d)
-    : null;
+  const { avgDailySpend: avgDailySpend7d, daysLeft } = estimateOfapiRunway({
+    lastBalance: credit.lastBalance,
+    spendInWindow: spendWindow.total,
+    earliestSpendAt: spendWindow.earliestEffectiveAt,
+    now,
+  });
 
   return {
     enabled,

@@ -1331,24 +1331,53 @@ export async function sumOfapiKnownCreditsBetween(
  * that carry their window start (details.fromOccurredAt) are pro-rated by the
  * window's overlap with [since, occurredAt].
  */
-export async function sumOfapiCreditsSpentSince(
+export interface OfapiSpendWindowStats {
+  /** Net credits spent in the window (refills excluded, external drift prorated). */
+  total: number;
+  /**
+   * Earliest EFFECTIVE spend start in the window: for a prorated `external` drift
+   * row this is `greatest(fromOccurredAt, since)` — the start of the counted slice
+   * — otherwise `occurredAt`. Null when the window holds no spend. Sizes the runway
+   * forecast's observed span so it matches how `total` is attributed, instead of
+   * anchoring on a drift row's post time (which would understate the span and make
+   * the runway too pessimistic).
+   */
+  earliestEffectiveAt: Date | null;
+}
+
+/**
+ * Net spend AND the earliest effective spend start over `[since, ∞)`, computed in
+ * one query so the two can never drift. The `external`-drift proration window used
+ * by both the sum and the effective-start is defined once (`isProratedExternal`).
+ */
+export async function summarizeOfapiSpendWindowSince(
   db: Database,
   input: { since: Date },
-): Promise<number> {
+): Promise<OfapiSpendWindowStats> {
   const fromOccurredAt = sql`(${ofapiCreditLedger.details} ->> 'fromOccurredAt')::timestamptz`;
+  const isProratedExternal = sql`${ofapiCreditLedger.source} = 'external'
+    and (${ofapiCreditLedger.details} ->> 'fromOccurredAt') is not null
+    and ${fromOccurredAt} < ${ofapiCreditLedger.occurredAt}`;
   const [row] = await db
     .select({
       total: sql<number>`coalesce(round(sum(
         case
-          when ${ofapiCreditLedger.source} = 'external'
-            and (${ofapiCreditLedger.details} ->> 'fromOccurredAt') is not null
-            and ${fromOccurredAt} < ${ofapiCreditLedger.occurredAt}
+          when ${isProratedExternal}
           then ${ofapiCreditLedger.credits}::double precision
             * extract(epoch from (${ofapiCreditLedger.occurredAt} - greatest(${fromOccurredAt}, ${input.since})))
             / extract(epoch from (${ofapiCreditLedger.occurredAt} - ${fromOccurredAt}))
           else ${ofapiCreditLedger.credits}
         end
       )), 0)::int`,
+      // Raw aggregate: the driver may hand back a timestamptz string, so coerce
+      // like getLatestOfapiWebhookEventReceivedAt rather than assuming a Date.
+      earliestEffectiveAt: sql<Date | string | null>`min(
+        case
+          when ${isProratedExternal}
+          then greatest(${fromOccurredAt}, ${input.since})
+          else ${ofapiCreditLedger.occurredAt}
+        end
+      )`,
     })
     .from(ofapiCreditLedger)
     .where(and(
@@ -1356,7 +1385,22 @@ export async function sumOfapiCreditsSpentSince(
       ne(ofapiCreditLedger.source, "refill"),
     ));
 
-  return row?.total ?? 0;
+  const rawEarliest = row?.earliestEffectiveAt ?? null;
+  const parsed = rawEarliest === null
+    ? null
+    : rawEarliest instanceof Date ? rawEarliest : new Date(rawEarliest);
+  return {
+    total: row?.total ?? 0,
+    earliestEffectiveAt: parsed && !Number.isNaN(parsed.getTime()) ? parsed : null,
+  };
+}
+
+export async function sumOfapiCreditsSpentSince(
+  db: Database,
+  input: { since: Date },
+): Promise<number> {
+  const { total } = await summarizeOfapiSpendWindowSince(db, input);
+  return total;
 }
 
 export interface OfapiCreditReconcileState {

@@ -378,9 +378,11 @@ describe("ofapi credits admin api", () => {
       retryAt: null,
     }]);
     expect(body.floor).toEqual({ value: 500, blocked: false });
-    // 137 credits over 7 days = 19.6/day; days left from the 23,950 balance.
-    expect(body.forecast.avgDailySpend7d).toBe(19.6);
-    expect(body.forecast.daysLeft).toBe(Math.floor(23_950 / 19.6));
+    // A2: all 137 net credits were recorded today (<1 day of history), so the
+    // runway divides by the observed span floored at 1 day — not a full 7 — and
+    // does not overstate days-left. (The old divide-by-7 reported 19.6/day.)
+    expect(body.forecast.avgDailySpend7d).toBe(137);
+    expect(body.forecast.daysLeft).toBe(Math.floor(23_950 / 137));
     expect(body.forecast.runOutDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(body.reconciliation.lastRunAt).not.toBeNull();
     expect(body.reconciliation.lastDriftCredits).toBe(0);
@@ -413,6 +415,53 @@ describe("ofapi credits admin api", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().pricing).toEqual({ microUsdPerCredit: 10_000 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("sizes the runway from an external residual's spread start, not its post time", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    // A zero-credit probe just sets the observed balance (7,000) without adding
+    // to spend; the runway's days-left divides the balance by the daily rate.
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_me",
+      credits: 0,
+      balanceAfter: 7_000,
+      occurredAt: new Date(now.getTime() - 30 * 1000),
+    });
+    // One external drift residual: 700 credits attributed across the whole 7-day
+    // window (fromOccurredAt) but posted just now (occurredAt). sumOfapiCredits…
+    // prorates it to ~700 over 7 days; the runway must divide by that 7-day span,
+    // not by the ~1-day gap to the post time.
+    await insertOfapiCreditLedgerEntry(appContext.db, {
+      occurredAt: new Date(now.getTime() - 60 * 1000),
+      source: "external",
+      credits: 700,
+      estimated: true,
+      details: {
+        fromOccurredAt: sevenDaysAgo.toISOString(),
+        fromBalance: 7_700,
+        toBalance: 7_000,
+      },
+    });
+
+    const cookie = await loginCookie("dima", "owner-secret");
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/summary",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    // ~700 credits spread over ~7 days → ~100/day, not ~700/day (which anchoring
+    // on the post time would produce).
+    expect(body.forecast.avgDailySpend7d).toBe(100);
+    expect(body.forecast.daysLeft).toBe(Math.floor(7_000 / 100)); // 70
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("reports current UTC-day pending webhook accrual without adding it to posted spend", async (context) => {

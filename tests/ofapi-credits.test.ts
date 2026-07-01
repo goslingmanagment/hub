@@ -7,6 +7,7 @@ import {
   planOfapiCreditReconciliation,
   webhookAccrualCredits,
 } from "../apps/runtime/src/services/ofapi-credits.ts";
+import { estimateOfapiRunway } from "../apps/runtime/src/services/ofapi-credit-report.ts";
 import { resolveOfapiCreditSpend } from "../apps/runtime/src/services/ofapi.ts";
 
 describe("resolveOfapiCreditSpend", () => {
@@ -59,6 +60,91 @@ describe("webhookAccrualCredits", () => {
     expect(webhookAccrualCredits(101)).toBe(2);
     expect(webhookAccrualCredits(250)).toBe(3);
     expect(webhookAccrualCredits(-5)).toBe(0);
+  });
+});
+
+describe("estimateOfapiRunway (A2 runway forecast)", () => {
+  const now = new Date("2026-07-01T12:00:00.000Z");
+  const daysAgo = (days: number) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+
+  it("divides by the full window once a full week of history exists", () => {
+    const runway = estimateOfapiRunway({
+      lastBalance: 10_000,
+      spendInWindow: 700,
+      earliestSpendAt: daysAgo(7),
+      now,
+    });
+    expect(runway.avgDailySpend).toBe(100);
+    expect(runway.daysLeft).toBe(100);
+  });
+
+  it("divides by the observed span, not 7, for a young ledger", () => {
+    const runway = estimateOfapiRunway({
+      lastBalance: 10_000,
+      spendInWindow: 200,
+      earliestSpendAt: daysAgo(2),
+      now,
+    });
+    // Observed two days → 100/day, not 200/7 ≈ 28.6 which would 3.5× the runway.
+    expect(runway.avgDailySpend).toBe(100);
+    expect(runway.daysLeft).toBe(100);
+  });
+
+  it("floors the observed span at one day so a few hours of spend is not extrapolated wildly", () => {
+    const runway = estimateOfapiRunway({
+      lastBalance: 10_000,
+      spendInWindow: 137,
+      earliestSpendAt: new Date(now.getTime() - 6 * 60 * 60 * 1000),
+      now,
+    });
+    expect(runway.avgDailySpend).toBe(137);
+    expect(runway.daysLeft).toBe(Math.floor(10_000 / 137));
+  });
+
+  it("caps the observed span at the window even if a spend row predates it", () => {
+    const runway = estimateOfapiRunway({
+      lastBalance: 7_000,
+      spendInWindow: 700,
+      earliestSpendAt: daysAgo(30),
+      now,
+    });
+    expect(runway.avgDailySpend).toBe(100); // 700 / 7, not 700 / 30
+  });
+
+  it("returns a zero rate and null runway when the window holds no spend", () => {
+    const runway = estimateOfapiRunway({
+      lastBalance: 10_000,
+      spendInWindow: 0,
+      earliestSpendAt: null,
+      now,
+    });
+    expect(runway.avgDailySpend).toBe(0);
+    expect(runway.daysLeft).toBeNull();
+  });
+
+  it("returns a null runway when the balance is unknown", () => {
+    const runway = estimateOfapiRunway({
+      lastBalance: null,
+      spendInWindow: 200,
+      earliestSpendAt: daysAgo(2),
+      now,
+    });
+    expect(runway.avgDailySpend).toBe(100);
+    expect(runway.daysLeft).toBeNull();
+  });
+
+  it("reports a shorter runway for a young ledger than the legacy divide-by-7 would", () => {
+    const spendInWindow = 210;
+    const lastBalance = 2_100;
+    const young = estimateOfapiRunway({
+      lastBalance,
+      spendInWindow,
+      earliestSpendAt: daysAgo(3),
+      now,
+    });
+    const legacyAvg = Math.round((spendInWindow / 7) * 10) / 10; // 30
+    expect(young.avgDailySpend).toBeGreaterThan(legacyAvg); // 70 > 30
+    expect(young.daysLeft ?? Infinity).toBeLessThan(Math.floor(lastBalance / legacyAvg));
   });
 });
 
