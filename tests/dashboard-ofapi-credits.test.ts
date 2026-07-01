@@ -76,12 +76,17 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain("OFAPI Credits");
     expect(markup).toContain("23,950 cr");
     expect(markup).toContain("137 cr");
-    expect(markup).toContain("dm 84/500");
+    // C1: stream budgets render as a labelled meter, not run-on text.
+    expect(markup).toContain("84/500");
+    expect(markup).toContain('role="progressbar"');
+    expect(markup).toContain("dm daily budget");
     expect(markup).toContain("~31 days left");
     expect(markup).toContain("floor 500 OK");
     expect(markup).toContain("accrual posted for 2026-06-11");
     expect(markup).toContain("drift 0");
     expect(markup).not.toContain("Credit ledger disabled");
+    // With no configured credit price, USD estimates stay hidden.
+    expect(markup).not.toContain("≈ $");
     // A healthy page raises no floor/incident alarm banner.
     expect(markup).not.toContain('role="alert"');
   });
@@ -270,6 +275,87 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain("Retry");
     // A failed ledger fetch must not read as an empty result.
     expect(markup).not.toContain("No ledger rows");
+  });
+
+  it("shows USD estimates and per-page ROI once a credit price is configured", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({ pricing: { microUsdPerCredit: 10_000 } }),
+      isLoading: false,
+      isError: false,
+    });
+    queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
+      data: {
+        ...emptyDaily,
+        byPage: [{ pageId: 3, pageLabel: "lora-of", credits: 100, revenueMills: 2500 }],
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    // $0.01/credit: balance 23,950 = $239.50, spent 137 = $1.37, avg 212/day = $2.12.
+    expect(markup).toContain("≈ $239.50");
+    expect(markup).toContain("≈ $1.37");
+    expect(markup).toContain("≈ $2.12/day");
+    // Per-page cost-vs-revenue: 100 cr costs $1.00, earned $2.50, ROI 2.5×.
+    expect(markup).toContain("$2.50");
+    expect(markup).toContain("2.5×");
+    // The "configure a price" nudge disappears once a price is set.
+    expect(markup).not.toContain("set a credit price");
+  });
+
+  it("drills breakdown operation and page rows into the ledger filters", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture(),
+      isLoading: false,
+      isError: false,
+    });
+    queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
+      data: {
+        ...emptyDaily,
+        byOperation: [{ operation: "ofapi_chats", requests: 2, credits: 90 }],
+        byPage: [{ pageId: 3, pageLabel: "lora-of", credits: 90, revenueMills: 0 }],
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    // Both breakdown labels are real buttons that filter the ledger below.
+    expect(markup).toContain('title="Filter ledger by ofapi_chats"');
+    expect(markup).toContain('title="Filter ledger by lora-of"');
+  });
+
+  it("offers a CSV export button in the ledger toolbar", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture(),
+      isLoading: false,
+      isError: false,
+    });
+    queryMocks.useAdminOfapiCreditsLedger.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        total: 1,
+        rows: [{
+          id: 1,
+          occurredAt: "2026-06-12T10:30:00.000Z",
+          source: "rest",
+          operation: "ofapi_chats",
+          pageId: 3,
+          pageLabel: "lora-of",
+          httpStatus: 200,
+          credits: 2,
+          estimated: false,
+          balanceAfter: 23_950,
+          requestId: null,
+          accrualDay: null,
+        }],
+      },
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("Export CSV");
   });
 
   it("shows the error panel when the summary fails", () => {

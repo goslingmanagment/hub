@@ -33,6 +33,7 @@ export function createTestAppContext(
     ofapiWebhookSilenceThresholdMinutes?: number;
     ofapiCreditLedgerEnabled?: boolean;
     ofapiBurnAlertCreditsPerHour?: number;
+    ofapiCreditMicroUsdPrice?: number;
     ofapiBalancePingEnabled?: boolean;
     ofapiAudienceSyncEnabled?: boolean;
     ofapiAudienceMaxRequestsPerRun?: number;
@@ -112,6 +113,7 @@ export function createTestAppContext(
       ofapiWebhookSilenceThresholdMinutes: overrides?.ofapiWebhookSilenceThresholdMinutes ?? 720,
       ofapiCreditLedgerEnabled: overrides?.ofapiCreditLedgerEnabled ?? false,
       ofapiBurnAlertCreditsPerHour: overrides?.ofapiBurnAlertCreditsPerHour ?? 300,
+      ofapiCreditMicroUsdPrice: overrides?.ofapiCreditMicroUsdPrice ?? 0,
       ofapiBalancePingEnabled: overrides?.ofapiBalancePingEnabled ?? false,
       ofapiAudienceSyncEnabled: overrides?.ofapiAudienceSyncEnabled ?? false,
       ofapiAudienceMaxRequestsPerRun: overrides?.ofapiAudienceMaxRequestsPerRun ?? 25,

@@ -133,6 +133,7 @@ const envSchema = z.object({
   OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(720),
   OFAPI_CREDIT_LEDGER_ENABLED: booleanSchema.default(false),
   OFAPI_BURN_ALERT_CREDITS_PER_HOUR: z.coerce.number().int().min(0).default(300),
+  OFAPI_CREDIT_MICRO_USD_PRICE: z.coerce.number().int().min(0).default(0),
   OFAPI_BALANCE_PING_ENABLED: booleanSchema.default(false),
   OFAPI_AUDIENCE_SYNC_ENABLED: booleanSchema.default(false),
   OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
@@ -228,6 +229,7 @@ export interface AppConfig {
   ofapiWebhookSilenceThresholdMinutes?: number;
   ofapiCreditLedgerEnabled?: boolean;
   ofapiBurnAlertCreditsPerHour?: number;
+  ofapiCreditMicroUsdPrice?: number;
   ofapiBalancePingEnabled?: boolean;
   ofapiAudienceSyncEnabled?: boolean;
   ofapiAudienceMaxRequestsPerRun?: number;
@@ -410,6 +412,7 @@ export function loadConfig(
     ofapiWebhookSilenceThresholdMinutes: parsed.OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
     ofapiCreditLedgerEnabled: parsed.OFAPI_CREDIT_LEDGER_ENABLED,
     ofapiBurnAlertCreditsPerHour: parsed.OFAPI_BURN_ALERT_CREDITS_PER_HOUR,
+    ofapiCreditMicroUsdPrice: parsed.OFAPI_CREDIT_MICRO_USD_PRICE,
     ofapiBalancePingEnabled: parsed.OFAPI_BALANCE_PING_ENABLED,
     ofapiAudienceSyncEnabled: parsed.OFAPI_AUDIENCE_SYNC_ENABLED,
     ofapiAudienceMaxRequestsPerRun: parsed.OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN,

@@ -38,3 +38,58 @@ export function useAdminOfapiCreditsLedger(params: AdminOfapiCreditsLedgerParams
     queryFn: () => api.get<OfapiCreditsLedgerResponse>(`/api/v1/admin/ofapi/credits/ledger${qs({ ...params })}`),
   });
 }
+
+export interface OfapiCreditsLedgerCsvParams {
+  source?: string;
+  pageId?: number;
+  operation?: string;
+  from?: string;
+  to?: string;
+}
+
+export function ofapiCreditsLedgerCsvUrl(params: OfapiCreditsLedgerCsvParams) {
+  return `/api/v1/admin/ofapi/credits/ledger.csv${qs({ ...params })}`;
+}
+
+export interface OfapiCreditsLedgerCsvResult {
+  rowCount: number;
+  // True when the export hit the server's row cap and is therefore incomplete.
+  truncated: boolean;
+}
+
+/**
+ * Streams the filtered ledger as a CSV download. The shared `api` client always
+ * JSON-parses, so this goes through a raw cookie-authenticated fetch → blob →
+ * temporary anchor, which keeps the SPA's session cookie and honours the
+ * server's Content-Disposition filename. Returns the server's row count and
+ * truncation flag so the caller can warn when a capped extract is incomplete.
+ */
+export async function downloadOfapiCreditsLedgerCsv(
+  params: OfapiCreditsLedgerCsvParams,
+): Promise<OfapiCreditsLedgerCsvResult> {
+  const response = await fetch(ofapiCreditsLedgerCsvUrl(params), { credentials: "include" });
+  if (!response.ok) {
+    throw new Error(`Export failed (HTTP ${response.status})`);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = /filename="?([^"]+)"?/.exec(disposition)?.[1] ?? "ofapi-credit-ledger.csv";
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  return {
+    rowCount: Number(response.headers.get("x-export-row-count") ?? "0"),
+    truncated: response.headers.get("x-export-truncated") === "1",
+  };
+}

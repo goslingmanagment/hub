@@ -1,4 +1,4 @@
-import { Fragment, useId, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
   Area,
@@ -10,12 +10,14 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { formatUsdFromMills } from "@agency_hub_core/shared";
 import type { OfapiCreditsLedgerResponse } from "@agency_hub_core/contracts";
 import {
   useAdminOfapiCreditsDaily,
   useAdminOfapiCreditsLedger,
   useAdminOfapiCreditsSummary,
 } from "@/api/queries";
+import { downloadOfapiCreditsLedgerCsv } from "@/api/adminOfapiCredits";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Pagination } from "@/components/shared/Pagination";
 import { StackedBarChart } from "@/components/shared/StackedBarChart";
@@ -163,6 +165,66 @@ function Caret(props: { expanded: boolean }) {
   );
 }
 
+// Micro-USD per credit → a formatted USD estimate. 1 mill = 1000 micro-USD, so
+// mills = credits * microUsdPerCredit / 1000; reuse the shared mills formatter so
+// the estimate reads identically to the actual revenue figures on the page.
+function creditsToUsd(credits: number, microUsdPerCredit: number) {
+  return formatUsdFromMills(Math.round((credits * microUsdPerCredit) / 1000));
+}
+
+// C1: a compact per-stream budget meter replaces the run-on "dm 84/500 · …" text.
+// The bar reddens once the stream is parked (exhausted or floor-blocked).
+function BudgetMeter(props: {
+  stream: string;
+  spentToday: number;
+  dailyCeiling: number;
+  state: "ok" | "budget_exhausted" | "floor_blocked";
+}) {
+  const pct = props.dailyCeiling > 0
+    ? Math.min(100, Math.round((props.spentToday / props.dailyCeiling) * 100))
+    : 0;
+  const parked = props.state !== "ok";
+  const barClass = parked
+    ? "bg-red-500"
+    : pct >= 80
+      ? "bg-amber-500"
+      : "bg-accent";
+  return (
+    <div>
+      <div className="flex items-baseline justify-between text-[11px] tabular-nums">
+        <span className="font-medium uppercase tracking-wide text-text-secondary">{props.stream}</span>
+        <span className={parked ? "text-red-700 font-semibold" : "text-text-secondary"}>
+          {fmtCredits(props.spentToday)}/{fmtCredits(props.dailyCeiling)}
+        </span>
+      </div>
+      <div
+        className="mt-1 h-1.5 overflow-hidden rounded-full bg-hover-alt"
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`${props.stream} daily budget: ${props.spentToday} of ${props.dailyCeiling} credits`}
+      >
+        <div className={`h-full ${barClass}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+// A page's revenue ÷ estimated credit cost, or null when it can't be computed
+// (no configured price, or the page cost no credits). Returns a raw ratio so the
+// caller can both format and tone-colour it.
+function computeRoi(revenueMills: number, credits: number, microUsdPerCredit: number): number | null {
+  if (microUsdPerCredit <= 0 || credits <= 0) {
+    return null;
+  }
+  const costMills = (credits * microUsdPerCredit) / 1000;
+  if (costMills <= 0) {
+    return null;
+  }
+  return revenueMills / costMills;
+}
+
 function BalanceChart(props: {
   points: Array<{ day: string; value: number }>;
   refills: Array<{ day: string; credits: number }>;
@@ -257,6 +319,9 @@ function BalanceChart(props: {
 
 const thClass = "px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-secondary";
 const tdClass = "px-4 py-2.5 text-[13px] text-text-secondary tabular-nums";
+// A breakdown label that drills into the matching ledger filter.
+const drillCellClass =
+  "text-left text-accent underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent rounded";
 
 function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number] }) {
   const [expanded, setExpanded] = useState(false);
@@ -327,6 +392,11 @@ export function OfapiCreditsPage() {
   const [fromFilter, setFromFilter] = useState("");
   const [toFilter, setToFilter] = useState("");
 
+  const ledgerRef = useRef<HTMLElement | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(false);
+  const [exportTruncated, setExportTruncated] = useState(false);
+
   const ledgerQuery = useAdminOfapiCreditsLedger({
     offset: ledgerOffset,
     limit: LEDGER_PAGE_SIZE,
@@ -382,7 +452,6 @@ export function OfapiCreditsPage() {
 
   const operationTotal = (breakdown?.byOperation ?? [])
     .reduce((sum, row) => sum + row.credits, 0);
-  const pageTotal = (breakdown?.byPage ?? []).reduce((sum, row) => sum + row.credits, 0);
 
   const filterSelectClass =
     "rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] text-text-secondary";
@@ -411,6 +480,49 @@ export function OfapiCreditsPage() {
   const parkedBudgets = summary.budgets.filter((budget) => budget.state !== "ok");
   const pendingWebhookEstimate = summary.accrual.pendingToday ?? null;
   const hasAudienceBudget = summary.budgets.some((budget) => budget.stream === "audience");
+
+  // USD context (goal 1): a display-only flat credit price from Settings. 0 means
+  // unset, and every USD estimate on the page is suppressed.
+  const microUsdPerCredit = summary.pricing?.microUsdPerCredit ?? 0;
+  const priceKnown = microUsdPerCredit > 0;
+  const usd = (credits: number) => creditsToUsd(credits, microUsdPerCredit);
+
+  const focusLedger = () => {
+    ledgerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  // Goal 4: a breakdown row drills straight into the matching ledger filter.
+  const drillByOperation = (operation: string) => {
+    setOperationFilter(operation);
+    setLedgerOffset(0);
+    focusLedger();
+  };
+  const drillByPage = (pageId: number) => {
+    setPageFilter(String(pageId));
+    setLedgerOffset(0);
+    focusLedger();
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    setExportError(false);
+    setExportTruncated(false);
+    try {
+      const result = await downloadOfapiCreditsLedgerCsv({
+        source: sourceFilter || undefined,
+        operation: operationFilter.trim() || undefined,
+        pageId: pageFilter ? Number(pageFilter) : undefined,
+        from: fromFilter ? `${fromFilter}T00:00:00.000Z` : undefined,
+        to: toFilter ? `${toFilter}T23:59:59.999Z` : undefined,
+      });
+      // The server caps a single export; warn so a capped extract is never
+      // mistaken for a complete accounting export.
+      setExportTruncated(result.truncated);
+    } catch {
+      setExportError(true);
+    } finally {
+      setExporting(false);
+    }
+  };
   const runwayTone: ValueTone = summary.forecast.daysLeft === null
     ? "neutral"
     : summary.forecast.daysLeft < RUNWAY_DANGER_DAYS
@@ -472,31 +584,57 @@ export function OfapiCreditsPage() {
           hint={summary.balance.observedAt
             ? `as of ${utcTime(summary.balance.observedAt)}`
             : "no balance observed yet"}
-        />
-        <Stat label="Spent today" value={`${fmtCredits(summary.today.total)} cr`} hint={summary.today.day}>
+        >
+          {priceKnown && summary.balance.value !== null && (
+            <div className="mt-1 text-[11px] text-text-secondary tabular-nums">
+              ≈ {usd(summary.balance.value)}
+            </div>
+          )}
+        </Stat>
+        <Stat
+          label="Spent today"
+          value={`${fmtCredits(summary.today.total)} cr`}
+          hint={priceKnown ? `${summary.today.day} · ≈ ${usd(summary.today.total)}` : summary.today.day}
+        >
           <div className="mt-1 space-y-0.5 text-[11px] text-text-secondary tabular-nums">
             <div>core {fmtCredits(summary.today.bySource.rest)}</div>
             <div>webhooks {fmtCredits(summary.today.bySource.webhookAccrual)}</div>
             <div>external {fmtCredits(summary.today.bySource.external + summary.today.bySource.adjustment)}</div>
           </div>
         </Stat>
-        <Stat
-          label="Stream budgets"
-          value={summary.budgets
-            .map((budget) => `${budget.stream} ${fmtCredits(budget.spentToday)}/${fmtCredits(budget.dailyCeiling)}`)
-            .join(" · ")}
-          hint={summary.floor.blocked
-            ? `floor ${fmtCredits(summary.floor.value)} BLOCKED`
-            : `floor ${fmtCredits(summary.floor.value)} OK`}
-          hintTone={summary.floor.blocked ? "danger" : "muted"}
-        />
+        {/* C1/goal 3: per-stream budget meters instead of a run-on text value. */}
+        <div className="rounded-xl border border-border bg-card px-4 py-3">
+          <div className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">
+            Stream budgets
+          </div>
+          <div className="mt-2 space-y-2">
+            {summary.budgets.map((budget) => (
+              <BudgetMeter
+                key={budget.stream}
+                stream={budget.stream}
+                spentToday={budget.spentToday}
+                dailyCeiling={budget.dailyCeiling}
+                state={budget.state}
+              />
+            ))}
+          </div>
+          <div
+            className={`mt-2 text-[11px] ${
+              summary.floor.blocked ? "text-red-700 font-semibold" : "text-text-secondary"
+            }`}
+          >
+            {summary.floor.blocked
+              ? `floor ${fmtCredits(summary.floor.value)} BLOCKED`
+              : `floor ${fmtCredits(summary.floor.value)} OK`}
+          </div>
+        </div>
         <Stat
           label="Forecast"
           valueTone={runwayTone}
           value={summary.forecast.daysLeft !== null ? `~${summary.forecast.daysLeft} days left` : "—"}
           hint={`avg ${summary.forecast.avgDailySpend7d} cr/day (7d)${
-            summary.forecast.runOutDate ? ` · out ${summary.forecast.runOutDate}` : ""
-          }`}
+            priceKnown ? ` · ≈ ${usd(summary.forecast.avgDailySpend7d)}/day` : ""
+          }${summary.forecast.runOutDate ? ` · out ${summary.forecast.runOutDate}` : ""}`}
         />
       </div>
 
@@ -511,7 +649,13 @@ export function OfapiCreditsPage() {
         )}
         <ConfigLink configKey="ofapiCreditFloor">Credit floor</ConfigLink>
         <ConfigLink configKey="ofapiBurnAlertCreditsPerHour">Burn alert</ConfigLink>
-        <span className="text-text-secondary">· burn alert is editable there (live); budgets &amp; floor are env-only</span>
+        <ConfigLink configKey="ofapiCreditMicroUsdPrice">Credit price</ConfigLink>
+        <span className="text-text-secondary">· burn alert is editable there (live); price, budgets &amp; floor are env-only</span>
+        {!priceKnown && (
+          <span className="text-text-secondary">
+            · set a credit price to show USD cost &amp; ROI
+          </span>
+        )}
       </div>
 
       <div className="mt-4 rounded-xl border border-border bg-card px-4 py-3">
@@ -629,7 +773,20 @@ export function OfapiCreditsPage() {
                   <tbody>
                     {(breakdown?.byOperation ?? []).map((row) => (
                       <tr key={row.operation ?? "unknown"} className="border-t border-border-light">
-                        <td className={tdClass}>{row.operation ?? "unknown"}</td>
+                        <td className={tdClass}>
+                          {row.operation ? (
+                            <button
+                              type="button"
+                              onClick={() => drillByOperation(row.operation as string)}
+                              className={drillCellClass}
+                              title={`Filter ledger by ${row.operation}`}
+                            >
+                              {row.operation}
+                            </button>
+                          ) : (
+                            "unknown"
+                          )}
+                        </td>
                         <td className={`${tdClass} text-right`}>{fmtCredits(row.requests)}</td>
                         <td className={`${tdClass} text-right`}>{fmtCredits(row.credits)}</td>
                         <td className={`${tdClass} text-right`}>
@@ -654,22 +811,47 @@ export function OfapiCreditsPage() {
                     <tr className="bg-hover-alt">
                       <th className={thClass}>Page</th>
                       <th className={`${thClass} text-right`}>Credits</th>
-                      <th className={`${thClass} text-right`}>Share</th>
+                      <th className={`${thClass} text-right`} title="Estimated USD cost at the configured credit price">Cost</th>
+                      <th className={`${thClass} text-right`} title="Net creator earnings over this window">Revenue</th>
+                      <th className={`${thClass} text-right`} title="Revenue ÷ estimated credit cost">ROI</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(breakdown?.byPage ?? []).map((row) => (
-                      <tr key={row.pageId} className="border-t border-border-light">
-                        <td className={tdClass}>{row.pageLabel}</td>
-                        <td className={`${tdClass} text-right`}>{fmtCredits(row.credits)}</td>
-                        <td className={`${tdClass} text-right`}>
-                          {pageTotal > 0 ? `${Math.round((row.credits / pageTotal) * 100)}%` : "—"}
-                        </td>
-                      </tr>
-                    ))}
+                    {(breakdown?.byPage ?? []).map((row) => {
+                      const revenueMills = row.revenueMills ?? 0;
+                      const roi = computeRoi(revenueMills, row.credits, microUsdPerCredit);
+                      return (
+                        <tr key={row.pageId} className="border-t border-border-light">
+                          <td className={tdClass}>
+                            <button
+                              type="button"
+                              onClick={() => drillByPage(row.pageId)}
+                              className={drillCellClass}
+                              title={`Filter ledger by ${row.pageLabel}`}
+                            >
+                              {row.pageLabel}
+                            </button>
+                          </td>
+                          <td className={`${tdClass} text-right`}>{fmtCredits(row.credits)}</td>
+                          <td className={`${tdClass} text-right`}>
+                            {priceKnown ? usd(row.credits) : "—"}
+                          </td>
+                          <td className={`${tdClass} text-right`}>{formatUsdFromMills(revenueMills)}</td>
+                          <td className={`${tdClass} text-right`}>
+                            {roi === null
+                              ? "—"
+                              : (
+                                <span className={roi >= 1 ? "text-green" : "text-red-700 font-medium"}>
+                                  {roi.toFixed(1)}×
+                                </span>
+                              )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {(breakdown?.byPage ?? []).length === 0 && (
                       <tr className="border-t border-border-light">
-                        <td colSpan={3} className={`${tdClass} text-text-muted`}>
+                        <td colSpan={5} className={`${tdClass} text-text-muted`}>
                           No page-attributed spend in this window
                         </td>
                       </tr>
@@ -680,7 +862,10 @@ export function OfapiCreditsPage() {
             )}
           </section>
 
-          <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+          <section
+            ref={ledgerRef}
+            className="mt-6 scroll-mt-20 overflow-hidden rounded-xl border border-border bg-card"
+          >
             <div className="flex flex-wrap items-center gap-2 px-4 py-3">
               <h2 className="mr-auto text-[12px] font-semibold uppercase tracking-wider text-text-secondary">
                 Ledger
@@ -750,6 +935,27 @@ export function OfapiCreditsPage() {
                 className={filterSelectClass}
                 aria-label="To date (UTC)"
               />
+              {/* Goal 5: a real CSV export of every row matching the current
+                  filters (not just the visible page) for accounting. */}
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={exporting || (ledger?.total ?? 0) === 0}
+                className="rounded-lg border border-border bg-card px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+                title="Download every ledger row matching the current filters as CSV"
+              >
+                {exporting ? "Exporting…" : "Export CSV"}
+              </button>
+              {exportError && (
+                <span role="alert" className="text-[12px] font-medium text-red-700">
+                  Export failed — retry
+                </span>
+              )}
+              {exportTruncated && !exportError && (
+                <span role="alert" className="text-[12px] font-medium text-amber-700">
+                  Export capped at 50,000 rows — narrow the filters for a complete extract
+                </span>
+              )}
             </div>
             {ledgerQuery.isLoading ? (
               <TableSkeleton rows={8} columns={9} />

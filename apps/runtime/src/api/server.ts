@@ -238,6 +238,7 @@ import {
   getChatterOfapiCreditsSummary,
   getOfapiCreditsDaily,
   getOfapiCreditsLedger,
+  getOfapiCreditsLedgerCsv,
   getOfapiCreditsSummary,
 } from "../services/ofapi-credit-report.ts";
 import { executeOfapiReadGatewayRequest } from "../services/ofapi-read-gateway.ts";
@@ -1657,6 +1658,37 @@ export async function buildApiServer(appContext: AppContext) {
     requireOwner(principal);
 
     return getOfapiCreditsLedger(appContext, request.query);
+  });
+
+  server.get("/api/v1/admin/ofapi/credits/ledger.csv", {
+    schema: routeSchemas.adminOfapiCreditsLedgerCsv,
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    // Build the export before hijacking: an invalid filter still returns a
+    // normal 400 through the error handler rather than a half-written body.
+    const { filename, csv, rowCount, truncated } = await getOfapiCreditsLedgerCsv(
+      appContext,
+      request.query,
+    );
+    if (truncated) {
+      request.log.warn(
+        { rowCount },
+        "OFAPI credit ledger CSV export hit the row cap; narrow the filters for a complete extract",
+      );
+    }
+
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="${filename}"`,
+      "cache-control": "no-store",
+      "x-export-row-count": String(rowCount),
+      "x-export-truncated": truncated ? "1" : "0",
+    });
+    raw.end(csv);
   });
 
   server.get("/api/v1/admin/ofapi/spend/comparison", {

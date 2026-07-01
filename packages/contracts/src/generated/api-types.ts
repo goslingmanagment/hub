@@ -7518,6 +7518,9 @@ export interface paths {
                                     estimatedCredits: number;
                                 } | null;
                             };
+                            pricing?: {
+                                microUsdPerCredit: number;
+                            };
                         };
                     };
                 };
@@ -7610,6 +7613,7 @@ export interface paths {
                                 pageId: number;
                                 pageLabel: string;
                                 credits: number;
+                                revenueMills?: number;
                             }[];
                         };
                     };
@@ -7712,6 +7716,87 @@ export interface paths {
                                 accrualDay: string | null;
                             }[];
                         };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            statusCode: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ofapi/credits/ledger.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export the filtered OFAPI credit ledger as a CSV accounting extract */
+        get: {
+            parameters: {
+                query?: {
+                    source?: "rest" | "webhook_accrual" | "external" | "refill" | "adjustment";
+                    pageId?: number;
+                    operation?: string;
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description text/csv — one row per credit ledger entry matching the filters */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": string;
                     };
                 };
                 /** @description Default Response */

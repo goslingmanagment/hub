@@ -3142,6 +3142,13 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
       estimatedCredits: z.number().int().min(0),
     }).nullable().optional(),
   }),
+  // Display-only flat credit price for USD cost estimates (OFAPI_CREDIT_MICRO_USD_PRICE).
+  // Micro-USD integer per credit; 0 means "unset" and the dashboard hides USD figures.
+  // Optional so a dashboard bundle can roll forward/back across an API version that
+  // predates the price surface.
+  pricing: z.object({
+    microUsdPerCredit: z.number().int().min(0),
+  }).optional(),
 });
 
 const ofapiCreditsChatterWindowSchema = z.object({
@@ -3337,12 +3344,26 @@ export const ofapiCreditsDailyResponseSchema = z.object({
     pageId: intId,
     pageLabel: z.string(),
     credits: z.number().int(),
+    // Net creator earnings (mills) for this page over the same window, for
+    // per-page cost-vs-revenue / ROI. Optional so a dashboard bundle can roll
+    // forward/back across an API version that predates the revenue join.
+    revenueMills: z.number().int().optional(),
   })),
 });
 
 export const adminOfapiCreditsLedgerQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+  source: ofapiCreditLedgerSourceEnum.optional(),
+  pageId: z.coerce.number().int().positive().optional(),
+  operation: z.string().min(1).optional(),
+  from: isoTimestamp.optional(),
+  to: isoTimestamp.optional(),
+});
+
+// CSV export reuses the ledger filters but drops pagination — the handler streams
+// every matching row (up to an internal safety cap) as an accounting extract.
+export const adminOfapiCreditsLedgerCsvQuerySchema = z.object({
   source: ofapiCreditLedgerSourceEnum.optional(),
   pageId: z.coerce.number().int().positive().optional(),
   operation: z.string().min(1).optional(),
@@ -3933,6 +3954,20 @@ export const routeSchemas = {
     querystring: adminOfapiCreditsLedgerQuerySchema,
     response: {
       200: ofapiCreditsLedgerResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminOfapiCreditsLedgerCsv: {
+    tags: ["admin"],
+    summary: "Export the filtered OFAPI credit ledger as a CSV accounting extract",
+    security: cookieOnlySecurity,
+    querystring: adminOfapiCreditsLedgerCsvQuerySchema,
+    response: {
+      // The handler sets text/csv + Content-Disposition and writes the body
+      // directly; this entry documents the success shape for OpenAPI consumers.
+      200: z.string().describe("text/csv — one row per credit ledger entry matching the filters"),
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -5297,6 +5332,7 @@ export type OfapiCreditsChatterSummaryResponse =
   z.infer<typeof ofapiCreditsChatterSummaryResponseSchema>;
 export type OfapiCreditsDailyResponse = z.infer<typeof ofapiCreditsDailyResponseSchema>;
 export type AdminOfapiCreditsLedgerQuery = z.infer<typeof adminOfapiCreditsLedgerQuerySchema>;
+export type AdminOfapiCreditsLedgerCsvQuery = z.infer<typeof adminOfapiCreditsLedgerCsvQuerySchema>;
 export type OfapiCreditsLedgerResponse = z.infer<typeof ofapiCreditsLedgerResponseSchema>;
 export type AdminOfapiSpendComparisonQuery =
   z.infer<typeof adminOfapiSpendComparisonQuerySchema>;

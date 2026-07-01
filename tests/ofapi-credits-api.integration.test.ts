@@ -8,6 +8,7 @@ import {
   recordOfapiCreditSpend,
   setOfapiCreditReconcileCursor,
   setPageOfapiAccountId,
+  upsertTransaction,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -188,6 +189,7 @@ describe("ofapi credits admin api", () => {
       "/api/v1/admin/ofapi/credits/summary",
       "/api/v1/admin/ofapi/credits/daily",
       "/api/v1/admin/ofapi/credits/ledger",
+      "/api/v1/admin/ofapi/credits/ledger.csv",
     ]) {
       const unauthenticated = await server.inject({ method: "GET", url });
       expect(unauthenticated.statusCode).toBe(401);
@@ -384,6 +386,33 @@ describe("ofapi credits admin api", () => {
     expect(body.reconciliation.lastDriftCredits).toBe(0);
     expect(body.accrual.lastPostedDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(body.incidents).toEqual([]);
+    // Credit price defaults to 0 (unset) so the dashboard hides USD estimates.
+    expect(body.pricing).toEqual({ microUsdPerCredit: 0 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("echoes the configured credit price for USD estimates", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    await server.close();
+
+    // 10,000 micro-USD/credit = $0.01/credit.
+    appContext = createTestAppContext(testDb, {
+      ofapiCreditLedgerEnabled: true,
+      ofapiCreditMicroUsdPrice: 10_000,
+    });
+    server = await buildApiServer(appContext);
+    await server.ready();
+
+    const cookie = await loginCookie("dima", "owner-secret");
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/summary",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().pricing).toEqual({ microUsdPerCredit: 10_000 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("reports current UTC-day pending webhook accrual without adding it to posted spend", async (context) => {
@@ -478,8 +507,74 @@ describe("ofapi credits admin api", () => {
       { operation: "ofapi_chats", requests: 1, credits: 90 },
       { operation: "ofapi_chat_messages", requests: 1, credits: 2 },
     ]);
+    // No transactions seeded, so per-page revenue is 0 but always present.
     expect(body.byPage).toEqual([
-      { pageId: page.id, pageLabel: "lora-of", credits: 92 },
+      { pageId: page.id, pageLabel: "lora-of", credits: 92, revenueMills: 0 },
+    ]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("joins per-page net revenue onto the page breakdown for ROI", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedLedgerFixture();
+    const now = new Date();
+    const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+
+    // A second page with its own credit spend and its own revenue, so a join that
+    // cross-attributes revenue to the wrong pageId would fail this assertion.
+    const modelB = await createModel(appContext.db, { slug: "model-credits-b", name: "Model B" });
+    const pageB = await createOnlyFansPage(appContext.db, { modelId: modelB.id, label: "kira-of" });
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chats",
+      credits: 50,
+      balanceAfter: 23_900,
+      pageId: pageB.id,
+      httpStatus: 200,
+      requestId: "ofapi_chats:seed_b",
+      occurredAt: new Date(dayStart + 7 * 60 * 1000),
+    });
+
+    // A reportable transaction per page inside the current UTC day so each lands in
+    // the same [from, to) window as that page's credit spend.
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      transactionId: "txn_roi_a",
+      rawType: "message",
+      canonicalType: "message_purchase",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 30_000n,
+      sourceDestinationAmountMills: 30_000n,
+      creatorNetAmountMills: 25_000n,
+      occurredAt: new Date(dayStart + 3 * 60 * 1000),
+    });
+    await upsertTransaction(appContext.db, {
+      platformAccountId: pageB.id,
+      transactionId: "txn_roi_b",
+      rawType: "message",
+      canonicalType: "message_purchase",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 9_000n,
+      sourceDestinationAmountMills: 9_000n,
+      creatorNetAmountMills: 7_000n,
+      occurredAt: new Date(dayStart + 8 * 60 * 1000),
+    });
+
+    const cookie = await loginCookie("dima", "owner-secret");
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/daily?days=7",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    // Ordered by credits desc; each page keeps its own revenue (no cross-attribution).
+    expect(response.json().byPage).toEqual([
+      { pageId: page.id, pageLabel: "lora-of", credits: 92, revenueMills: 25_000 },
+      { pageId: pageB.id, pageLabel: "kira-of", credits: 50, revenueMills: 7_000 },
     ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -533,6 +628,86 @@ describe("ofapi credits admin api", () => {
       headers: { cookie },
     });
     expect(badQuery.statusCode).toBe(400);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("exports the filtered ledger as a CSV download", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await seedLedgerFixture();
+    const cookie = await loginCookie("dima", "owner-secret");
+
+    const all = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/ledger.csv",
+      headers: { cookie },
+    });
+    expect(all.statusCode).toBe(200);
+    expect(all.headers["content-type"]).toContain("text/csv");
+    expect(all.headers["content-disposition"]).toContain("attachment");
+    expect(all.headers["content-disposition"]).toContain("ofapi-credit-ledger.csv");
+
+    const lines = all.body.trim().split("\r\n");
+    expect(lines[0]).toBe(
+      "id,occurred_at,source,operation,page_id,page_label,http_status,credits,estimated,balance_after,request_id,accrual_day",
+    );
+    // Header + the five seeded ledger rows.
+    expect(lines).toHaveLength(6);
+    expect(all.body).toContain("ofapi_chats");
+    expect(all.body).toContain("lora-of");
+
+    // Pin the column-to-value mapping on a full data row (the ofapi_chats spend);
+    // none of its fields contain a comma, so a plain split is safe here.
+    const chatsLine = lines.find((line) => line.includes("ofapi_chats:seed"));
+    expect(chatsLine).toBeDefined();
+    const cols = chatsLine!.split(",");
+    expect(cols[2]).toBe("rest"); // source
+    expect(cols[3]).toBe("ofapi_chats"); // operation
+    expect(cols[5]).toBe("lora-of"); // page_label
+    expect(cols[6]).toBe("200"); // http_status
+    expect(cols[7]).toBe("90"); // credits
+    expect(cols[8]).toBe("false"); // estimated
+    expect(cols[9]).toBe("24000"); // balance_after
+    expect(cols[10]).toBe("ofapi_chats:seed"); // request_id
+    expect(cols[11]).toBe(""); // accrual_day (null → empty)
+
+    // Filters narrow the export the same way the JSON ledger does.
+    const restOnly = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/ledger.csv?source=rest",
+      headers: { cookie },
+    });
+    expect(restOnly.statusCode).toBe(200);
+    expect(restOnly.headers["content-disposition"]).toContain("ofapi-credit-ledger_rest.csv");
+    expect(restOnly.body.trim().split("\r\n")).toHaveLength(3);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("sanitizes a hostile filter value out of the CSV download filename", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await seedLedgerFixture();
+    const cookie = await loginCookie("dima", "owner-secret");
+
+    // `from` is only shape-validated as a string (isoTimestamp === z.string()), so a
+    // slash-separated date (a valid Date, but with a path separator) reaches the
+    // handler. It must be clamped before it lands in the Content-Disposition header
+    // that is written after reply.hijack().
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/ledger.csv?from=2026%2F01%2F01",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    const disposition = String(response.headers["content-disposition"]);
+    const filename = /filename="([^"]*)"/.exec(disposition)?.[1] ?? "";
+    // The raw '/' from the query never survives into the filename.
+    expect(filename).not.toContain("/");
+    expect(filename).toMatch(/^[A-Za-z0-9._-]+$/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("reports the ledger as disabled when the flag is off", async (context) => {

@@ -5,6 +5,7 @@
 // notification incidents — no OFAPI requests are made here.
 
 import type {
+  AdminOfapiCreditsLedgerCsvQuery,
   AdminOfapiCreditsLedgerQuery,
   OfapiCreditsChatterSummaryResponse,
   OfapiCreditsDailyResponse,
@@ -16,6 +17,7 @@ import {
   getLastOfapiWebhookAccrualDay,
   getOfapiCreditReconcileState,
   getOfapiCreditState,
+  getRevenuePageTotalsForExactPeriod,
   listNotificationIncidents,
   listOfapiBalanceSeriesBetween,
   listOfapiCreditLedgerEntries,
@@ -300,6 +302,10 @@ export async function getOfapiCreditsSummary(
         }
         : null,
     },
+    // Display-only flat credit price; 0 (unset) tells the dashboard to hide USD.
+    pricing: {
+      microUsdPerCredit: Math.max(0, Math.trunc(app.config.ofapiCreditMicroUsdPrice ?? 0)),
+    },
   };
 }
 
@@ -318,6 +324,20 @@ export async function getOfapiCreditsDaily(
     listOfapiOperationBreakdownBetween(app.db, { from, to }),
     listOfapiPageBreakdownBetween(app.db, { from, to }),
   ]);
+
+  // Net creator revenue for the same pages over the exact [from, to) UTC window,
+  // so per-page credit cost can be shown against what the page actually earned.
+  // `getRevenuePageTotalsForExactPeriod` windows on transactions.occurredAt — the
+  // same raw-UTC boundary the credit ledger uses — so the two align 1:1.
+  const revenueRows = byPage.length > 0
+    ? await getRevenuePageTotalsForExactPeriod(app.db, {
+      pageIds: byPage.map((row) => row.pageId),
+      period: { from, to },
+    })
+    : [];
+  const revenueMillsByPage = new Map(
+    revenueRows.map((row) => [row.pageId, Number(row.netEarningsMills)]),
+  );
 
   const dayMap = new Map<string, SpendBySource>();
   for (const row of dailyRows) {
@@ -347,7 +367,10 @@ export async function getOfapiCreditsDaily(
     balance: balance.map((point) => ({ at: point.at.toISOString(), value: point.value })),
     refills: refills.map((row) => ({ at: row.at.toISOString(), credits: row.credits })),
     byOperation,
-    byPage,
+    byPage: byPage.map((row) => ({
+      ...row,
+      revenueMills: revenueMillsByPage.get(row.pageId) ?? 0,
+    })),
   };
 }
 
@@ -392,5 +415,96 @@ export async function getOfapiCreditsLedger(
       requestId: row.requestId,
       accrualDay: row.accrualDay,
     })),
+  };
+}
+
+// A hard ceiling on a single export so a wide filter can't stream unbounded rows.
+// Truncation is surfaced (route logs + a header) rather than silently dropped.
+const OFAPI_LEDGER_CSV_MAX_ROWS = 50_000;
+
+const OFAPI_LEDGER_CSV_HEADER = [
+  "id",
+  "occurred_at",
+  "source",
+  "operation",
+  "page_id",
+  "page_label",
+  "http_status",
+  "credits",
+  "estimated",
+  "balance_after",
+  "request_id",
+  "accrual_day",
+].join(",");
+
+// RFC 4180 escaping: wrap in quotes when the field holds a comma, quote, or
+// newline, doubling any embedded quote.
+function csvField(value: string | number | boolean | null): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function ledgerCsvFilename(query: AdminOfapiCreditsLedgerCsvQuery): string {
+  const parts = ["ofapi-credit-ledger"];
+  if (query.source) {
+    parts.push(query.source);
+  }
+  if (query.pageId !== undefined) {
+    parts.push(`page-${query.pageId}`);
+  }
+  if (query.from) {
+    parts.push(`from-${query.from.slice(0, 10)}`);
+  }
+  if (query.to) {
+    parts.push(`to-${query.to.slice(0, 10)}`);
+  }
+  // `from`/`to` are only shape-validated as strings (isoTimestamp === z.string()),
+  // so a caller could smuggle a quote or CR/LF into a query value. This filename
+  // lands in a Content-Disposition header written after reply.hijack(), where an
+  // invalid character would throw with no way to emit a clean response — so hard
+  // clamp to a filesystem/header-safe charset.
+  return `${parts.join("_")}.csv`.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+export async function getOfapiCreditsLedgerCsv(
+  app: AppContext,
+  query: AdminOfapiCreditsLedgerCsvQuery,
+): Promise<{ filename: string; csv: string; rowCount: number; truncated: boolean }> {
+  const { total, rows } = await listOfapiCreditLedgerEntries(app.db, {
+    offset: 0,
+    limit: OFAPI_LEDGER_CSV_MAX_ROWS,
+    source: query.source,
+    pageId: query.pageId,
+    operation: query.operation,
+    from: parseIsoDate(query.from, "from"),
+    to: parseIsoDate(query.to, "to"),
+  });
+
+  const lines = [OFAPI_LEDGER_CSV_HEADER];
+  for (const row of rows) {
+    lines.push([
+      csvField(row.id),
+      csvField(row.occurredAt.toISOString()),
+      csvField(row.source),
+      csvField(row.operation),
+      csvField(row.pageId),
+      csvField(row.pageLabel),
+      csvField(row.httpStatus),
+      csvField(row.credits),
+      csvField(row.estimated),
+      csvField(row.balanceAfter),
+      csvField(row.requestId),
+      csvField(row.accrualDay),
+    ].join(","));
+  }
+
+  return {
+    filename: ledgerCsvFilename(query),
+    csv: `${lines.join("\r\n")}\r\n`,
+    rowCount: rows.length,
+    truncated: total > rows.length,
   };
 }
