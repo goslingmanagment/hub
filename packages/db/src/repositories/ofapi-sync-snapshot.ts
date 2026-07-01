@@ -114,16 +114,16 @@ export async function listOfapiSyncSnapshotThreads(
         select 1
         from (
           select
-            ${pageDmMessages.totalTipAmountCents} as total_tip_amount_cents,
+            m.total_tip_amount_cents,
             row_number() over (
-              order by ${pageDmMessages.createdAt} desc, ${pageDmMessages.id} desc
+              order by m.created_at desc, m.id desc
             ) as unread_rank
-          from ${pageDmMessages}
-          where ${pageDmMessages.conversationId} = ${pageDmThreads.id}
-            and ${pageDmMessages.deletedAt} is null
-            and ${pageDmMessages.senderRole} = 'fan'
+          from page_dm_messages m
+          where m.conversation_id = "page_dm_threads"."id"
+            and m.deleted_at is null
+            and m.sender_role = 'fan'
         ) unread_fan_messages
-        where unread_fan_messages.unread_rank <= ${pageDmThreads.unreadCount}
+        where unread_fan_messages.unread_rank <= "page_dm_threads"."unread_count"
           and unread_fan_messages.total_tip_amount_cents > 0
       )`,
       lastMessageId: pageDmThreads.lastMessageId,
