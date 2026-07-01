@@ -2033,6 +2033,14 @@ export const ofapiCreditLedger = pgTable(
     occurredAtIdx: index("ofapi_credit_ledger_occurred_at_idx").on(table.occurredAt),
     sourceOccurredAtIdx: index("ofapi_credit_ledger_source_occurred_at_idx")
       .on(table.source, table.occurredAt),
+    // A4: cover the owner ledger list's filtered + ordered + paginated paths
+    // (ORDER BY occurred_at desc, id desc, filtered by page_id / operation).
+    pageOccurredAtIdx: index("ofapi_credit_ledger_page_occurred_at_id_idx")
+      .on(table.pageId, table.occurredAt.desc(), table.id.desc()),
+    operationOccurredAtIdx: index("ofapi_credit_ledger_operation_occurred_at_id_idx")
+      .on(table.operation, table.occurredAt.desc(), table.id.desc()),
+    occurredAtIdIdx: index("ofapi_credit_ledger_occurred_at_id_idx")
+      .on(table.occurredAt.desc(), table.id.desc()),
     balanceObservationIdx: index("ofapi_credit_ledger_balance_observation_idx")
       .on(table.id)
       .where(sql`${table.balanceAfter} is not null`),

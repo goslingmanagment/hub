@@ -34,7 +34,12 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError } from "./errors.ts";
-import { isOfapiCreditLedgerEnabled, webhookAccrualCredits } from "./ofapi-credits.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
+import {
+  DEFAULT_BURN_ALERT_CREDITS_PER_HOUR,
+  isOfapiCreditLedgerEnabled,
+  webhookAccrualCredits,
+} from "./ofapi-credits.ts";
 import { isOfapiCreditFloorBlocking } from "./sync/ofapi-dm-sync.ts";
 
 const DEFAULT_DM_DAILY_CREDIT_BUDGET = 500;
@@ -44,6 +49,12 @@ const DEFAULT_CREDIT_FLOOR = 500;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 // Trailing window (days) the runway forecast averages spend over.
 const RUNWAY_WINDOW_DAYS = 7;
+// Target runway (days above the floor) the refill recommendation sizes for.
+const REFILL_TARGET_DAYS = 30;
+// Trailing window (minutes) for the recent-burn drivers view; mirrors the
+// ofapi_burn_rate monitor's 60-minute window.
+const BURN_WINDOW_MINUTES = 60;
+const BURN_TOP_N = 5;
 
 // Ledger operations attributed to the DM bootstrap/reconcile stream (decision #49)
 // and to the audience sweep (parity Phase 3).
@@ -199,6 +210,8 @@ export async function getOfapiCreditsSummary(
   const dayStart = utcDayStart(now);
   const nextDayStart = addUtcDays(dayStart, 1);
   const spendWindowSince = new Date(now.getTime() - RUNWAY_WINDOW_DAYS * MS_PER_DAY);
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const burnSince = new Date(now.getTime() - BURN_WINDOW_MINUTES * 60 * 1000);
 
   const [
     credit,
@@ -208,6 +221,11 @@ export async function getOfapiCreditsSummary(
     dmSpentToday,
     audienceSpentToday,
     spendWindow,
+    monthWindow,
+    burnWindow,
+    burnOps,
+    burnPages,
+    effective,
     openIncidents,
     pendingWebhookEventCount,
   ] = await Promise.all([
@@ -228,6 +246,20 @@ export async function getOfapiCreditsSummary(
     // Net spend AND the earliest effective spend start share one query so the
     // runway numerator and denominator use the same window semantics.
     summarizeOfapiSpendWindowSince(app.db, { since: spendWindowSince }),
+    // Month-to-date spend (D5) reuses the same refill-excluded/external-prorated
+    // semantics as the runway numerator.
+    summarizeOfapiSpendWindowSince(app.db, { since: monthStart }),
+    // Trailing-hour burn (D3) mirrors the ofapi_burn_rate monitor exactly.
+    summarizeOfapiSpendWindowSince(app.db, { since: burnSince }),
+    listOfapiOperationBreakdownBetween(app.db, { from: burnSince, to: now }),
+    listOfapiPageBreakdownBetween(app.db, { from: burnSince, to: now, limit: BURN_TOP_N }),
+    // The burn threshold is live-editable, so read the effective override the
+    // monitor uses rather than the boot config. Fall back to the boot config on a
+    // read failure (like the monitor does) so an overrides hiccup can't 500 the
+    // whole credits page over an informational threshold.
+    enabled
+      ? loadEffectiveConfig(app.db, app.config).catch(() => app.config)
+      : Promise.resolve(null),
     listNotificationIncidents(app.db, { status: "open" }),
     enabled
       ? countOfapiWebhookEventsReceivedBetween(app.db, { from: dayStart, to: nextDayStart })
@@ -297,6 +329,44 @@ export async function getOfapiCreditsSummary(
     now,
   });
 
+  // D5: project the calendar-month total from month-to-date spend plus the daily
+  // rate over the remaining UTC days (exclusive of today, already in MTD).
+  const monthToDateSpend = Math.max(0, monthWindow.total);
+  const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const remainingDaysInMonth = Math.max(
+    0,
+    Math.ceil((nextMonthStart.getTime() - nextDayStart.getTime()) / MS_PER_DAY),
+  );
+  const monthEndProjection = monthToDateSpend + Math.round(avgDailySpend7d * remainingDaysInMonth);
+  // Credits to refill now to keep `REFILL_TARGET_DAYS` of runway above the floor.
+  // Only meaningful once a balance has been observed.
+  const refillRecommendation = credit.lastBalance === null
+    ? null
+    : {
+      targetDays: REFILL_TARGET_DAYS,
+      credits: Math.max(
+        0,
+        Math.round(creditFloor + avgDailySpend7d * REFILL_TARGET_DAYS - credit.lastBalance),
+      ),
+    };
+
+  // D3: recent-burn drivers. `total` is all-source (matches the monitor); the
+  // top-operation/top-page lists are REST-only (webhook/external have no operation
+  // or page attribution).
+  const burnThreshold = Math.max(
+    0,
+    effective?.ofapiBurnAlertCreditsPerHour ?? app.config.ofapiBurnAlertCreditsPerHour
+      ?? DEFAULT_BURN_ALERT_CREDITS_PER_HOUR,
+  );
+  const recentBurn = {
+    windowMinutes: BURN_WINDOW_MINUTES,
+    total: burnWindow.total,
+    threshold: burnThreshold,
+    alerting: burnThreshold > 0 && burnWindow.total > burnThreshold,
+    topOperations: burnOps.slice(0, BURN_TOP_N),
+    topPages: burnPages,
+  };
+
   return {
     enabled,
     balance: {
@@ -316,6 +386,9 @@ export async function getOfapiCreditsSummary(
       runOutDate: daysLeft !== null
         ? isoDay(addUtcDays(dayStart, daysLeft))
         : null,
+      monthToDateSpend,
+      monthEndProjection,
+      refillRecommendation,
     },
     incidents: openIncidents
       .filter((incident) => incident.kind.startsWith("ofapi_"))
@@ -338,6 +411,7 @@ export async function getOfapiCreditsSummary(
         }
         : null,
     },
+    recentBurn,
     // Display-only flat credit price; 0 (unset) tells the dashboard to hide USD.
     pricing: {
       microUsdPerCredit: Math.max(0, Math.trunc(app.config.ofapiCreditMicroUsdPrice ?? 0)),

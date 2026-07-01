@@ -3122,6 +3122,19 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
     avgDailySpend7d: z.number(),
     daysLeft: z.number().int().nullable(),
     runOutDate: businessDate.nullable(),
+    // D5: month-to-date spend and the projected calendar-month total (MTD +
+    // avgDailySpend × remaining UTC days). Credits only; the dashboard formats USD
+    // from `pricing`. Optional so a dashboard bundle can roll across an API version
+    // that predates them.
+    monthToDateSpend: z.number().int().min(0).optional(),
+    monthEndProjection: z.number().int().min(0).optional(),
+    // Credits to refill now to keep the runway at `targetDays` above the floor:
+    // max(0, floor + avgDailySpend × targetDays − balance). Null when the balance
+    // has not been observed (no meaningful recommendation).
+    refillRecommendation: z.object({
+      targetDays: z.number().int().min(0),
+      credits: z.number().int().min(0),
+    }).nullable().optional(),
   }),
   incidents: z.array(z.object({
     kind: z.string(),
@@ -3142,6 +3155,27 @@ export const ofapiCreditsSummaryResponseSchema = z.object({
       estimatedCredits: z.number().int().min(0),
     }).nullable().optional(),
   }),
+  // D3: trailing-window (last 60 min) burn drivers mirroring the ofapi_burn_rate
+  // monitor. `total` is all-source net (refills excluded, external prorated);
+  // topOperations/topPages are REST-only (webhook/external spend has no operation
+  // or page attribution). Optional so a dashboard bundle can roll across an API
+  // version that predates it.
+  recentBurn: z.object({
+    windowMinutes: z.number().int().positive(),
+    total: z.number().int(),
+    threshold: z.number().int(),
+    alerting: z.boolean(),
+    topOperations: z.array(z.object({
+      operation: z.string().nullable(),
+      requests: z.number().int(),
+      credits: z.number().int(),
+    })),
+    topPages: z.array(z.object({
+      pageId: intId,
+      pageLabel: z.string(),
+      credits: z.number().int(),
+    })),
+  }).optional(),
   // Display-only flat credit price for USD cost estimates (OFAPI_CREDIT_MICRO_USD_PRICE).
   // Micro-USD integer per credit; 0 means "unset" and the dashboard hides USD figures.
   // Optional so a dashboard bundle can roll forward/back across an API version that

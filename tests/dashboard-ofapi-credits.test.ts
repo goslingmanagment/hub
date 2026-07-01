@@ -7,6 +7,7 @@ const queryMocks = vi.hoisted(() => ({
   useAdminOfapiCreditsSummary: vi.fn(),
   useAdminOfapiCreditsDaily: vi.fn(),
   useAdminOfapiCreditsLedger: vi.fn(),
+  useAdminOfapiSpendComparison: vi.fn(),
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
@@ -58,9 +59,16 @@ describe("OfapiCreditsPage", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReset();
     queryMocks.useAdminOfapiCreditsDaily.mockReset();
     queryMocks.useAdminOfapiCreditsLedger.mockReset();
+    queryMocks.useAdminOfapiSpendComparison.mockReset();
     queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({ data: emptyDaily, isLoading: false });
     queryMocks.useAdminOfapiCreditsLedger.mockReturnValue({
       data: { total: 0, rows: [] },
+      isLoading: false,
+    });
+    // The comparison panel is collapsed by default, so its body/hook does not
+    // mount in a static render; provide a benign default anyway.
+    queryMocks.useAdminOfapiSpendComparison.mockReturnValue({
+      data: { summary: [], byPage: [], samples: [], limitations: [] },
       isLoading: false,
     });
   });
@@ -356,6 +364,133 @@ describe("OfapiCreditsPage", () => {
 
     const markup = renderPage();
     expect(markup).toContain("Export CSV");
+  });
+
+  it("surfaces recent burn drivers and reddens an alerting window (D3)", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({
+        recentBurn: {
+          windowMinutes: 60,
+          total: 450,
+          threshold: 300,
+          alerting: true,
+          topOperations: [{ operation: "ofapi_chats", requests: 40, credits: 300 }],
+          topPages: [{ pageId: 3, pageLabel: "lora-of", credits: 150 }],
+        },
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("Recent burn");
+    expect(markup).toContain("450 cr / last 60m");
+    expect(markup).toContain("threshold 300/h");
+    expect(markup).toContain("top REST drivers");
+    expect(markup).toContain("ofapi_chats");
+    // A healthy fixture has no floor/incident banner, so the only alert region is
+    // the alerting burn window.
+    expect(markup).toContain('role="alert"');
+  });
+
+  it("shows recent burn without an alarm when under threshold (D3)", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({
+        recentBurn: {
+          windowMinutes: 60,
+          total: 120,
+          threshold: 300,
+          alerting: false,
+          topOperations: [],
+          topPages: [],
+        },
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("Recent burn");
+    expect(markup).toContain("120 cr / last 60m");
+    expect(markup).not.toContain('role="alert"');
+  });
+
+  it("renders month-end projection and refill recommendation (D5)", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({
+        pricing: { microUsdPerCredit: 10_000 },
+        forecast: {
+          avgDailySpend7d: 100,
+          daysLeft: 40,
+          runOutDate: "2026-07-30",
+          monthToDateSpend: 800,
+          monthEndProjection: 2_000,
+          refillRecommendation: { targetDays: 30, credits: 1_500 },
+        },
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("month-end ~2,000 cr");
+    expect(markup).toContain("refill ~1,500 cr");
+    expect(markup).toContain("for 30d runway");
+  });
+
+  it("shows no-refill-needed when the balance covers the target runway (D5)", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({
+        forecast: {
+          avgDailySpend7d: 100,
+          daysLeft: 400,
+          runOutDate: null,
+          monthToDateSpend: 800,
+          monthEndProjection: 2_000,
+          refillRecommendation: { targetDays: 30, credits: 0 },
+        },
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("none needed (30d covered)");
+  });
+
+  it("mounts the spend comparison section collapsed by default (B4)", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture(),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("Spend projection comparison");
+    expect(markup).toContain("shadow diagnostic");
+    // Collapsed → the body (and its matched/drift chips) is not mounted.
+    expect(markup).not.toContain("matched ·");
+  });
+
+  it("labels breakdown credits with units and shows a per-operation cost (C5)", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({ pricing: { microUsdPerCredit: 10_000 } }),
+      isLoading: false,
+      isError: false,
+    });
+    queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
+      data: {
+        ...emptyDaily,
+        byOperation: [{ operation: "ofapi_chats", requests: 5, credits: 200 }],
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("Credits (cr)");
+    // 200 cr × $0.01/credit = $2.00 cost cell.
+    expect(markup).toContain("$2.00");
   });
 
   it("shows the error panel when the summary fails", () => {

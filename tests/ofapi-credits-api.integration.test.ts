@@ -390,6 +390,74 @@ describe("ofapi credits admin api", () => {
     expect(body.incidents).toEqual([]);
     // Credit price defaults to 0 (unset) so the dashboard hides USD estimates.
     expect(body.pricing).toEqual({ microUsdPerCredit: 0 });
+    // D5: all 137 net credits were spent today (this month), and the 23,950
+    // balance already covers 30 days above the 500 floor, so no refill is needed.
+    expect(body.forecast.monthToDateSpend).toBe(137);
+    expect(body.forecast.monthEndProjection).toBeGreaterThanOrEqual(137);
+    expect(body.forecast.refillRecommendation).toEqual({ targetDays: 30, credits: 0 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("recommends a refill when the balance falls short of the target runway (D5)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    // Spend 700 credits today against a low 1,000 balance: with a 500 floor and a
+    // ~700/day rate, 30 days of runway needs far more than 1,000.
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chats",
+      credits: 700,
+      balanceAfter: 1_000,
+    });
+
+    const cookie = await loginCookie("dima", "owner-secret");
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/summary",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    const forecast = response.json().forecast;
+    // max(0, floor 500 + avg 700 × 30 − balance 1,000) = 20,500.
+    expect(forecast.avgDailySpend7d).toBe(700);
+    expect(forecast.refillRecommendation).toEqual({ targetDays: 30, credits: 20_500 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reports trailing-hour burn drivers in the summary (D3)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(appContext.db, { slug: "burn-model", name: "Burn" });
+    const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label: "burn-of" });
+    const now = new Date();
+    // 400 credits in the last five minutes — inside the 60-minute burn window and
+    // over the default 300/h threshold.
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chats",
+      credits: 400,
+      balanceAfter: 5_000,
+      pageId: page.id,
+      httpStatus: 200,
+      occurredAt: new Date(now.getTime() - 5 * 60 * 1000),
+    });
+
+    const cookie = await loginCookie("dima", "owner-secret");
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/summary",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    const burn = response.json().recentBurn;
+    expect(burn.windowMinutes).toBe(60);
+    expect(burn.total).toBe(400);
+    expect(burn.threshold).toBe(300);
+    expect(burn.alerting).toBe(true);
+    expect(burn.topOperations).toEqual([{ operation: "ofapi_chats", requests: 1, credits: 400 }]);
+    expect(burn.topPages).toEqual([{ pageId: page.id, pageLabel: "burn-of", credits: 400 }]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("echoes the configured credit price for USD estimates", async (context) => {

@@ -11,10 +11,15 @@ import {
   YAxis,
 } from "recharts";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
-import type { OfapiCreditsLedgerResponse } from "@agency_hub_core/contracts";
+import type {
+  OfapiCreditsLedgerResponse,
+  OfapiCreditsSummaryResponse,
+  OfapiSpendComparisonResponse,
+} from "@agency_hub_core/contracts";
 import {
   useAdminOfapiCreditsDaily,
   useAdminOfapiCreditsLedger,
+  useAdminOfapiSpendComparison,
   useAdminOfapiCreditsSummary,
 } from "@/api/queries";
 import { downloadOfapiCreditsLedgerCsv } from "@/api/adminOfapiCredits";
@@ -211,6 +216,59 @@ function BudgetMeter(props: {
   );
 }
 
+// D3: trailing-window burn drivers. Surfaces WHICH operations/pages are driving
+// recent spend so a burn alert can be diagnosed without a new alerting system.
+// REST-only attribution (webhook/external have no operation/page).
+function RecentBurnPanel(props: {
+  burn: NonNullable<OfapiCreditsSummaryResponse["recentBurn"]>;
+  priceKnown: boolean;
+  usd: (credits: number) => string;
+}) {
+  const { burn } = props;
+  const tone: ValueTone = burn.alerting ? "danger" : "neutral";
+  const hasDrivers = burn.topOperations.length > 0 || burn.topPages.length > 0;
+  return (
+    <div
+      role={burn.alerting ? "alert" : undefined}
+      className={`mt-3 rounded-xl border px-4 py-3 ${
+        burn.alerting ? "border-red-500/40 bg-red-500/10" : "border-border bg-card"
+      }`}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="text-[11px] font-bold uppercase tracking-wide text-text-secondary">
+          Recent burn
+        </span>
+        <span
+          className={`text-[13px] font-semibold tabular-nums ${
+            burn.alerting ? "text-red-700" : "text-text-primary"
+          }`}
+        >
+          {fmtCredits(burn.total)} cr / last {burn.windowMinutes}m
+        </span>
+        <span className="text-[11px] text-text-secondary tabular-nums">
+          threshold {burn.threshold > 0 ? `${fmtCredits(burn.threshold)}/h` : "off"}
+          {props.priceKnown ? ` · ≈ ${props.usd(burn.total)}` : ""}
+        </span>
+      </div>
+      {hasDrivers && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] text-text-secondary">top REST drivers:</span>
+          {burn.topOperations.map((op) => (
+            <StatusChip key={`op-${op.operation ?? "unknown"}`} tone={tone}>
+              {op.operation ?? "unknown"} · {fmtCredits(op.credits)} cr
+            </StatusChip>
+          ))}
+          {burn.topPages.map((page) => (
+            <StatusChip key={`page-${page.pageId}`} tone={tone} title="page">
+              {page.pageLabel} · {fmtCredits(page.credits)} cr
+            </StatusChip>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // A page's revenue ÷ estimated credit cost, or null when it can't be computed
 // (no configured price, or the page cost no credits). Returns a raw ratio so the
 // caller can both format and tone-colour it.
@@ -228,6 +286,7 @@ function computeRoi(revenueMills: number, credits: number, microUsdPerCredit: nu
 function BalanceChart(props: {
   points: Array<{ day: string; value: number }>;
   refills: Array<{ day: string; credits: number }>;
+  usd?: (credits: number) => string;
 }) {
   const gradientId = useId();
   const color = "#5b8def";
@@ -296,7 +355,13 @@ function BalanceChart(props: {
                 fontSize: 13,
               }}
               wrapperStyle={{ zIndex: 20 }}
-              formatter={(value) => [fmtCredits(Number(value ?? 0)), "Balance"]}
+              formatter={(value) => {
+                const credits = Number(value ?? 0);
+                return [
+                  `${fmtCredits(credits)} cr${props.usd ? ` · ${props.usd(credits)}` : ""}`,
+                  "Balance",
+                ];
+              }}
             />
           </AreaChart>
         </ResponsiveContainer>
@@ -375,6 +440,160 @@ function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number] }) {
         </tr>
       )}
     </Fragment>
+  );
+}
+
+// B4: statuses other than "matched" that are expected/benign vs genuine drift.
+const COMPARISON_BENIGN = new Set([
+  "matched",
+  "skipped",
+  "ppv_estimated",
+  "tips_blocked",
+  "blocked",
+]);
+
+function comparisonTone(status: string): ValueTone {
+  if (status === "matched") return "neutral";
+  return COMPARISON_BENIGN.has(status) ? "warning" : "danger";
+}
+
+function SpendComparisonBody() {
+  const query = useAdminOfapiSpendComparison({ days: 7, sampleLimit: 25 });
+  const data = query.data;
+
+  if (query.isLoading) {
+    return <TableSkeleton rows={6} columns={5} />;
+  }
+  if (query.isError || !data) {
+    return (
+      <div className="p-4">
+        <StatusPanel
+          tone="error"
+          title="Failed to load spend comparison"
+          description="The comparison endpoint returned an error."
+          action={<RetryButton onClick={() => query.refetch()} />}
+        />
+      </div>
+    );
+  }
+
+  const noData = data.summary.length === 0 && data.byPage.length === 0
+    && data.samples.length === 0;
+  if (noData) {
+    return (
+      <div className="pb-6">
+        <EmptyState
+          title="No shadow-projection comparison yet"
+          description="Enable the OFAPI spend shadow projection to compare projected transactions against core truth before applying them. No rows have been projected in this window."
+        />
+        <div className="text-center text-[13px]">
+          <ConfigLink configKey="ofapiSpendProjectionShadowEnabled">
+            Enable shadow projection →
+          </ConfigLink>
+        </div>
+      </div>
+    );
+  }
+
+  const matched = data.summary.find((row) => row.status === "matched")?.count ?? 0;
+  const drift = data.summary
+    .filter((row) => !COMPARISON_BENIGN.has(row.status))
+    .reduce((sum, row) => sum + row.count, 0);
+
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <StatusChip tone={drift > 0 ? "danger" : "neutral"}>
+          {fmtCredits(matched)} matched · {fmtCredits(drift)} drift
+        </StatusChip>
+        {data.summary
+          .filter((row) => row.status !== "matched")
+          .map((row) => (
+            <StatusChip key={row.status} tone={comparisonTone(row.status)}>
+              {row.status.replace(/_/g, " ")} · {fmtCredits(row.count)}
+            </StatusChip>
+          ))}
+      </div>
+
+      {data.samples.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="bg-hover-alt">
+                <th className={thClass}>Status</th>
+                <th className={thClass}>Page</th>
+                <th className={thClass}>Time (UTC)</th>
+                <th className={thClass}>Event</th>
+                <th className={`${thClass} text-right`}>Projected net</th>
+                <th className={`${thClass} text-right`}>Core net</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.samples.map((sample) => (
+                <tr key={sample.projectionId} className="border-t border-border-light">
+                  <td className={tdClass}>
+                    <StatusChip tone={comparisonTone(sample.comparisonStatus)}>
+                      {sample.comparisonStatus.replace(/_/g, " ")}
+                    </StatusChip>
+                  </td>
+                  <td className={tdClass}>{sample.pageLabel}</td>
+                  <td className={tdClass}>{utcDateTime(sample.occurredAt)}</td>
+                  <td className={tdClass}>{sample.sourceEventType}</td>
+                  <td className={`${tdClass} text-right`}>
+                    {sample.creatorNetAmountMills !== null
+                      ? formatUsdFromMills(sample.creatorNetAmountMills)
+                      : "—"}
+                  </td>
+                  <td className={`${tdClass} text-right`}>
+                    {sample.coreCreatorNetAmountMills !== null
+                      ? formatUsdFromMills(sample.coreCreatorNetAmountMills)
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {data.limitations.length > 0 && (
+        <ul className="list-disc space-y-0.5 pl-5 text-[11px] text-text-secondary">
+          {data.limitations.map((note) => <li key={note}>{note}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// B4: read-only shadow-projection comparison, collapsed by default so it only
+// fetches (and runs the comparison) when an operator opens it before flipping the
+// #51 staged flags.
+function SpendComparisonSection() {
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
+  return (
+    <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-hover"
+      >
+        <span className="text-text-muted">
+          <Caret expanded={open} />
+        </span>
+        <h2 className="text-[12px] font-semibold uppercase tracking-wider text-text-secondary">
+          Spend projection comparison
+        </h2>
+        <span className="text-[11px] text-text-secondary">shadow diagnostic · last 7d</span>
+      </button>
+      {open && (
+        <div id={bodyId} className="border-t border-border-light">
+          <SpendComparisonBody />
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -523,6 +742,20 @@ export function OfapiCreditsPage() {
       setExporting(false);
     }
   };
+
+  // C5: clear-all affordance for the ledger filters.
+  const hasActiveFilters = Boolean(
+    sourceFilter || operationFilter.trim() || pageFilter || fromFilter || toFilter,
+  );
+  const clearFilters = () => {
+    setSourceFilter("");
+    setOperationFilter("");
+    setPageFilter("");
+    setFromFilter("");
+    setToFilter("");
+    setLedgerOffset(0);
+  };
+
   const runwayTone: ValueTone = summary.forecast.daysLeft === null
     ? "neutral"
     : summary.forecast.daysLeft < RUNWAY_DANGER_DAYS
@@ -635,7 +868,30 @@ export function OfapiCreditsPage() {
           hint={`avg ${summary.forecast.avgDailySpend7d} cr/day (7d)${
             priceKnown ? ` · ≈ ${usd(summary.forecast.avgDailySpend7d)}/day` : ""
           }${summary.forecast.runOutDate ? ` · out ${summary.forecast.runOutDate}` : ""}`}
-        />
+        >
+          {/* D5: month-end projection + refill recommendation. */}
+          <div className="mt-1 space-y-0.5 text-[11px] text-text-secondary tabular-nums">
+            {summary.forecast.monthEndProjection !== undefined && (
+              <div>
+                month-end ~{fmtCredits(summary.forecast.monthEndProjection)} cr
+                {priceKnown ? ` · ≈ ${usd(summary.forecast.monthEndProjection)}` : ""}
+              </div>
+            )}
+            {summary.forecast.refillRecommendation && (
+              summary.forecast.refillRecommendation.credits > 0 ? (
+                <div className="font-semibold text-amber-700">
+                  refill ~{fmtCredits(summary.forecast.refillRecommendation.credits)} cr
+                  {priceKnown ? ` (≈ ${usd(summary.forecast.refillRecommendation.credits)})` : ""}
+                  {" "}for {summary.forecast.refillRecommendation.targetDays}d runway
+                </div>
+              ) : (
+                <div>
+                  refill: none needed ({summary.forecast.refillRecommendation.targetDays}d covered)
+                </div>
+              )
+            )}
+          </div>
+        </Stat>
       </div>
 
       {/* D2: jump to each knob's Settings > Configuration entry. Burn alert is
@@ -698,9 +954,18 @@ export function OfapiCreditsPage() {
         </div>
       </div>
 
+      {summary.recentBurn && summary.recentBurn.total > 0 && (
+        <RecentBurnPanel burn={summary.recentBurn} priceKnown={priceKnown} usd={usd} />
+      )}
+
       {summary.enabled && (
         <>
-          {chartsQuery.isError ? (
+          {chartsQuery.isLoading ? (
+            <div className="mt-6 grid gap-4 lg:grid-cols-2">
+              <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
+              <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
+            </div>
+          ) : chartsQuery.isError ? (
             <div className="mt-6">
               <StatusPanel
                 tone="error"
@@ -711,7 +976,11 @@ export function OfapiCreditsPage() {
             </div>
           ) : (
             <div className="mt-6 grid gap-4 lg:grid-cols-2">
-              <BalanceChart points={balancePoints} refills={refillMarkers} />
+              <BalanceChart
+                points={balancePoints}
+                refills={refillMarkers}
+                usd={priceKnown ? usd : undefined}
+              />
               <StackedBarChart
                 title="Daily spend by source"
                 data={dailyBars}
@@ -719,6 +988,8 @@ export function OfapiCreditsPage() {
                 series={[...SOURCE_SERIES]}
                 xTickFormatter={shortDay}
                 valueFormatter={fmtCredits}
+                tooltipValueFormatter={(value) =>
+                  priceKnown ? `${fmtCredits(value)} cr · ${usd(value)}` : `${fmtCredits(value)} cr`}
                 yAxisWidth={48}
                 headerExtra={(
                   <span className="text-[12px] text-text-secondary">Last {CHART_DAYS} days · UTC</span>
@@ -749,7 +1020,11 @@ export function OfapiCreditsPage() {
                 ))}
               </div>
             </div>
-            {breakdownQuery.isError ? (
+            {breakdownQuery.isLoading ? (
+              <div className="border-t border-border-light p-4">
+                <TableSkeleton rows={6} columns={6} />
+              </div>
+            ) : breakdownQuery.isError ? (
               <div className="border-t border-border-light p-4">
                 <StatusPanel
                   tone="error"
@@ -765,7 +1040,8 @@ export function OfapiCreditsPage() {
                     <tr className="bg-hover-alt">
                       <th className={thClass}>Operation</th>
                       <th className={`${thClass} text-right`}>Requests</th>
-                      <th className={`${thClass} text-right`}>Credits</th>
+                      <th className={`${thClass} text-right`}>Credits (cr)</th>
+                      <th className={`${thClass} text-right`} title="Estimated USD cost at the configured credit price">Cost</th>
                       <th className={`${thClass} text-right`}>Share</th>
                       <th className={`${thClass} text-right`}>cr/day</th>
                     </tr>
@@ -790,6 +1066,9 @@ export function OfapiCreditsPage() {
                         <td className={`${tdClass} text-right`}>{fmtCredits(row.requests)}</td>
                         <td className={`${tdClass} text-right`}>{fmtCredits(row.credits)}</td>
                         <td className={`${tdClass} text-right`}>
+                          {priceKnown ? usd(row.credits) : "—"}
+                        </td>
+                        <td className={`${tdClass} text-right`}>
                           {operationTotal > 0 ? `${Math.round((row.credits / operationTotal) * 100)}%` : "—"}
                         </td>
                         <td className={`${tdClass} text-right`}>
@@ -799,7 +1078,7 @@ export function OfapiCreditsPage() {
                     ))}
                     {(breakdown?.byOperation ?? []).length === 0 && (
                       <tr className="border-t border-border-light">
-                        <td colSpan={5} className={`${tdClass} text-text-muted`}>
+                        <td colSpan={6} className={`${tdClass} text-text-muted`}>
                           No REST spend in this window
                         </td>
                       </tr>
@@ -810,7 +1089,7 @@ export function OfapiCreditsPage() {
                   <thead>
                     <tr className="bg-hover-alt">
                       <th className={thClass}>Page</th>
-                      <th className={`${thClass} text-right`}>Credits</th>
+                      <th className={`${thClass} text-right`}>Credits (cr)</th>
                       <th className={`${thClass} text-right`} title="Estimated USD cost at the configured credit price">Cost</th>
                       <th className={`${thClass} text-right`} title="Net creator earnings over this window">Revenue</th>
                       <th className={`${thClass} text-right`} title="Revenue ÷ estimated credit cost">ROI</th>
@@ -861,6 +1140,8 @@ export function OfapiCreditsPage() {
               </div>
             )}
           </section>
+
+          <SpendComparisonSection />
 
           <section
             ref={ledgerRef}
@@ -935,6 +1216,16 @@ export function OfapiCreditsPage() {
                 className={filterSelectClass}
                 aria-label="To date (UTC)"
               />
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="rounded-lg border border-border bg-card px-3 py-1.5 text-[13px] font-medium text-text-secondary hover:bg-hover"
+                  title="Reset all ledger filters"
+                >
+                  Clear filters
+                </button>
+              )}
               {/* Goal 5: a real CSV export of every row matching the current
                   filters (not just the visible page) for accounting. */}
               <button

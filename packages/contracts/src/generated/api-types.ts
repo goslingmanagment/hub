@@ -7500,6 +7500,12 @@ export interface paths {
                                 avgDailySpend7d: number;
                                 daysLeft: number | null;
                                 runOutDate: string | null;
+                                monthToDateSpend?: number;
+                                monthEndProjection?: number;
+                                refillRecommendation?: {
+                                    targetDays: number;
+                                    credits: number;
+                                } | null;
                             };
                             incidents: {
                                 kind: string;
@@ -7517,6 +7523,22 @@ export interface paths {
                                     eventCount: number;
                                     estimatedCredits: number;
                                 } | null;
+                            };
+                            recentBurn?: {
+                                windowMinutes: number;
+                                total: number;
+                                threshold: number;
+                                alerting: boolean;
+                                topOperations: {
+                                    operation: string | null;
+                                    requests: number;
+                                    credits: number;
+                                }[];
+                                topPages: {
+                                    pageId: number;
+                                    pageLabel: string;
+                                    credits: number;
+                                }[];
                             };
                             pricing?: {
                                 microUsdPerCredit: number;

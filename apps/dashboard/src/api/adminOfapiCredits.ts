@@ -3,6 +3,7 @@ import type {
   OfapiCreditsDailyResponse,
   OfapiCreditsLedgerResponse,
   OfapiCreditsSummaryResponse,
+  OfapiSpendComparisonResponse,
 } from "@agency_hub_core/contracts";
 import { api } from "./client.js";
 import { qs } from "./utils.js";
@@ -12,6 +13,15 @@ export function useAdminOfapiCreditsSummary() {
     queryKey: ["admin", "ofapi-credits", "summary"],
     queryFn: () => api.get<OfapiCreditsSummaryResponse>("/api/v1/admin/ofapi/credits/summary"),
     refetchInterval: 60_000,
+  });
+}
+
+export function useAdminOfapiSpendComparison(params: { days: number; sampleLimit: number }) {
+  return useQuery({
+    queryKey: ["admin", "ofapi-spend-comparison", params],
+    queryFn: () => api.get<OfapiSpendComparisonResponse>(
+      `/api/v1/admin/ofapi/spend/comparison${qs({ ...params })}`,
+    ),
   });
 }
 

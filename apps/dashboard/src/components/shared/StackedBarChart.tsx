@@ -46,11 +46,15 @@ export function StackedBarChart(props: {
   series: StackedBarChartSeries[];
   xTickFormatter?: (value: string) => string;
   valueFormatter?: (value: number) => string;
+  // Optional richer formatter for tooltip values only (e.g. add a USD estimate);
+  // falls back to valueFormatter. Y-axis ticks always use valueFormatter.
+  tooltipValueFormatter?: (value: number) => string;
   yAxisWidth?: number;
   height?: number;
   headerExtra?: ReactNode;
 }) {
   const height = props.height ?? 300;
+  const tooltipFormatter = props.tooltipValueFormatter ?? props.valueFormatter;
 
   const labelFormatter = (label: ReactNode) =>
     typeof label === "string" && props.xTickFormatter ? props.xTickFormatter(label) : label;
@@ -94,10 +98,10 @@ export function StackedBarChart(props: {
           <Tooltip
             {...tooltipProps}
             labelFormatter={labelFormatter}
-            {...(props.valueFormatter
+            {...(tooltipFormatter
               ? {
                 formatter: (value: unknown, name: unknown) => [
-                  props.valueFormatter!(Number(value ?? 0)),
+                  tooltipFormatter(Number(value ?? 0)),
                   String(name ?? ""),
                 ] as [ReactNode, string],
               }

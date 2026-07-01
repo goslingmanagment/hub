@@ -35,7 +35,7 @@ export const OFAPI_CREDIT_ACCRUAL_QUEUE = "ofapi.credits.accrual";
 export const OFAPI_CREDIT_RECONCILE_QUEUE = "ofapi.credits.reconcile";
 export const OFAPI_CREDIT_BALANCE_PING_QUEUE = "ofapi.credits.balance-ping";
 
-const DEFAULT_BURN_ALERT_CREDITS_PER_HOUR = 300;
+export const DEFAULT_BURN_ALERT_CREDITS_PER_HOUR = 300;
 // Webhook accrual backfills at most this many completed UTC days — matches the
 // journal's default retention so a late first enable still captures everything
 // that is still countable.
