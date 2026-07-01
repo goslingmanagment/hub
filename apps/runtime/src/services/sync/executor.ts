@@ -375,7 +375,7 @@ export async function executeNextSyncPageChunk(
   }, SYNC_RUN_HEARTBEAT_MS);
 
   try {
-    const pageContext = await resolveExecutorPageContext(app, taskLease.pageId);
+    const pageContext = await resolveExecutorPageContext(app, taskLease.pageId, taskLease.stream);
     const result = await runWithPageSyncExecutionContext({
       pageId: platformAccountId,
       stream: taskLease.stream,

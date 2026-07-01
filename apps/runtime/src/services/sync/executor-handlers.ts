@@ -6,6 +6,7 @@ import {
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
   finalizePageDmConversationMessageSync,
+  findPageById,
   getEarliestSpenderTransactionAt,
   getExistingPageDmMessageIds,
   getPageDmConversationById,
@@ -73,6 +74,8 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import {
   resolvePageContextById,
+  resolveStoredProxyConfig,
+  resolveStoredProxyEgressKey,
   type ResolvedPageContext,
 } from "../page-context.ts";
 import {
@@ -4059,7 +4062,27 @@ export async function executeDmMessagesChunk(
 export async function resolveExecutorPageContext(
   app: AppContext,
   platformAccountId: number,
+  stream: SyncStream,
 ) {
+  const stored = await findPageById(app.db, platformAccountId);
+  if (
+    stored?.page.platform === "onlyfans" &&
+    (
+      (stream === "subscribers" && isOfapiAudienceSyncEligiblePage(app.config, stored.page)) ||
+      (isOnlyFansDmPollingStream(stream) && isOfapiDmSyncEligiblePage(app.config, stored.page))
+    )
+  ) {
+    return {
+      page: stored.page,
+      platform: "onlyfans" as const,
+      // OFAPI-owned streams never read the legacy OnlyMonster token, but the
+      // shared executor context keeps the shape stable for legacy handlers.
+      auth: { token: "" },
+      proxy: resolveStoredProxyConfig(app, stored.proxy),
+      egressKey: resolveStoredProxyEgressKey(stored.proxy),
+    } satisfies ResolvedPageContext;
+  }
+
   return resolvePageContextById(app, platformAccountId);
 }
 

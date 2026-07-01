@@ -35,6 +35,7 @@ import {
   executeOfapiAudienceChunk,
   pauseDisabledOnlyFansAudienceForPage,
 } from "../apps/runtime/src/services/sync/ofapi-audience-sync.ts";
+import { resolveExecutorPageContext } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import { triggerSyncBlock } from "../apps/runtime/src/services/sync-blocks.ts";
 import { getSyncStatusSnapshot } from "../apps/runtime/src/services/sync-status.ts";
 import {
@@ -566,6 +567,26 @@ describe("OFAPI live subscription projection", () => {
 });
 
 describe("audience stream plumbing", () => {
+  it("resolves OFAPI audience streams without legacy OnlyFans credentials", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedMappedPage();
+
+    await expect(resolveExecutorPageContext(appContext, page.id, "subscribers"))
+      .resolves.toMatchObject({
+        platform: "onlyfans",
+        page: {
+          id: page.id,
+          ofapiAccountId: OFAPI_ACCOUNT,
+        },
+      });
+    await expect(resolveExecutorPageContext(appContext, page.id, "transactions"))
+      .rejects.toThrow(`Page "${page.id}" has no stored platform credentials`);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("exposes the audience block for eligible OnlyFans pages", async (context) => {
     if (!testDb) {
       context.skip();
