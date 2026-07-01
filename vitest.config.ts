@@ -14,6 +14,7 @@ export default defineConfig({
       "@/": path.resolve("apps/dashboard/src") + "/",
       "react": path.resolve("apps/dashboard/node_modules/react"),
       "react-dom": path.resolve("apps/dashboard/node_modules/react-dom"),
+      "react-router": path.resolve("apps/dashboard/node_modules/react-router"),
     },
   },
   test: {

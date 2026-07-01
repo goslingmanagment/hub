@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
@@ -369,7 +369,11 @@ function SettingRow({ item }: { item: ConfigItem }) {
 
   return (
     <div
-      className={`grid grid-cols-1 gap-y-2 border-l-2 ${status.rail} py-3.5 pl-4 pr-3 sm:grid-cols-[minmax(0,1fr)_104px_minmax(168px,auto)] sm:items-start sm:gap-x-5`}
+      // Staged flags also render an actionable StagedFlagRow below, which owns the
+      // canonical `config-<key>` anchor; this read-only readout must not duplicate
+      // the id (getElementById would otherwise land deep-links on this row).
+      id={item.editability === "staged" ? undefined : `config-${item.key}`}
+      className={`scroll-mt-24 grid grid-cols-1 gap-y-2 border-l-2 ${status.rail} py-3.5 pl-4 pr-3 sm:grid-cols-[minmax(0,1fr)_104px_minmax(168px,auto)] sm:items-start sm:gap-x-5`}
     >
       <div className="min-w-0">
         <SettingLabel item={item} />
@@ -687,7 +691,7 @@ function StagedFlagRow({
   ];
 
   return (
-    <div className="flex flex-col gap-1.5 border-b border-l-2 border-border/60 border-l-amber-500/50 py-3 pl-4 pr-4 last:border-b-0">
+    <div id={`config-${item.key}`} className="scroll-mt-24 flex flex-col gap-1.5 border-b border-l-2 border-border/60 border-l-amber-500/50 py-3 pl-4 pr-4 last:border-b-0">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <SettingLabel item={item} />
@@ -876,6 +880,27 @@ function StagedPendingBanner({ data }: { data: ConfigViewResponse }) {
 
 export function ConfigurationTab() {
   const { data, isLoading, isError } = useAdminConfig();
+
+  // Deep-link support: pages that link here with `#config-<key>` (e.g. the OFAPI
+  // Credits page's budget/floor/burn shortcuts) scroll to and briefly highlight
+  // the matching row once the config data has rendered.
+  useEffect(() => {
+    if (isLoading || isError || typeof document === "undefined") return;
+    const hash = window.location.hash;
+    if (!hash.startsWith("#config-")) return;
+    const el = document.getElementById(hash.slice(1));
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    el.style.outline = "2px solid var(--color-accent)";
+    el.style.outlineOffset = "2px";
+    el.style.borderRadius = "8px";
+    const timer = setTimeout(() => {
+      el.style.outline = "";
+      el.style.outlineOffset = "";
+      el.style.borderRadius = "";
+    }, 2200);
+    return () => clearTimeout(timer);
+  }, [isLoading, isError]);
 
   if (isLoading) {
     return <div className="text-sm text-text-muted">Loading configuration…</div>;
