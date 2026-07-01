@@ -626,8 +626,9 @@ remote_curl_status() {
   local output_file="$1"
   local url="$2"
   local header="${3:-}"
+  local max_time="${4:-10}"
   local remote_output="${TEMP_DIR}/remote-curl.out"
-  local command="curl --silent --show-error --connect-timeout 5 --max-time 10"
+  local command="curl --silent --show-error --connect-timeout 5 --max-time ${max_time}"
   if [[ -n "$header" ]]; then
     command+=" --header $(printf '%q' "$header")"
   fi
@@ -641,14 +642,15 @@ remote_curl_status() {
 curl_status() {
   local output_file="$1"
   local url="$2"
+  local max_time="${3:-10}"
   if [[ "$VERIFY_VIA_SSH" == "1" ]]; then
-    remote_curl_status "$output_file" "$url"
+    remote_curl_status "$output_file" "$url" "" "$max_time"
     return
   fi
 
   curl --silent --show-error \
     --connect-timeout 5 \
-    --max-time 10 \
+    --max-time "$max_time" \
     --output "$output_file" \
     --write-out '%{http_code}' \
     "$url"
@@ -658,14 +660,15 @@ curl_status_with_monitoring_token() {
   local output_file="$1"
   local url="$2"
   local token="$3"
+  local max_time="${4:-10}"
   if [[ "$VERIFY_VIA_SSH" == "1" ]]; then
-    remote_curl_status "$output_file" "$url" "x-monitoring-token: ${token}"
+    remote_curl_status "$output_file" "$url" "x-monitoring-token: ${token}" "$max_time"
     return
   fi
 
   curl --silent --show-error \
     --connect-timeout 5 \
-    --max-time 10 \
+    --max-time "$max_time" \
     --header "x-monitoring-token: ${token}" \
     --output "$output_file" \
     --write-out '%{http_code}' \
@@ -712,6 +715,25 @@ wait_for_worker_health() {
   done
 
   log "Worker container last observed status: ${status:-unknown}"
+  return 1
+}
+
+wait_for_sync_health() {
+  local sync_file="$1"
+  local url="${VERIFY_URL%/}/api/v1/health/sync"
+  local attempt=0
+
+  while (( attempt < 12 )); do
+    attempt=$((attempt + 1))
+    SYNC_STATUS_CODE="$(curl_status_with_monitoring_token "$sync_file" "$url" "$SYNC_MONITORING_TOKEN" 30 || true)"
+    case "$SYNC_STATUS_CODE" in
+      200|503)
+        grep -q '"pages"' "$sync_file" && return 0
+        ;;
+    esac
+    sleep 5
+  done
+
   return 1
 }
 
@@ -1022,15 +1044,7 @@ verify_post_deploy_image_labels
 
 if [[ -n "$SYNC_MONITORING_TOKEN" ]]; then
   log "Verifying sync health endpoint"
-  SYNC_STATUS_CODE="$(curl_status_with_monitoring_token "$SYNC_FILE" "${VERIFY_URL%/}/api/v1/health/sync" "$SYNC_MONITORING_TOKEN" || true)"
-  case "$SYNC_STATUS_CODE" in
-    200|503)
-      ;;
-    *)
-      fail "Unexpected /api/v1/health/sync status: ${SYNC_STATUS_CODE}"
-      ;;
-  esac
-  grep -q '"pages"' "$SYNC_FILE" || fail "Sync health response is missing pages[]"
+  wait_for_sync_health "$SYNC_FILE" || fail "Unexpected /api/v1/health/sync status: ${SYNC_STATUS_CODE}"
 else
   SYNC_STATUS_CODE="skipped"
   log "Skipping protected sync health verification because HEALTH_SYNC_MONITORING_TOKEN is not set"
