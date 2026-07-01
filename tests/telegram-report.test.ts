@@ -103,7 +103,7 @@ describe("renderDailyRevenueTelegramReport", () => {
   it("renders a bold headline and the windows footer without a code block", () => {
     expect(text).toContain("📊 <b>Revenue · Mon 29 Jun</b>");
     expect(text).toContain("<b>$425.55</b> +44%");
-    expect(text).toContain("<i>Windows: UTC · excl. today</i>");
+    expect(text).toContain("<i>Windows: 02:00-02:00 MSK · excl. current day</i>");
     // <pre> renders as a copy-able code block in Telegram — never use it here.
     expect(text).not.toContain("<pre>");
   });
@@ -165,6 +165,7 @@ describe("buildDailyRevenueReportHtml", () => {
     expect(html).toContain("tabular-nums");
     expect(html).toContain('<div id="card">');
     expect(html).toContain("Revenue · Mon 29 Jun");
+    expect(html).toContain("Windows: 02:00-02:00 MSK");
   });
 
   it("colours direction by class (no reliance on emoji fonts)", () => {

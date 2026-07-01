@@ -116,7 +116,7 @@ td{padding:3px 0;vertical-align:baseline}
 <div class="head">Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</div>
 <div class="hero"><span class="amt">${formatUsdFromMills(y.currentMills)}</span><span class="pill ${heroDir}">${escapeHtml(formatDeltaCompact(y))}</span></div>
 <table>${rows.join("")}</table>
-<div class="foot">Windows: UTC · excluding today</div>
+<div class="foot">Windows: 02:00-02:00 MSK · excluding current day</div>
 </div></body></html>`;
 }
 

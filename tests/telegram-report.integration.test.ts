@@ -4,13 +4,13 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
-  dailyRevenue,
   getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
   hasScheduledReportForDate,
   insertDeliveryAttempt,
   listDeliveryAttempts,
   updateTelegramSettings,
+  upsertTransaction,
 } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
 
@@ -34,22 +34,29 @@ vi.mock("../apps/runtime/src/services/telegram-report-image.ts", async (importOr
   renderDailyRevenueReportImage: vi.fn(async () => Buffer.from([0x89, 0x50, 0x4e, 0x47])),
 }));
 
+let revenueTransactionSeq = 0;
+
 async function insertRevenue(
   testDb: StartedTestDatabase,
   input: {
     pageId: number;
     businessDate: string;
     creatorNetAmountMills: bigint;
+    occurredAt?: Date;
   },
 ) {
-  await testDb.db.insert(dailyRevenue).values({
+  revenueTransactionSeq += 1;
+  await upsertTransaction(testDb.db, {
     platformAccountId: input.pageId,
-    businessDate: input.businessDate,
+    transactionId: `telegram-report-tx-${revenueTransactionSeq}`,
+    rawType: 20001,
     canonicalType: "tip",
-    transactionState: "posted",
-    transactionCount: 1,
+    transactionState: "pending",
+    rawStatus: 1,
     grossAmountMills: input.creatorNetAmountMills,
+    sourceDestinationAmountMills: input.creatorNetAmountMills,
     creatorNetAmountMills: input.creatorNetAmountMills,
+    occurredAt: input.occurredAt ?? new Date(`${input.businessDate}T12:00:00.000Z`),
   });
 }
 
@@ -106,7 +113,7 @@ describe("telegram revenue report integration", () => {
     await resetIntegrationDatabase(testDb.pool);
   });
 
-  it("builds a combined cross-platform report with top-page truncation and UTC windows", async (context) => {
+  it("builds a combined cross-platform report with top-page truncation and 02:00 MSK windows", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -267,8 +274,57 @@ describe("telegram revenue report integration", () => {
     expect(report.text).toContain("alpha-fansly");
     expect(report.text).toContain("$120.00");
     expect(report.text).toContain(`+${report.overflow?.pageCount} more`);
-    expect(report.text).toContain("Windows: UTC");
+    expect(report.text).toContain("Windows: 02:00-02:00 MSK");
     expect(report.text).not.toContain("$999.00");
+  });
+
+  it("uses 02:00 Moscow time as the daily close boundary", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "boundary",
+      name: "Boundary Model",
+    });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "boundary-page",
+    });
+
+    await insertRevenue(testDb, {
+      pageId: page.id,
+      businessDate: "2026-03-19",
+      creatorNetAmountMills: 999_000n,
+      occurredAt: new Date("2026-03-18T22:59:59.000Z"), // 01:59:59 MSK, previous business day.
+    });
+    await insertRevenue(testDb, {
+      pageId: page.id,
+      businessDate: "2026-03-19",
+      creatorNetAmountMills: 120_000n,
+      occurredAt: new Date("2026-03-18T23:00:00.000Z"), // 02:00:00 MSK, included.
+    });
+    await insertRevenue(testDb, {
+      pageId: page.id,
+      businessDate: "2026-03-19",
+      creatorNetAmountMills: 80_000n,
+      occurredAt: new Date("2026-03-19T22:59:59.000Z"), // 01:59:59 MSK next day, included.
+    });
+    await insertRevenue(testDb, {
+      pageId: page.id,
+      businessDate: "2026-03-20",
+      creatorNetAmountMills: 777_000n,
+      occurredAt: new Date("2026-03-19T23:00:00.000Z"), // 02:00:00 MSK next day, excluded.
+    });
+
+    const app = createTestAppContext(testDb);
+    const report = await buildDailyRevenueTelegramReport(app, new Date("2026-03-20T15:00:00.000Z"));
+
+    expect(report.reportDate).toBe("2026-03-19");
+    expect(report.agency.metrics.yesterday.currentMills).toBe(200_000n);
+    expect(report.pages[0]?.label).toBe("boundary-page");
+    expect(report.pages[0]?.metrics.yesterday.currentMills).toBe(200_000n);
   });
 
   it("treats only sent scheduled deliveries as completed for a report date", async (context) => {

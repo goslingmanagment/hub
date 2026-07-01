@@ -261,6 +261,43 @@ export async function getRevenuePageTotals(
     .orderBy(models.slug, pages.label);
 }
 
+export async function getRevenuePageTotalsForExactPeriod(
+  db: Database,
+  input: {
+    pageIds?: number[];
+    period: PeriodBounds;
+    modelSlug?: string;
+  },
+) {
+  const clauses = buildTransactionScopeClauses({
+    pageIds: input.pageIds,
+    period: input.period,
+    excludeExcludedTypes: true,
+  });
+
+  if (!clauses) {
+    return [];
+  }
+
+  if (input.modelSlug) {
+    clauses.push(eq(models.slug, input.modelSlug));
+  }
+
+  return db.select({
+    pageId: pages.id,
+    pageLabel: pages.label,
+    modelId: models.id,
+    modelSlug: models.slug,
+    modelName: models.name,
+    netEarningsMills: sql<bigint>`coalesce(sum(${transactions.creatorNetAmountMills}), 0)::bigint`,
+  }).from(transactions)
+    .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
+    .innerJoin(models, eq(models.id, pages.modelId))
+    .where(and(...clauses))
+    .groupBy(pages.id, pages.label, models.id, models.slug, models.name)
+    .orderBy(models.slug, pages.label);
+}
+
 export async function getRevenueBreakdownForScope(
   db: Database,
   input: {

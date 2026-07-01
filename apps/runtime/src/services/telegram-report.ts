@@ -1,5 +1,5 @@
 import {
-  getRevenuePageTotals,
+  getRevenuePageTotalsForExactPeriod,
   getTelegramSettings,
   insertDeliveryAttempt,
   listVisiblePages,
@@ -7,11 +7,10 @@ import {
 import {
   addUtcDays,
   formatUsdFromMills,
+  MOSCOW_TIME_ZONE,
   startOfBusinessDay,
   toBusinessDate,
   toMills,
-  UTC_TIME_ZONE,
-  type Platform,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -20,6 +19,9 @@ import { renderDailyRevenueReportImage } from "./telegram-report-image.ts";
 
 export const TOP_PAGE_LIMIT = 10;
 export const TOP_MODEL_LIMIT = 10;
+const REPORT_BUSINESS_TIME_ZONE = MOSCOW_TIME_ZONE;
+const REPORT_BUSINESS_DAY_START_HOUR = 2;
+const HOUR_MS = 60 * 60 * 1000;
 
 type WindowKey = "yesterday" | "days7" | "days30";
 
@@ -120,46 +122,36 @@ export function formatShare(partMills: bigint, totalMills: bigint): string {
   return `${pct}%`;
 }
 
-function groupPageIdsByPlatform(
-  pages: Array<Awaited<ReturnType<typeof listVisiblePages>>[number]>,
-) {
-  const grouped = new Map<Platform, number[]>();
-
-  for (const page of pages) {
-    const current = grouped.get(page.platform) ?? [];
-    current.push(page.id);
-    grouped.set(page.platform, current);
-  }
-
-  return grouped;
-}
-
 async function loadPageTotalsForBounds(
   app: Pick<AppContext, "db">,
-  groupedPageIds: Map<Platform, number[]>,
+  pageIds: number[],
   bounds: {
     from: Date;
     to: Date;
   },
 ) {
   const totals = new Map<number, bigint>();
-  const groups = Array.from(groupedPageIds.entries());
-  const rows = await Promise.all(groups.map(([platform, pageIds]) => getRevenuePageTotals(app.db, {
-    platform,
+  const rows = await getRevenuePageTotalsForExactPeriod(app.db, {
     pageIds,
     period: {
       from: bounds.from,
       to: bounds.to,
     },
-  })));
+  });
 
-  for (const group of rows) {
-    for (const row of group) {
-      totals.set(row.pageId, toMills(row.netEarningsMills));
-    }
+  for (const row of rows) {
+    totals.set(row.pageId, toMills(row.netEarningsMills));
   }
 
   return totals;
+}
+
+function startOfReportBusinessDay(date: Date) {
+  const shifted = new Date(date.getTime() - REPORT_BUSINESS_DAY_START_HOUR * HOUR_MS);
+  return new Date(
+    startOfBusinessDay(shifted, REPORT_BUSINESS_TIME_ZONE).getTime()
+      + REPORT_BUSINESS_DAY_START_HOUR * HOUR_MS,
+  );
 }
 
 function buildMetric(
@@ -338,12 +330,9 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
     );
   }
 
-  // Windows are UTC calendar windows that exclude today — intentionally
-  // different from the dashboard's OnlyFans-specific windows (see the NOTE in
-  // buildDailyRevenueTelegramReport). Labeling avoids misreading without
-  // changing the math.
+  // Windows are business-day windows aligned to the agency shift boundary.
   lines.push("");
-  lines.push("<i>Windows: UTC · excl. today</i>");
+  lines.push("<i>Windows: 02:00-02:00 MSK · excl. current day</i>");
 
   return lines.join("\n");
 }
@@ -361,30 +350,27 @@ export async function buildDailyRevenueTelegramReport(
   app: Pick<AppContext, "db">,
   now = new Date(),
 ): Promise<DailyRevenueTelegramReport> {
-  const todayStart = startOfBusinessDay(now, UTC_TIME_ZONE);
-  const yesterdayStart = addUtcDays(todayStart, -1);
+  const currentBusinessDayStart = startOfReportBusinessDay(now);
+  const previousBusinessDayStart = addUtcDays(currentBusinessDayStart, -1);
   const pageRows = await listVisiblePages(app.db);
-  const groupedPageIds = groupPageIdsByPlatform(pageRows);
+  const pageIds = pageRows.map((page) => page.id);
 
-  // NOTE: The daily Telegram report uses uniform UTC calendar windows that
-  // exclude today (yesterday/7d/30d all end at todayStart). This intentionally
-  // differs from the dashboard's OnlyFans-specific windows in
-  // packages/shared/src/time.ts, which are one day wider and today-inclusive
-  // (ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS + a `to` of todayStart+1). This
-  // 7d/30d divergence between report and dashboard is known and unresolved; do
-  // not "fix" the math here without aligning both surfaces.
+  // The daily Telegram report closes the agency business day at 02:00 Moscow
+  // time, matching chatter shift accounting. Use exact transactions instead of
+  // the UTC-day revenue_daily rollup so boundary-hour sales land on the right
+  // report date.
   const windows = {
     yesterday: {
-      current: { from: yesterdayStart, to: todayStart },
-      previous: { from: addUtcDays(yesterdayStart, -1), to: yesterdayStart },
+      current: { from: previousBusinessDayStart, to: currentBusinessDayStart },
+      previous: { from: addUtcDays(previousBusinessDayStart, -1), to: previousBusinessDayStart },
     },
     days7: {
-      current: { from: addUtcDays(todayStart, -7), to: todayStart },
-      previous: { from: addUtcDays(todayStart, -14), to: addUtcDays(todayStart, -7) },
+      current: { from: addUtcDays(currentBusinessDayStart, -7), to: currentBusinessDayStart },
+      previous: { from: addUtcDays(currentBusinessDayStart, -14), to: addUtcDays(currentBusinessDayStart, -7) },
     },
     days30: {
-      current: { from: addUtcDays(todayStart, -30), to: todayStart },
-      previous: { from: addUtcDays(todayStart, -60), to: addUtcDays(todayStart, -30) },
+      current: { from: addUtcDays(currentBusinessDayStart, -30), to: currentBusinessDayStart },
+      previous: { from: addUtcDays(currentBusinessDayStart, -60), to: addUtcDays(currentBusinessDayStart, -30) },
     },
   } satisfies Record<WindowKey, {
     current: { from: Date; to: Date };
@@ -395,8 +381,8 @@ export async function buildDailyRevenueTelegramReport(
     Object.entries(windows).map(async ([key, bounds]) => [
       key,
       {
-        current: await loadPageTotalsForBounds(app, groupedPageIds, bounds.current),
-        previous: await loadPageTotalsForBounds(app, groupedPageIds, bounds.previous),
+        current: await loadPageTotalsForBounds(app, pageIds, bounds.current),
+        previous: await loadPageTotalsForBounds(app, pageIds, bounds.previous),
       },
     ]),
   )) as Record<WindowKey, {
@@ -458,7 +444,7 @@ export async function buildDailyRevenueTelegramReport(
     : null;
 
   const report = {
-    reportDate: toBusinessDate(yesterdayStart, UTC_TIME_ZONE),
+    reportDate: toBusinessDate(previousBusinessDayStart, REPORT_BUSINESS_TIME_ZONE),
     generatedAt: now.toISOString(),
     agency,
     models,
