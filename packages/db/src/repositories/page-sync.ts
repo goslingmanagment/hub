@@ -997,6 +997,24 @@ async function refreshLockedPageSyncDependencies(
         row.stream,
       ).filter((dependency) => streamByName.has(dependency));
       if (dependencies.length === 0) {
+        if (row.blockerKind !== "dependency" || row.status === "paused") {
+          continue;
+        }
+
+        const nextStatus: PageSyncStatus = row.requestSeq > row.appliedSeq ? "pending" : "idle";
+        await db.execute(sql`
+          update ${pageSyncStates}
+          set status = ${nextStatus}::page_sync_status,
+              blocker_kind = null,
+              blocker_code = null,
+              blocker_message = null,
+              blocked_at = null,
+              updated_at = ${now}
+          where page_id = ${pageId}
+            and stream = ${row.stream}
+            and blocker_kind = 'dependency'
+            and status <> 'paused'
+        `);
         continue;
       }
 

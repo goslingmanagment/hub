@@ -647,6 +647,47 @@ describe("audience stream plumbing", () => {
     expect(byStream.get("dm_messages")?.blockerMessage ?? "").not.toContain("subscribers");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("clears stale legacy dependency blockers from OFAPI DM conversations", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    appContext = createTestAppContext(testDb, {
+      ofapiDmSyncEnabled: true,
+    });
+    const page = await seedMappedPage("lora-of-stale-dm-blocker");
+    await testDb.pool.query(
+      `
+        update page_sync_states
+        set status = 'blocked',
+            request_seq = 2,
+            applied_seq = 0,
+            blocker_kind = 'dependency',
+            blocker_code = 'unmet_dependency',
+            blocker_message = 'Waiting for light, transactions',
+            blocked_at = now(),
+            updated_at = now()
+        where page_id = $1
+          and stream = 'dm_conversations'
+      `,
+      [page.id],
+    );
+
+    await refreshPageSyncDependencies(appContext.db, { pageId: page.id });
+
+    const states = await listPageSyncStates(appContext.db, {
+      pageId: page.id,
+      streams: ["dm_conversations"],
+    });
+    expect(states[0]).toMatchObject({
+      status: "pending",
+      blockerKind: null,
+      blockerCode: null,
+      blockerMessage: null,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("reports the audience block not_available unless flag+mapping are active (audit B1)", async (context) => {
     if (!testDb) {
       context.skip();
