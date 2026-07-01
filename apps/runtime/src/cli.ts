@@ -513,7 +513,10 @@ function printOfapiTransactionsBackfillResult(result: OfapiTransactionsBackfillR
       `  has_credentials=${page.hasCredentials} active_non_ofapi_transactions=${page.activeNonOfapiTransactions}`,
     );
     console.log(
-      `  api_pages=${page.apiPages} raw_rows=${page.rawRows} normalized_rows=${page.normalizedRows} skipped_rows=${page.skippedRows} written_rows=${page.writtenRows}`,
+      `  api_pages=${page.apiPages} raw_rows=${page.rawRows} normalized_rows=${page.normalizedRows} skipped_rows=${page.skippedRows} written_rows=${page.writtenRows}`
+        + (page.paginationStopReason && page.paginationStopReason !== "completed"
+          ? ` pagination=${page.paginationStopReason}`
+          : ""),
     );
     console.log(
       `  occurred_at=${page.minOccurredAt?.toISOString() ?? ""}..${page.maxOccurredAt?.toISOString() ?? ""}`,

@@ -42,6 +42,7 @@ async function seedOfapiPage(label: string, ofapiAccountId: string) {
 function fakeOfapiTransactionsClient(input: {
   rowsByAccount: Map<string, Record<string, unknown>[]>;
   calls?: Array<{ accountId: string; marker: string | null }>;
+  onCall?: (accountId: string) => Promise<void> | void;
 }): OfapiClient {
   return {
     async listTransactions(
@@ -50,10 +51,38 @@ function fakeOfapiTransactionsClient(input: {
       params: { marker?: string | null },
     ): Promise<OfapiListPage> {
       input.calls?.push({ accountId, marker: params.marker ?? null });
+      await input.onCall?.(accountId);
       return {
         items: input.rowsByAccount.get(accountId) ?? [],
         hasNextPage: false,
         nextMarker: null,
+        nextPageUrl: null,
+        meta: null,
+      };
+    },
+  } as unknown as OfapiClient;
+}
+
+// Serves a fixed list of pages in order, one per listTransactions call, so a test
+// can exercise the multi-page marker walk and assert exactly how many pages were
+// fetched before the bounded walk stopped.
+function pagedOfapiTransactionsClient(input: {
+  pages: Array<{ items: Record<string, unknown>[]; nextMarker: string | null }>;
+  calls: Array<{ marker: string | null }>;
+}): OfapiClient {
+  return {
+    async listTransactions(
+      _context: unknown,
+      _accountId: string,
+      params: { marker?: string | null },
+    ): Promise<OfapiListPage> {
+      const index = input.calls.length;
+      input.calls.push({ marker: params.marker ?? null });
+      const page = input.pages[index] ?? { items: [], nextMarker: null };
+      return {
+        items: page.items,
+        hasNextPage: page.nextMarker !== null,
+        nextMarker: page.nextMarker,
         nextPageUrl: null,
         meta: null,
       };
@@ -625,9 +654,12 @@ describe("OFAPI REST transactions backfill", () => {
         and t.transaction_id = 'rest-tx-1'
     `, [page.id]);
 
+    // Audit B2: the REST backfill writes the canonical `ofapi:<category>` rawType
+    // — identical to the webhook ingest path — so re-running over a webhook row
+    // converges in place instead of flipping it to a divergent `ofapi:rest:*`.
     expect(rows).toEqual([{
       transaction_count: 1,
-      raw_type: "ofapi:rest:message",
+      raw_type: "ofapi:message",
       transaction_state: "posted",
       raw_status: "settled",
       gross_amount_mills: "45000",
@@ -637,6 +669,228 @@ describe("OFAPI REST transactions backfill", () => {
       revenue_count: 1,
       revenue_net: "36000",
     }]);
+  });
+
+  it("does not let a stale REST pending row demote already-settled webhook truth", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rest-no-demote-of", "acct_rest_no_demote");
+    const occurredAt = new Date("2026-06-26T22:36:00.000Z");
+    // Webhook ingest already promoted this transaction to settled/posted.
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      transactionId: "keep-settled",
+      rawType: "ofapi:message",
+      canonicalType: "message_purchase",
+      transactionState: "posted",
+      rawStatus: "settled",
+      grossAmountMills: 45_000n,
+      sourceDestinationAmountMills: 45_000n,
+      creatorNetAmountMills: 36_000n,
+      senderId: "fan-keep",
+      occurredAt,
+    });
+
+    // REST backfill re-reads the same transaction as stale loading/pending.
+    appContext = {
+      ...appContext,
+      ofapi: fakeOfapiTransactionsClient({
+        rowsByAccount: new Map([[
+          "acct_rest_no_demote",
+          [{
+            id: "keep-settled",
+            type: "message",
+            status: "loading",
+            amount: "45.00",
+            net: "36.00",
+            createdAt: "2026-06-26T22:36:00+00:00",
+            user: { id: "fan-keep" },
+          }],
+        ]]),
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-07-01T00:00:00.000Z"),
+      mode: "write",
+    });
+
+    // The pending row is a no-op: it is normalized but not written, and terminal
+    // truth is preserved.
+    expect(result.pages[0]).toMatchObject({
+      status: "written",
+      normalizedRows: 1,
+      writtenRows: 0,
+    });
+
+    const { rows } = await testDb.pool.query<{
+      transaction_state: string;
+      raw_status: string;
+      gross_amount_mills: string;
+      creator_net_amount_mills: string;
+    }>(
+      "select transaction_state, raw_status, gross_amount_mills::text, creator_net_amount_mills::text from transactions where platform_account_id = $1 and transaction_id = 'keep-settled'",
+      [page.id],
+    );
+    expect(rows).toEqual([{
+      transaction_state: "posted",
+      raw_status: "settled",
+      gross_amount_mills: "45000",
+      creator_net_amount_mills: "36000",
+    }]);
+  });
+
+  it("keeps the settled state when a batch carries both settled and pending rows for one id", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rest-batch-settle-of", "acct_rest_batch_settle");
+    appContext = {
+      ...appContext,
+      ofapi: fakeOfapiTransactionsClient({
+        rowsByAccount: new Map([[
+          "acct_rest_batch_settle",
+          [
+            // Settled row appears BEFORE the stale pending duplicate: without the
+            // intra-batch guard, the later pending upsert would demote it.
+            { id: "dup", type: "message", status: "done", amount: "45.00", net: "36.00", createdAt: "2026-06-10T00:00:00+00:00", user: { id: "fan-dup" } },
+            { id: "dup", type: "message", status: "loading", amount: "45.00", net: "36.00", createdAt: "2026-06-10T00:00:00+00:00", user: { id: "fan-dup" } },
+          ],
+        ]]),
+      }),
+    };
+
+    await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-07-01T00:00:00.000Z"),
+      mode: "write",
+    });
+
+    const { rows } = await testDb.pool.query<{ transaction_state: string; raw_status: string }>(
+      "select transaction_state, raw_status from transactions where platform_account_id = $1 and transaction_id = 'dup'",
+      [page.id],
+    );
+    expect(rows).toEqual([{ transaction_state: "posted", raw_status: "settled" }]);
+  });
+
+  it("does not early-stop on the first page (unproven order) even when it crosses the window end", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rest-firstpage-of", "acct_rest_firstpage");
+    const calls: Array<{ marker: string | null }> = [];
+    appContext = {
+      ...appContext,
+      ofapi: pagedOfapiTransactionsClient({
+        calls,
+        pages: [
+          {
+            // First page is descending and its first row is already after `to`.
+            // With no prior page, ascending order is unproven, so the after_window
+            // row must NOT trigger an early-stop.
+            nextMarker: "m1",
+            items: [
+              { id: "a", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-20T00:00:00+00:00", user: { id: "fan-a" } },
+              { id: "b", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-12T00:00:00+00:00", user: { id: "fan-b" } },
+              { id: "c", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-05T00:00:00+00:00", user: { id: "fan-c" } },
+            ],
+          },
+          {
+            nextMarker: null,
+            items: [
+              { id: "d", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-08T00:00:00+00:00", user: { id: "fan-d" } },
+              { id: "e", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-03T00:00:00+00:00", user: { id: "fan-e" } },
+            ],
+          },
+        ],
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-06-15T00:00:00.000Z"),
+      mode: "dry-run",
+    });
+
+    // Both pages fetched; the second page's in-window rows (06-08, 06-03) that a
+    // first-page early-stop would have dropped are captured alongside page 1's
+    // in-window rows (06-12, 06-05). Only 06-20 is after_window.
+    expect(calls).toHaveLength(2);
+    expect(result.pages[0]).toMatchObject({
+      apiPages: 2,
+      normalizedRows: 4,
+      paginationStopReason: "completed",
+    });
+    expect(result.pages[0]?.skippedReasons).toMatchObject({ after_window: 1 });
+  });
+
+  it("does not early-stop when the feed is not ascending, so no in-window row is lost", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rest-misorder-of", "acct_rest_misorder");
+    const calls: Array<{ marker: string | null }> = [];
+    appContext = {
+      ...appContext,
+      ofapi: pagedOfapiTransactionsClient({
+        calls,
+        pages: [
+          {
+            nextMarker: "m1",
+            items: [
+              { id: "a", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-05T00:00:00+00:00", user: { id: "fan-a" } },
+              { id: "b", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-10T00:00:00+00:00", user: { id: "fan-b" } },
+            ],
+          },
+          {
+            // Goes backwards (06-08 < prior max 06-10) AND crosses `to` (06-20).
+            // A naive early-stop here would drop the later in-window row below.
+            nextMarker: "m2",
+            items: [
+              { id: "c", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-08T00:00:00+00:00", user: { id: "fan-c" } },
+              { id: "d", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-20T00:00:00+00:00", user: { id: "fan-d" } },
+            ],
+          },
+          {
+            nextMarker: null,
+            items: [
+              { id: "e", type: "tip", status: "done", amount: "1.00", net: "1.00", createdAt: "2026-06-12T00:00:00+00:00", user: { id: "fan-e" } },
+            ],
+          },
+        ],
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-06-15T00:00:00.000Z"),
+      mode: "dry-run",
+    });
+
+    // All three pages are read (no early-stop), so the in-window 06-12 row that a
+    // naive early-stop would have skipped is captured: a=06-05, b=06-10, c=06-08,
+    // e=06-12 (d=06-20 is after_window).
+    expect(calls).toHaveLength(3);
+    expect(result.pages[0]).toMatchObject({
+      apiPages: 3,
+      normalizedRows: 4,
+      paginationStopReason: "completed",
+    });
+    expect(result.pages[0]?.skippedReasons).toMatchObject({ after_window: 1 });
   });
 
   it("blocks pages with direct credentials or active non-OFAPI truth rows", async (context) => {
@@ -769,5 +1023,230 @@ describe("OFAPI REST transactions backfill", () => {
         lifetime_net: "0",
       },
     ]);
+  });
+
+  it("stops paginating once the ascending feed crosses the upper bound", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rest-paging-of", "acct_rest_paging");
+    const calls: Array<{ marker: string | null }> = [];
+    appContext = {
+      ...appContext,
+      ofapi: pagedOfapiTransactionsClient({
+        calls,
+        pages: [
+          {
+            nextMarker: "m1",
+            items: [
+              { id: "p0-a", type: "tip", status: "done", amount: "10.00", net: "8.00", createdAt: "2026-06-02T00:00:00+00:00", user: { id: "fan-1" } },
+              { id: "p0-b", type: "tip", status: "done", amount: "10.00", net: "8.00", createdAt: "2026-06-05T00:00:00+00:00", user: { id: "fan-2" } },
+            ],
+          },
+          {
+            nextMarker: "m2",
+            items: [
+              { id: "p1-a", type: "tip", status: "done", amount: "10.00", net: "8.00", createdAt: "2026-06-10T00:00:00+00:00", user: { id: "fan-3" } },
+              // First row at/after `to`: the ascending feed has crossed the window.
+              { id: "p1-b", type: "tip", status: "done", amount: "10.00", net: "8.00", createdAt: "2026-06-20T00:00:00+00:00", user: { id: "fan-4" } },
+            ],
+          },
+          {
+            // Entirely past `to` — must never be requested (would cost credits).
+            nextMarker: "m3",
+            items: [
+              { id: "p2-a", type: "tip", status: "done", amount: "99.00", net: "80.00", createdAt: "2026-06-25T00:00:00+00:00", user: { id: "fan-5" } },
+            ],
+          },
+        ],
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-06-15T00:00:00.000Z"),
+      mode: "dry-run",
+    });
+
+    // Page 0 and the boundary page 1 are fetched; the all-future page 2 is not.
+    expect(calls).toEqual([{ marker: null }, { marker: "m1" }]);
+    expect(result.pages[0]).toMatchObject({
+      status: "dry_run",
+      apiPages: 2,
+      rawRows: 4,
+      normalizedRows: 3,
+      paginationStopReason: "reached_window_end",
+    });
+    expect(result.pages[0]?.skippedReasons).toMatchObject({ after_window: 1 });
+  });
+
+  it("caps the paginated walk and reports truncation when no upper bound stops it", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rest-cap-of", "acct_rest_cap");
+    const calls: Array<{ marker: string | null }> = [];
+    // An always-has-next feed with no `to`: only the page cap can stop it.
+    appContext = {
+      ...appContext,
+      ofapi: pagedOfapiTransactionsClient({
+        calls,
+        pages: Array.from({ length: 10 }, (_unused, index) => ({
+          nextMarker: `m${index + 1}`,
+          items: [{
+            id: `cap-${index}`,
+            type: "tip",
+            status: "done",
+            amount: "1.00",
+            net: "1.00",
+            createdAt: "2026-06-05T00:00:00+00:00",
+            user: { id: `fan-${index}` },
+          }],
+        })),
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: null,
+      mode: "dry-run",
+      maxApiPages: 3,
+    });
+
+    expect(calls).toHaveLength(3);
+    expect(result.pages[0]).toMatchObject({
+      apiPages: 3,
+      paginationStopReason: "page_cap",
+    });
+  });
+
+  it("blocks --write when spend transaction ingest is disabled and makes no API calls", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rest-gated-of", "acct_rest_gated");
+    const calls: Array<{ accountId: string; marker: string | null }> = [];
+    const disabledContext = {
+      ...createTestAppContext(testDb, {
+        ofapiSpendProjectionShadowEnabled: true,
+        ofapiSpendTransactionIngestEnabled: false,
+      }),
+      ofapi: fakeOfapiTransactionsClient({
+        rowsByAccount: new Map([[
+          "acct_rest_gated",
+          [{ id: "gated-tx", type: "message", status: "done", amount: "20.00", net: "16.00", createdAt: "2026-06-10T00:00:00+00:00", user: { id: "fan-gated" } }],
+        ]]),
+        calls,
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(disabledContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-07-01T00:00:00.000Z"),
+      mode: "write",
+    });
+
+    expect(calls).toEqual([]);
+    expect(result.pages.map((row) => ({ status: row.status, reason: row.reason }))).toEqual([
+      { status: "blocked", reason: "ingest_disabled" },
+    ]);
+
+    const { rows } = await testDb.pool.query("select count(*)::int as count from transactions");
+    expect(rows).toEqual([{ count: 0 }]);
+  });
+
+  it("blocks a page that becomes ineligible in-lock without aborting the batch", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const db = appContext.db;
+    const blockedPage = await seedOfapiPage("rest-toctou-of", "acct_rest_toctou");
+    const okPage = await seedOfapiPage("rest-ok-of", "acct_rest_ok");
+
+    appContext = {
+      ...appContext,
+      ofapi: fakeOfapiTransactionsClient({
+        rowsByAccount: new Map([
+          ["acct_rest_toctou", [
+            { id: "toctou-tx", type: "message", status: "done", amount: "30.00", net: "24.00", createdAt: "2026-06-10T00:00:00+00:00", user: { id: "fan-toctou" } },
+          ]],
+          ["acct_rest_ok", [
+            { id: "ok-tx", type: "message", status: "done", amount: "40.00", net: "32.00", createdAt: "2026-06-12T00:00:00+00:00", user: { id: "fan-ok" } },
+          ]],
+        ]),
+        // TOCTOU race: a non-OFAPI truth row lands for the first page AFTER its
+        // pre-fetch eligibility check but before the in-lock re-check.
+        onCall: async (accountId) => {
+          if (accountId !== "acct_rest_toctou") {
+            return;
+          }
+          await upsertTransaction(db, {
+            platformAccountId: blockedPage.id,
+            transactionId: "manual-toctou",
+            rawType: "manual",
+            canonicalType: "message_purchase",
+            transactionState: "posted",
+            rawStatus: "done",
+            grossAmountMills: 1_000n,
+            sourceDestinationAmountMills: 1_000n,
+            creatorNetAmountMills: 800n,
+            senderId: "manual-fan",
+            occurredAt: new Date("2026-06-11T00:00:00.000Z"),
+          });
+        },
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [blockedPage.label, okPage.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      to: new Date("2026-07-01T00:00:00.000Z"),
+      mode: "write",
+    });
+
+    expect(result.pages.map((row) => ({
+      label: row.pageLabel,
+      status: row.status,
+      reason: row.reason,
+      writtenRows: row.writtenRows,
+      hasCredentials: row.hasCredentials,
+      activeNonOfapiTransactions: row.activeNonOfapiTransactions,
+    }))).toEqual([
+      // Blocked page reports the FRESH in-lock count (1), not the stale pre-fetch 0.
+      {
+        label: "rest-toctou-of",
+        status: "blocked",
+        reason: "active_non_ofapi_transactions",
+        writtenRows: 0,
+        hasCredentials: false,
+        activeNonOfapiTransactions: 1,
+      },
+      {
+        label: "rest-ok-of",
+        status: "written",
+        reason: null,
+        writtenRows: 1,
+        hasCredentials: false,
+        activeNonOfapiTransactions: 0,
+      },
+    ]);
+
+    // The second page was still written even though the first page blocked.
+    const { rows } = await testDb.pool.query<{ count: number }>(
+      "select count(*)::int as count from transactions where platform_account_id = $1 and transaction_id = 'ok-tx'",
+      [okPage.id],
+    );
+    expect(rows).toEqual([{ count: 1 }]);
   });
 });
