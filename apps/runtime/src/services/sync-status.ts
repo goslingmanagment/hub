@@ -322,6 +322,37 @@ function buildStatusReason(
   };
 }
 
+function getOfapiBudgetBlock(progress: unknown) {
+  if (!progress || typeof progress !== "object" || Array.isArray(progress)) {
+    return null;
+  }
+
+  const block = (progress as { ofapiBudgetBlock?: unknown }).ofapiBudgetBlock;
+  return typeof block === "string" ? block : null;
+}
+
+function buildOfapiBudgetStatusReason(progress: unknown): SyncStatusReason | null {
+  switch (getOfapiBudgetBlock(progress)) {
+    case "ofapi_daily_credit_budget":
+      return buildStatusReason(
+        "ofapi_daily_credit_budget",
+        "OFAPI daily credit budget reached; sync will resume after the UTC budget reset.",
+      );
+    case "ofapi_credit_floor":
+      return buildStatusReason(
+        "ofapi_credit_floor",
+        "OFAPI credit floor reached; add credits or lower the floor before sync can continue.",
+      );
+    case "ofapi_request_budget":
+      return buildStatusReason(
+        "ofapi_request_budget",
+        "OFAPI per-run request cap reached; sync will continue in the next chunk.",
+      );
+    default:
+      return null;
+  }
+}
+
 function buildDelayedDomainReason(input: {
   block: SyncDomainBlockKey;
   state: SyncDomainBlockState;
@@ -938,7 +969,11 @@ function deriveTaskState(
       state = "backfilling";
     }
   } else if (task.requestSeq > task.appliedSeq || task.status === "pending") {
-    if ((queueContext?.activeSiblingStreams.length ?? 0) > 0) {
+    const budgetReason = buildOfapiBudgetStatusReason(task.progress);
+    if (budgetReason) {
+      state = budgetReason.code === "ofapi_request_budget" ? "scheduled" : "delayed";
+      statusReason = budgetReason;
+    } else if ((queueContext?.activeSiblingStreams.length ?? 0) > 0) {
       state = "scheduled";
       statusReason = buildStatusReason(
         "queue_waiting",

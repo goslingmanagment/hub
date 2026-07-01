@@ -580,6 +580,64 @@ describe("sync status service", () => {
     });
   });
 
+  it("surfaces OFAPI budget blocks instead of generic queue delays", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([
+      buildVisiblePage({
+        platform: "onlyfans",
+        username: "loravie",
+        ofapiAccountId: "acct_lora",
+      }),
+    ]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({
+        stream: "subscribers",
+        status: "pending",
+        requestSeq: 2,
+        appliedSeq: 0,
+        requestedAt: new Date("2026-03-24T11:30:00.000Z"),
+        succeededAt: null,
+        progress: {
+          mode: "audience_sweep",
+          offset: 1880,
+          pageCount: 98,
+          ofapiBudgetBlock: "ofapi_daily_credit_budget",
+        },
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "subscribers",
+        platform: "onlyfans",
+        status: "pending",
+        succeededAt: null,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({
+      db: {},
+      config: { ofapiAudienceSyncEnabled: true },
+    } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.audience).toMatchObject({
+      state: "delayed",
+      statusReason: {
+        code: "ofapi_daily_credit_budget",
+        summary: "OFAPI daily credit budget reached; sync will resume after the UTC budget reset.",
+      },
+    });
+    expect(snapshot.pages[0]?.blocks.audience.substreams[0]).toMatchObject({
+      stream: "subscribers",
+      state: "delayed",
+      statusReason: expect.objectContaining({
+        code: "ofapi_daily_credit_budget",
+      }),
+    });
+  });
+
   it("treats fresh queue waits as healthy when a sibling page is actively using the same queue group", async () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([
