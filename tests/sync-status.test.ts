@@ -364,6 +364,56 @@ describe("sync status service", () => {
     expect(snapshot.pages[0]?.syncUx.state).toBe("attention");
   });
 
+  it("reports OFAPI-mapped OnlyFans connection as connected without legacy credentials", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
+      platform: "onlyfans",
+      hasCredentials: false,
+      ofapiAccountId: "acct_test",
+      ofapiAuthStatus: null,
+      ofapiAuthChangedAt: null,
+      lastLightSyncAt: null,
+      lastFollowerSyncAt: null,
+    })]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({
+        stream: "light",
+        status: "paused",
+        succeededAt: null,
+        progressedAt: null,
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "light",
+        succeededAt: null,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({
+      db: {},
+      config: {
+        ofapiAccountHealthEnabled: true,
+      },
+    } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.connection).toMatchObject({
+      state: "up_to_date",
+      connectionStatus: "connected",
+      primaryFresh: true,
+      needsAttention: false,
+      statusReason: {
+        code: "ofapi_auth_connected",
+      },
+      metrics: {
+        ofapiAuthStatus: null,
+      },
+    });
+  });
+
   it("prefers the current dependency blocker over stale last-error fields", async () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{

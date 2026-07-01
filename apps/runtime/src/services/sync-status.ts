@@ -1332,19 +1332,26 @@ function overlayConnectionBlockWithOfapiAuth(
   page: { ofapiAuthStatus: string | null; ofapiAuthChangedAt: Date | null },
 ): SyncDomainBlockStatus {
   const needsAction = ofapiAuthStatusNeedsAction(page.ofapiAuthStatus);
+  const statusReason: SyncStatusReason = needsAction
+    ? {
+      code: "ofapi_auth",
+      summary: `OFAPI reports the OnlyFans account needs attention (${page.ofapiAuthStatus}).`,
+      waitingFor: null,
+    }
+    : {
+      code: "ofapi_auth_connected",
+      summary: "OFAPI account auth is connected.",
+      waitingFor: null,
+    };
+
   return {
     ...block,
-    ...(needsAction
-      ? {
-        connectionStatus: "error" as const,
-        needsAttention: true,
-        statusReason: {
-          code: "ofapi_auth",
-          summary: `OFAPI reports the OnlyFans account needs attention (${page.ofapiAuthStatus}).`,
-          waitingFor: null,
-        },
-      }
-      : {}),
+    state: needsAction ? block.state : "up_to_date",
+    connectionStatus: needsAction ? "error" : "connected",
+    statusReason,
+    error: needsAction ? block.error : null,
+    primaryFresh: !needsAction,
+    needsAttention: needsAction,
     metrics: {
       ...block.metrics,
       ofapiAuthStatus: page.ofapiAuthStatus,
