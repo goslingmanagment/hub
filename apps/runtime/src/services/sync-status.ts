@@ -1366,6 +1366,7 @@ export async function getSyncStatusSnapshot(
     pageIds?: number[];
     pageLabel?: string;
     now?: Date;
+    includeMonitorRows?: boolean;
   },
 ): Promise<SyncStatusSnapshot> {
   const now = input?.now ?? new Date();
@@ -1400,13 +1401,16 @@ export async function getSyncStatusSnapshot(
     await ensurePageSyncStates(app.db, { now });
   }
 
+  const includeMonitorRows = input?.includeMonitorRows ?? true;
   const [taskRows, monitorRows] = await Promise.all([
     listPageSyncStates(app.db),
-    listSyncMonitorStreamRows(app.db, {
-      pageIds: scopedPageIds,
-      windowStart: new Date(now.getTime() - 24 * 60 * 60 * 1000),
-      streams: [...getSyncStreamsForPlatform("fansly")],
-    }),
+    includeMonitorRows
+      ? listSyncMonitorStreamRows(app.db, {
+        pageIds: scopedPageIds,
+        windowStart: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+        streams: [...getSyncStreamsForPlatform("fansly")],
+      })
+      : Promise.resolve([] as SyncMonitorStreamRow[]),
   ]);
 
   const ofapiDmIngestPageIds = isOfapiDmProjectionEnabled(app.config)

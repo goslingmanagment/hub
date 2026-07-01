@@ -316,6 +316,9 @@ export async function getSyncBlocksOverview(
   const snapshot = await getSyncStatusSnapshot(app, {
     pageIds: input?.pageIds,
     now: input?.now,
+    // The list view only needs current block state; 24h monitor rollups make
+    // this all-page route scan large observability tables every 10 seconds.
+    includeMonitorRows: false,
   });
   const pages = snapshot.pages.map((page) => toBlocksPage(page));
 
