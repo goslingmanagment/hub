@@ -635,9 +635,14 @@ describe("audience stream plumbing", () => {
     const states = await listPageSyncStates(appContext.db, { pageId: page.id });
     const byStream = new Map(states.map((state) => [state.stream, state]));
     expect(byStream.get("subscribers")?.status).toBe("paused");
-    // A fresh page legitimately blocks DM streams on light/transactions; the
-    // invariant under test is that the permanently-paused subscribers stream is
-    // never among the unmet dependencies (decision #49 regression guard).
+    // OFAPI-fed OnlyFans DM must not wait on legacy light/financial/audience
+    // streams: these pages can intentionally run without stored platform creds.
+    expect(byStream.get("dm_conversations")?.status).toBe("pending");
+    expect(byStream.get("dm_conversations")?.blockerMessage).toBeNull();
+    expect(byStream.get("dm_messages")?.status).toBe("blocked");
+    expect(byStream.get("dm_messages")?.blockerMessage).toBe("Waiting for dm_conversations");
+    expect(byStream.get("dm_messages")?.blockerMessage ?? "").not.toContain("light");
+    expect(byStream.get("dm_messages")?.blockerMessage ?? "").not.toContain("transactions");
     expect(byStream.get("dm_conversations")?.blockerMessage ?? "").not.toContain("subscribers");
     expect(byStream.get("dm_messages")?.blockerMessage ?? "").not.toContain("subscribers");
   }, INTEGRATION_TEST_TIMEOUT_MS);

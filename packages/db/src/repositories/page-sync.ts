@@ -907,13 +907,15 @@ export async function ensurePageSyncStates(
 }
 
 /**
- * Stream dependencies are a Fansly ordering concern (hydrate audience before
- * DMs). OnlyFans DM ingest is OFAPI-fed and independent of the audience sweep
- * (decision #49 shipped without subscribers rows), so the audience/top-spender
- * streams must never dependency-block it — a flag-off page would park
- * subscribers forever and dead-lock the DM streams otherwise.
+ * Stream dependencies are a Fansly/legacy ordering concern (hydrate account and
+ * audience before DMs). OnlyFans DM ingest is OFAPI-fed and independent of the
+ * legacy light/financial/audience sweeps, so those streams must never
+ * dependency-block it — a flag-off or credentialless legacy stream would park
+ * forever and dead-lock the OFAPI DM streams otherwise.
  */
 const ONLYFANS_EXCLUDED_DEPENDENCIES: readonly SyncStream[] = [
+  "light",
+  "transactions",
   "subscribers",
   "followers",
   "top_spenders",
