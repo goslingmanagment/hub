@@ -589,6 +589,45 @@ describe("sync status service", () => {
     expect(snapshot.pages[0]?.syncUx.state).toBe("healthy");
   });
 
+  it("does not mark a fresh running lease stalled because an older progress timestamp exists", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }),
+      buildTaskRow({
+        stream: "dm_conversations",
+        status: "running",
+        requestSeq: 2,
+        leasedSeq: 2,
+        appliedSeq: 1,
+        succeededAt: new Date("2026-03-24T11:45:00.000Z"),
+        startedAt: new Date("2026-03-24T11:59:00.000Z"),
+        progressedAt: new Date("2026-03-24T11:30:00.000Z"),
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ stream: "light" }),
+      buildMonitorRow({ stream: "dm_conversations" }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.messages_live).toMatchObject({
+      state: "syncing",
+      statusReason: null,
+    });
+    expect(snapshot.pages[0]?.blocks.messages_live.substreams).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stream: "dm_conversations",
+        state: "syncing",
+        statusReason: null,
+      }),
+    ]));
+  });
+
   it("keeps page sync UX blue while history backfill runs and fresh siblings wait in queue", async () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);

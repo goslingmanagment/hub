@@ -232,6 +232,20 @@ function latestIso(values: Array<Date | null | undefined>) {
   return iso(latest);
 }
 
+function latestDate(values: Array<Date | null | undefined>) {
+  let latest: Date | null = null;
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+    if (!latest || value.getTime() > latest.getTime()) {
+      latest = value;
+    }
+  }
+
+  return latest;
+}
+
 function earliestIso(values: Array<Date | null | undefined>) {
   let earliest: Date | null = null;
   for (const value of values) {
@@ -277,7 +291,7 @@ function hasActiveProgress(task: PageSyncState, now: Date) {
   }
 
   const policy = SYNC_STREAM_POLICY[task.stream];
-  const lastActiveAt = task.progressedAt ?? task.startedAt;
+  const lastActiveAt = latestDate([task.progressedAt, task.startedAt]);
   if (!lastActiveAt) {
     return false;
   }
@@ -878,9 +892,10 @@ function deriveTaskState(
     ? ageSeconds(task.requestedAt, now)
     : null;
   const freshnessAgeSeconds = ageSeconds(task.succeededAt, now);
+  const lastActiveAt = latestDate([task.progressedAt, task.startedAt]);
   const progressStalled = task.status === "running" &&
-    task.progressedAt !== null &&
-    (now.getTime() - task.progressedAt.getTime()) > policy.progressStallThresholdMs;
+    lastActiveAt !== null &&
+    (now.getTime() - lastActiveAt.getTime()) > policy.progressStallThresholdMs;
   const queueDelayed = queueAgeSeconds !== null &&
     (queueAgeSeconds * 1000) > policy.queueDelayThresholdMs;
   const nextDueAt = computeNextDueAt(task);

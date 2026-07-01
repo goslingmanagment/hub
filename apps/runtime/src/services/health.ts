@@ -224,7 +224,7 @@ export async function getPublicSyncHealth(
       failedStreams,
       stalledStreams,
       pendingStreams,
-      lastErrorSummary: firstErrorSummary(healthBlocks) ?? connection?.lastSyncError ?? null,
+      lastErrorSummary: firstErrorSummary(healthBlocks) ?? (hasOfapiConnection ? null : connection?.lastSyncError ?? null),
       issues,
     };
   });

@@ -150,7 +150,7 @@ describe("health service", () => {
         connectionStatus: "unverified",
         lastLightSyncAt: null,
         lastFollowerSyncAt: null,
-        lastSyncError: null,
+        lastSyncError: "Page \"9\" has no stored platform credentials",
       },
     ]);
     healthMocks.getSyncStatusSnapshot.mockResolvedValue({
