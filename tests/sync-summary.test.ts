@@ -140,4 +140,37 @@ describe("sync summary service", () => {
       requiresAction: true,
     });
   });
+
+  it("does not require legacy credentials for OFAPI-mapped OnlyFans pages without action auth", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
+      platform: "onlyfans",
+      hasCredentials: false,
+      ofapiAccountId: "acct_test",
+      ofapiAuthStatus: null,
+    })]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({
+        stream: "light",
+        status: "paused",
+        succeededAt: null,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSummarySnapshot({
+      db: {},
+      config: {
+        ofapiAccountHealthEnabled: true,
+      },
+    } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(dbMocks.listSyncMonitorStreamRows).not.toHaveBeenCalled();
+    expect(snapshot.pages[0]?.syncUx).toMatchObject({
+      state: "off",
+      requiresAction: false,
+    });
+  });
 });

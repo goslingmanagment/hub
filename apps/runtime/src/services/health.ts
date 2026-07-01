@@ -1,7 +1,7 @@
 import type { AppContext } from "../bootstrap.ts";
 import { listConnectionStatuses } from "./connections.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
-import { getSyncStatusSnapshot } from "./sync-status.ts";
+import { getSyncStatusSnapshot, type SyncDomainBlockStatus } from "./sync-status.ts";
 
 type ServiceHealthStatus = "ok" | "degraded";
 type SystemCheckStatus = "ok" | "error";
@@ -16,18 +16,50 @@ function ageMinutes(timestamp: string | null, now: Date) {
   return Math.max(0, Math.floor((now.getTime() - new Date(timestamp).getTime()) / 60_000));
 }
 
-function firstErrorSummary(
-  blocks: Array<{
-    statusReason?: {
-      summary: string | null;
-    } | null;
-    error: {
-      summary: string | null;
-    } | null;
-  }>,
-) {
-  const first = blocks.find((block) => block.statusReason?.summary || block.error?.summary);
+function firstErrorSummary(blocks: SyncDomainBlockStatus[]) {
+  const first = blocks.find((block) =>
+    (block.state === "failed" || block.state === "delayed" || block.needsAttention) &&
+    (block.statusReason?.summary || block.error?.summary)
+  );
   return first?.statusReason?.summary ?? first?.error?.summary ?? null;
+}
+
+function numericMetric(block: SyncDomainBlockStatus, key: string) {
+  const value = block.metrics?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function isDeepBackfillOnlyDelay(block: SyncDomainBlockStatus) {
+  if (
+    block.block !== "messages_history" ||
+    block.state !== "delayed" ||
+    block.statusReason?.code !== "history_incomplete"
+  ) {
+    return false;
+  }
+
+  const eligibleConversations = numericMetric(block, "eligibleConversationCount");
+  const readyConversations = numericMetric(block, "readyConversationCount");
+  const laggingConversations = numericMetric(block, "laggingConversationCount");
+  const pendingDeepPages = numericMetric(block, "deepBackfillPendingPagesEstimate");
+
+  return (
+    eligibleConversations !== null &&
+    readyConversations !== null &&
+    laggingConversations === 0 &&
+    pendingDeepPages !== null &&
+    pendingDeepPages > 0 &&
+    readyConversations >= eligibleConversations
+  );
+}
+
+function isOfapiMappedConnectionUsable(block: SyncDomainBlockStatus | undefined) {
+  const metrics = block?.metrics ?? {};
+  if (!block || !Object.prototype.hasOwnProperty.call(metrics, "ofapiAuthStatus")) {
+    return false;
+  }
+
+  return block.connectionStatus !== "error" && block.statusReason?.code !== "ofapi_auth";
 }
 
 function recentCountersFromSnapshot(snapshot: Awaited<ReturnType<typeof getSyncStatusSnapshot>>) {
@@ -124,14 +156,17 @@ export async function getPublicSyncHealth(
     const page = snapshotPagesById.get(pageId);
     const connection = connectionsById.get(pageId);
     const blocks = page ? Object.values(page.blocks).filter((block) => block.state !== "not_available") : [];
+    const healthBlocks = blocks.filter((block) => !isDeepBackfillOnlyDelay(block));
+    const connectionBlock = page?.blocks.connection;
+    const hasOfapiConnection = isOfapiMappedConnectionUsable(connectionBlock);
     const allSupportedBlocksPaused = blocks.length > 0 && blocks.every((block) => block.state === "paused");
     const lightAge = ageMinutes(connection?.lastLightSyncAt ?? null, now);
     const followerAge = (page?.platform ?? connection?.platform) === "fansly"
       ? ageMinutes(connection?.lastFollowerSyncAt ?? null, now)
       : null;
-    const failedStreams = blocks.filter((block) => block.state === "failed").length;
-    const stalledStreams = blocks.filter((block) => block.state === "delayed").length;
-    const pendingStreams = blocks.filter((block) =>
+    const failedStreams = healthBlocks.filter((block) => block.state === "failed").length;
+    const stalledStreams = healthBlocks.filter((block) => block.state === "delayed").length;
+    const pendingStreams = healthBlocks.filter((block) =>
       block.state === "scheduled" ||
       block.state === "retrying" ||
       block.state === "syncing" ||
@@ -140,7 +175,11 @@ export async function getPublicSyncHealth(
     ).length;
     const issues: string[] = [];
 
-    if (!allSupportedBlocksPaused) {
+    if (connectionBlock?.statusReason?.code === "ofapi_auth") {
+      issues.push("connection:ofapi_auth");
+    }
+
+    if (!allSupportedBlocksPaused && !hasOfapiConnection) {
       if (!connection || connection.connectionStatus !== "active") {
         issues.push(`connection:${connection?.connectionStatus ?? "missing"}`);
       }
@@ -185,7 +224,7 @@ export async function getPublicSyncHealth(
       failedStreams,
       stalledStreams,
       pendingStreams,
-      lastErrorSummary: firstErrorSummary(blocks) ?? connection?.lastSyncError ?? null,
+      lastErrorSummary: firstErrorSummary(healthBlocks) ?? connection?.lastSyncError ?? null,
       issues,
     };
   });
@@ -200,7 +239,9 @@ export async function getPublicSyncHealth(
     return count + Object.values(page.blocks).filter((block) => block.state === "failed").length;
   }, 0);
   const stalledStreams = snapshot.pages.reduce((count, page) => {
-    return count + Object.values(page.blocks).filter((block) => block.state === "delayed").length;
+    return count + Object.values(page.blocks).filter((block) =>
+      block.state === "delayed" && !isDeepBackfillOnlyDelay(block)
+    ).length;
   }, 0);
   const pendingStreams = snapshot.pages.reduce((count, page) => {
     return count + Object.values(page.blocks).filter((block) =>

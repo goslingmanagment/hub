@@ -123,7 +123,18 @@ function toStreamSyncUx(task: PageSyncState, now: Date): SyncUxSummary {
   });
 }
 
-function buildCredentialSyncUx(page: VisiblePage): SyncUxSummary | null {
+function hasUsableOfapiConnection(app: AppContext, page: VisiblePage) {
+  return isOfapiAccountHealthEnabled(app.config) &&
+    page.platform === "onlyfans" &&
+    page.ofapiAccountId !== null &&
+    !ofapiAuthStatusNeedsAction(page.ofapiAuthStatus);
+}
+
+function buildCredentialSyncUx(app: AppContext, page: VisiblePage): SyncUxSummary | null {
+  if (hasUsableOfapiConnection(app, page)) {
+    return null;
+  }
+
   if (!page.hasCredentials) {
     return buildSummary("attention", {
       label: "Reconnect",
@@ -161,7 +172,7 @@ function buildPageSummarySyncUx(
   taskRows: PageSyncState[],
   now: Date,
 ) {
-  const actionRequired = buildCredentialSyncUx(page) ?? buildOfapiAuthSyncUx(app, page);
+  const actionRequired = buildOfapiAuthSyncUx(app, page) ?? buildCredentialSyncUx(app, page);
   if (actionRequired) {
     return actionRequired;
   }

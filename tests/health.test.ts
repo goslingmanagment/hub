@@ -199,6 +199,163 @@ describe("health service", () => {
     });
   });
 
+  it("does not degrade sync health for a deep-backfill-only message history backlog", async () => {
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 7,
+        label: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        connectionStatus: "active",
+        lastLightSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      pages: [{
+        pageId: 7,
+        pageLabel: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        blocks: {
+          connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_history: {
+            block: "messages_history",
+            state: "delayed",
+            statusReason: {
+              code: "history_incomplete",
+              summary: "Conversation history is still catching up.",
+              waitingFor: null,
+            },
+            error: null,
+            metrics: {
+              eligibleConversationCount: 2538,
+              readyConversationCount: 2538,
+              laggingConversationCount: 0,
+              deepBackfillPendingPagesEstimate: 1756,
+            },
+          },
+        },
+      }],
+    });
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toMatchObject({
+      status: "ok",
+      overall: {
+        unhealthyPageCount: 0,
+        stalledStreams: 0,
+      },
+      pages: [
+        {
+          pageId: 7,
+          status: "ok",
+          stalledStreams: 0,
+          issues: [],
+          lastErrorSummary: null,
+        },
+      ],
+    });
+  });
+
+  it("does not require legacy OnlyFans credentials when OFAPI account health covers the connection", async () => {
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 9,
+        label: "lora-of",
+        platform: "onlyfans",
+        modelSlug: "lora",
+        modelName: "Lora",
+        connectionStatus: "unverified",
+        lastLightSyncAt: null,
+        lastFollowerSyncAt: null,
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      pages: [{
+        pageId: 9,
+        pageLabel: "lora-of",
+        platform: "onlyfans",
+        modelSlug: "lora",
+        modelName: "Lora",
+        blocks: {
+          connection: {
+            block: "connection",
+            state: "paused",
+            connectionStatus: "connected",
+            statusReason: null,
+            error: null,
+            metrics: {
+              ofapiAuthStatus: null,
+            },
+          },
+          financials: { block: "financials", state: "paused", statusReason: null, error: null, metrics: {} },
+          audience: { block: "audience", state: "not_available", statusReason: null, error: null, metrics: {} },
+          messages_live: {
+            block: "messages_live",
+            state: "up_to_date",
+            statusReason: {
+              code: "webhook_live",
+              summary: "Live DMs are fed by OFAPI webhooks.",
+              waitingFor: null,
+            },
+            error: null,
+            metrics: {
+              webhookIngest: true,
+            },
+          },
+          messages_history: { block: "messages_history", state: "paused", statusReason: null, error: null, metrics: {} },
+        },
+      }],
+    });
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toMatchObject({
+      status: "ok",
+      overall: {
+        unhealthyPageCount: 0,
+      },
+      pages: [
+        {
+          pageId: 9,
+          status: "ok",
+          connectionStatus: "unverified",
+          issues: [],
+          lastErrorSummary: null,
+        },
+      ],
+    });
+  });
+
   it("sanitizes database probe failures in the public health response", async () => {
     const app = {
       pool: {
