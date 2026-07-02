@@ -15,7 +15,7 @@ import {
   listOfapiMappedPages,
   recordOfapiCreditSpend,
   setOfapiCreditReconcileCursor,
-  sumOfapiCreditsSpentSince,
+  sumOfapiCreditsSpentBetween,
   sumOfapiKnownCreditsBetween,
   upsertOfapiWebhookAccrual,
   type OfapiBalanceObservationRow,
@@ -358,8 +358,9 @@ export async function runOfapiCreditBurnMonitor(app: AppContext, now = new Date(
       return;
     }
 
-    const spentLastHour = await sumOfapiCreditsSpentSince(app.db, {
-      since: new Date(now.getTime() - 60 * 60 * 1000),
+    const spentLastHour = await sumOfapiCreditsSpentBetween(app.db, {
+      from: new Date(now.getTime() - 60 * 60 * 1000),
+      to: now,
     });
     if (spentLastHour > threshold) {
       await notifyOfapiGlobalIncident(app, {

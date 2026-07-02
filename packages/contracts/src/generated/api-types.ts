@@ -7722,6 +7722,10 @@ export interface paths {
                     content: {
                         "application/json": {
                             total: number;
+                            pageOptions: {
+                                pageId: number;
+                                pageLabel: string;
+                            }[];
                             rows: {
                                 id: number;
                                 occurredAt: string;
@@ -7812,13 +7816,13 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description text/csv — one row per credit ledger entry matching the filters */
+                /** @description CSV — one row per credit ledger entry matching the filters */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": string;
+                        "text/csv": string;
                     };
                 };
                 /** @description Default Response */

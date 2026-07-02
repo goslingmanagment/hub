@@ -21,11 +21,12 @@ import {
   listNotificationIncidents,
   listOfapiBalanceSeriesBetween,
   listOfapiCreditLedgerEntries,
+  listOfapiCreditLedgerPageOptions,
   listOfapiDailySpendBySource,
   listOfapiOperationBreakdownBetween,
   listOfapiPageBreakdownBetween,
   listOfapiRefillsBetween,
-  summarizeOfapiSpendWindowSince,
+  summarizeOfapiSpendWindowBetween,
   sumOfapiRestCreditsForPagesBetween,
   sumOfapiRestCreditsForOperationsBetween,
   sumOfapiSpendBySourceBetween,
@@ -245,12 +246,12 @@ export async function getOfapiCreditsSummary(
     }),
     // Net spend AND the earliest effective spend start share one query so the
     // runway numerator and denominator use the same window semantics.
-    summarizeOfapiSpendWindowSince(app.db, { since: spendWindowSince }),
+    summarizeOfapiSpendWindowBetween(app.db, { from: spendWindowSince, to: now }),
     // Month-to-date spend (D5) reuses the same refill-excluded/external-prorated
     // semantics as the runway numerator.
-    summarizeOfapiSpendWindowSince(app.db, { since: monthStart }),
+    summarizeOfapiSpendWindowBetween(app.db, { from: monthStart, to: now }),
     // Trailing-hour burn (D3) mirrors the ofapi_burn_rate monitor exactly.
-    summarizeOfapiSpendWindowSince(app.db, { since: burnSince }),
+    summarizeOfapiSpendWindowBetween(app.db, { from: burnSince, to: now }),
     listOfapiOperationBreakdownBetween(app.db, { from: burnSince, to: now }),
     listOfapiPageBreakdownBetween(app.db, { from: burnSince, to: now, limit: BURN_TOP_N }),
     // The burn threshold is live-editable, so read the effective override the
@@ -499,19 +500,23 @@ export async function getOfapiCreditsLedger(
   app: AppContext,
   query: AdminOfapiCreditsLedgerQuery,
 ): Promise<OfapiCreditsLedgerResponse> {
-  const { total, rows } = await listOfapiCreditLedgerEntries(app.db, {
-    offset: query.offset,
-    limit: query.limit,
-    source: query.source,
-    pageId: query.pageId,
-    operation: query.operation,
-    from: parseIsoDate(query.from, "from"),
-    to: parseIsoDate(query.to, "to"),
-  });
+  const [ledger, pageOptions] = await Promise.all([
+    listOfapiCreditLedgerEntries(app.db, {
+      offset: query.offset,
+      limit: query.limit,
+      source: query.source,
+      pageId: query.pageId,
+      operation: query.operation,
+      from: parseIsoDate(query.from, "from"),
+      to: parseIsoDate(query.to, "to"),
+    }),
+    listOfapiCreditLedgerPageOptions(app.db),
+  ]);
 
   return {
-    total,
-    rows: rows.map((row) => ({
+    total: ledger.total,
+    pageOptions,
+    rows: ledger.rows.map((row) => ({
       id: row.id,
       occurredAt: row.occurredAt.toISOString(),
       source: row.source,

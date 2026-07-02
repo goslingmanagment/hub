@@ -15,6 +15,7 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../bootstrap.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
+import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
   filterOnlyFansAudienceStreams,
   pauseDisabledOnlyFansAudienceForPage,
@@ -117,10 +118,12 @@ export async function requestPageSync(
     app.config,
   );
   const now = new Date();
+  const dependencyInput = pageSyncDependencyInput(app);
   await ensurePageSyncStates(app.db, {
     pageId: storedPage.page.id,
     onboarding: input.reason === "onboarding",
     now,
+    ...dependencyInput,
   });
   if (storedPage.page.platform === "onlyfans") {
     await pauseDisabledOnlyFansDmPollingForPage(app, storedPage.page.id, now);
@@ -153,6 +156,7 @@ export async function requestPageSync(
     source: input.reason,
     requestPayloadByStream,
     now,
+    ...dependencyInput,
   });
 
   const priority = streams.reduce((current, stream) => {

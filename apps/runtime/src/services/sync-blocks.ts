@@ -18,6 +18,7 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, NotFoundError } from "./errors.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
+import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
   getSyncStatusSnapshot,
   SYNC_DOMAIN_BLOCKS,
@@ -316,9 +317,11 @@ export async function getSyncBlocksOverview(
   const snapshot = await getSyncStatusSnapshot(app, {
     pageIds: input?.pageIds,
     now: input?.now,
-    // The list view only needs current block state; 24h monitor rollups make
-    // this all-page route scan large observability tables every 10 seconds.
+    // The list view needs dm_messages monitor aggregates to avoid hiding
+    // message-history backlog, but not the full 24h monitor rollup for every
+    // stream.
     includeMonitorRows: false,
+    monitorStreams: ["dm_messages"],
   });
   const pages = snapshot.pages.map((page) => toBlocksPage(page));
 
@@ -389,6 +392,7 @@ export async function triggerSyncBlock(
 ) {
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
+  const dependencyInput = pageSyncDependencyInput(app);
   const tasks = blockTasksForPlatform(stored.page.platform, input.block);
   if (tasks.length === 0) {
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
@@ -397,12 +401,14 @@ export async function triggerSyncBlock(
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
     now,
+    ...dependencyInput,
   });
   const requests = await requestPageSyncRows(app.db, {
     pageId: stored.page.id,
     streams: tasks,
     source: "manual",
     now,
+    ...dependencyInput,
   });
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,
@@ -434,6 +440,7 @@ export async function pauseSyncBlock(
 ) {
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
+  const dependencyInput = pageSyncDependencyInput(app);
   const tasks = blockTasksForPlatform(stored.page.platform, input.block);
   if (tasks.length === 0) {
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
@@ -442,6 +449,7 @@ export async function pauseSyncBlock(
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
     now,
+    ...dependencyInput,
   });
   await pausePageSync(app.db, {
     pageId: stored.page.id,
@@ -468,6 +476,7 @@ export async function resumeSyncBlock(
 ) {
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
+  const dependencyInput = pageSyncDependencyInput(app);
   const tasks = blockTasksForPlatform(stored.page.platform, input.block);
   if (tasks.length === 0) {
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
@@ -476,6 +485,7 @@ export async function resumeSyncBlock(
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
     now,
+    ...dependencyInput,
   });
   await resumePageSync(app.db, {
     pageId: stored.page.id,
@@ -487,6 +497,7 @@ export async function resumeSyncBlock(
     streams: tasks,
     source: "manual",
     now,
+    ...dependencyInput,
   });
   await enqueueBlockWakeup(boss, {
     platformAccountId: stored.page.id,
@@ -519,6 +530,7 @@ export async function resetSyncBlock(
 ) {
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
+  const dependencyInput = pageSyncDependencyInput(app);
   const tasks = blockTasksForPlatform(stored.page.platform, input.block);
   if (tasks.length === 0) {
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
@@ -527,6 +539,7 @@ export async function resetSyncBlock(
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
     now,
+    ...dependencyInput,
   });
   const requests = await app.db.transaction(async (tx) => {
     const dbTx = tx as typeof app.db;
@@ -553,6 +566,7 @@ export async function resetSyncBlock(
       streams: tasks,
       source: "reset",
       now,
+      ...dependencyInput,
     });
   });
   await enqueueBlockWakeup(boss, {

@@ -800,6 +800,7 @@ export async function ensurePageSyncStates(
     pageId?: number;
     onboarding?: boolean;
     now?: Date;
+    dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input?.now ?? new Date();
@@ -908,12 +909,11 @@ export async function ensurePageSyncStates(
 
 /**
  * Stream dependencies are a Fansly/legacy ordering concern (hydrate account and
- * audience before DMs). OnlyFans DM ingest is OFAPI-fed and independent of the
- * legacy light/financial/audience sweeps, so those streams must never
- * dependency-block it — a flag-off or credentialless legacy stream would park
- * forever and dead-lock the OFAPI DM streams otherwise.
+ * audience before DMs). OFAPI-fed OnlyFans DM streams are independent of the
+ * legacy light/financial/audience sweeps, but legacy/unmapped OnlyFans pages
+ * still need the same ordering guarantees as Fansly.
  */
-const ONLYFANS_EXCLUDED_DEPENDENCIES: readonly SyncStream[] = [
+const ONLYFANS_OFAPI_DM_EXCLUDED_DEPENDENCIES: readonly SyncStream[] = [
   "light",
   "transactions",
   "subscribers",
@@ -921,34 +921,76 @@ const ONLYFANS_EXCLUDED_DEPENDENCIES: readonly SyncStream[] = [
   "top_spenders",
 ];
 
+const ONLYFANS_DM_DEPENDENCY_EXEMPT_STREAMS: readonly SyncStream[] = [
+  "dm_conversations",
+  "dm_messages",
+];
+
+export interface PageSyncDependencyOptions {
+  onlyFansOfapiDmSyncEnabled?: boolean;
+}
+
+interface PageSyncDependencyContext {
+  platform: "fansly" | "onlyfans";
+  ofapiAccountId: string | null;
+}
+
 export function getSyncStreamDependenciesForPlatform(
   platform: "fansly" | "onlyfans",
   stream: SyncStream,
 ): SyncStream[] {
-  const base = SYNC_STREAM_DEPENDENCIES[stream] ?? [];
-  if (platform !== "onlyfans") {
-    return [...base];
-  }
-  return base.filter((dependency) => !ONLYFANS_EXCLUDED_DEPENDENCIES.includes(dependency));
+  return getSyncStreamDependenciesForPage({ platform, stream });
 }
 
-async function getPagePlatforms(
+export function getSyncStreamDependenciesForPage(input: {
+  platform: "fansly" | "onlyfans";
+  stream: SyncStream;
+  onlyFansOfapiDmEligible?: boolean;
+}): SyncStream[] {
+  const base = SYNC_STREAM_DEPENDENCIES[input.stream] ?? [];
+  if (
+    input.platform !== "onlyfans" ||
+    input.onlyFansOfapiDmEligible !== true ||
+    !ONLYFANS_DM_DEPENDENCY_EXEMPT_STREAMS.includes(input.stream)
+  ) {
+    return [...base];
+  }
+
+  return base.filter((dependency) => !ONLYFANS_OFAPI_DM_EXCLUDED_DEPENDENCIES.includes(dependency));
+}
+
+function isOnlyFansOfapiDmDependencyEligible(
+  context: PageSyncDependencyContext,
+  options?: PageSyncDependencyOptions,
+) {
+  return options?.onlyFansOfapiDmSyncEnabled === true &&
+    context.platform === "onlyfans" &&
+    typeof context.ofapiAccountId === "string" &&
+    context.ofapiAccountId.length > 0;
+}
+
+async function getPageDependencyContexts(
   db: Database,
   pageIds: number[],
-): Promise<Map<number, "fansly" | "onlyfans">> {
+): Promise<Map<number, PageSyncDependencyContext>> {
   if (pageIds.length === 0) {
     return new Map();
   }
 
   const result = await db.execute(sql`
-    select id, platform from pages where id in (${sql.join(pageIds.map((id) => sql`${id}`), sql`, `)})
+    select id, platform, ofapi_account_id as "ofapiAccountId"
+    from pages
+    where id in (${sql.join(pageIds.map((id) => sql`${id}`), sql`, `)})
   `);
-  const platforms = new Map<number, "fansly" | "onlyfans">();
+  const contexts = new Map<number, PageSyncDependencyContext>();
   for (const row of result.rows) {
     const platform = row.platform === "onlyfans" ? "onlyfans" : "fansly";
-    platforms.set(Number(row.id), platform);
+    contexts.set(Number(row.id), {
+      platform,
+      ofapiAccountId: typeof row.ofapiAccountId === "string" ? row.ofapiAccountId : null,
+    });
   }
-  return platforms;
+  return contexts;
 }
 
 function dependencyMet(streamByName: Map<SyncStream, PageSyncState>, dependency: SyncStream) {
@@ -961,6 +1003,7 @@ export async function refreshPageSyncDependencies(
   input?: {
     pageId?: number;
     now?: Date;
+    dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input?.now ?? new Date();
@@ -971,7 +1014,7 @@ export async function refreshPageSyncDependencies(
       input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
       { lock: true },
     );
-    await refreshLockedPageSyncDependencies(database, rows, now);
+    await refreshLockedPageSyncDependencies(database, rows, now, input?.dependencyOptions);
   });
 }
 
@@ -979,6 +1022,7 @@ async function refreshLockedPageSyncDependencies(
   db: Database,
   rows: PageSyncState[],
   now: Date,
+  options?: PageSyncDependencyOptions,
 ) {
   const rowsByPage = new Map<number, PageSyncState[]>();
   for (const row of rows) {
@@ -987,15 +1031,17 @@ async function refreshLockedPageSyncDependencies(
     rowsByPage.set(row.pageId, current);
   }
 
-  const platformByPage = await getPagePlatforms(db, [...rowsByPage.keys()]);
+  const contextByPage = await getPageDependencyContexts(db, [...rowsByPage.keys()]);
 
   for (const [pageId, pageRows] of rowsByPage) {
+    const context = contextByPage.get(pageId) ?? { platform: "fansly" as const, ofapiAccountId: null };
     const streamByName = new Map(pageRows.map((row) => [row.stream, row] as const));
     for (const row of pageRows) {
-      const dependencies = getSyncStreamDependenciesForPlatform(
-        platformByPage.get(pageId) ?? "fansly",
-        row.stream,
-      ).filter((dependency) => streamByName.has(dependency));
+      const dependencies = getSyncStreamDependenciesForPage({
+        platform: context.platform,
+        stream: row.stream,
+        onlyFansOfapiDmEligible: isOnlyFansOfapiDmDependencyEligible(context, options),
+      }).filter((dependency) => streamByName.has(dependency));
       if (dependencies.length === 0) {
         if (row.blockerKind !== "dependency" || row.status === "paused") {
           continue;
@@ -1116,12 +1162,14 @@ export async function scheduleDuePageSync(
   input?: {
     pageId?: number;
     now?: Date;
+    dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input?.now ?? new Date();
   await ensurePageSyncStates(db, {
     pageId: input?.pageId,
     now,
+    dependencyOptions: input?.dependencyOptions,
   });
   await reclaimExpiredPageSync(db, now);
 
@@ -1195,6 +1243,7 @@ export async function scheduleDuePageSync(
   await refreshPageSyncDependencies(db, {
     pageId: input?.pageId,
     now,
+    dependencyOptions: input?.dependencyOptions,
   });
 
   return listPageSyncStates(
@@ -1460,6 +1509,7 @@ export async function completePageSync(
     workClass?: SyncWorkClass | null;
     progress?: Record<string, unknown>;
     now?: Date;
+    dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input.now ?? new Date();
@@ -1502,6 +1552,7 @@ export async function completePageSync(
     await refreshPageSyncDependencies(db, {
       pageId: input.pageId,
       now,
+      dependencyOptions: input.dependencyOptions,
     });
   }
 
@@ -1880,6 +1931,7 @@ export async function requestPageSync(
     source: SyncRequestSource;
     requestPayloadByStream?: Partial<Record<SyncStream, Record<string, unknown> | null>>;
     now?: Date;
+    dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input.now ?? new Date();
@@ -1890,6 +1942,7 @@ export async function requestPageSync(
     pageId: input.pageId,
     onboarding: input.source === "onboarding",
     now,
+    dependencyOptions: input.dependencyOptions,
   });
 
   await db.transaction(async (tx) => {
@@ -1965,6 +2018,7 @@ export async function requestPageSync(
       database,
       lockedRows.map((row) => lockedRowsByStream.get(row.stream) ?? row),
       now,
+      input.dependencyOptions,
     );
   });
 

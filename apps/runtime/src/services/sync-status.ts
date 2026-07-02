@@ -30,6 +30,7 @@ import {
   parseFollowersReconcileCursorState,
   parseSubscribersCursorState,
 } from "./sync/cursor-state.ts";
+import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
@@ -284,6 +285,17 @@ function buildRuntimeGroupId(page: {
   egressKey?: string | null;
 }) {
   return `${page.platform}:${page.egressKey ?? "direct"}`;
+}
+
+function isOfapiOnlyOnlyFansPage(page: {
+  platform: "fansly" | "onlyfans";
+  ofapiAccountId: string | null;
+  hasCredentials: boolean;
+}) {
+  return page.platform === "onlyfans" &&
+    typeof page.ofapiAccountId === "string" &&
+    page.ofapiAccountId.length > 0 &&
+    page.hasCredentials === false;
 }
 
 function hasActiveProgress(task: PageSyncState, now: Date) {
@@ -1127,9 +1139,7 @@ function deriveDomainState(
     : !primaryPending;
 
   let state: SyncDomainBlockState;
-  if (allPrimaryNeverSucceeded && !primaryPending && !supportingPending && !anySupportingHistoryRunning && !anySupportingLiveRunning) {
-    state = "not_started";
-  } else if (anyPrimaryPaused) {
+  if (anyPrimaryPaused) {
     state = "paused";
   } else if (anyPrimaryFailed) {
     state = "failed";
@@ -1149,6 +1159,8 @@ function deriveDomainState(
     state = "retrying";
   } else if (supportingPending) {
     state = "scheduled";
+  } else if (allPrimaryNeverSucceeded && !primaryPending && !supportingPending) {
+    state = "not_started";
   } else {
     const domainUpToDate = (() => {
       switch (block) {
@@ -1466,9 +1478,11 @@ export async function getSyncStatusSnapshot(
     pageLabel?: string;
     now?: Date;
     includeMonitorRows?: boolean;
+    monitorStreams?: SyncStream[];
   },
 ): Promise<SyncStatusSnapshot> {
   const now = input?.now ?? new Date();
+  const dependencyInput = pageSyncDependencyInput(app);
   const allVisiblePages = await listVisiblePages(app.db);
   const scopedPages = (() => {
     const pageIds = input?.pageIds ? new Set(input.pageIds) : null;
@@ -1495,19 +1509,23 @@ export async function getSyncStatusSnapshot(
     await Promise.all(scopedPageIds.map((pageId) => ensurePageSyncStates(app.db, {
       pageId,
       now,
+      ...dependencyInput,
     })));
   } else {
-    await ensurePageSyncStates(app.db, { now });
+    await ensurePageSyncStates(app.db, { now, ...dependencyInput });
   }
 
   const includeMonitorRows = input?.includeMonitorRows ?? true;
+  const monitorStreams = includeMonitorRows
+    ? (input?.monitorStreams ?? [...getSyncStreamsForPlatform("fansly")])
+    : (input?.monitorStreams ?? []);
   const [taskRows, monitorRows] = await Promise.all([
     listPageSyncStates(app.db),
-    includeMonitorRows
+    monitorStreams.length > 0
       ? listSyncMonitorStreamRows(app.db, {
         pageIds: scopedPageIds,
         windowStart: new Date(now.getTime() - 24 * 60 * 60 * 1000),
-        streams: [...getSyncStreamsForPlatform("fansly")],
+        streams: monitorStreams,
       })
       : Promise.resolve([] as SyncMonitorStreamRow[]),
   ]);
@@ -1527,7 +1545,7 @@ export async function getSyncStatusSnapshot(
     : new Map<number, Date>();
   const ofapiFinancialPageIds = new Set(
     scopedPages
-      .filter((page) => page.platform === "onlyfans" && page.ofapiAccountId !== null)
+      .filter(isOfapiOnlyOnlyFansPage)
       .map((page) => page.id),
   );
   const ofapiFinancialSummaries = ofapiFinancialPageIds.size > 0
@@ -1656,8 +1674,7 @@ export async function getSyncStatusSnapshot(
       }
       if (
         isOfapiAccountHealthEnabled(app.config) &&
-        page.platform === "onlyfans" &&
-        page.ofapiAccountId !== null
+        isOfapiOnlyOnlyFansPage(page)
       ) {
         blocks.connection = overlayConnectionBlockWithOfapiAuth(blocks.connection, page);
       }

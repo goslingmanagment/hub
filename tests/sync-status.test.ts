@@ -420,6 +420,61 @@ describe("sync status service", () => {
     });
   });
 
+  it("does not mask credentialed OnlyFans connection failures with OFAPI auth health", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
+      platform: "onlyfans",
+      hasCredentials: true,
+      ofapiAccountId: "acct_test",
+      ofapiAuthStatus: null,
+      ofapiAuthChangedAt: null,
+    })]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({
+        stream: "light",
+        status: "blocked",
+        succeededAt: null,
+        progressedAt: null,
+        blockerKind: "auth",
+        blockerCode: "credentials_invalid",
+        blockerMessage: "Session expired",
+        lastErrorCode: "credentials_invalid",
+        lastErrorSummary: "Session expired",
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "light",
+        succeededAt: null,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({
+      db: {},
+      config: {
+        ofapiAccountHealthEnabled: true,
+      },
+    } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.connection).toMatchObject({
+      state: "failed",
+      connectionStatus: "error",
+      primaryFresh: false,
+      needsAttention: true,
+      statusReason: {
+        code: "credentials_invalid",
+        summary: "Session expired",
+      },
+      error: {
+        code: "credentials_invalid",
+        summary: "Session expired",
+      },
+    });
+  });
+
   it("reports OFAPI-mapped OnlyFans financials from transaction truth without legacy credentials", async () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.getOfapiFinancialTruthSummaries.mockResolvedValue(new Map([
@@ -473,6 +528,66 @@ describe("sync status service", () => {
         ofapiFinancials: true,
         transactionCount: 677,
         lastOfapiTransactionAt: "2026-06-30T14:43:46.000Z",
+      },
+    });
+  });
+
+  it("does not mask credentialed OnlyFans financial failures with OFAPI transaction truth", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.getOfapiFinancialTruthSummaries.mockResolvedValue(new Map([
+      [7, {
+        pageId: 7,
+        transactionCount: 677,
+        latestTransactionAt: new Date("2026-06-30T14:43:46.000Z"),
+      }],
+    ]));
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
+      platform: "onlyfans",
+      hasCredentials: true,
+      ofapiAccountId: "acct_test",
+      ofapiAuthStatus: null,
+      ofapiAuthChangedAt: null,
+      lastLightSyncAt: null,
+      lastFollowerSyncAt: null,
+    })]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({
+        stream: "transactions",
+        status: "blocked",
+        succeededAt: null,
+        progressedAt: null,
+        blockerKind: "auth",
+        blockerCode: "credentials_invalid",
+        blockerMessage: "Legacy session expired",
+        lastErrorCode: "credentials_invalid",
+        lastErrorSummary: "Legacy session expired",
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "transactions",
+        succeededAt: null,
+        transactionCount: 0,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-07-02T00:00:00.000Z"),
+    });
+
+    expect(dbMocks.getOfapiFinancialTruthSummaries).not.toHaveBeenCalled();
+    expect(snapshot.pages[0]?.blocks.financials).toMatchObject({
+      state: "failed",
+      primaryFresh: false,
+      needsAttention: true,
+      statusReason: {
+        code: "credentials_invalid",
+        summary: "Legacy session expired",
+      },
+      error: {
+        code: "credentials_invalid",
+        summary: "Legacy session expired",
       },
     });
   });

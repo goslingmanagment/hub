@@ -49,6 +49,7 @@ import {
   parseOfapiDmConversationCursorState,
   type DmMessagesCursorState,
 } from "./cursor-state.ts";
+import { pageSyncDependencyInput } from "./dependencies.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 
 const OFAPI_CHATS_PAGE_LIMIT = 100;
@@ -789,6 +790,7 @@ export async function executeOfapiDmConversationsChunk(
       pageId: input.pageContext.page.id,
       streams: ["dm_messages"],
       source: "scheduled",
+      ...pageSyncDependencyInput(app),
     });
   }
 

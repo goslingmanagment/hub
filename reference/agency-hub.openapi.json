@@ -24311,6 +24311,27 @@
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
                     },
+                    "pageOptions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pageId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "pageId",
+                          "pageLabel"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "rows": {
                       "type": "array",
                       "items": {
@@ -24440,6 +24461,7 @@
                   },
                   "required": [
                     "total",
+                    "pageOptions",
                     "rows"
                   ],
                   "additionalProperties": false
@@ -24602,12 +24624,12 @@
         ],
         "responses": {
           "200": {
-            "description": "text/csv — one row per credit ledger entry matching the filters",
+            "description": "CSV — one row per credit ledger entry matching the filters",
             "content": {
-              "application/json": {
+              "text/csv": {
                 "schema": {
                   "type": "string",
-                  "description": "text/csv — one row per credit ledger entry matching the filters"
+                  "description": "CSV — one row per credit ledger entry matching the filters"
                 }
               }
             }

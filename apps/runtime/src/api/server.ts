@@ -407,6 +407,19 @@ function rethrowAdminCatalogError(error: unknown): never {
   throw error;
 }
 
+export function normalizeOpenApiDocument<T extends Record<string, any>>(spec: T): T {
+  const csvResponse = spec.paths?.["/api/v1/admin/ofapi/credits/ledger.csv"]
+    ?.get?.responses?.["200"];
+  const jsonContent = csvResponse?.content?.["application/json"];
+  if (csvResponse && jsonContent) {
+    csvResponse.content = {
+      "text/csv": jsonContent,
+    };
+  }
+
+  return spec;
+}
+
 export async function buildApiServer(appContext: AppContext) {
   const server = Fastify({
     loggerInstance: appContext.logger ?? createLogger(appContext.config.logLevel),
@@ -2363,7 +2376,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.openApiJson,
   }, async (request) => {
     await requireOpenApiDocsOwner(request);
-    return server.swagger();
+    return normalizeOpenApiDocument(server.swagger() as Record<string, any>);
   });
 
   // === Admin routes ===

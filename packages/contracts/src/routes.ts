@@ -3407,6 +3407,10 @@ export const adminOfapiCreditsLedgerCsvQuerySchema = z.object({
 
 export const ofapiCreditsLedgerResponseSchema = z.object({
   total: z.number().int(),
+  pageOptions: z.array(z.object({
+    pageId: intId,
+    pageLabel: z.string(),
+  })),
   rows: z.array(z.object({
     id: z.number().int(),
     occurredAt: isoTimestamp,
@@ -4000,8 +4004,9 @@ export const routeSchemas = {
     querystring: adminOfapiCreditsLedgerCsvQuerySchema,
     response: {
       // The handler sets text/csv + Content-Disposition and writes the body
-      // directly; this entry documents the success shape for OpenAPI consumers.
-      200: z.string().describe("text/csv — one row per credit ledger entry matching the filters"),
+      // directly; server OpenAPI generation rewrites this success media type to
+      // text/csv because the Zod Fastify transformer only accepts Zod schemas here.
+      200: z.string().describe("CSV — one row per credit ledger entry matching the filters"),
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,

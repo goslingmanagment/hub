@@ -62,7 +62,7 @@ describe("OfapiCreditsPage", () => {
     queryMocks.useAdminOfapiSpendComparison.mockReset();
     queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({ data: emptyDaily, isLoading: false });
     queryMocks.useAdminOfapiCreditsLedger.mockReturnValue({
-      data: { total: 0, rows: [] },
+      data: { total: 0, pageOptions: [], rows: [] },
       isLoading: false,
     });
     // The comparison panel is collapsed by default, so its body/hook does not
@@ -192,6 +192,7 @@ describe("OfapiCreditsPage", () => {
       isError: false,
       data: {
         total: 1,
+        pageOptions: [{ pageId: 3, pageLabel: "lora-of" }],
         rows: [{
           id: 12,
           occurredAt: "2026-06-12T10:30:00.000Z",
@@ -334,6 +335,37 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain('title="Filter ledger by lora-of"');
   });
 
+  it("sources ledger page filter options from the uncapped ledger response", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture(),
+      isLoading: false,
+      isError: false,
+    });
+    queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
+      data: {
+        ...emptyDaily,
+        byPage: [{ pageId: 3, pageLabel: "lora-of", credits: 90, revenueMills: 0 }],
+      },
+      isLoading: false,
+      isError: false,
+    });
+    queryMocks.useAdminOfapiCreditsLedger.mockReturnValue({
+      data: {
+        total: 0,
+        pageOptions: [
+          { pageId: 3, pageLabel: "lora-of" },
+          { pageId: 9, pageLabel: "vip-of" },
+        ],
+        rows: [],
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain('<option value="9">vip-of</option>');
+  });
+
   it("offers a CSV export button in the ledger toolbar", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture(),
@@ -345,6 +377,7 @@ describe("OfapiCreditsPage", () => {
       isError: false,
       data: {
         total: 1,
+        pageOptions: [{ pageId: 3, pageLabel: "lora-of" }],
         rows: [{
           id: 1,
           occurredAt: "2026-06-12T10:30:00.000Z",

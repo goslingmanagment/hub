@@ -71,6 +71,22 @@ function shortDay(day: string) {
   return day.slice(5);
 }
 
+function ledgerDateStart(value: string) {
+  return value ? `${value}T00:00:00.000Z` : undefined;
+}
+
+function ledgerDateEndExclusive(value: string) {
+  if (!value) {
+    return undefined;
+  }
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  if (!year || !month || !day) {
+    return undefined;
+  }
+
+  return new Date(Date.UTC(year, month - 1, day + 1)).toISOString();
+}
+
 type ValueTone = "neutral" | "warning" | "danger";
 
 function valueToneClass(tone: ValueTone | undefined) {
@@ -616,20 +632,26 @@ export function OfapiCreditsPage() {
   const [exportError, setExportError] = useState(false);
   const [exportTruncated, setExportTruncated] = useState(false);
 
+  const ledgerFrom = ledgerDateStart(fromFilter);
+  const ledgerTo = ledgerDateEndExclusive(toFilter);
   const ledgerQuery = useAdminOfapiCreditsLedger({
     offset: ledgerOffset,
     limit: LEDGER_PAGE_SIZE,
     source: sourceFilter || undefined,
     operation: operationFilter.trim() || undefined,
     pageId: pageFilter ? Number(pageFilter) : undefined,
-    from: fromFilter ? `${fromFilter}T00:00:00.000Z` : undefined,
-    to: toFilter ? `${toFilter}T23:59:59.999Z` : undefined,
+    from: ledgerFrom,
+    to: ledgerTo,
   });
 
   const summary = summaryQuery.data;
   const charts = chartsQuery.data;
   const breakdown = breakdownQuery.data;
   const ledger = ledgerQuery.data;
+  const pageOptions = ledger?.pageOptions ?? (breakdown?.byPage ?? []).map((row) => ({
+    pageId: row.pageId,
+    pageLabel: row.pageLabel,
+  }));
 
   const balancePoints = useMemo(() => {
     const byDay = new Map<string, number>();
@@ -730,8 +752,8 @@ export function OfapiCreditsPage() {
         source: sourceFilter || undefined,
         operation: operationFilter.trim() || undefined,
         pageId: pageFilter ? Number(pageFilter) : undefined,
-        from: fromFilter ? `${fromFilter}T00:00:00.000Z` : undefined,
-        to: toFilter ? `${toFilter}T23:59:59.999Z` : undefined,
+        from: ledgerFrom,
+        to: ledgerTo,
       });
       // The server caps a single export; warn so a capped extract is never
       // mistaken for a complete accounting export.
@@ -1174,7 +1196,7 @@ export function OfapiCreditsPage() {
                 aria-label="Filter by page"
               >
                 <option value="">All pages</option>
-                {(breakdown?.byPage ?? []).map((row) => (
+                {pageOptions.map((row) => (
                   <option key={row.pageId} value={String(row.pageId)}>{row.pageLabel}</option>
                 ))}
               </select>

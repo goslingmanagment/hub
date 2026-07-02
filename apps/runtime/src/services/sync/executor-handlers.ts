@@ -107,6 +107,7 @@ import {
   type TopSpendersCursorState,
   type TopSpendersCursorWindow,
 } from "./cursor-state.ts";
+import { pageSyncDependencyInput } from "./dependencies.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
   isOnlyFansDmPollingEnabled,
@@ -424,6 +425,7 @@ async function triggerFollowersReconcileAnomaly(
     pageId: platformAccountId,
     streams: ["followers_reconcile"],
     source: "anomaly",
+    ...pageSyncDependencyInput(app),
   });
 }
 
@@ -2651,6 +2653,7 @@ async function executeOnlyFansDmConversationsChunk(
       pageId: input.pageContext.page.id,
       streams: ["dm_messages"],
       source: "scheduled",
+      ...pageSyncDependencyInput(app),
     });
   }
 
@@ -3116,6 +3119,7 @@ export async function executeDmConversationsChunk(
         pageId: input.pageContext.page.id,
         streams: ["dm_messages"],
         source: "scheduled",
+        ...pageSyncDependencyInput(app),
       });
     }
 

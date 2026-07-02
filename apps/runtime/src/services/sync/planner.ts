@@ -9,6 +9,7 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
+import { pageSyncDependencyInput } from "./dependencies.ts";
 import { pauseDisabledOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
 import { pauseDisabledOnlyFansDmPollingForAllPages } from "./onlyfans-dm-polling.ts";
 import { pauseDisabledOnlyFansTopSpendersForAllPages } from "./onlyfans-top-spenders.ts";
@@ -36,7 +37,8 @@ export async function runSyncPlannerCycle(
     }, "Inactive sync run cleanup complete");
   }
 
-  await ensurePageSyncStates(app.db, { now });
+  const dependencyInput = pageSyncDependencyInput(app);
+  await ensurePageSyncStates(app.db, { now, ...dependencyInput });
   const pausedOnlyFansDmPages = await pauseDisabledOnlyFansDmPollingForAllPages(app, now);
   if (pausedOnlyFansDmPages > 0) {
     app.logger.warn({
@@ -55,7 +57,7 @@ export async function runSyncPlannerCycle(
       pausedOnlyFansTopSpenderPages,
     }, "Paused OnlyFans top spenders because ONLYFANS_TOP_SPENDERS_ENABLED is false");
   }
-  await scheduleDuePageSync(app.db, { now });
+  await scheduleDuePageSync(app.db, { now, ...dependencyInput });
 
   const runnablePages = await listRunnablePageSync(app.db, now);
   for (const page of runnablePages) {

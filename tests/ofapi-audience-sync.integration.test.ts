@@ -629,8 +629,12 @@ describe("audience stream plumbing", () => {
       pageId: page.id,
       streams: ["light", "transactions", "dm_conversations", "dm_messages"],
       source: "manual",
+      dependencyOptions: { onlyFansOfapiDmSyncEnabled: true },
     });
-    await refreshPageSyncDependencies(appContext.db, { pageId: page.id });
+    await refreshPageSyncDependencies(appContext.db, {
+      pageId: page.id,
+      dependencyOptions: { onlyFansOfapiDmSyncEnabled: true },
+    });
 
     const states = await listPageSyncStates(appContext.db, { pageId: page.id });
     const byStream = new Map(states.map((state) => [state.stream, state]));
@@ -674,7 +678,10 @@ describe("audience stream plumbing", () => {
       [page.id],
     );
 
-    await refreshPageSyncDependencies(appContext.db, { pageId: page.id });
+    await refreshPageSyncDependencies(appContext.db, {
+      pageId: page.id,
+      dependencyOptions: { onlyFansOfapiDmSyncEnabled: true },
+    });
 
     const states = await listPageSyncStates(appContext.db, {
       pageId: page.id,

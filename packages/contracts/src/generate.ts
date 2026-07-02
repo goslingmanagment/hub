@@ -5,7 +5,7 @@ import openapiTS, { astToString } from "openapi-typescript";
 
 import { createLogger } from "@agency_hub_core/shared";
 
-import { buildApiServer } from "../../../apps/runtime/src/api/server.ts";
+import { buildApiServer, normalizeOpenApiDocument } from "../../../apps/runtime/src/api/server.ts";
 
 async function main() {
   const encryptionKey = Buffer.alloc(32, 0);
@@ -52,7 +52,7 @@ async function main() {
 
   try {
     await server.ready();
-    const spec = server.swagger() as unknown as Record<string, unknown>;
+    const spec = normalizeOpenApiDocument(server.swagger() as unknown as Record<string, any>);
     const openapiPath = path.resolve("reference/agency-hub.openapi.json");
     const typesPath = path.resolve("packages/contracts/src/generated/api-types.ts");
 

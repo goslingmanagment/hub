@@ -13,6 +13,7 @@ import {
   isOfapiAccountHealthEnabled,
   ofapiAuthStatusNeedsAction,
 } from "./ofapi-account-health.ts";
+import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import {
   buildPageSyncUx,
@@ -220,13 +221,15 @@ export async function getSyncStatusSummarySnapshot(
     };
   }
 
+  const dependencyInput = pageSyncDependencyInput(app);
   if (input?.pageIds || input?.pageLabel || scopedPageIds.length === 1) {
     await Promise.all(scopedPageIds.map((pageId) => ensurePageSyncStates(app.db, {
       pageId,
       now,
+      ...dependencyInput,
     })));
   } else {
-    await ensurePageSyncStates(app.db, { now });
+    await ensurePageSyncStates(app.db, { now, ...dependencyInput });
   }
 
   const taskRows = await listPageSyncStates(app.db);

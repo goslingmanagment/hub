@@ -11,7 +11,7 @@ import {
   upsertTransaction,
 } from "@agency_hub_core/db";
 
-import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import { buildApiServer, normalizeOpenApiDocument } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   createUserAccount,
@@ -532,6 +532,46 @@ describe("ofapi credits admin api", () => {
     expect(body.forecast.daysLeft).toBe(Math.floor(7_000 / 100)); // 70
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("bounds summary forecast and burn windows at the current observation time", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(appContext.db, { slug: "future-window", name: "Future Window" });
+    const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label: "future-of" });
+    const now = new Date();
+    await recordOfapiCreditSpend(appContext.db, {
+      operation: "ofapi_chats",
+      credits: 100,
+      balanceAfter: 5_000,
+      pageId: page.id,
+      httpStatus: 200,
+      occurredAt: new Date(now.getTime() - 60_000),
+    });
+    await insertOfapiCreditLedgerEntry(appContext.db, {
+      occurredAt: new Date(now.getTime() + 5 * 60_000),
+      source: "rest",
+      operation: "ofapi_chat_messages",
+      credits: 10_000,
+      estimated: false,
+      pageId: page.id,
+    });
+
+    const cookie = await loginCookie("dima", "owner-secret");
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/credits/summary",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.forecast.monthToDateSpend).toBe(100);
+    expect(body.recentBurn.total).toBe(100);
+    expect(body.recentBurn.alerting).toBe(false);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("reports current UTC-day pending webhook accrual without adding it to posted spend", async (context) => {
     if (!testDb || !server) {
       context.skip();
@@ -712,6 +752,9 @@ describe("ofapi credits admin api", () => {
     expect(all.statusCode).toBe(200);
     expect(all.json().total).toBe(5);
     expect(all.json().rows).toHaveLength(5);
+    expect(all.json().pageOptions).toEqual([
+      { pageId: page.id, pageLabel: "lora-of" },
+    ]);
 
     const restOnly = await server.inject({
       method: "GET",
@@ -765,6 +808,11 @@ describe("ofapi credits admin api", () => {
     expect(all.headers["content-type"]).toContain("text/csv");
     expect(all.headers["content-disposition"]).toContain("attachment");
     expect(all.headers["content-disposition"]).toContain("ofapi-credit-ledger.csv");
+
+    const spec = normalizeOpenApiDocument(server.swagger() as any);
+    const csvContent = spec.paths["/api/v1/admin/ofapi/credits/ledger.csv"].get.responses["200"].content;
+    expect(csvContent).toHaveProperty("text/csv");
+    expect(csvContent).not.toHaveProperty("application/json");
 
     const lines = all.body.trim().split("\r\n");
     expect(lines[0]).toBe(

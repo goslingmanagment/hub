@@ -3,7 +3,10 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { getSyncStreamDependenciesForPlatform } from "@agency_hub_core/db";
+import {
+  getSyncStreamDependenciesForPage,
+  getSyncStreamDependenciesForPlatform,
+} from "@agency_hub_core/db";
 
 import { parseOfapiSubscriptionPayload } from "../apps/runtime/src/services/ofapi-subscription-projection.ts";
 import { toFansListPage } from "../apps/runtime/src/services/ofapi.ts";
@@ -165,13 +168,31 @@ describe("platform-aware sync dependencies", () => {
       .toEqual(["light", "top_spenders", "transactions", "subscribers", "followers"]);
   });
 
-  it("never gates OnlyFans DM streams on audience/top-spender streams", () => {
+  it("keeps legacy/unmapped OnlyFans DM streams gated on their prerequisites", () => {
     expect(getSyncStreamDependenciesForPlatform("onlyfans", "dm_conversations"))
-      .toEqual(["light", "transactions"]);
+      .toEqual(["light", "top_spenders", "transactions", "subscribers", "followers"]);
     expect(getSyncStreamDependenciesForPlatform("onlyfans", "dm_messages"))
-      .toEqual(["light", "transactions", "dm_conversations"]);
+      .toEqual(["light", "top_spenders", "transactions", "subscribers", "followers", "dm_conversations"]);
     expect(getSyncStreamDependenciesForPlatform("onlyfans", "top_spenders"))
       .toEqual(["transactions"]);
+  });
+
+  it("strips legacy prerequisites only for OFAPI-DM-eligible OnlyFans DM streams", () => {
+    expect(getSyncStreamDependenciesForPage({
+      platform: "onlyfans",
+      stream: "dm_conversations",
+      onlyFansOfapiDmEligible: true,
+    })).toEqual([]);
+    expect(getSyncStreamDependenciesForPage({
+      platform: "onlyfans",
+      stream: "dm_messages",
+      onlyFansOfapiDmEligible: true,
+    })).toEqual(["dm_conversations"]);
+    expect(getSyncStreamDependenciesForPage({
+      platform: "onlyfans",
+      stream: "top_spenders",
+      onlyFansOfapiDmEligible: true,
+    })).toEqual(["transactions"]);
   });
 });
 

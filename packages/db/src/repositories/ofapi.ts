@@ -1395,13 +1395,14 @@ export interface OfapiSpendWindowStats {
 }
 
 /**
- * Net spend AND the earliest effective spend start over `[since, ∞)`, computed in
- * one query so the two can never drift. The `external`-drift proration window used
- * by both the sum and the effective-start is defined once (`isProratedExternal`).
+ * Net spend AND the earliest effective spend start over `[from, to)`, computed
+ * in one query so the two can never drift. The `external`-drift proration
+ * window used by both the sum and the effective-start is defined once
+ * (`isProratedExternal`).
  */
-export async function summarizeOfapiSpendWindowSince(
+export async function summarizeOfapiSpendWindowBetween(
   db: Database,
-  input: { since: Date },
+  input: { from: Date; to: Date },
 ): Promise<OfapiSpendWindowStats> {
   const fromOccurredAt = sql`(${ofapiCreditLedger.details} ->> 'fromOccurredAt')::timestamptz`;
   const isProratedExternal = sql`${ofapiCreditLedger.source} = 'external'
@@ -1413,7 +1414,7 @@ export async function summarizeOfapiSpendWindowSince(
         case
           when ${isProratedExternal}
           then ${ofapiCreditLedger.credits}::double precision
-            * extract(epoch from (${ofapiCreditLedger.occurredAt} - greatest(${fromOccurredAt}, ${input.since})))
+            * extract(epoch from (${ofapiCreditLedger.occurredAt} - greatest(${fromOccurredAt}, ${input.from})))
             / extract(epoch from (${ofapiCreditLedger.occurredAt} - ${fromOccurredAt}))
           else ${ofapiCreditLedger.credits}
         end
@@ -1423,14 +1424,15 @@ export async function summarizeOfapiSpendWindowSince(
       earliestEffectiveAt: sql<Date | string | null>`min(
         case
           when ${isProratedExternal}
-          then greatest(${fromOccurredAt}, ${input.since})
+          then greatest(${fromOccurredAt}, ${input.from})
           else ${ofapiCreditLedger.occurredAt}
         end
       )`,
     })
     .from(ofapiCreditLedger)
     .where(and(
-      gte(ofapiCreditLedger.occurredAt, input.since),
+      gte(ofapiCreditLedger.occurredAt, input.from),
+      lt(ofapiCreditLedger.occurredAt, input.to),
       ne(ofapiCreditLedger.source, "refill"),
     ));
 
@@ -1442,6 +1444,29 @@ export async function summarizeOfapiSpendWindowSince(
     total: row?.total ?? 0,
     earliestEffectiveAt: parsed && !Number.isNaN(parsed.getTime()) ? parsed : null,
   };
+}
+
+/**
+ * Backwards-compatible unbounded-later helper. New forecast/alerting callers
+ * should prefer `summarizeOfapiSpendWindowBetween` and pass their current
+ * observation time as `to` so future-dated imports cannot leak into live totals.
+ */
+export async function summarizeOfapiSpendWindowSince(
+  db: Database,
+  input: { since: Date },
+): Promise<OfapiSpendWindowStats> {
+  return summarizeOfapiSpendWindowBetween(db, {
+    from: input.since,
+    to: new Date("9999-12-31T23:59:59.999Z"),
+  });
+}
+
+export async function sumOfapiCreditsSpentBetween(
+  db: Database,
+  input: { from: Date; to: Date },
+): Promise<number> {
+  const { total } = await summarizeOfapiSpendWindowBetween(db, input);
+  return total;
 }
 
 export async function sumOfapiCreditsSpentSince(
@@ -1750,6 +1775,27 @@ export interface OfapiCreditLedgerListRow {
   balanceAfter: number | null;
   requestId: string | null;
   accrualDay: string | null;
+}
+
+export interface OfapiCreditLedgerPageOption {
+  pageId: number;
+  pageLabel: string;
+}
+
+export async function listOfapiCreditLedgerPageOptions(
+  db: Database,
+): Promise<OfapiCreditLedgerPageOption[]> {
+  const rows = await db
+    .selectDistinct({
+      pageId: ofapiCreditLedger.pageId,
+      pageLabel: pages.label,
+    })
+    .from(ofapiCreditLedger)
+    .innerJoin(pages, eq(ofapiCreditLedger.pageId, pages.id))
+    .where(isNotNull(ofapiCreditLedger.pageId))
+    .orderBy(pages.label, ofapiCreditLedger.pageId);
+
+  return rows.filter((row): row is OfapiCreditLedgerPageOption => row.pageId !== null);
 }
 
 export async function listOfapiCreditLedgerEntries(

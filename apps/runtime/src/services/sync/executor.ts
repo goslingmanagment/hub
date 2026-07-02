@@ -32,6 +32,7 @@ import {
 } from "../notification-incidents.ts";
 import { resolveStoredProxyEgressKey } from "../page-context.ts";
 import { SYNC_PAGE_EXECUTE_QUEUE, sendSyncPageWakeup, type SyncPageExecutePayload } from "../sync-queue.ts";
+import { pageSyncDependencyInput } from "./dependencies.ts";
 import { normalizeSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
@@ -323,7 +324,8 @@ export async function executeNextSyncPageChunk(
   app: AppContext,
   platformAccountId: number,
 ): Promise<SyncPageChunkResult> {
-  await ensurePageSyncStates(app.db, { pageId: platformAccountId });
+  const dependencyInput = pageSyncDependencyInput(app);
+  await ensurePageSyncStates(app.db, { pageId: platformAccountId, ...dependencyInput });
   await pauseDisabledOnlyFansDmPollingForPage(app, platformAccountId);
 
   const taskLease = await acquirePageSyncLease(app.db, {
@@ -408,6 +410,7 @@ export async function executeNextSyncPageChunk(
         phase,
         workClass,
         progress,
+        ...dependencyInput,
       });
       if (!applied) {
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
