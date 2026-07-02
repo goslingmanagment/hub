@@ -126,6 +126,65 @@ function compactRecord(record: Record<string, unknown>) {
   );
 }
 
+function numericStat(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function anomalySeverityRank(stats: Record<string, unknown>) {
+  const anomalies = stats.anomalies;
+  if (!Array.isArray(anomalies)) {
+    return null;
+  }
+
+  let rank: SyncTelemetryEventSeverity | null = null;
+  for (const anomaly of anomalies) {
+    if (!anomaly || typeof anomaly !== "object") {
+      continue;
+    }
+    const severity = (anomaly as { severity?: unknown }).severity;
+    if (severity === "error") {
+      return "error";
+    }
+    if (severity === "warn") {
+      rank = "warn";
+    }
+  }
+
+  return rank;
+}
+
+function requestTotalsFromStats(stats: Record<string, unknown>) {
+  const requestTotals = stats.requestTotals;
+  if (!requestTotals || typeof requestTotals !== "object" || Array.isArray(requestTotals)) {
+    return { failedAttempts: 0 };
+  }
+
+  return {
+    failedAttempts: numericStat((requestTotals as { failedAttempts?: unknown }).failedAttempts) ?? 0,
+  };
+}
+
+function resolveRunFinishedSeverity(
+  status: "success" | "partial" | "failed" | "skipped",
+  stats: Record<string, unknown>,
+): SyncTelemetryEventSeverity {
+  if (status === "failed") {
+    return "error";
+  }
+
+  const anomalySeverity = anomalySeverityRank(stats);
+  if (anomalySeverity) {
+    return anomalySeverity;
+  }
+
+  const requestTotals = requestTotalsFromStats(stats);
+  if (requestTotals.failedAttempts > 0) {
+    return "warn";
+  }
+
+  return "info";
+}
+
 function flattenPagination(event: Pick<HttpRequestEvent, "pagination">) {
   return compactRecord({
     offset: event.pagination?.offset ?? undefined,
@@ -499,6 +558,7 @@ export class SyncRunTelemetry {
     );
     await this.emitRequestSummary(requestSummary);
     const stats = this.buildStats(status, normalizedFailure?.error ?? null, extraStats, requestSummary);
+    const statsRecord = stats as Record<string, unknown>;
     await this.safeTelemetryOp(
       "run_finished_event",
       () => insertSyncRunEvent(this.app.db, {
@@ -507,11 +567,12 @@ export class SyncRunTelemetry {
         provider: this.metadata.provider,
         stream: this.metadata.stream,
         eventType: "run_finished",
-        severity: status === "failed" ? "error" : status === "partial" ? "warn" : "info",
+        severity: resolveRunFinishedSeverity(status, statsRecord),
         message: `Sync run finished with status ${status}`,
         details: compactRecord({
           status,
           health: stats.health,
+          yieldReason: typeof statsRecord.yieldReason === "string" ? statsRecord.yieldReason : undefined,
           errorSummary: normalizedFailure ? undefined : errorSummary ?? undefined,
           error: normalizedFailure?.error ?? undefined,
         }),

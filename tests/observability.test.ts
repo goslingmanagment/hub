@@ -18,6 +18,33 @@ function mockStdoutWrite(lines: string[]) {
   }) as typeof process.stdout.write);
 }
 
+function buildTelemetry(overrides: Partial<ConstructorParameters<typeof SyncRunTelemetry>[1]> = {}) {
+  return new SyncRunTelemetry(
+    {
+      config: {
+        syncHttpTraceFile: null,
+      },
+      db: {} as never,
+      logger: {
+        warn: vi.fn(),
+      } as never,
+    } as never,
+    {
+      runId: 99,
+      platformAccountId: 7,
+      pageLabel: "lana",
+      provider: "fansly",
+      stream: "dm_conversations",
+      trigger: "worker",
+      egressKey: "direct",
+      ...overrides,
+    },
+    {
+      runStartedAt: new Date("2026-03-10T12:00:00.000Z"),
+    },
+  );
+}
+
 describe("sync observability", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -259,5 +286,63 @@ describe("sync observability", () => {
     expect(fileContents).not.toContain("shared-proxy");
 
     await rm(traceDir, { recursive: true, force: true });
+  });
+
+  it("records clean partial continuation finishes as info instead of warning noise", async () => {
+    const stdoutLines: string[] = [];
+    mockStdoutWrite(stdoutLines);
+    const insertEventSpy = vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
+    vi.spyOn(dbRepo, "finishSyncRun").mockResolvedValue({ id: 99 } as never);
+
+    const telemetry = buildTelemetry();
+    await telemetry.finish("partial", null, {
+      yieldReason: "request_budget",
+      chunkBudget: {
+        requestCount: 5,
+        elapsedMs: 12_000,
+      },
+    });
+
+    const runFinished = insertEventSpy.mock.calls.find(([, input]) => input.eventType === "run_finished");
+    expect(runFinished?.[1]).toMatchObject({
+      eventType: "run_finished",
+      severity: "info",
+      details: {
+        status: "partial",
+        health: "degraded",
+        yieldReason: "request_budget",
+      },
+    });
+  });
+
+  it("keeps partial finishes warning-level when the run has warning anomalies", async () => {
+    const stdoutLines: string[] = [];
+    mockStdoutWrite(stdoutLines);
+    const insertEventSpy = vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
+    vi.spyOn(dbRepo, "finishSyncRun").mockResolvedValue({ id: 99 } as never);
+
+    const telemetry = buildTelemetry();
+    await telemetry.addAnomaly({
+      code: "high_retry_volume",
+      severity: "warn",
+      message: "Run exceeded the retry volume threshold",
+      details: {
+        retryAttempts: 4,
+      },
+    });
+    await telemetry.finish("partial", null, {
+      yieldReason: "request_budget",
+    });
+
+    const runFinished = insertEventSpy.mock.calls.find(([, input]) => input.eventType === "run_finished");
+    expect(runFinished?.[1]).toMatchObject({
+      eventType: "run_finished",
+      severity: "warn",
+      details: {
+        status: "partial",
+        health: "degraded",
+        yieldReason: "request_budget",
+      },
+    });
   });
 });
