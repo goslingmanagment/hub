@@ -1,5 +1,0 @@
-[     130ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5174/favicon.ico:0
-[     481ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5174/api/v1/pages/lora-1/fans/pabslow/transactions?limit=50&offset=0:0
-[     482ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5174/api/v2/spenders/fansly/pabslow?scope=page&pageLabel=lora-1&period=30d:0
-[     482ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5174/api/v1/pages/lora-1/fans/pabslow/profile:0
-[     485ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5174/api/v1/pages/lora-1/fans/pabslow:0
