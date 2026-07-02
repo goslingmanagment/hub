@@ -659,6 +659,7 @@ describe("sync status service", () => {
         requestSeq: 2,
         appliedSeq: 0,
         requestedAt: new Date("2026-03-24T11:30:00.000Z"),
+        retryAt: new Date("2026-03-24T13:00:00.000Z"),
         succeededAt: null,
         progress: {
           mode: "audience_sweep",
@@ -698,6 +699,59 @@ describe("sync status service", () => {
       statusReason: expect.objectContaining({
         code: "ofapi_daily_credit_budget",
       }),
+    });
+  });
+
+  it("ignores stale OFAPI budget markers left on completed progress payloads", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([
+      buildVisiblePage({
+        platform: "onlyfans",
+        username: "loravie",
+        ofapiAccountId: "acct_lora",
+      }),
+    ]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({
+        stream: "subscribers",
+        status: "pending",
+        requestSeq: 2,
+        appliedSeq: 1,
+        requestedAt: new Date("2026-03-24T11:59:00.000Z"),
+        succeededAt: new Date("2026-03-24T11:58:00.000Z"),
+        progress: {
+          mode: "audience_sweep",
+          skipped: "sweep_not_due",
+          fullSweepCompleted: true,
+          ofapiBudgetBlock: "ofapi_daily_credit_budget",
+        },
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "subscribers",
+        platform: "onlyfans",
+        status: "pending",
+        succeededAt: new Date("2026-03-24T11:58:00.000Z"),
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({
+      db: {},
+      config: { ofapiAudienceSyncEnabled: true },
+    } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.audience).toMatchObject({
+      state: "scheduled",
+      statusReason: null,
+    });
+    expect(snapshot.pages[0]?.blocks.audience.substreams[0]).toMatchObject({
+      stream: "subscribers",
+      state: "scheduled",
+      statusReason: null,
     });
   });
 

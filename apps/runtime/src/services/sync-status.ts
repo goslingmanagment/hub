@@ -332,14 +332,33 @@ function getOfapiBudgetBlock(progress: unknown) {
   return typeof block === "string" ? block : null;
 }
 
-function buildOfapiBudgetStatusReason(progress: unknown): SyncStatusReason | null {
+function hasCompletedOrSkippedOfapiProgress(progress: unknown) {
+  if (!progress || typeof progress !== "object" || Array.isArray(progress)) {
+    return false;
+  }
+
+  const payload = progress as { fullSweepCompleted?: unknown; skipped?: unknown };
+  return payload.fullSweepCompleted === true || typeof payload.skipped === "string";
+}
+
+function buildOfapiBudgetStatusReason(progress: unknown, retryAt: Date | null): SyncStatusReason | null {
+  if (hasCompletedOrSkippedOfapiProgress(progress)) {
+    return null;
+  }
+
   switch (getOfapiBudgetBlock(progress)) {
     case "ofapi_daily_credit_budget":
+      if (!retryAt) {
+        return null;
+      }
       return buildStatusReason(
         "ofapi_daily_credit_budget",
         "OFAPI daily credit budget reached; sync will resume after the UTC budget reset.",
       );
     case "ofapi_credit_floor":
+      if (!retryAt) {
+        return null;
+      }
       return buildStatusReason(
         "ofapi_credit_floor",
         "OFAPI credit floor reached; add credits or lower the floor before sync can continue.",
@@ -970,7 +989,7 @@ function deriveTaskState(
       state = "backfilling";
     }
   } else if (task.requestSeq > task.appliedSeq || task.status === "pending") {
-    const budgetReason = buildOfapiBudgetStatusReason(task.progress);
+    const budgetReason = buildOfapiBudgetStatusReason(task.progress, task.retryAt);
     if (budgetReason) {
       state = budgetReason.code === "ofapi_request_budget" ? "scheduled" : "delayed";
       statusReason = budgetReason;
