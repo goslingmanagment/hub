@@ -301,6 +301,55 @@ export async function getLatestSettledOfapiDmEventTimes(
   return result;
 }
 
+export interface OfapiFinancialTruthSummary {
+  pageId: number;
+  transactionCount: number;
+  latestTransactionAt: Date | null;
+}
+
+export async function getOfapiFinancialTruthSummaries(
+  db: Database,
+  input: {
+    pageIds: number[];
+  },
+): Promise<Map<number, OfapiFinancialTruthSummary>> {
+  if (input.pageIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = await db
+    .select({
+      pageId: transactions.platformAccountId,
+      transactionCount: sql<number>`count(*)::int`,
+      latestTransactionAt: sql<Date | string | null>`
+        max(coalesce(${transactions.sourceUpdatedAt}, ${transactions.occurredAt}))
+      `,
+    })
+    .from(transactions)
+    .where(and(
+      inArray(transactions.platformAccountId, input.pageIds),
+      eq(transactions.isActive, true),
+      sql`${transactions.rawType} like 'ofapi:%'`,
+    ))
+    .groupBy(transactions.platformAccountId);
+
+  const result = new Map<number, OfapiFinancialTruthSummary>();
+  for (const row of rows) {
+    const parsed = row.latestTransactionAt instanceof Date
+      ? row.latestTransactionAt
+      : row.latestTransactionAt === null
+        ? null
+        : new Date(row.latestTransactionAt);
+    result.set(row.pageId, {
+      pageId: row.pageId,
+      transactionCount: row.transactionCount,
+      latestTransactionAt: parsed && !Number.isNaN(parsed.getTime()) ? parsed : null,
+    });
+  }
+
+  return result;
+}
+
 export interface UpsertOfapiSpendProjectionEventInput {
   domainKey: string;
   projectionStatus: "projected" | "blocked" | "skipped";

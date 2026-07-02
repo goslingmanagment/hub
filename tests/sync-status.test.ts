@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   ensurePageSyncStates: vi.fn(),
+  getOfapiFinancialTruthSummaries: vi.fn(),
   listVisiblePages: vi.fn(),
   listPageSyncStates: vi.fn(),
   listSyncMonitorStreamRows: vi.fn(),
@@ -12,6 +13,7 @@ vi.mock("@agency_hub_core/db", async () => {
   return {
     ...actual,
     ensurePageSyncStates: dbMocks.ensurePageSyncStates,
+    getOfapiFinancialTruthSummaries: dbMocks.getOfapiFinancialTruthSummaries,
     listVisiblePages: dbMocks.listVisiblePages,
     listPageSyncStates: dbMocks.listPageSyncStates,
     listSyncMonitorStreamRows: dbMocks.listSyncMonitorStreamRows,
@@ -161,6 +163,10 @@ function buildVisiblePage(overrides: Record<string, unknown> = {}) {
 }
 
 describe("sync status service", () => {
+  beforeEach(() => {
+    dbMocks.getOfapiFinancialTruthSummaries.mockResolvedValue(new Map());
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -410,6 +416,63 @@ describe("sync status service", () => {
       },
       metrics: {
         ofapiAuthStatus: null,
+      },
+    });
+  });
+
+  it("reports OFAPI-mapped OnlyFans financials from transaction truth without legacy credentials", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.getOfapiFinancialTruthSummaries.mockResolvedValue(new Map([
+      [7, {
+        pageId: 7,
+        transactionCount: 677,
+        latestTransactionAt: new Date("2026-06-30T14:43:46.000Z"),
+      }],
+    ]));
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
+      platform: "onlyfans",
+      hasCredentials: false,
+      ofapiAccountId: "acct_test",
+      ofapiAuthStatus: null,
+      ofapiAuthChangedAt: null,
+      lastLightSyncAt: null,
+      lastFollowerSyncAt: null,
+    })]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({
+        stream: "transactions",
+        status: "paused",
+        succeededAt: null,
+        progressedAt: null,
+        lastErrorCode: "bad_request",
+        lastErrorSummary: "Page \"7\" has no stored platform credentials",
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "transactions",
+        succeededAt: null,
+        transactionCount: 0,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-07-02T00:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.financials).toMatchObject({
+      state: "up_to_date",
+      succeededAt: "2026-06-30T14:43:46.000Z",
+      primaryFresh: true,
+      needsAttention: false,
+      statusReason: {
+        code: "ofapi_financials_live",
+      },
+      metrics: {
+        ofapiFinancials: true,
+        transactionCount: 677,
+        lastOfapiTransactionAt: "2026-06-30T14:43:46.000Z",
       },
     });
   });

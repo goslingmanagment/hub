@@ -1,6 +1,7 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
   ensurePageSyncStates,
+  getOfapiFinancialTruthSummaries,
   getLatestSettledOfapiDmEventTimes,
   getSyncStreamsForPlatform,
   listSyncMonitorStreamRows,
@@ -1357,6 +1358,50 @@ function overrideMessagesLiveBlockWithOfapiIngest(
   };
 }
 
+// OFAPI-only OnlyFans pages have no legacy OnlyMonster credentials, so the
+// parked legacy `transactions` stream must not make the Financials block look
+// paused when transaction truth is already fed by OFAPI backfill/webhooks.
+function overrideFinancialsBlockWithOfapiTruth(
+  block: SyncDomainBlockStatus,
+  summary: { transactionCount: number; latestTransactionAt: Date | null } | null,
+): SyncDomainBlockStatus {
+  const transactionCount = summary?.transactionCount ?? 0;
+  const latestTransactionAt = summary?.latestTransactionAt ?? null;
+  const hasFinancialTruth = transactionCount > 0;
+  const statusReason: SyncStatusReason = hasFinancialTruth
+    ? {
+      code: "ofapi_financials_live",
+      summary: "Financials are fed by OFAPI transactions.",
+      waitingFor: null,
+    }
+    : {
+      code: "ofapi_financials_waiting",
+      summary: "Waiting for the first OFAPI transaction for this page.",
+      waitingFor: null,
+    };
+
+  return {
+    ...block,
+    state: hasFinancialTruth ? "up_to_date" : "not_started",
+    succeededAt: latestTransactionAt ? latestTransactionAt.toISOString() : null,
+    progress: null,
+    progressStream: null,
+    progressRole: null,
+    error: null,
+    statusReason,
+    primaryFresh: hasFinancialTruth,
+    needsAttention: false,
+    nextDueAt: null,
+    nextRetryAt: null,
+    metrics: {
+      ...block.metrics,
+      ofapiFinancials: true,
+      transactionCount,
+      lastOfapiTransactionAt: latestTransactionAt ? latestTransactionAt.toISOString() : null,
+    },
+  };
+}
+
 // Phase 3 of the OFAPI integration (decision #49): the connection block for
 // OFAPI-mapped OnlyFans pages also surfaces the OFAPI account auth state
 // projected from accounts.* webhooks. Display-only overlay — the underlying
@@ -1461,6 +1506,16 @@ export async function getSyncStatusSnapshot(
       eventTypes: OFAPI_DM_PROJECTION_EVENT_TYPES,
     })
     : new Map<number, Date>();
+  const ofapiFinancialPageIds = new Set(
+    scopedPages
+      .filter((page) => page.platform === "onlyfans" && page.ofapiAccountId !== null)
+      .map((page) => page.id),
+  );
+  const ofapiFinancialSummaries = ofapiFinancialPageIds.size > 0
+    ? await getOfapiFinancialTruthSummaries(app.db, {
+      pageIds: [...ofapiFinancialPageIds],
+    })
+    : new Map<number, { transactionCount: number; latestTransactionAt: Date | null }>();
 
   const visiblePageIds = new Set(allVisiblePages.map((page) => page.id));
   const pagesById = new Map(allVisiblePages.map((page) => [page.id, page] as const));
@@ -1572,6 +1627,12 @@ export async function getSyncStatusSnapshot(
           blocks.messages_live,
           ofapiDmIngestTimes.get(page.id) ?? null,
           now,
+        );
+      }
+      if (ofapiFinancialPageIds.has(page.id)) {
+        blocks.financials = overrideFinancialsBlockWithOfapiTruth(
+          blocks.financials,
+          ofapiFinancialSummaries.get(page.id) ?? null,
         );
       }
       if (
