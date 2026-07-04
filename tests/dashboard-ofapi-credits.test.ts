@@ -21,6 +21,9 @@ function renderPage() {
   );
 }
 
+// ru-RU number formatting uses U+00A0 as the thousands separator.
+const NBSP = "\u00A0";
+
 const emptyDaily = {
   days: [],
   balance: [],
@@ -65,15 +68,15 @@ describe("OfapiCreditsPage", () => {
       data: { total: 0, pageOptions: [], rows: [] },
       isLoading: false,
     });
-    // The comparison panel is collapsed by default, so its body/hook does not
-    // mount in a static render; provide a benign default anyway.
+    // The projection-accuracy panel is collapsed by default, so its body/hook
+    // does not mount in a static render; provide a benign default anyway.
     queryMocks.useAdminOfapiSpendComparison.mockReturnValue({
       data: { summary: [], byPage: [], samples: [], limitations: [] },
       isLoading: false,
     });
   });
 
-  it("renders the summary cards and ops strip", () => {
+  it("answers balance, runway, and top-up in the hero card", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture(),
       isLoading: false,
@@ -81,25 +84,65 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("OFAPI Credits");
-    expect(markup).toContain("23,950 cr");
-    expect(markup).toContain("137 cr");
-    // C1: stream budgets render as a labelled meter, not run-on text.
-    expect(markup).toContain("84/500");
-    expect(markup).toContain('role="progressbar"');
-    expect(markup).toContain("dm daily budget");
-    expect(markup).toContain("~31 days left");
-    expect(markup).toContain("floor 500 OK");
-    expect(markup).toContain("accrual posted for 2026-06-11");
-    expect(markup).toContain("drift 0");
-    expect(markup).not.toContain("Credit ledger disabled");
+    expect(markup).toContain("Кредиты OFAPI");
+    expect(markup).toContain("Баланс");
+    expect(markup).toContain(`23${NBSP}950`);
+    expect(markup).toContain("проверен 12:41 UTC");
+    expect(markup).toContain("Хватит на");
+    expect(markup).toContain("~31");
+    expect(markup).toContain("закончатся ~13 июля");
+    expect(markup).toContain("212 кр/день");
+    // No refill recommendation in the payload → the top-up slot explains itself.
+    expect(markup).toContain("Пополнение");
+    expect(markup).toContain("появится после нескольких дней истории трат");
+    expect(markup).not.toContain("Журнал кредитов выключен");
     // With no configured credit price, USD estimates stay hidden.
     expect(markup).not.toContain("≈ $");
-    // A healthy page raises no floor/incident alarm banner.
+    // A healthy page raises no alarm banner.
     expect(markup).not.toContain('role="alert"');
   });
 
-  it("renders the pending current-day webhook estimate when present", () => {
+  it("shows today's spend with a per-source split and labelled budget meters", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture(),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("Потрачено сегодня · 2026-06-12");
+    expect(markup).toContain("137");
+    // Only non-zero sources are listed (adjustment 0 is omitted).
+    expect(markup).toContain("Приложение");
+    expect(markup).toContain("Вебхуки");
+    expect(markup).toContain("Вне приложения");
+    // Budget meters use plain-language stream names.
+    expect(markup).toContain("Синк сообщений");
+    expect(markup).toContain("84 из 500 кр");
+    expect(markup).toContain('role="progressbar"');
+    expect(markup).toContain("дневной бюджет: 84 из 500 кредитов");
+    // The floor reads as what it does, not "floor 500 OK".
+    expect(markup).toContain("Порог автостопа: 500 кр");
+    expect(markup).toContain("остановятся");
+  });
+
+  it("keeps system health collapsed and quiet while everything passes", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture(),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("Состояние системы");
+    expect(markup).toContain("Всё в порядке");
+    expect(markup).toContain("баланс сверен 12:00 UTC");
+    // Collapsed → the ops detail rows are not mounted.
+    expect(markup).not.toContain("Сверен с провайдером");
+    expect(markup).not.toContain("Точность проекций");
+  });
+
+  it("renders the pending current-day webhook estimate with today's spend", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({
         accrual: {
@@ -112,8 +155,9 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("pending today 45 cr from");
-    expect(markup).toContain("4,464 events");
+    expect(markup).toContain("~45 кр за");
+    expect(markup).toContain(`4${NBSP}464`);
+    expect(markup).toContain("ещё не проведены");
   });
 
   it("shows the disabled notice pointing at Settings > Configuration", () => {
@@ -124,18 +168,18 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("Credit ledger disabled");
-    expect(markup).toContain("Settings → Configuration");
-    expect(markup).toContain("Open Configuration");
+    expect(markup).toContain("Журнал кредитов выключен");
+    expect(markup).toContain("Настройки → Конфигурация");
+    expect(markup).toContain("Открыть конфигурацию");
     expect(markup).toContain("config-ofapiCreditLedgerEnabled");
-    // No longer instructs a raw env-var edit.
     expect(markup).not.toContain("OFAPI_CREDIT_LEDGER_ENABLED");
     // Ledger-derived sections are hidden with the flag off.
-    expect(markup).not.toContain("Daily spend by source");
-    expect(markup).not.toContain("Breakdown");
+    expect(markup).not.toContain("Траты по дням");
+    expect(markup).not.toContain("Куда уходят кредиты");
+    expect(markup).not.toContain("Журнал операций");
   });
 
-  it("renders parked budgets and open incidents in the ops strip", () => {
+  it("explains a paused stream and raises the incident banner", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({
         budgets: [{
@@ -156,14 +200,19 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("dm parked");
-    expect(markup).toContain("incidents: ofapi_burn_rate");
-    // Open incidents raise the top alarm banner.
+    // The incident is a plain-language alarm, not a raw kind string.
     expect(markup).toContain('role="alert"');
-    expect(markup).toContain("Open incidents: ofapi_burn_rate");
+    expect(markup).toContain("Кредиты сгорают необычно быстро");
+    expect(markup).toContain("OFAPI spent 400 credits in the trailing hour");
+    // The exhausted budget reads as paused with a resume time on its meter.
+    expect(markup).toContain("дневной бюджет исчерпан");
+    expect(markup).toContain("Продолжит в 2026-06-13 00:00 UTC");
+    // System health opens itself and reports the paused stream.
+    expect(markup).toContain("Требует внимания");
+    expect(markup).toContain("Синк сообщений на паузе");
   });
 
-  it("raises a floor-blocked alarm banner and reddens a short runway", () => {
+  it("raises a floor-blocked alarm and reddens a short runway", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({
         floor: { value: 500, blocked: true },
@@ -175,13 +224,14 @@ describe("OfapiCreditsPage", () => {
 
     const markup = renderPage();
     expect(markup).toContain('role="alert"');
-    expect(markup).toContain("Balance floor blocked");
-    expect(markup).toContain("floor 500 BLOCKED");
-    // A sub-3-day runway (and the blocked hint) use the danger tone.
+    expect(markup).toContain("Траты остановлены");
+    expect(markup).toContain("порога автостопа");
+    // A sub-3-day runway uses the danger tone.
     expect(markup).toContain("text-red-700");
+    expect(markup).toContain("~2");
   });
 
-  it("renders ledger rows with page attribution and an accessible expander", () => {
+  it("renders ledger rows with friendly labels and an accessible expander", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture(),
       isLoading: false,
@@ -211,12 +261,17 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("ofapi_chats");
+    // The raw operation id is translated but kept as a tooltip.
+    expect(markup).toContain("Синк чатов");
+    expect(markup).toContain('title="ofapi_chats"');
+    expect(markup).toContain("Приложение");
     expect(markup).toContain("lora-of");
     expect(markup).toContain("2026-06-12 10:30 UTC");
-    // C3: the expander is a real button, not a bare clickable row.
+    // Spend renders as its balance impact.
+    expect(markup).toContain("-2");
+    // The expander is a real button, not a bare clickable row.
     expect(markup).toContain('aria-expanded="false"');
-    expect(markup).toContain('aria-label="Expand ledger row details"');
+    expect(markup).toContain('aria-label="Развернуть детали записи"');
     expect(markup).toContain("aria-controls=");
   });
 
@@ -241,13 +296,19 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain('value="ofapi_chat_messages"');
   });
 
-  it("deep-links budgets, floor, and burn alert to Settings > Configuration", () => {
+  it("deep-links every credit knob to Settings > Configuration", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({
         budgets: [
           { stream: "dm", spentToday: 84, dailyCeiling: 500, state: "ok", retryAt: null },
           { stream: "audience", spentToday: 12, dailyCeiling: 300, state: "ok", retryAt: null },
         ],
+        // An open incident expands System health, which hosts the settings row.
+        incidents: [{
+          kind: "ofapi_webhook_silence",
+          openedAt: "2026-06-12T11:00:00.000Z",
+          errorSummary: null,
+        }],
       }),
       isLoading: false,
       isError: false,
@@ -258,9 +319,35 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain("config-ofapiAudienceDailyCreditBudget");
     expect(markup).toContain("config-ofapiCreditFloor");
     expect(markup).toContain("config-ofapiBurnAlertCreditsPerHour");
+    expect(markup).toContain("config-ofapiCreditMicroUsdPrice");
   });
 
-  it("shows scoped errors for charts, breakdown, and ledger instead of empty data", () => {
+  it("shows health detail rows in plain language once expanded", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({
+        reconciliation: { lastRunAt: "2026-06-12T12:00:00.000Z", lastDriftCredits: 20 },
+        accrual: { lastPostedDay: "2026-06-11" },
+        incidents: [{
+          kind: "ofapi_webhook_silence",
+          openedAt: "2026-06-12T11:00:00.000Z",
+          errorSummary: null,
+        }],
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("Сверен с провайдером 2026-06-12 12:00 UTC");
+    expect(markup).toContain("расхождение 20 кр");
+    expect(markup).toContain("Проведены по 2026-06-11.");
+    expect(markup).toContain("Вебхуки замолчали");
+    // The projection diagnostic lives inside health, collapsed until opened.
+    expect(markup).toContain("Точность проекций");
+    expect(markup).not.toContain("совпало ·");
+  });
+
+  it("shows scoped errors for charts, breakdown, and the activity log", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture(),
       isLoading: false,
@@ -278,12 +365,12 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("Failed to load spend charts");
-    expect(markup).toContain("Failed to load breakdown");
-    expect(markup).toContain("Failed to load ledger");
-    expect(markup).toContain("Retry");
+    expect(markup).toContain("Не удалось загрузить графики");
+    expect(markup).toContain("Не удалось загрузить разбивку");
+    expect(markup).toContain("Не удалось загрузить журнал");
+    expect(markup).toContain("Повторить");
     // A failed ledger fetch must not read as an empty result.
-    expect(markup).not.toContain("No ledger rows");
+    expect(markup).not.toContain("Ничего не найдено");
   });
 
   it("shows USD estimates and per-page ROI once a credit price is configured", () => {
@@ -305,15 +392,40 @@ describe("OfapiCreditsPage", () => {
     // $0.01/credit: balance 23,950 = $239.50, spent 137 = $1.37, avg 212/day = $2.12.
     expect(markup).toContain("≈ $239.50");
     expect(markup).toContain("≈ $1.37");
-    expect(markup).toContain("≈ $2.12/day");
+    expect(markup).toContain("$2.12/день");
     // Per-page cost-vs-revenue: 100 cr costs $1.00, earned $2.50, ROI 2.5×.
+    expect(markup).toContain("$1.00");
     expect(markup).toContain("$2.50");
     expect(markup).toContain("2.5×");
     // The "configure a price" nudge disappears once a price is set.
-    expect(markup).not.toContain("set a credit price");
+    expect(markup).not.toContain("чтобы видеть стоимость");
   });
 
-  it("drills breakdown operation and page rows into the ledger filters", () => {
+  it("hides the USD cost columns and nudges when no price is configured", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture(),
+      isLoading: false,
+      isError: false,
+    });
+    queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
+      data: {
+        ...emptyDaily,
+        byOperation: [{ operation: "ofapi_chats", requests: 5, credits: 200 }],
+        byPage: [{ pageId: 3, pageLabel: "lora-of", credits: 200, revenueMills: 2500 }],
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    // No dash-filled Cost/ROI columns — they are omitted entirely.
+    expect(markup).not.toContain(">Стоимость<");
+    expect(markup).not.toContain(">ROI<");
+    expect(markup).toContain("чтобы видеть стоимость");
+    expect(markup).toContain("config-ofapiCreditMicroUsdPrice");
+  });
+
+  it("drills breakdown activity and page rows into the log filters", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture(),
       isLoading: false,
@@ -330,9 +442,10 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    // Both breakdown labels are real buttons that filter the ledger below.
-    expect(markup).toContain('title="Filter ledger by ofapi_chats"');
-    expect(markup).toContain('title="Filter ledger by lora-of"');
+    // Friendly label on screen, raw id in the drill tooltip.
+    expect(markup).toContain("Синк чатов");
+    expect(markup).toContain('title="Показать в журнале: ofapi_chats"');
+    expect(markup).toContain('title="Показать в журнале: lora-of"');
   });
 
   it("sources ledger page filter options from the uncapped ledger response", () => {
@@ -366,7 +479,7 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain('<option value="9">vip-of</option>');
   });
 
-  it("offers a CSV export button in the ledger toolbar", () => {
+  it("offers a CSV export button in the activity log toolbar", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture(),
       isLoading: false,
@@ -396,10 +509,10 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("Export CSV");
+    expect(markup).toContain("Экспорт CSV");
   });
 
-  it("surfaces recent burn drivers and reddens an alerting window (D3)", () => {
+  it("raises the burn banner with named drivers when the window alerts", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({
         recentBurn: {
@@ -416,17 +529,14 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("Recent burn");
-    expect(markup).toContain("450 cr / last 60m");
-    expect(markup).toContain("threshold 300/h");
-    expect(markup).toContain("top REST drivers");
-    expect(markup).toContain("ofapi_chats");
-    // A healthy fixture has no floor/incident banner, so the only alert region is
-    // the alerting burn window.
     expect(markup).toContain('role="alert"');
+    expect(markup).toContain("Кредиты сгорают быстро");
+    expect(markup).toContain("450 кр за последние");
+    expect(markup).toContain("Синк чатов (300 кр)");
+    expect(markup).toContain("lora-of (150 кр)");
   });
 
-  it("shows recent burn without an alarm when under threshold (D3)", () => {
+  it("keeps a quiet burn window out of the alarms", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({
         recentBurn: {
@@ -443,12 +553,13 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("Recent burn");
-    expect(markup).toContain("120 cr / last 60m");
     expect(markup).not.toContain('role="alert"');
+    expect(markup).toContain("Всё в порядке");
+    // The quiet window stays inside the collapsed health section.
+    expect(markup).not.toContain("120 кр за последние");
   });
 
-  it("renders month-end projection and refill recommendation (D5)", () => {
+  it("recommends a top-up and reports the month trajectory", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({
         pricing: { microUsdPerCredit: 10_000 },
@@ -466,12 +577,14 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("month-end ~2,000 cr");
-    expect(markup).toContain("refill ~1,500 cr");
-    expect(markup).toContain("for 30d runway");
+    expect(markup).toContain(`+1${NBSP}500`);
+    expect(markup).toContain("чтобы хватило на 30 дней");
+    expect(markup).toContain("≈ $15.00");
+    expect(markup).toContain("Потрачено за месяц: 800 кр");
+    expect(markup).toContain(`к концу месяца выйдет ~2${NBSP}000 кр`);
   });
 
-  it("shows no-refill-needed when the balance covers the target runway (D5)", () => {
+  it("shows the runway as covered when no top-up is needed", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({
         forecast: {
@@ -488,42 +601,8 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("none needed (30d covered)");
-  });
-
-  it("mounts the spend comparison section collapsed by default (B4)", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
-
-    const markup = renderPage();
-    expect(markup).toContain("Spend projection comparison");
-    expect(markup).toContain("shadow diagnostic");
-    // Collapsed → the body (and its matched/drift chips) is not mounted.
-    expect(markup).not.toContain("matched ·");
-  });
-
-  it("labels breakdown credits with units and shows a per-operation cost (C5)", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({ pricing: { microUsdPerCredit: 10_000 } }),
-      isLoading: false,
-      isError: false,
-    });
-    queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
-      data: {
-        ...emptyDaily,
-        byOperation: [{ operation: "ofapi_chats", requests: 5, credits: 200 }],
-      },
-      isLoading: false,
-      isError: false,
-    });
-
-    const markup = renderPage();
-    expect(markup).toContain("Credits (cr)");
-    // 200 cr × $0.01/credit = $2.00 cost cell.
-    expect(markup).toContain("$2.00");
+    expect(markup).toContain("Не нужно");
+    expect(markup).toContain("баланса хватает больше чем на 30 дней");
   });
 
   it("shows the error panel when the summary fails", () => {
@@ -534,6 +613,6 @@ describe("OfapiCreditsPage", () => {
     });
 
     const markup = renderPage();
-    expect(markup).toContain("Failed to load OFAPI credits");
+    expect(markup).toContain("Не удалось загрузить кредиты OFAPI");
   });
 });
