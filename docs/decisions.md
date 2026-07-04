@@ -60,6 +60,7 @@
 | 60 | OFAPI Mark-Read Command Custody | Empty-payload `mark_chat_read_v1` command through the core outbox/executor; no retry, one mark-as-read POST, bounded audit surface, Direct rollback retained |
 | 61 | OFAPI Media/PPV Send Command Custody | Bounded `send_media_message_v1` command for existing media IDs; one send attempt, same-kind retry lineage, webhook repair by text/price/media-count only, Direct rollback retained |
 | 62 | Fansly server-replay gate (Pass 3 Stage 6) | Day-1 probe: all three DP-1 endpoint families (earnings stats, monthly stats, PPV order history) are REPLAYABLE server-side with the single pasted `fansly-client-check`; no per-route anti-bot token needed. Clears kernel-only Fansly capture (DP 1-B) for Stages 16/17 |
+| 63 | Kernel retention & redaction stand-down (Pass 3 Stage 1) | All scheduled/automatic destruction of business facts stopped: retention defaults+envs → 36500 d (webhook journal, DM cold archive, sync raw payloads); page_dm prune + command payload self-redaction behind default-OFF env kill-switches; DM-message sync gains raw persistence (`payload_kind='dm_messages'`, 3 paths); consumed-only guard on the journal purge; hourly disk-usage alert (migration 0052, additive enum value) |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -983,3 +984,54 @@ page egress + DB-backed pacing; running api/worker never restarted). Per family,
 **Still open:** the ≥5-day check-longevity re-probe (run once/day; measures whether the pasted
 check rots on these routes faster than on core's live routes). Day-1 replayability is sufficient
 for the Stage 16 go/no-go; the longevity number feeds the cadence/degradation design.
+
+## Kernel Retention & Redaction Stand-Down — Pass 3 Stage 1 (2026-07-05)
+
+**Decision #63:** The kernel no longer schedules deletion of its own business facts. One
+stage branch (`kernel/stage-01-retention-redaction-standdown`, five checkpoint commits)
+delivers, effective the next deploy:
+
+- **Retention raised to effectively-forever (36500 d)** for the OFAPI webhook journal,
+  the DM cold archive, and sync raw payloads — env *and* code defaults both change, so a
+  missing env can never re-enable a short purge. `retentionDate()`/`dmRetentionDate()`
+  now stamp far-future; the cleanup jobs stay in place as no-ops.
+- **Kill-switches (default OFF):** `PAGE_DM_PRUNE_ENABLED` gates the per-conversation
+  `page_dm_messages` prune at all four call sites (two sync finalizes, OFAPI DM sync
+  finalize, projection live-ingest refresh); `OFAPI_COMMAND_PAYLOAD_REDACTION_ENABLED`
+  gates the terminal-payload self-redaction inside `sweepOfapiCommands` (at the redaction
+  call, which runs before the execution-enabled check). Registry rows added (env-only,
+  `NEVER`/`none`); the two retention knobs' registry defaults/labels now tell the truth.
+- **DM-message raw persistence (new capture, flagged per spec §7.5):** all three
+  DM-message fetch paths persist raw pages with `payload_kind='dm_messages'`
+  (OnlyMonster + Fansly persist `page.raw`; the OFAPI client exposes no raw envelope, so
+  that path persists the unfiltered item records). Union-only type change; the DB column
+  is free text.
+- **Consumed-only purge guard:** `deleteExpiredOfapiWebhookEvents` refuses rows whose
+  `projection_status`/`archive_status` is `pending`/`failed` regardless of age.
+- **Disk-usage alert:** hourly worker cron (`db.disk-usage.check`, :15 UTC) compares
+  `statfs("/")` usage against `DISK_USAGE_ALERT_PERCENT` (default 80) and pages the owner
+  through the existing Telegram incident layer (`db_disk_usage` kind, one alert per state
+  change; Postgres size included as context).
+
+**Deviation from the spec:** §3 declared "no schema change", but §2's "reuse the existing
+alert-monitor pattern" requires the incident-kind enum value — **migration 0052**
+(`ALTER TYPE notification_incident_kind ADD VALUE IF NOT EXISTS 'db_disk_usage'`),
+additive-only, same pattern as migrations 0030/0031. Rollback story unchanged (an unused
+enum value is inert; everything else is env/flag-guarded).
+
+**Verification (local):** `pnpm typecheck` clean; full `pnpm test` suite green —
+**166 files, 1398/1398** (Testcontainers applied migration 0052). Behavior-change tests:
+prune no-op over a >cap conversation, redaction-off leaves >7 d terminal payloads intact,
+purge guard deletes old consumed / refuses old unconsumed, DM sync chunk writes
+`dm_messages` raw rows, disk alert opens/resolves on threshold crossings. One existing
+test updated to the new truth: the OFAPI backfill-cap test now expects 201 stored
+messages (fetch-side window cap still bounds the backfill; finalize no longer prunes).
+
+**Prod exit (§3.8) pending owner deploy:** env `OFAPI_EVENT_RETENTION_DAYS=36500` +
+`OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS=36500` in `/opt/agency-hub/.env.production`,
+standard deploy (ships 0052), optional idempotent re-stamp of pre-deploy
+`sync_raw_payloads.retain_until`, then the §5 V1–V5 checks (exact SQL in the stage
+file's `## Progress` block). **Risk carried forward:** fact tables now grow without
+bound by design — the disk alert is the containment; retention tiering returns as a
+safe cache policy in Stage 28. No off-box backup (Q3) unchanged and now covers strictly
+more data.
