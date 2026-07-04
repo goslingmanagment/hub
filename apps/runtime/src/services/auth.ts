@@ -739,4 +739,33 @@ export function requireApiKeyUser(principal: AuthPrincipal) {
   }
 }
 
+/**
+ * Stage 2 chatter-read-scope fix: raw revenue/transaction reads are a
+ * dashboard-session-role surface (owner/team_lead) — a leaked chatter bearer
+ * key must not read a page's ledger. REVENUE_ROUTE_ROLE_ENFORCEMENT starts in
+ * "log" (serve normally, log `would-deny`) for a 48 h observation window, then
+ * flips to "enforce" (403). Callers keep their canAccessPage page-scope check
+ * on top; this narrows role scope only.
+ */
+export function enforceRevenueRouteRoleScope(
+  app: Pick<AppContext, "config" | "logger">,
+  principal: AuthPrincipal,
+  routePath: string,
+) {
+  try {
+    requireDashboardUser(principal);
+  } catch (error) {
+    if (app.config.revenueRouteRoleEnforcement === "enforce") {
+      throw error;
+    }
+    app.logger.warn({
+      path: routePath,
+      userId: principal.user.id,
+      username: principal.user.username,
+      role: principal.user.role,
+      authMethod: principal.authMethod,
+    }, "would-deny: revenue route requires a dashboard session role (log-only mode)");
+  }
+}
+
 export { getAuthenticatedUserByUsername };

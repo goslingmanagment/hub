@@ -2391,6 +2391,76 @@ describe("api integration", () => {
     ]);
   });
 
+  it("gates raw revenue routes to dashboard session roles (Stage 2 chatter-read-scope)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const appContext = createTestAppContext(testDb);
+    const chatterKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+    const warnSpy = vi.spyOn(appContext.logger, "warn");
+    const gateServer = await buildApiServer(appContext);
+    await gateServer.ready();
+
+    const gatedUrls = [
+      "/api/v1/pages/lana/revenue?period=7d",
+      "/api/v1/pages/lana/transactions?limit=10&offset=0",
+      "/api/v1/pages/lana/revenue/daily?period=30d",
+      "/api/v1/pages/lana/fans/fan-001/transactions?limit=10&offset=0",
+    ];
+
+    try {
+      // Default mode is "log": bearer-key hits serve normally and log would-deny.
+      for (const url of gatedUrls) {
+        const response = await gateServer.inject({
+          method: "GET",
+          url,
+          headers: { authorization: `Bearer ${chatterKey.key}` },
+        });
+        expect(response.statusCode, `${url} in log mode`).toBe(200);
+      }
+      const wouldDenyLogs = warnSpy.mock.calls.filter(([, message]) =>
+        typeof message === "string" && message.startsWith("would-deny"));
+      expect(wouldDenyLogs).toHaveLength(gatedUrls.length);
+
+      // Enforce mode refuses bearer keys with 403…
+      appContext.config.revenueRouteRoleEnforcement = "enforce";
+      for (const url of gatedUrls) {
+        const response = await gateServer.inject({
+          method: "GET",
+          url,
+          headers: { authorization: `Bearer ${chatterKey.key}` },
+        });
+        expect(response.statusCode, `${url} in enforce mode`).toBe(403);
+      }
+
+      // …while owner sessions keep working…
+      const ownerCookie = await loginOwnerCookie(gateServer);
+      for (const url of gatedUrls) {
+        const response = await gateServer.inject({
+          method: "GET",
+          url,
+          headers: { cookie: ownerCookie },
+        });
+        expect(response.statusCode, `${url} for owner session`).toBe(200);
+      }
+
+      // …and the chatter-facing spenders board stays reachable (do not over-gate).
+      const spenders = await gateServer.inject({
+        method: "GET",
+        url: "/api/v2/spenders?scope=page&pageLabel=lana&period=30d&limit=10&offset=0",
+        headers: { authorization: `Bearer ${chatterKey.key}` },
+      });
+      expect(spenders.statusCode, spenders.body).toBe(200);
+    } finally {
+      await gateServer.close();
+    }
+  });
+
   it("skips events with invalid completedAt per-event instead of failing the whole batch", async (context) => {
     if (!testDb || !server) {
       context.skip();

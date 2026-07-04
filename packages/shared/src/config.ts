@@ -153,6 +153,10 @@ const envSchema = z.object({
   // Stage 1 containment for forever-growing fact tables: the worker pages the
   // owner when server disk usage crosses this percentage.
   DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
+  // Stage 2 chatter-read-scope fix: raw revenue/transaction routes require a
+  // dashboard session role. "log" serves bearer-key hits but logs would-deny
+  // (the 48 h observation mode); "enforce" refuses them with 403.
+  REVENUE_ROUTE_ROLE_ENFORCEMENT: z.enum(["log", "enforce"]).default("log"),
   CHATMUSE_AI_GATEWAY_ENABLED: booleanSchema.default(false),
   CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(200),
   CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
@@ -252,6 +256,7 @@ export interface AppConfig {
   ofapiCommandPayloadRedactionEnabled?: boolean;
   pageDmPruneEnabled?: boolean;
   diskUsageAlertPercent?: number;
+  revenueRouteRoleEnforcement?: "log" | "enforce";
   chatMuseAiGatewayEnabled?: boolean;
   chatMuseAiGatewayDailyRequestLimit?: number;
   chatMuseAiGatewayDailyMicroUsdLimit?: number;
@@ -438,6 +443,7 @@ export function loadConfig(
     ofapiCommandPayloadRedactionEnabled: parsed.OFAPI_COMMAND_PAYLOAD_REDACTION_ENABLED,
     pageDmPruneEnabled: parsed.PAGE_DM_PRUNE_ENABLED,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
+    revenueRouteRoleEnforcement: parsed.REVENUE_ROUTE_ROLE_ENFORCEMENT,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,
     chatMuseAiGatewayDailyRequestLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT,
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,

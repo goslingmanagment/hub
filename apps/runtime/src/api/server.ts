@@ -91,6 +91,7 @@ import {
   authenticateSessionToken,
   canAccessPage,
   createUserAccount,
+  enforceRevenueRouteRoleScope,
   getAuthenticatedUserByUsername,
   issueChatterApiKey,
   listApiKeysForUsers,
@@ -865,6 +866,7 @@ export async function buildApiServer(appContext: AppContext) {
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
     }
+    enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/revenue");
     return getPageRevenueReport(appContext, request.params.pageLabel, {
       period: query.period,
       custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
@@ -880,6 +882,7 @@ export async function buildApiServer(appContext: AppContext) {
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
     }
+    enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/transactions");
 
     return getPageTransactionsReport(appContext, request.params.pageLabel, {
       limit: query.limit,
@@ -2164,6 +2167,7 @@ export async function buildApiServer(appContext: AppContext) {
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
     }
+    enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/revenue/daily");
     return getRevenueDailySeries([page.id], [page], request.query);
   });
 
@@ -2237,6 +2241,7 @@ export async function buildApiServer(appContext: AppContext) {
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
     }
+    enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/fans/:platformUserId/transactions");
     const fan = await findPlatformFan(appContext.db, page.platform, request.params.platformUserId);
     if (!fan) {
       throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
