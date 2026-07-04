@@ -65,7 +65,9 @@ export const OFAPI_EVENT_PROCESS_BATCH_SIZE = 100;
 // processor to the API process's SSE fanout (services/events-stream.ts).
 export const OFAPI_SYNC_EVENT_CHANNEL = "ofapi_sync_events";
 
-const DEFAULT_OFAPI_EVENT_RETENTION_DAYS = 7;
+// Stage 1 retention stand-down: journal rows are business facts (money events
+// included) and must outlive the ledger build-out; effectively-forever.
+const DEFAULT_OFAPI_EVENT_RETENTION_DAYS = 36500;
 // Rows still pending after this grace period get re-enqueued by the sweep job;
 // long enough that the normal receive-time enqueue always wins the race.
 const SWEEP_PENDING_GRACE_MS = 30_000;

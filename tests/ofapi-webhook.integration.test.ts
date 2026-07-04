@@ -309,6 +309,9 @@ describe("OFAPI event processing", () => {
     }
 
     await seedWebhookConfig();
+    // Stage 1 stand-down raised the default retention to effectively-forever;
+    // pin a short window here to keep exercising the prune mechanics.
+    appContext.config.ofapiEventRetentionDays = 7;
     const fresh = await postWebhook({ body: await fixtureBody("users_typing.json") });
     expect(fresh.statusCode).toBe(200);
     const stale = await postWebhook({ body: await fixtureBody("messages_deleted.json") });

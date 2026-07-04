@@ -117,12 +117,14 @@ const envSchema = z.object({
   OFAPI_API_KEY: optionalTrimmedStringSchema,
   OFAPI_WEBHOOK_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(1000),
   OFAPI_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
-  OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+  // Stage 1 retention stand-down: the webhook journal holds business facts; the
+  // default matches the env so a missing env can never re-enable a short purge.
+  OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_EVENT_WORKER_REPLICAS: z.coerce.number().int().positive().default(1),
   OFAPI_DM_PROJECTION_ENABLED: booleanSchema.default(false),
   OFAPI_DM_SYNC_ENABLED: booleanSchema.default(false),
   OFAPI_DM_COLD_ARCHIVE_ENABLED: booleanSchema.default(false),
-  OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().positive().default(3650),
+  OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
   OFAPI_DM_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(500),

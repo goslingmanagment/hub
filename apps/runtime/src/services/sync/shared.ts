@@ -25,10 +25,15 @@ import type { SyncRunTelemetry } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-const DM_RAW_RETENTION_DAYS = 7;
+// Stage 1 retention stand-down: raw payloads are captured business facts. Rows
+// are stamped far-future so the existing `retain_until < now` purge
+// (packages/db repositories/sync.ts deleteExpiredRawPayloads) never matches;
+// the cleanup job stays in place as a no-op.
+const RAW_RETENTION_DAYS = 36500;
+const DM_RAW_RETENTION_DAYS = 36500;
 
 export function retentionDate(now = new Date()) {
-  return new Date(now.getTime() + 180 * DAY_MS);
+  return new Date(now.getTime() + RAW_RETENTION_DAYS * DAY_MS);
 }
 
 export function dmRetentionDate(now = new Date()) {
