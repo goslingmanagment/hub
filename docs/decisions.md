@@ -63,6 +63,7 @@
 | 63 | Kernel retention & redaction stand-down (Pass 3 Stage 1) | All scheduled/automatic destruction of business facts stopped: retention defaults+envs → 36500 d (webhook journal, DM cold archive, sync raw payloads); page_dm prune + command payload self-redaction behind default-OFF env kill-switches; DM-message sync gains raw persistence (`payload_kind='dm_messages'`, 3 paths); consumed-only guard on the journal purge; hourly disk-usage alert (migration 0052, additive enum value) |
 | 64 | Pass 3 spec fixup (pre-execution review) | Doc-only amendments: Stage 7/8 key-table insert protocols made implementable (pre-allocated ids + OVERRIDING SYSTEM VALUE); dependency graph tightened (31/32←11, 33←20, soft 26←19, mutual soft 28↔29); Stage 20 method/path recovered by booting buildApiServer; sensitive kinds excluded from the generic lake into lake/restricted |
 | 65 | Kernel destruction-door guards + chatter-read-scope (Pass 3 Stage 2) | One-action data-loss doors closed: raw revenue routes role-gated behind REVENUE_ROUTE_ROLE_ENFORCEMENT (log→enforce); messages_history reset refuses 409 until the Stage 10 archive; fact-bearing page DELETE refuses 409; workboard undo → retraction marker; reclassify → soft-supersede append log (partial active unique, migration 0053) |
+| 66 | Desktop stop-loss (Pass 3 Stage 4) | Desktop stops destroying facts: usage spool never self-deletes (dead-letter tier; drop path removed at the type level); prune horizons ×10 (messages 50k, spend 310 d, guard-audit 3650 d); purge flow warns kernel-holds-no-copy; `x-client-version` on every hub request (Proposal 4.1). Q5 diff verdict: served 0.1.28 = desktop origin/main@145260a byte-exact, but the desktop repo's local/origin mains diverged 5-and-5 — 0.1.29 release blocked until the owner reconciles |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -1129,3 +1130,50 @@ stage-02), deploy (ships 0053; no env change — `log` is the default), review 4
 commands in the stage file's `## Progress`). **Risk carried forward:** none new; the
 messages_history reset stays unavailable until Stage 10, and Stage 13 must reconcile with
 `pages.deleted_at` rather than adding a second tombstone column.
+
+## Desktop Stop-Loss — Pass 3 Stage 4 (2026-07-05)
+
+**Decision #66:** The desktop stops destroying facts daily — the client-side twin of Stage 1.
+Desktop repo branch `kernel/stage-04-desktop-stop-loss` (three checkpoint commits off local
+main 5d298d4; full `pnpm check` green):
+
+- **Usage spool never self-deletes** (d0c094c): the legacy drop-after-3-failures rule is
+  retired. Failed events keep persisted attempts and park in a dead-letter tier after the 3rd
+  failure — retried on app start and on an hourly sweep, never removed. `kind:'dropped'` is
+  gone from the onError union (compile-time proof). Backoff extends to a capped [5 s..60 m].
+  HTTP-400 quarantine kept and now exportable (diagnostics `usageQuarantine`: count +
+  payloads). Core's `(userId, clientEventId)` dedup absorbs re-sends.
+- **Prune horizons ×10** (4a2bfcf): messages 5,000 → 50,000 per chat; spend 31 d → 310 d;
+  guard-audit TTL 90 d → 3,650 d. Constants only, mechanisms kept, pin tests added.
+- **Purge warning + version header** (e79a259): the DangerZone purge flow now states the
+  kernel holds no copy of local messages/transactions/telemetry and offers diagnostics export
+  inline (the false "next sync rebuilds it" reassurance corrected); every hub request carries
+  `x-client-version` (Proposal 4.1, accepted 2026-07-04), injected from main so
+  packages/shared stays platform-pure — the fleet-version exit signal and Stage 11's
+  producer version.
+
+**Deviations:** (1) the spec's "purge flow renderer test" is unimplementable — the desktop
+repo has no component-test infrastructure (no jsdom/@testing-library, zero .test.tsx);
+coverage = the typed i18n catalog + unchanged confirm logic. (2) The Q5 artifact diff used a
+macOS dir-build instead of `pnpm dist:win` (the script hard-asserts win32) — valid because
+the asar payload is the platform-independent bundled JS, proven below.
+
+**Q5 artifact-diff verdict (the assumption was FALSE):** the served
+`ChatGoose-Setup-0.1.28.exe` (sha512 matches latest.yml) contains an app payload
+**byte-identical to a clean build of desktop `origin/main@145260a`** ("release: bump desktop
+to 0.1.28"; sole delta = CRLF in index.html from the Windows CI checkout). Nothing exists
+only in the artifact — but 0.1.28 is NOT a version-bump-only build: **the desktop repo's
+local main and origin/main have diverged 5-and-5**. Inside 0.1.28 and missing locally:
+01b25e7 (activity-panel mockup fixture), e8016da (Online snapshot staleness fix), 62d00fb
+(Hub confirmed-send projection fix), 5ebf171 (live OFAPI read-transport switching fix).
+Local-only and missing from origin: b1dd980, 77d5014, 84038b8 + two doc commits. Per the
+stage spec §7.1 the 0.1.29 release is **blocked until the owner reconciles the branches**
+(merge/rebase, then rebase the stage branch — one likely small conflict in
+apps/desktop/src/main/index.ts — then bump 0.1.28 → 0.1.29, tag, windows-build workflow).
+Exact steps in the stage file's `## Progress`.
+
+**Risk carried forward:** local DBs grow ~10× slower-bounded (accepted; DangerZone shows
+dbBytes); `usage_events` spool grows unbounded while the hub is unreachable (accepted,
+disk-bounded, surfaced in diagnostics); the desktop branch divergence is a NEW standing risk
+until reconciled — every desktop session before the merge builds on a main that lacks four
+production fixes.
