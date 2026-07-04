@@ -61,6 +61,8 @@
 | 61 | OFAPI Media/PPV Send Command Custody | Bounded `send_media_message_v1` command for existing media IDs; one send attempt, same-kind retry lineage, webhook repair by text/price/media-count only, Direct rollback retained |
 | 62 | Fansly server-replay gate (Pass 3 Stage 6) | Day-1 probe: all three DP-1 endpoint families (earnings stats, monthly stats, PPV order history) are REPLAYABLE server-side with the single pasted `fansly-client-check`; no per-route anti-bot token needed. Clears kernel-only Fansly capture (DP 1-B) for Stages 16/17 |
 | 63 | Kernel retention & redaction stand-down (Pass 3 Stage 1) | All scheduled/automatic destruction of business facts stopped: retention defaults+envs → 36500 d (webhook journal, DM cold archive, sync raw payloads); page_dm prune + command payload self-redaction behind default-OFF env kill-switches; DM-message sync gains raw persistence (`payload_kind='dm_messages'`, 3 paths); consumed-only guard on the journal purge; hourly disk-usage alert (migration 0052, additive enum value) |
+| 64 | Pass 3 spec fixup (pre-execution review) | Doc-only amendments: Stage 7/8 key-table insert protocols made implementable (pre-allocated ids + OVERRIDING SYSTEM VALUE); dependency graph tightened (31/32←11, 33←20, soft 26←19, mutual soft 28↔29); Stage 20 method/path recovered by booting buildApiServer; sensitive kinds excluded from the generic lake into lake/restricted |
+| 65 | Kernel destruction-door guards + chatter-read-scope (Pass 3 Stage 2) | One-action data-loss doors closed: raw revenue routes role-gated behind REVENUE_ROUTE_ROLE_ENFORCEMENT (log→enforce); messages_history reset refuses 409 until the Stage 10 archive; fact-bearing page DELETE refuses 409; workboard undo → retraction marker; reclassify → soft-supersede append log (partial active unique, migration 0053) |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -1074,3 +1076,56 @@ kind allowlist stand (a per-principal volume alert on `desktop.unknown:*` is not
 cheap hardening at execution time); resizing Stage 23 — its spec already carries the
 claim-lease schema, attribution, compensating-event undo, and v1-route removal the
 review believed missing.
+
+## Kernel Destruction-Door Guards + Chatter-Read-Scope — Pass 3 Stage 2 (2026-07-05)
+
+**Decision #65:** The two classes of one-action data loss are closed, on branch
+`kernel/stage-02-destruction-doors` (based on the `kernel/pass3-spec-fixup` tip so this log
+stays linear; five checkpoint commits + one test-fixup commit):
+
+- **Chatter-read-scope gate.** The four raw revenue/transaction routes (page revenue,
+  transactions, revenue/daily, per-fan transactions) now require a dashboard session role
+  (owner/team_lead) via `enforceRevenueRouteRoleScope`, layered after the existing
+  `canAccessPage` page scope. `REVENUE_ROUTE_ROLE_ENFORCEMENT` starts in `log`
+  (serve + `would-deny` log, the 48 h observation window) and flips to `enforce` (403) by env.
+  The chatter-facing spenders board is untouched (regression-tested). **Entry criterion
+  verified in client code, not assumed:** desktop calls core only for `/api/v1/pages`, fan
+  profiles, and OFAPI read lanes; the extension calls pages/profiles/`ai-usage/batch` and
+  builds its spenders board against Fansly directly — neither touches the gated routes.
+- **Reset door.** `resetSyncBlock` refuses `messages_history` with 409 before touching any
+  state (it would hard-delete every stored DM for the page); it returns with the Stage 10
+  archive. Checkpoint (`audience`) and top-spender (`financials`) resets stay available.
+- **Page-delete door.** Admin page DELETE refuses 409 while the page holds transactions or
+  DM history (`getPageBusinessFactPresence` handler check; the 38 CASCADE FKs are Stage 13's
+  RESTRICT flip). Empty pages still delete. `pages.deleted_at` lands as unwritten substrate
+  for Stage 13.
+- **Workboard undo/reclassify.** `deleteLastWorkboardContact` → `retractLastWorkboardContact`
+  (marks `retracted_at`; both contact-log readers exclude retracted rows).
+  `clearClosingCacheForPage` → `supersedeClosingCacheForPage` (marks `superseded_at`;
+  verdicts become an append log; all five closing-cache joins and three scans read active
+  rows only).
+
+**Deviation from the spec (§3):** the spec's migration sketch was ADD-COLUMN-only, but its §2
+supersede design ("keep prior verdicts … let the new run write fresh rows") is impossible
+under the existing full `UNIQUE (platform_account_id, platform_message_id)` on
+`wb_closing_cache` with an upsert writer. **Migration 0053** therefore also converts that
+unique into a **partial unique index on active rows** (`WHERE superseded_at IS NULL`), and
+the upsert targets it via `targetWhere`. Additive-safe: existing rows are all active; no
+rewrite; rollback keeps the columns harmlessly.
+
+**Verification (local):** `pnpm typecheck` clean; full `pnpm test` **166 files, 1402/1402**
+(Testcontainers applied migration 0053; schema-guard green). New tests: 4-route gate in
+log/enforce + owner-session + spenders regression; reset 409 + audience/financials resets
+still 200; fact-bearing delete 409 / empty delete 200; undo retraction with reader
+exclusion; supersede + fresh-run reinsert with reads returning only the active verdict. Two
+existing tests were updated to the new truth (admin CRUD delete now meets the guard;
+sync-blocks unit reset test documents the refusal).
+
+**Prod exit (§3.8) pending owner:** merge the chain (stage-01 → pass3-spec-fixup →
+stage-02), deploy (ships 0053; no env change — `log` is the default), review 48 h of
+`would-deny` logs (expected zero legitimate hits given the client-code grep), then set
+`REVENUE_ROUTE_ROLE_ENFORCEMENT=enforce` + restart and run the §5 smoke checks (chatter-key
+403 probe, fact-bearing delete refusal, retraction/supersede marker queries — exact
+commands in the stage file's `## Progress`). **Risk carried forward:** none new; the
+messages_history reset stays unavailable until Stage 10, and Stage 13 must reconcile with
+`pages.deleted_at` rather than adding a second tombstone column.
