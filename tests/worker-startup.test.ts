@@ -55,6 +55,13 @@ const ofapiDmAnalyticsMocks = vi.hoisted(() => ({
   startOfapiDmAnalyticsWorker: vi.fn(),
 }));
 
+const dbDiskAlertMocks = vi.hoisted(() => ({
+  DB_DISK_USAGE_CHECK_QUEUE: "db.disk-usage.check",
+  ensureDbDiskUsageQueue: vi.fn(),
+  ensureDbDiskUsageSchedule: vi.fn(),
+  runDbDiskUsageCheck: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
@@ -68,6 +75,7 @@ vi.mock("../apps/runtime/src/services/ofapi-events.ts", () => ofapiEventMocks);
 vi.mock("../apps/runtime/src/services/ofapi-credits.ts", () => ofapiCreditMocks);
 vi.mock("../apps/runtime/src/services/ofapi-command-executor.ts", () => ofapiCommandMocks);
 vi.mock("../apps/runtime/src/services/ofapi-dm-analytics.ts", () => ofapiDmAnalyticsMocks);
+vi.mock("../apps/runtime/src/services/db-disk-alert.ts", () => dbDiskAlertMocks);
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,
@@ -122,6 +130,12 @@ describe("worker startup", () => {
       mock.mockReset();
       mock.mockResolvedValue(undefined);
     }
+    dbDiskAlertMocks.ensureDbDiskUsageQueue.mockReset();
+    dbDiskAlertMocks.ensureDbDiskUsageQueue.mockResolvedValue(undefined);
+    dbDiskAlertMocks.ensureDbDiskUsageSchedule.mockReset();
+    dbDiskAlertMocks.ensureDbDiskUsageSchedule.mockResolvedValue(undefined);
+    dbDiskAlertMocks.runDbDiskUsageCheck.mockReset();
+    dbDiskAlertMocks.runDbDiskUsageCheck.mockResolvedValue(null);
     plannerMocks.runSyncPlannerCycle.mockReset();
 
     dbMocks.closeOrphanedSyncRuns.mockResolvedValue({

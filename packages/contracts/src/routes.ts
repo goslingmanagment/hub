@@ -2549,6 +2549,7 @@ const notificationIncidentKindEnum = z.enum([
   "ofapi_low_credit",
   "ofapi_webhook_silence",
   "ofapi_burn_rate",
+  "db_disk_usage",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const deliveryKindEnum = z.enum([

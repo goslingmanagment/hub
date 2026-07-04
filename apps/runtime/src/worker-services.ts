@@ -13,6 +13,12 @@ import { PgBoss } from "pg-boss";
 
 import type { AppContext } from "./bootstrap.ts";
 import {
+  DB_DISK_USAGE_CHECK_QUEUE,
+  ensureDbDiskUsageQueue,
+  ensureDbDiskUsageSchedule,
+  runDbDiskUsageCheck,
+} from "./services/db-disk-alert.ts";
+import {
   ensureOfapiCreditQueues,
   ensureOfapiCreditSchedules,
   startOfapiCreditWorker,
@@ -136,6 +142,7 @@ export async function startWorkerServices(
   await ensureOfapiCreditQueues(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
+  await ensureDbDiskUsageQueue(boss, createdQueues);
   await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
@@ -145,6 +152,7 @@ export async function startWorkerServices(
     ensureOfapiCreditSchedules(boss),
     ensureOfapiCommandSchedules(boss),
     ensureOfapiDmAnalyticsSchedules(boss),
+    ensureDbDiskUsageSchedule(boss),
   ]);
 
   await boss.work(SYNC_PLANNER_QUEUE, {
@@ -165,6 +173,13 @@ export async function startWorkerServices(
   await boss.work(WORKBOARD_RECOMPUTE_QUEUE, { batchSize: 1 }, async () => {
     const result = await recomputeAllWorkboardPages(app.db, { now: new Date() });
     app.logger.info(result, "Workboard v2 recompute complete");
+  });
+
+  await boss.work(DB_DISK_USAGE_CHECK_QUEUE, { batchSize: 1 }, async () => {
+    const result = await runDbDiskUsageCheck(app);
+    if (result) {
+      app.logger.info(result, "Disk usage check complete");
+    }
   });
 
   await boss.work(WORKBOARD_CLASSIFY_QUEUE, { batchSize: 1 }, async () => {

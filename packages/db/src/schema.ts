@@ -132,6 +132,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "ofapi_low_credit",
   "ofapi_webhook_silence",
   "ofapi_burn_rate",
+  "db_disk_usage",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",

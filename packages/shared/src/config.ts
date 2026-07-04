@@ -150,6 +150,9 @@ const envSchema = z.object({
   // Stage 1 retention stand-down kill-switches (default OFF = no destruction).
   OFAPI_COMMAND_PAYLOAD_REDACTION_ENABLED: booleanSchema.default(false),
   PAGE_DM_PRUNE_ENABLED: booleanSchema.default(false),
+  // Stage 1 containment for forever-growing fact tables: the worker pages the
+  // owner when server disk usage crosses this percentage.
+  DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
   CHATMUSE_AI_GATEWAY_ENABLED: booleanSchema.default(false),
   CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(200),
   CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
@@ -248,6 +251,7 @@ export interface AppConfig {
   ofapiDesktopCommandExecutionEnabled?: boolean;
   ofapiCommandPayloadRedactionEnabled?: boolean;
   pageDmPruneEnabled?: boolean;
+  diskUsageAlertPercent?: number;
   chatMuseAiGatewayEnabled?: boolean;
   chatMuseAiGatewayDailyRequestLimit?: number;
   chatMuseAiGatewayDailyMicroUsdLimit?: number;
@@ -433,6 +437,7 @@ export function loadConfig(
     ofapiDesktopCommandExecutionEnabled: parsed.OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED,
     ofapiCommandPayloadRedactionEnabled: parsed.OFAPI_COMMAND_PAYLOAD_REDACTION_ENABLED,
     pageDmPruneEnabled: parsed.PAGE_DM_PRUNE_ENABLED,
+    diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,
     chatMuseAiGatewayDailyRequestLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT,
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,

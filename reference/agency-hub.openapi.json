@@ -46062,7 +46062,8 @@
                 "ofapi_auth",
                 "ofapi_low_credit",
                 "ofapi_webhook_silence",
-                "ofapi_burn_rate"
+                "ofapi_burn_rate",
+                "db_disk_usage"
               ]
             },
             "in": "query",
@@ -46136,7 +46137,8 @@
                               "ofapi_auth",
                               "ofapi_low_credit",
                               "ofapi_webhook_silence",
-                              "ofapi_burn_rate"
+                              "ofapi_burn_rate",
+                              "db_disk_usage"
                             ]
                           },
                           "pageLabel": {
