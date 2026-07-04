@@ -59,6 +59,7 @@
 | 59 | OFAPI Unsend Command Custody | Numeric-target `unsend_message_v1` command through the core outbox/executor; no retry, one DELETE attempt, bounded audit surface, Direct rollback retained |
 | 60 | OFAPI Mark-Read Command Custody | Empty-payload `mark_chat_read_v1` command through the core outbox/executor; no retry, one mark-as-read POST, bounded audit surface, Direct rollback retained |
 | 61 | OFAPI Media/PPV Send Command Custody | Bounded `send_media_message_v1` command for existing media IDs; one send attempt, same-kind retry lineage, webhook repair by text/price/media-count only, Direct rollback retained |
+| 62 | Fansly server-replay gate (Pass 3 Stage 6) | Day-1 probe: all three DP-1 endpoint families (earnings stats, monthly stats, PPV order history) are REPLAYABLE server-side with the single pasted `fansly-client-check`; no per-route anti-bot token needed. Clears kernel-only Fansly capture (DP 1-B) for Stages 16/17 |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -956,3 +957,29 @@ exclusive queue exists. A one-off production rebuild wrote 5 aggregate rows from
 (`355` inbound, `417` outbound, `7` deleted, `4` paid outbound); aggregate privacy-column count was
 zero and cold archive media URL leakage count was zero. Webhook pending returned to zero after the
 deploy and command nonterminal rows remained zero.
+
+## Fansly Server-Replay Gate — Pass 3 Stage 6 (2026-07-04)
+
+**Decision #62:** Kernel-only Fansly capture (DP 1-B) is unblocked for the two endpoint
+families only the extension called: per-fan earnings stats (`/account/wallets/earnings/stats/accounts`),
+monthly earnings stats (`.../monthlystats/accounts`), and PPV order history (`/media/orderhistory`).
+The day-1 live probe proves core can replay all three server-side with the **single pasted
+`fansly-client-check`** — the per-route anti-bot token the extension harvests per route is NOT
+required for these families. The `routeChecks` per-route-bundle contingency in the Stage 6 spec
+stays unbuilt.
+
+**Evidence (day-1, 2026-07-04):** `fansly:replay-probe --page lilly-1 --page lilly-2 --calls 1`
+run read-only from a one-off container off the production image (bind-mounted patched `cli.js`,
+page egress + DB-backed pacing; running api/worker never restarted). Per family, both pages:
+
+| Family | lilly-1 | lilly-2 | verdict |
+|---|---|---|---|
+| earnings/stats/accounts | 200 success | 200 success | replayable |
+| earnings/monthlystats/accounts | 200 success | 200 success | replayable |
+| media/orderhistory | 400 code 99 | 400 code 99 | replayable — the 400 is a param error on the bare probe (no `accountMediaId`), NOT a 401/403 auth rejection; the session validated server-side |
+
+**Zero auth rejections on either page.** Confirms owner Q2 ("токен не нужен, это безопасно").
+
+**Still open:** the ≥5-day check-longevity re-probe (run once/day; measures whether the pasted
+check rots on these routes faster than on core's live routes). Day-1 replayability is sufficient
+for the Stage 16 go/no-go; the longevity number feeds the cadence/degradation design.

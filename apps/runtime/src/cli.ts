@@ -32,6 +32,7 @@ import {
 import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-backfill.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
+import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import {
   assignPageToUser,
   createUserAccount,
@@ -844,6 +845,43 @@ export function buildProgram() {
         console.log(`Proxy exit IP: ${proxyIp}`);
         console.log(`Direct exit IP: ${directIp}`);
         console.log(`Differs from direct: ${proxyIp !== directIp ? "yes" : "no"}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("fansly:replay-probe")
+    .description(
+      "Stage 6 gate: probe whether core can replay Fansly earnings/order-history endpoints server-side",
+    )
+    .option("--page <label>", "Fansly page label; may be repeated", collectStringOption, [])
+    .option("--calls <n>", "calls per family per page (default 1)", (v) => Number.parseInt(v, 10), 1)
+    .option("--fan <accountId>", "fan account id → correlationAccountId + order-history accountIds (well-formed call)")
+    .option("--media <accountMediaId>", "accountMediaId for order-history (well-formed call)")
+    .option("--bundle <accountMediaBundleId>", "accountMediaBundleId for order-history (well-formed call)")
+    .option("--dry-run", "resolve contexts and print the plan without calling Fansly")
+    .action(async (options) => {
+      const pageLabels: string[] = options.page;
+      if (pageLabels.length === 0) {
+        throw new Error("fansly:replay-probe requires at least one --page <label>");
+      }
+      const app = await createAppContext();
+      try {
+        const results = await runFanslyReplayProbe(app, {
+          pageLabels,
+          calls: options.calls,
+          dryRun: Boolean(options.dryRun),
+          correlationAccountId: options.fan ?? null,
+          mediaAccountIds: options.fan ?? null,
+          accountMediaId: options.media ?? null,
+          accountMediaBundleId: options.bundle ?? null,
+        });
+        for (const result of results) {
+          console.log(JSON.stringify(result));
+        }
+        console.log("");
+        console.log(summarizeReplayProbe(results));
       } finally {
         await app.close();
       }

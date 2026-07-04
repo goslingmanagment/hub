@@ -71,6 +71,24 @@ export type AdapterLike = ProviderAdapter<
       before?: Date | null;
     },
   ): Promise<FanslyEarningsAccountsPageResponse>;
+  // Stage 6 replay-probe methods (read-only, loosely typed — Stage 16 hardens).
+  getEarningsStatsAccountsPage(
+    context: FanslyRequestContext,
+    params: { correlationAccountId?: string | null; after?: Date | null; before?: Date | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getEarningsMonthlyStatsAccountsPage(
+    context: FanslyRequestContext,
+    params: { correlationAccountId?: string | null; after?: Date | null; before?: Date | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getMediaOrderHistoryPage(
+    context: FanslyRequestContext,
+    params: {
+      accountIds?: string | null;
+      accountMediaId?: string | null;
+      accountMediaBundleId?: string | null;
+      limit?: number;
+    },
+  ): Promise<{ items: unknown; raw: unknown }>;
   close?(): Promise<void>;
 };
 

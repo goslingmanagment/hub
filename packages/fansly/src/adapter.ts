@@ -436,6 +436,113 @@ export class FanslyAdapter {
     return this.getAccountMe(context);
   }
 
+  // ── Stage 6 replay-probe methods (read-only, loosely typed) ──
+  // These test whether core can replay, server-side, the Fansly endpoint families
+  // that today only the extension calls (DP 1-B). They reuse `buildHeaders` as-is
+  // (the single pasted `fansly-client-check`); response typing is deliberately loose
+  // (Stage 16 hardens it). See docs/project-kernel/pass3/stages/stage-06-*.md.
+
+  async getEarningsStatsAccountsPage(
+    context: FanslyRequestContext,
+    params: {
+      correlationAccountId?: string | null;
+      after?: Date | null;
+      before?: Date | null;
+    },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(
+      context,
+      "/account/wallets/earnings/stats/accounts",
+      {
+        operation: "earnings_stats_accounts",
+        endpointTemplate: "/account/wallets/earnings/stats/accounts",
+        query: {
+          correlationAccountId: params.correlationAccountId ?? undefined,
+          after: params.after ? String(params.after.getTime()) : undefined,
+          before: params.before ? String(params.before.getTime()) : undefined,
+        },
+        category: "top_spenders",
+        requestShape: {
+          correlationAccountId: params.correlationAccountId ?? null,
+          after: params.after ? params.after.toISOString() : null,
+          before: params.before ? params.before.toISOString() : null,
+        },
+        summarizeResponse: (parsed) => ({
+          returnedItems: Array.isArray(parsed) ? parsed.length : null,
+        }),
+      },
+    );
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  async getEarningsMonthlyStatsAccountsPage(
+    context: FanslyRequestContext,
+    params: {
+      correlationAccountId?: string | null;
+      after?: Date | null;
+      before?: Date | null;
+    },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(
+      context,
+      "/account/wallets/earnings/monthlystats/accounts",
+      {
+        operation: "earnings_monthlystats_accounts",
+        endpointTemplate: "/account/wallets/earnings/monthlystats/accounts",
+        query: {
+          correlationAccountId: params.correlationAccountId ?? undefined,
+          after: params.after ? String(params.after.getTime()) : undefined,
+          before: params.before ? String(params.before.getTime()) : undefined,
+        },
+        category: "top_spenders",
+        requestShape: {
+          correlationAccountId: params.correlationAccountId ?? null,
+          after: params.after ? params.after.toISOString() : null,
+          before: params.before ? params.before.toISOString() : null,
+        },
+        summarizeResponse: (parsed) => ({
+          returnedItems: Array.isArray(parsed) ? parsed.length : null,
+        }),
+      },
+    );
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  async getMediaOrderHistoryPage(
+    context: FanslyRequestContext,
+    params: {
+      accountIds?: string | null;
+      accountMediaId?: string | null;
+      accountMediaBundleId?: string | null;
+      limit?: number;
+    },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/media/orderhistory", {
+      operation: "media_orderhistory",
+      endpointTemplate: "/media/orderhistory",
+      query: {
+        accountIds: params.accountIds ?? undefined,
+        accountMediaId: params.accountMediaId ?? undefined,
+        accountMediaBundleId: params.accountMediaBundleId ?? undefined,
+        limit: params.limit != null ? String(params.limit) : undefined,
+      },
+      category: "media",
+      requestShape: {
+        hasAccountIds: Boolean(params.accountIds),
+        hasAccountMediaId: Boolean(params.accountMediaId),
+        hasAccountMediaBundleId: Boolean(params.accountMediaBundleId),
+        limit: params.limit ?? 100,
+      },
+      summarizeResponse: (parsed) => ({
+        returnedItems: Array.isArray(parsed) ? parsed.length : null,
+      }),
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
   private async request<T>(
     context: FanslyRequestContext,
     pathname: string,

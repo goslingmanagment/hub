@@ -379,6 +379,15 @@ function createAutoSyncFanslyAdapter(input: {
         raw: [],
       };
     },
+    async getEarningsStatsAccountsPage() {
+      return { items: [], raw: [] };
+    },
+    async getEarningsMonthlyStatsAccountsPage() {
+      return { items: [], raw: [] };
+    },
+    async getMediaOrderHistoryPage() {
+      return { items: [], raw: [] };
+    },
     async close() {},
   } as AppContext["adapter"];
 }
