@@ -71,6 +71,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { isPageDmPruneEnabled } from "../page-dm-retention.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import {
   resolvePageContextById,
@@ -3419,6 +3420,7 @@ async function executeOnlyFansDmMessagesChunk(
             const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
               conversationId: currentConversation.id,
               messageCoverageStatus,
+              enforceRetention: isPageDmPruneEnabled(app.config),
             });
             const progressCheckpoint = await upsertCheckpointProgress(dbTx, {
               platformAccountId: input.pageContext.page.id,
@@ -3903,6 +3905,7 @@ export async function executeDmMessagesChunk(
             const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
               conversationId: currentConversation.id,
               messageCoverageStatus,
+              enforceRetention: isPageDmPruneEnabled(app.config),
             });
             const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
               emptyDmMessagesCursorState(),

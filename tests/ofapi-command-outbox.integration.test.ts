@@ -987,11 +987,15 @@ describe("OFAPI command outbox intake", () => {
       [recoveryCommandId, new Date("2026-06-01T20:00:00.000Z")],
     );
 
+    // Stage 1 stand-down defaults redaction OFF; this test covers the
+    // mechanics behind the explicit kill-switch.
+    appContext.config.ofapiCommandPayloadRedactionEnabled = true;
     await expect(sweepOfapiCommands(
       appContext,
       { send: vi.fn() } as never,
       new Date("2026-06-19T20:00:00.000Z"),
     )).resolves.toEqual({ stale: 0, purged: 1, enqueued: 0 });
+    appContext.config.ofapiCommandPayloadRedactionEnabled = false;
 
     const payloads = await testDb!.pool.query<{
       id: string;
@@ -1034,5 +1038,41 @@ describe("OFAPI command outbox intake", () => {
       platformMessageId: "platform-old",
     });
     expectResponseOmits(fetched, oldTerminalText);
+  });
+
+  it("leaves old terminal payloads intact while redaction is disabled (Stage 1 stand-down)", async () => {
+    const oldTerminalText = "old terminal payload survives the stand-down";
+    const oldTerminal = await createCommand(commandBody({ payload: { text: oldTerminalText } }));
+    const oldTerminalId = (oldTerminal.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      `update ofapi_commands
+       set state = 'confirmed',
+           updated_at = $2,
+           platform_message_id = 'platform-standdown'
+       where id = $1`,
+      [oldTerminalId, new Date("2026-06-01T20:00:00.000Z")],
+    );
+
+    appContext.config.ofapiCommandPayloadRedactionEnabled = false;
+    await expect(sweepOfapiCommands(
+      appContext,
+      { send: vi.fn() } as never,
+      new Date("2026-06-19T20:00:00.000Z"),
+    )).resolves.toEqual({ stale: 0, purged: 0, enqueued: 0 });
+
+    const payloads = await testDb!.pool.query<{
+      payload_text: string;
+      payload_redacted_at: Date | null;
+    }>(
+      `select payload->>'text' as payload_text,
+              payload_redacted_at
+       from ofapi_commands
+       where id = $1`,
+      [oldTerminalId],
+    );
+    expect(payloads.rows[0]).toMatchObject({
+      payload_text: oldTerminalText,
+      payload_redacted_at: null,
+    });
   });
 });

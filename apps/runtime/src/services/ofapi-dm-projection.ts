@@ -32,6 +32,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { isPageDmPruneEnabled } from "./page-dm-retention.ts";
 import {
   asRecord,
   extractMessageIdFromNotification,
@@ -319,7 +320,9 @@ async function projectDmMessageEvent(
 
     await refreshPageDmConversationWindow(db, {
       conversationId: conversation.id,
-      enforceRetention: true,
+      // Stage 1 retention stand-down: live-ingest prune only when the
+      // PAGE_DM_PRUNE_ENABLED kill-switch is explicitly on.
+      enforceRetention: isPageDmPruneEnabled(app.config),
     });
 
     return { status: "projected" } satisfies OfapiDmProjectionOutcome;

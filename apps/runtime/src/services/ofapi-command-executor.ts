@@ -91,6 +91,14 @@ export function isOfapiCommandExecutionEnabled(
   return config?.ofapiDesktopCommandExecutionEnabled === true;
 }
 
+// Stage 1 retention stand-down: terminal command payloads are business facts;
+// self-redaction is disabled unless this env kill-switch is explicitly set.
+export function isOfapiCommandPayloadRedactionEnabled(
+  config?: Pick<AppContext["config"], "ofapiCommandPayloadRedactionEnabled">,
+) {
+  return config?.ofapiCommandPayloadRedactionEnabled === true;
+}
+
 export async function ensureOfapiCommandQueues(
   boss: QueueCreationClient,
   createdQueues?: Set<string>,
@@ -340,27 +348,34 @@ export async function sweepOfapiCommands(
     );
   }
 
-  const redacted = await redactTerminalOfapiCommandPayloads(app.db, {
-    terminalUpdatedBefore: new Date(now.getTime() - COMMAND_PAYLOAD_RECOVERY_WINDOW_MS),
-    redactedAt: now,
-    limit: COMMAND_PAYLOAD_REDACTION_LIMIT,
-  });
-  if (redacted.length > 0) {
-    app.logger.info(
-      { count: redacted.length, recoveryWindowDays: 7 },
-      "OFAPI command terminal payloads redacted",
-    );
+  // The redaction sweep runs before the execution-enabled check below, so it
+  // fires even with command execution disabled — which is why the Stage 1
+  // kill-switch sits here at the redaction call, not at the executor gate.
+  let redactedCount = 0;
+  if (isOfapiCommandPayloadRedactionEnabled(app.config)) {
+    const redacted = await redactTerminalOfapiCommandPayloads(app.db, {
+      terminalUpdatedBefore: new Date(now.getTime() - COMMAND_PAYLOAD_RECOVERY_WINDOW_MS),
+      redactedAt: now,
+      limit: COMMAND_PAYLOAD_REDACTION_LIMIT,
+    });
+    redactedCount = redacted.length;
+    if (redacted.length > 0) {
+      app.logger.info(
+        { count: redacted.length, recoveryWindowDays: 7 },
+        "OFAPI command terminal payloads redacted",
+      );
+    }
   }
 
   if (!isOfapiCommandExecutionEnabled(app.config) || !app.ofapi) {
-    return { stale: stale.length, purged: redacted.length, enqueued: 0 };
+    return { stale: stale.length, purged: redactedCount, enqueued: 0 };
   }
 
   const queued = await listQueuedOfapiCommandIds(app.db, { limit: COMMAND_SWEEP_LIMIT });
   for (const command of queued) {
     await sendOfapiCommandExecuteJob(boss, command.id);
   }
-  return { stale: stale.length, purged: redacted.length, enqueued: queued.length };
+  return { stale: stale.length, purged: redactedCount, enqueued: queued.length };
 }
 
 type SentWebhookRow = {

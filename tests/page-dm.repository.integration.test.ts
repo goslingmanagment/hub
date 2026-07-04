@@ -743,6 +743,90 @@ describe("page DM repository integration", () => {
     expect(newestFirst?.messages[0]?.tipAmountCents).toBe(500);
   });
 
+  it("keeps every stored message when enforceRetention is false (Stage 1 stand-down)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const messageCount = PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT + 30;
+    const latestMessageId = `msg-${String(messageCount).padStart(4, "0")}`;
+
+    const page = await createTestPage(testDb, "page-dm-standdown");
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-standdown",
+      username: "fan_standdown",
+      displayName: "Fan Standdown",
+    }]);
+
+    const conversation = await upsertPageDmConversation(testDb.db, {
+      platformAccountId: page.id,
+      fanId: fan.id,
+      platformConversationId: "standdown-conversation",
+      partnerPlatformUserId: "fan-standdown",
+      partnerUsername: "fan_standdown",
+      partnerDisplayName: "Fan Standdown",
+      conversationFlags: 0,
+      unreadCount: 0,
+      subscriptionTierId: null,
+      lastMessageId: latestMessageId,
+      lastUnreadMessageId: null,
+      lastMessageAt: new Date("2026-03-17T14:10:00.000Z"),
+      lastMessageSenderId: "fan-standdown",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: `message ${messageCount}`,
+      lastFanMessageAt: new Date("2026-03-17T14:10:00.000Z"),
+      lastModelMessageAt: null,
+      isVisible: true,
+      lastSeenGeneration: 1,
+      metadata: {},
+    });
+
+    await upsertPageDmMessages(testDb.db, Array.from({ length: messageCount }, (_value, index) => {
+      const sequence = index + 1;
+      return {
+        conversationId: conversation.id,
+        platformAccountId: page.id,
+        platformMessageId: `msg-${String(sequence).padStart(4, "0")}`,
+        senderPlatformUserId: sequence % 2 === 0 ? "fan-standdown" : "acct-standdown",
+        senderRole: sequence % 2 === 0 ? "fan" : "model",
+        createdAt: new Date(Date.UTC(2026, 2, 17, 12, sequence, 0, 0)),
+        content: `message ${sequence}`,
+        totalTipAmountCents: 0,
+        inReplyToMessageId: null,
+        inReplyToRootMessageId: null,
+      };
+    }));
+
+    const finalized = await finalizePageDmConversationMessageSync(testDb.db, {
+      conversationId: conversation.id,
+      messageCoverageStatus: "complete",
+      lastMessageSyncAt: new Date("2026-03-17T13:30:00.000Z"),
+      enforceRetention: false,
+    });
+    expect(finalized.deletedCount).toBe(0);
+    expect(finalized.summary.storedMessageCount).toBe(messageCount);
+
+    // The live-ingest recompute without enforceRetention must not prune either.
+    const refreshed = await refreshPageDmConversationWindow(testDb.db, {
+      conversationId: conversation.id,
+    });
+    expect(refreshed.deletedCount).toBe(0);
+    expect(refreshed.summary.storedMessageCount).toBe(messageCount);
+
+    const storedMessages = await testDb.pool.query<{ count: string }>(
+      `
+        select count(*)::text as count
+        from page_dm_messages
+        where conversation_id = $1
+          and deleted_at is null
+      `,
+      [conversation.id],
+    );
+    expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(messageCount);
+  });
+
   it("keeps a hot tombstone from being resurrected by a later message upsert", async (context) => {
     if (!testDb) {
       context.skip();

@@ -804,16 +804,28 @@ export async function finalizePageDmConversationMessageSync(
     conversationId: number;
     messageCoverageStatus: MessageCoverageStatus;
     lastMessageSyncAt?: Date;
+    /**
+     * When false, the per-conversation retention prune is skipped and only the
+     * window bookkeeping is recomputed. Stage 1 retention stand-down: sync
+     * callers pass the PAGE_DM_PRUNE_ENABLED kill-switch here (default off),
+     * so stored DM history is nondecreasing until Stage 28 re-scopes the prune
+     * as a cache policy. Defaults to true to keep the repo function's
+     * standalone semantics unchanged.
+     */
+    enforceRetention?: boolean;
   },
 ) {
   const lastMessageSyncAt = input.lastMessageSyncAt ?? new Date();
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
-    const retentionLimit = await getPageDmMessageRetentionLimit(database, input.conversationId);
-    const deletedCount = await prunePageDmMessagesToLimit(database, {
-      conversationId: input.conversationId,
-      limit: retentionLimit,
-    });
+    let deletedCount = 0;
+    if (input.enforceRetention !== false) {
+      const retentionLimit = await getPageDmMessageRetentionLimit(database, input.conversationId);
+      deletedCount = await prunePageDmMessagesToLimit(database, {
+        conversationId: input.conversationId,
+        limit: retentionLimit,
+      });
+    }
     const summary = await getPageDmMessageWindowSummary(database, input.conversationId);
 
     const [row] = await database
