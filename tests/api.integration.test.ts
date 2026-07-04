@@ -6260,6 +6260,21 @@ describe("api integration", () => {
       model_slug: "target-model",
     });
 
+    // Stage 2 destruction-door guard: the page still holds fixture
+    // transactions, so deletion refuses before the cascade can reach them.
+    const guardedDelete = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/pages/lana-renamed",
+      headers: { cookie: ownerCookie },
+    });
+    expect(guardedDelete.statusCode).toBe(409);
+    expect(guardedDelete.json()).toMatchObject({ error: "conflict" });
+
+    // With the business facts gone, the delete (and its config cascades) work.
+    await testDb.pool.query(
+      "delete from transactions where platform_account_id = $1",
+      [fixture.lanaPage.id],
+    );
     const deleteResponse = await server.inject({
       method: "DELETE",
       url: "/api/v1/admin/pages/lana-renamed",
