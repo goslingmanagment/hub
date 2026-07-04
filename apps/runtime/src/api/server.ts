@@ -22,6 +22,7 @@ import {
   createModel,
   deleteModelBySlug,
   deletePageByLabel,
+  getPageBusinessFactPresence,
   DuplicateModelSlugError,
   DuplicatePageLabelError,
   setConfigOverridesAtomic,
@@ -2746,6 +2747,15 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
+    // Stage 2 destruction-door guard: deletion cascades through the pages.id
+    // FKs (transactions included), so a fact-bearing page refuses. Stage 13's
+    // soft-delete standard replaces this handler-level check with RESTRICT FKs.
+    const facts = await getPageBusinessFactPresence(appContext.db, request.params.pageLabel);
+    if (facts && (facts.hasTransactions || facts.hasDmMessages)) {
+      throw new ConflictError(
+        "Page still holds business facts (transactions or DM history) and cannot be deleted. Deleting would cascade through them irreversibly.",
+      );
+    }
     try {
       await deletePageByLabel(appContext.db, request.params.pageLabel);
       return { deleted: true as const };

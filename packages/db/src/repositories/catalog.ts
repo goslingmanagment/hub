@@ -517,6 +517,35 @@ export async function updatePageByLabel(
   return updated;
 }
 
+/**
+ * Stage 2 destruction-door guard: page deletion fans out through the pages.id
+ * CASCADE FKs (transactions included), so the admin DELETE handler refuses
+ * when the page still holds business facts. Interim handler-level check —
+ * Stage 13's soft-delete standard flips the FKs to RESTRICT.
+ */
+export async function getPageBusinessFactPresence(db: Database, label: string) {
+  const result = await db.execute<{
+    id: number;
+    has_transactions: boolean;
+    has_dm_messages: boolean;
+  }>(sql`
+    select p.id::int as id,
+           exists(select 1 from transactions t where t.platform_account_id = p.id) as has_transactions,
+           exists(select 1 from page_dm_messages m where m.platform_account_id = p.id) as has_dm_messages
+    from pages p
+    where p.label = ${label}
+  `);
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    id: row.id,
+    hasTransactions: row.has_transactions,
+    hasDmMessages: row.has_dm_messages,
+  };
+}
+
 export async function deletePageByLabel(db: Database, label: string) {
   const [deleted] = await db
     .delete(pages)

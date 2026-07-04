@@ -9708,6 +9708,9 @@ describe("api integration", () => {
       block: "audience",
     });
 
+    // Stage 2 destruction-door guard: the messages_history reset would
+    // hard-delete every stored DM for the page, so it refuses until the
+    // message archive exists (Stage 10).
     const reset = await server.inject({
       method: "POST",
       url: "/api/v1/admin/sync/blocks/reset",
@@ -9717,14 +9720,89 @@ describe("api integration", () => {
         block: "messages_history",
       },
     });
-    expect(reset.statusCode).toBe(200);
-    expect(reset.json()).toMatchObject({
+    expect(reset.statusCode).toBe(409);
+    expect(reset.json()).toMatchObject({ error: "conflict" });
+
+    // Checkpoint and top-spender resets stay available.
+    const audienceReset = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/sync/blocks/reset",
+      headers: { cookie: ownerCookie },
+      payload: {
+        pageLabel: "lana",
+        block: "audience",
+      },
+    });
+    expect(audienceReset.statusCode, audienceReset.body).toBe(200);
+    expect(audienceReset.json()).toMatchObject({
       accepted: true,
       action: "reset",
       pageLabel: "lana",
-      block: "messages_history",
+      block: "audience",
+    });
+
+    const financialsReset = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/sync/blocks/reset",
+      headers: { cookie: ownerCookie },
+      payload: {
+        pageLabel: "lana",
+        block: "financials",
+      },
+    });
+    expect(financialsReset.statusCode, financialsReset.body).toBe(200);
+    expect(financialsReset.json()).toMatchObject({
+      accepted: true,
+      action: "reset",
+      pageLabel: "lana",
+      block: "financials",
     });
   }, 15_000);
+
+  it("refuses to delete a page that still holds business facts (Stage 2)", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    // lana holds transactions from the fixture — deletion must refuse.
+    const factBearing = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/pages/lana",
+      headers: { cookie: ownerCookie },
+    });
+    expect(factBearing.statusCode).toBe(409);
+    expect(factBearing.json()).toMatchObject({ error: "conflict" });
+
+    const lanaStillThere = await testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from pages where label = 'lana'",
+    );
+    expect(lanaStillThere.rows[0]?.count).toBe("1");
+
+    // An empty page (no transactions, no DM history) still deletes.
+    const spareModel = await createModel(testDb.db, {
+      slug: "empty-model",
+      name: "Empty Model",
+    });
+    await createFanslyPage(testDb.db, {
+      modelId: spareModel.id,
+      label: "empty-page",
+    });
+    const emptyDelete = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/pages/empty-page",
+      headers: { cookie: ownerCookie },
+    });
+    expect(emptyDelete.statusCode, emptyDelete.body).toBe(200);
+    expect(emptyDelete.json()).toEqual({ deleted: true });
+  });
 
   it("lists recent sync requests with field mapping, scope-aware proxy gaps, and since filtering", async (context) => {
     if (!testDb || !server || !fixture) {

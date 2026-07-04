@@ -552,55 +552,26 @@ describe("sync blocks service", () => {
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledTimes(1);
   });
 
-  it("resets message history without clearing auth through the legacy message endpoint", async () => {
-    dbMocks.findPageByLabel.mockResolvedValue({
-      page: {
-        id: 7,
-        label: "lana",
-        platform: "fansly",
-      },
-      proxy: null,
-    });
-    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
-    dbMocks.deleteCheckpoints.mockResolvedValue(undefined);
-    dbMocks.resetPageDmSyncState.mockResolvedValue(undefined);
-    dbMocks.resetPageSync.mockResolvedValue(undefined);
-    dbMocks.requestPageSync.mockResolvedValue([
-      { stream: "dm_messages", requestedSeq: 4 },
-    ]);
-    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-1");
+  it("refuses the message-history reset before touching any state (Stage 2 guard)", async () => {
+    // Stage 2 destruction-door guard: this reset would hard-delete every
+    // stored DM for the page (resetPageDmSyncState); it refuses until the
+    // message archive exists (Stage 10).
     const db = {
       transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
     };
 
-    const response = await resetSyncBlock({ db } as never, {
+    await expect(resetSyncBlock({ db } as never, {
       send: vi.fn(),
     } as never, {
       pageLabel: "lana",
       block: "messages_history",
       now: new Date("2026-03-24T12:00:00.000Z"),
+    })).rejects.toMatchObject({
+      statusCode: 409,
     });
 
-    expect(response).toMatchObject({
-      accepted: true,
-      action: "reset",
-      block: "messages_history",
-      requests: [{ stream: "dm_messages", requestedSeq: 4 }],
-    });
-    expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(dbMocks.deleteCheckpoints).toHaveBeenCalledWith(expect.anything(), {
-      platformAccountId: 7,
-      streams: ["dm_messages"],
-    });
-    expect(dbMocks.resetPageDmSyncState).toHaveBeenCalledWith(expect.anything(), 7);
-    expect(dbMocks.resetPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      pageId: 7,
-      streams: ["dm_messages"],
-    }));
-    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      pageId: 7,
-      streams: ["dm_messages"],
-      source: "reset",
-    }));
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(dbMocks.resetPageDmSyncState).not.toHaveBeenCalled();
+    expect(dbMocks.resetPageSync).not.toHaveBeenCalled();
   });
 });

@@ -16,7 +16,7 @@ import type { Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, NotFoundError } from "./errors.ts";
+import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
@@ -528,6 +528,16 @@ export async function resetSyncBlock(
     now?: Date;
   },
 ) {
+  // Stage 2 destruction-door guard: the messages_history reset would
+  // hard-delete every stored DM for the page (resetPageDmSyncState) with no
+  // archive to recover from. Disabled until the message archive exists
+  // (Stage 10); checkpoint/top-spender resets below stay available.
+  if (input.block === "messages_history") {
+    throw new ConflictError(
+      "Message-history reset is disabled: it would irreversibly delete every stored DM for this page. It returns once the message archive exists (kernel Stage 10).",
+    );
+  }
+
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
   const dependencyInput = pageSyncDependencyInput(app);
