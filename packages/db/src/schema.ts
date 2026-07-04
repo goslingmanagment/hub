@@ -192,6 +192,10 @@ export const pages = pgTable(
     lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
     lastLightSyncAt: timestamp("last_light_sync_at", { withTimezone: true }),
     lastFollowerSyncAt: timestamp("last_follower_sync_at", { withTimezone: true }),
+    // Stage 2 interim tombstone substrate: nothing writes this yet (fact-bearing
+    // pages refuse deletion at the handler); Stage 13's soft-delete standard
+    // reconciles with this column rather than adding a second one.
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -1853,6 +1857,9 @@ export const workboardContactLog = pgTable(
     wasProductive: boolean("was_productive").default(false).notNull(),
     actedAt: timestamp("acted_at", { withTimezone: true }).defaultNow().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // Stage 2: undo marks the row retracted instead of deleting it (interim
+    // form of Stage 23's contact.retracted compensating event). NULL = active.
+    retractedAt: timestamp("retracted_at", { withTimezone: true }),
   },
   (table) => ({
     pageFanActedIdx: index("workboard_contact_log_page_fan_acted_idx").on(
@@ -1860,6 +1867,9 @@ export const workboardContactLog = pgTable(
       table.fanId,
       table.actedAt.desc(),
     ),
+    activeIdx: index("workboard_contact_log_active_idx")
+      .on(table.platformAccountId, table.fanId)
+      .where(sql`${table.retractedAt} is null`),
     crossPageIdx: index("workboard_contact_log_model_fan_date_idx").on(
       table.modelId,
       table.fanId,
@@ -1890,9 +1900,16 @@ export const wbClosingCache = pgTable(
     state: text("state"),
     reason: text("reason"),
     classifiedAt: timestamp("classified_at", { withTimezone: true }).defaultNow().notNull(),
+    // Stage 2: reclassify soft-supersedes verdicts (append log) instead of
+    // wholesale delete. NULL = the active verdict for this message.
+    supersededAt: timestamp("superseded_at", { withTimezone: true }),
   },
   (table) => ({
-    uniq: unique("wb_closing_cache_message_uniq").on(table.platformAccountId, table.platformMessageId),
+    // Uniqueness applies to active rows only, so a fresh run can insert a new
+    // verdict for a message whose prior verdict was superseded.
+    activeUniq: uniqueIndex("wb_closing_cache_message_active_uniq")
+      .on(table.platformAccountId, table.platformMessageId)
+      .where(sql`${table.supersededAt} is null`),
     pageIdx: index("wb_closing_cache_page_idx").on(table.platformAccountId, table.classifiedAt),
   }),
 );
