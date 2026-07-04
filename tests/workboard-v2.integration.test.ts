@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   appendWorkboardContact,
+  countOldMassContactsToday,
   createFanslyPage,
   createModel,
   fanSpendLifetime,
@@ -12,6 +13,7 @@ import {
   getLlmUsageDaily,
   insertClassifierRun,
   insertClassifierRunRunningIfIdle,
+  listRecentClosingVerdicts,
   listSpenderDiagnosisRows,
   listWorkboardRecomputePageIds,
   listClassifierRuns,
@@ -22,6 +24,8 @@ import {
   pageDmThreads,
   pageFans,
   pageSubscriptions,
+  retractLastWorkboardContact,
+  supersedeClosingCacheForPage,
   upsertClosingSettings,
 } from "@agency_hub_core/db";
 import { dollarsToMills, SPENDER_AUTO_LIST_BUCKETS, toBusinessDate, UTC_TIME_ZONE } from "@agency_hub_core/shared";
@@ -441,6 +445,149 @@ describe("workboard v2 recompute + read (integration)", () => {
     });
     expect(onlyNeedReply.rows.length).toBeGreaterThan(0);
     expect(onlyNeedReply.rows.every((r) => r.secondary_status === "need_reply")).toBe(true);
+  });
+
+  it("undo retracts the last contact instead of deleting it (Stage 2)", async () => {
+    const { model, page } = await seedPage();
+    const fan = await insertFan("undo-fan", "undo_fan");
+    const businessDate = "2026-07-05";
+
+    await appendWorkboardContact(harness.db, {
+      modelId: model.id,
+      platformAccountId: page.id,
+      fanId: fan,
+      businessDate,
+      action: "handled",
+      wasProductive: true,
+    });
+    await appendWorkboardContact(harness.db, {
+      modelId: model.id,
+      platformAccountId: page.id,
+      fanId: fan,
+      businessDate,
+      action: "handled",
+      wasProductive: true,
+    });
+    // Old-mass state row so the residual-cap read (countOldMassContactsToday)
+    // counts this fan's touches.
+    await harness.pool.query(
+      `insert into workboard_state (platform_account_id, fan_id, tab)
+       values ($1, $2, 'old_mass'::workboard_tab)`,
+      [page.id, fan],
+    );
+    expect(await countOldMassContactsToday(harness.db, page.id, businessDate)).toBe(2);
+
+    await retractLastWorkboardContact(harness.db, page.id, fan);
+
+    // The row is retracted, not gone — and reads exclude it.
+    const rows = await harness.pool.query<{ total: string; active: string }>(
+      `select count(*)::text as total,
+              count(*) filter (where retracted_at is null)::text as active
+       from workboard_contact_log
+       where platform_account_id = $1 and fan_id = $2`,
+      [page.id, fan],
+    );
+    expect(rows.rows[0]).toEqual({ total: "2", active: "1" });
+    expect(await countOldMassContactsToday(harness.db, page.id, businessDate)).toBe(1);
+
+    // A second undo retracts the remaining contact; both rows stay retained.
+    await retractLastWorkboardContact(harness.db, page.id, fan);
+    const after = await harness.pool.query<{ total: string; active: string }>(
+      `select count(*)::text as total,
+              count(*) filter (where retracted_at is null)::text as active
+       from workboard_contact_log
+       where platform_account_id = $1 and fan_id = $2`,
+      [page.id, fan],
+    );
+    expect(after.rows[0]).toEqual({ total: "2", active: "0" });
+    expect(await countOldMassContactsToday(harness.db, page.id, businessDate)).toBe(0);
+  });
+
+  it("reclassify supersedes cached verdicts and lets a fresh run write new rows (Stage 2)", async () => {
+    const now = new Date();
+    const { page } = await seedPage();
+
+    const fan = await insertFan("resup", "resup");
+    await harness.db.insert(pageFans).values({ fanId: fan, platformAccountId: page.id, isFollower: true, followerSince: new Date(now.getTime() - 3 * DAY) });
+    await harness.db.insert(pageDmThreads).values({
+      platformAccountId: page.id,
+      fanId: fan,
+      platformConversationId: "conv-resup",
+      lastMessageId: "msg-resup",
+      lastMessageAt: new Date(now.getTime() - 48 * HOUR),
+      lastMessageSenderRole: "fan",
+      lastFanMessageAt: new Date(now.getTime() - 48 * HOUR),
+      lastMessagePreview: "what do you think about my idea?",
+      storedMessageCount: 3,
+      messageCoverageStatus: "complete",
+      isVisible: true,
+    });
+
+    function classifierSaying(needsReply: boolean): ClosingClassifier {
+      return {
+        model: "fake-haiku",
+        async classifyBatch(messages) {
+          return {
+            verdicts: messages.map((m) => ({
+              id: m.id,
+              needsReply,
+              state: needsReply ? ("question" as const) : ("closing" as const),
+              reason: needsReply ? "second look: a real question" : "first pass: warm goodbye",
+            })),
+            inputTokens: 1,
+            outputTokens: 1,
+          };
+        },
+      };
+    }
+
+    const first = await runClosingClassificationForPage(harness.db, classifierSaying(false), {
+      platformAccountId: page.id,
+      now,
+      capMin: 50,
+      capMax: 400,
+    });
+    expect(first.classified).toBe(1);
+
+    const superseded = await supersedeClosingCacheForPage(harness.db, page.id);
+    expect(superseded).toBe(1);
+
+    // The prior verdict is retained (superseded), not deleted…
+    const afterSupersede = await harness.pool.query<{ total: string; active: string }>(
+      `select count(*)::text as total,
+              count(*) filter (where superseded_at is null)::text as active
+       from wb_closing_cache
+       where platform_account_id = $1`,
+      [page.id],
+    );
+    expect(afterSupersede.rows[0]).toEqual({ total: "1", active: "0" });
+
+    // …the message becomes a candidate again, and the fresh run inserts a new row.
+    const second = await runClosingClassificationForPage(harness.db, classifierSaying(true), {
+      platformAccountId: page.id,
+      now,
+      capMin: 50,
+      capMax: 400,
+    });
+    expect(second.classified).toBe(1);
+
+    const afterRerun = await harness.pool.query<{ total: string; active: string }>(
+      `select count(*)::text as total,
+              count(*) filter (where superseded_at is null)::text as active
+       from wb_closing_cache
+       where platform_account_id = $1`,
+      [page.id],
+    );
+    expect(afterRerun.rows[0]).toEqual({ total: "2", active: "1" });
+
+    // Reads return only the fresh verdict.
+    const verdicts = await listRecentClosingVerdicts(harness.db, page.id, 10);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0]).toMatchObject({
+      platform_message_id: "msg-resup",
+      needs_reply: true,
+      state: "question",
+    });
   });
 
   it("classifies fresh spender fan-last tails for spender diagnostics", async () => {

@@ -6,7 +6,7 @@ import type {
   WorkboardV2AiSettingsBody,
 } from "@agency_hub_core/contracts";
 import {
-  clearClosingCacheForPage,
+  supersedeClosingCacheForPage,
   countClosingCache,
   countUnansweredTails,
   failStaleClassifierRuns,
@@ -169,7 +169,7 @@ async function executeClassifyRun(
   reclassify: boolean,
 ): Promise<void> {
   try {
-    const cleared = reclassify ? await clearClosingCacheForPage(app.db, platformAccountId) : 0;
+    const cleared = reclassify ? await supersedeClosingCacheForPage(app.db, platformAccountId) : 0;
     const classifier = createAnthropicClosingClassifier({ apiKey: app.config.anthropicApiKey!, model: eff.model });
     const result = await runClosingClassificationForPage(app.db, classifier, {
       platformAccountId,

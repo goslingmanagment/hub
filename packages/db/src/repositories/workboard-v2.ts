@@ -159,6 +159,7 @@ export async function loadWorkboardSignalRows(
       select fan_id, max(acted_at) filter (where was_productive) as last_productive_at
       from workboard_contact_log
       where platform_account_id = ${platformAccountId}
+        and retracted_at is null
         ${fanScope}
       group by fan_id
     )
@@ -212,7 +213,7 @@ export async function loadWorkboardSignalRows(
     left join current_sub cs on cs.fan_id = pf.fan_id
     left join primary_thread pt on pt.fan_id = pf.fan_id
     left join cq on cq.conversation_id = pt.conversation_id
-    left join wb_closing_cache cc on cc.platform_account_id = pf.platform_account_id and cc.platform_message_id = pt.last_message_id
+    left join wb_closing_cache cc on cc.platform_account_id = pf.platform_account_id and cc.platform_message_id = pt.last_message_id and cc.superseded_at is null
     left join last_purchase lp on lp.fan_id = pf.fan_id
     left join refund_recent rr on rr.fan_id = pf.fan_id
     left join last_touch lt on lt.fan_id = pf.fan_id
@@ -407,7 +408,7 @@ export async function listWorkboardV2(
       order by last_message_at desc nulls last, id desc
       limit 1
     ) pt on true
-    left join wb_closing_cache cc on cc.platform_account_id = ws.platform_account_id and cc.platform_message_id = pt.last_message_id
+    left join wb_closing_cache cc on cc.platform_account_id = ws.platform_account_id and cc.platform_message_id = pt.last_message_id and cc.superseded_at is null
     where ws.platform_account_id = ${platformAccountId} and ws.tab = ${tab}::workboard_tab ${statusFilter}
     order by ws.is_purchase_followup desc, ws.rank_score desc, ws.fan_id asc
     limit ${limit} offset ${offset}
@@ -538,7 +539,7 @@ export async function listWorkboardSpenderBands(
           order by last_message_at desc nulls last, id desc
           limit 1
         ) pt on true
-        left join wb_closing_cache cc on cc.platform_account_id = ws.platform_account_id and cc.platform_message_id = pt.last_message_id
+        left join wb_closing_cache cc on cc.platform_account_id = ws.platform_account_id and cc.platform_message_id = pt.last_message_id and cc.superseded_at is null
         where ws.platform_account_id = ${platformAccountId} and ${grossSql} >= ${minFloor}
       ) inner_q
     ) z
@@ -601,6 +602,7 @@ export async function countOldMassContactsToday(
     where cl.platform_account_id = ${platformAccountId}
       and cl.business_date = ${businessDate}::date
       and cl.was_productive = true
+      and cl.retracted_at is null
       and ws.tab = 'old_mass'::workboard_tab
   `);
   return result.rows[0]?.used ?? 0;
@@ -622,17 +624,24 @@ export async function snoozeWorkboardFanV2(
   return row ? { snoozedUntil: new Date(row.snoozed_until) } : null;
 }
 
-/** Delete the most recent touch-log entry for a fan (undo of Готово). */
-export async function deleteLastWorkboardContact(
+/**
+ * Retract the most recent touch-log entry for a fan (undo of Готово).
+ * Stage 2 destruction-door guard: the row is marked retracted, not deleted —
+ * the interim form of Stage 23's contact.retracted compensating event.
+ * Readers exclude retracted rows.
+ */
+export async function retractLastWorkboardContact(
   db: Database,
   platformAccountId: number,
   fanId: number,
 ): Promise<void> {
   await db.execute(sql`
-    delete from workboard_contact_log
+    update workboard_contact_log
+    set retracted_at = now()
     where id = (
       select id from workboard_contact_log
       where platform_account_id = ${platformAccountId} and fan_id = ${fanId}
+        and retracted_at is null
       order by acted_at desc
       limit 1
     )
@@ -716,7 +725,7 @@ export async function listClosingClassificationCandidates(
     join fans f on f.id = t.fan_id and f.deleted_detected_at is null
     left join page_dm_messages m on m.conversation_id = t.id and m.platform_message_id = t.last_message_id and m.deleted_at is null
     left join workboard_state ws on ws.platform_account_id = t.platform_account_id and ws.fan_id = t.fan_id
-    left join wb_closing_cache cc on cc.platform_account_id = t.platform_account_id and cc.platform_message_id = t.last_message_id
+    left join wb_closing_cache cc on cc.platform_account_id = t.platform_account_id and cc.platform_message_id = t.last_message_id and cc.superseded_at is null
     ${ctxJoin}
     where t.platform_account_id = ${platformAccountId}
       and t.is_visible = true
@@ -785,6 +794,7 @@ export async function listSpenderDiagnosisRows(
     left join wb_closing_cache cc
       on cc.platform_account_id = ws.platform_account_id
       and cc.platform_message_id = pt.last_message_id
+      and cc.superseded_at is null
     where ws.platform_account_id = ${platformAccountId}
       and ws.tab = 'spenders'::workboard_tab
     order by ws.rank_score desc, ws.fan_id asc
@@ -805,6 +815,7 @@ export async function countClosingCache(
       on t.platform_account_id = c.platform_account_id and t.last_message_id = c.platform_message_id
     join fans f on f.id = t.fan_id and f.deleted_detected_at is null
     where c.platform_account_id = ${platformAccountId}
+      and c.superseded_at is null
   `);
   return { total: result.rows[0]?.total ?? 0, closings: result.rows[0]?.closings ?? 0 };
 }
@@ -921,7 +932,10 @@ export async function upsertClosingCache(db: Database, rows: ClosingCacheUpsert[
       })),
     )
     .onConflictDoUpdate({
+      // Matches the partial unique on ACTIVE rows (superseded_at is null):
+      // a fresh run inserts new rows alongside retained superseded verdicts.
       target: [wbClosingCache.platformAccountId, wbClosingCache.platformMessageId],
+      targetWhere: sql`superseded_at is null`,
       set: {
         contentHash: sql`excluded.content_hash`,
         needsReply: sql`excluded.needs_reply`,
@@ -934,10 +948,19 @@ export async function upsertClosingCache(db: Database, rows: ClosingCacheUpsert[
     });
 }
 
-/** Delete every cached verdict for a page (forces a fresh re-classification run). */
-export async function clearClosingCacheForPage(db: Database, platformAccountId: number): Promise<number> {
+/**
+ * Supersede every active cached verdict for a page (forces a fresh
+ * re-classification run). Stage 2 destruction-door guard: prior verdicts are
+ * retained as an append log — the partial unique on active rows lets the next
+ * run insert fresh verdicts for the same messages.
+ */
+export async function supersedeClosingCacheForPage(db: Database, platformAccountId: number): Promise<number> {
   const result = await db.execute<{ id: bigint }>(sql`
-    delete from wb_closing_cache where platform_account_id = ${platformAccountId} returning id
+    update wb_closing_cache
+    set superseded_at = now()
+    where platform_account_id = ${platformAccountId}
+      and superseded_at is null
+    returning id
   `);
   return result.rows.length;
 }
@@ -1008,6 +1031,7 @@ export async function getClosingStateDistribution(
       on t.platform_account_id = c.platform_account_id and t.last_message_id = c.platform_message_id
     join fans f on f.id = t.fan_id and f.deleted_detected_at is null
     where c.platform_account_id = ${platformAccountId}
+      and c.superseded_at is null
     group by state order by count desc
   `);
   return result.rows;
@@ -1042,6 +1066,7 @@ export async function listRecentClosingVerdicts(
       on t.platform_account_id = c.platform_account_id and t.last_message_id = c.platform_message_id
     join fans f on f.id = t.fan_id and f.deleted_detected_at is null
     where c.platform_account_id = ${platformAccountId}
+      and c.superseded_at is null
     order by c.classified_at desc
     limit ${limit}
   `);

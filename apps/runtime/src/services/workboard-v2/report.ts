@@ -10,7 +10,7 @@ import {
   appendWorkboardContact,
   countClosingCache,
   countOldMassContactsToday,
-  deleteLastWorkboardContact,
+  retractLastWorkboardContact,
   getClosingSettings,
   getLlmUsageDaily,
   getWorkboardV2Counts,
@@ -320,7 +320,7 @@ export async function undoWorkboardContactV2(
   fanId: number,
 ): Promise<{ ok: true; fanId: number }> {
   const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
-  await deleteLastWorkboardContact(app.db, page.id, fanId);
+  await retractLastWorkboardContact(app.db, page.id, fanId);
   await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId });
   return { ok: true, fanId };
 }

@@ -4,7 +4,7 @@
 //
 //   DATABASE_URL=... ANTHROPIC_API_KEY=... \
 //     node --import tsx/esm scripts/workboard-v2-reclassify-page.ts <pageLabel>
-import { clearClosingCacheForPage, createDb, createPool, findPageSummaryByLabel } from "@agency_hub_core/db";
+import { supersedeClosingCacheForPage, createDb, createPool, findPageSummaryByLabel } from "@agency_hub_core/db";
 import type { Pool } from "pg";
 
 import { resolveClosingSettings } from "../apps/runtime/src/services/workboard-v2/ai-settings.ts";
@@ -51,8 +51,8 @@ async function main() {
     const before = await stateHistogram(pool, page.id);
     console.log(`BEFORE  buy_signal=${before.buy_signal ?? 0} ·`, before);
 
-    const cleared = await clearClosingCacheForPage(db, page.id);
-    console.log(`Cleared ${cleared} cached verdict(s). Reclassifying "${label}" with ${model} (temp 0)…`);
+    const cleared = await supersedeClosingCacheForPage(db, page.id);
+    console.log(`Superseded ${cleared} cached verdict(s). Reclassifying "${label}" with ${model} (temp 0)…`);
 
     const classifier = createAnthropicClosingClassifier({ apiKey, model });
     const result = await runClosingClassificationForPage(db, classifier, {
