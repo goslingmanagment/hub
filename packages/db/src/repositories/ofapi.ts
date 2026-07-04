@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, notInArray, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
@@ -978,9 +978,18 @@ export async function deleteExpiredOfapiWebhookEvents(
   db: Database,
   receivedBefore: Date,
 ) {
+  // Stage 1 belt-and-braces guard: a journal row may only be deleted once its
+  // projection and archive bookkeeping show it consumed — 'pending'/'failed'
+  // rows are never deletable regardless of age ('none' means no consumer wants
+  // the row). This permanently closes the "expire before the projection
+  // consumes" class even if the retention window is ever shortened again.
   await db
     .delete(ofapiWebhookEvents)
-    .where(lt(ofapiWebhookEvents.receivedAt, receivedBefore));
+    .where(and(
+      lt(ofapiWebhookEvents.receivedAt, receivedBefore),
+      notInArray(ofapiWebhookEvents.projectionStatus, ["pending", "failed"]),
+      notInArray(ofapiWebhookEvents.archiveStatus, ["pending", "failed"]),
+    ));
 }
 
 function utcDayOf(now: Date) {

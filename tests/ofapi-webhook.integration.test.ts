@@ -302,7 +302,7 @@ describe("OFAPI event processing", () => {
     })).toEqual([]);
   });
 
-  it("prunes journal rows past the retention window", async (context) => {
+  it("prunes only consumed journal rows past the retention window", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -314,23 +314,38 @@ describe("OFAPI event processing", () => {
     appContext.config.ofapiEventRetentionDays = 7;
     const fresh = await postWebhook({ body: await fixtureBody("users_typing.json") });
     expect(fresh.statusCode).toBe(200);
-    const stale = await postWebhook({ body: await fixtureBody("messages_deleted.json") });
-    expect(stale.statusCode).toBe(200);
+    const staleConsumed = await postWebhook({ body: await fixtureBody("messages_deleted.json") });
+    expect(staleConsumed.statusCode).toBe(200);
+    const staleUnconsumed = await postWebhook({ body: await fixtureBody("messages_received.json") });
+    expect(staleUnconsumed.statusCode).toBe(200);
 
     const rows = await appContext.db
       .select()
       .from(ofapiWebhookEvents)
       .orderBy(ofapiWebhookEvents.id);
+    expect(rows).toHaveLength(3);
     const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    // Both message-shaped rows age out of the window; only the one whose
+    // projection+archive bookkeeping shows consumed may be deleted (Stage 1
+    // belt-and-braces guard).
     await testDb.pool.query(
-      "update ofapi_webhook_events set received_at = $1 where id = $2",
+      `update ofapi_webhook_events
+       set received_at = $1,
+           projection_status = 'projected',
+           archive_status = 'archived'
+       where id = $2`,
       [eightDaysAgo, rows[1]!.id],
     );
+    await testDb.pool.query(
+      "update ofapi_webhook_events set received_at = $1 where id = $2",
+      [eightDaysAgo, rows[2]!.id],
+    );
+    expect(rows[2]!.projectionStatus).toBe("pending");
 
     await cleanupExpiredOfapiEvents(appContext);
 
-    const remaining = await appContext.db.select().from(ofapiWebhookEvents);
-    expect(remaining.map((row) => row.id)).toEqual([rows[0]!.id]);
+    const remaining = await appContext.db.select().from(ofapiWebhookEvents).orderBy(ofapiWebhookEvents.id);
+    expect(remaining.map((row) => row.id)).toEqual([rows[0]!.id, rows[2]!.id]);
   });
 });
 
