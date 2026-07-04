@@ -632,7 +632,7 @@ export async function insertRawPayload(
     requestParams: Record<string, unknown>;
     responsePayload: unknown;
     mapperVersion: string;
-    payloadKind: "mapping_critical" | "dm_metadata" | "failed";
+    payloadKind: "mapping_critical" | "dm_metadata" | "dm_messages" | "failed";
     statusCode?: number | null;
     errorMessage?: string | null;
     retainUntil: Date;

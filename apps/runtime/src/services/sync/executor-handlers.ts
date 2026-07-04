@@ -51,6 +51,7 @@ import {
   type FanslyFollower,
 } from "@agency_hub_core/fansly";
 import {
+  ONLYMONSTER_MAPPER_VERSION,
   OnlyMonsterApiError,
   type OnlyMonsterChatMessage,
 } from "@agency_hub_core/onlyfans";
@@ -3354,6 +3355,26 @@ async function executeOnlyFansDmMessagesChunk(
           );
           continue conversationLoop;
         }
+        // Stage 1: DM message pages are captured raw (previously zero raw
+        // persistence on this path); far-future retention via dmRetentionDate.
+        await persistRawPayload(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          syncRunId: input.syncRunId,
+          endpoint: "dm_messages",
+          requestParams: {
+            chatId: currentConversation.platformConversationId,
+            limit,
+            messageId: state.currentBeforeMessageId ?? null,
+            order: "desc",
+          },
+          responsePayload: page.raw,
+          mapperVersion: ONLYMONSTER_MAPPER_VERSION,
+          payloadKind: "dm_messages",
+          retainUntil: dmRetentionDate(),
+        }, {
+          action: "inserting dm_messages raw payload",
+        });
+
         const platformMessageIds = page.parsed.items.map((message) => onlyMonsterMessageId(message));
         const existingIds = await getExistingPageDmMessageIds(app.db, {
           conversationId: currentConversation.id,
@@ -3825,6 +3846,25 @@ export async function executeDmMessagesChunk(
           );
           continue conversationLoop;
         }
+        // Stage 1: DM message pages are captured raw (previously zero raw
+        // persistence on this path); far-future retention via dmRetentionDate.
+        await persistRawPayload(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          syncRunId: input.syncRunId,
+          endpoint: "dm_messages",
+          requestParams: {
+            groupId: currentConversation.platformConversationId,
+            limit: 25,
+            before: state.currentBeforeMessageId ?? null,
+          },
+          responsePayload: page.raw,
+          mapperVersion: FANSLY_MAPPER_VERSION,
+          payloadKind: "dm_messages",
+          retainUntil: dmRetentionDate(),
+        }, {
+          action: "inserting dm_messages raw payload",
+        });
+
         const existingIds = await getExistingPageDmMessageIds(app.db, {
           conversationId: currentConversation.id,
           platformMessageIds: page.items.map((message) => message.id),

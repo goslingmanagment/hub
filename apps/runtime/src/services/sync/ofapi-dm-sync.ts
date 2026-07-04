@@ -52,9 +52,12 @@ import {
 } from "./cursor-state.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
+import { dmRetentionDate, persistRawPayload } from "./shared.ts";
 
 const OFAPI_CHATS_PAGE_LIMIT = 100;
 const OFAPI_MESSAGES_PAGE_LIMIT = 100;
+// Versions the parseOfapiRestMessage mapping for raw-payload provenance.
+const OFAPI_DM_MAPPER_VERSION = "ofapi-dm-rest-v1";
 const DM_PREVIEW_MAX_LENGTH = 280;
 
 const DEFAULT_MAX_REQUESTS_PER_RUN = 25;
@@ -905,6 +908,26 @@ export async function executeOfapiDmMessagesChunk(
         },
       );
       await guard.recordResponse(page);
+
+      // Stage 1: DM message pages are captured raw (previously zero raw
+      // persistence on this path). The OFAPI client exposes no raw response
+      // envelope, so the unfiltered item records are persisted instead.
+      await persistRawPayload(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        syncRunId: input.syncRunId,
+        endpoint: "dm_messages",
+        requestParams: {
+          conversationId: currentConversation.platformConversationId,
+          limit: OFAPI_MESSAGES_PAGE_LIMIT,
+          firstId: cursor ?? null,
+        },
+        responsePayload: { items: page.items },
+        mapperVersion: OFAPI_DM_MAPPER_VERSION,
+        payloadKind: "dm_messages",
+        retainUntil: dmRetentionDate(),
+      }, {
+        action: "inserting dm_messages raw payload",
+      });
 
       // first_id is inclusive — drop the cursor echo before any bookkeeping.
       const items = page.items.filter((item) => {

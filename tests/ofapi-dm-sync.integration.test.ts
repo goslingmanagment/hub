@@ -599,6 +599,26 @@ describe("OFAPI DM messages sync", () => {
     ]);
     expect(messages[1]!.sender_role).toBe("model");
     expect(messages[3]!.total_tip_amount_cents).toBe(500);
+
+    // Stage 1 (V4): every DM-message fetch persists the raw page far-future.
+    const rawPayloads = await testDb.pool.query<{
+      endpoint: string;
+      retain_until: Date;
+    }>(
+      `select endpoint, retain_until
+       from sync_raw_payloads
+       where page_id = $1
+         and payload_kind = 'dm_messages'
+       order by id`,
+      [page.id],
+    );
+    expect(rawPayloads.rows).toHaveLength(2);
+    for (const row of rawPayloads.rows) {
+      expect(row.endpoint).toBe("dm_messages");
+      expect(row.retain_until.getTime()).toBeGreaterThan(
+        Date.now() + 36000 * 24 * 60 * 60 * 1000,
+      );
+    }
   });
 
   it("tops up a diverged head incrementally and stops on overlap with stored messages", async (context) => {
@@ -749,8 +769,10 @@ describe("OFAPI DM messages sync", () => {
 
     const capped = await getConversation(page.id, FAN_A);
     expect(capped!.messageCoverageStatus).toBe("partial_window");
-    // Finalize prunes to the 200-message retention tier.
-    expect(capped!.storedMessageCount).toBe(200);
+    // The fetch-side window cap still bounds the backfill (hence
+    // partial_window), but Stage 1 disables the finalize prune by default, so
+    // every stored row is kept — 198 seeded + 3 new past the 200 tier.
+    expect(capped!.storedMessageCount).toBe(201);
   });
 });
 
