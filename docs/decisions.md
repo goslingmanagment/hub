@@ -1035,3 +1035,42 @@ file's `## Progress` block). **Risk carried forward:** fact tables now grow with
 bound by design — the disk alert is the containment; retention tiering returns as a
 safe cache policy in Stage 28. No off-box backup (Q3) unchanged and now covers strictly
 more data.
+
+## Pass 3 Spec Fixup — pre-execution review findings (2026-07-05)
+
+**Decision #64:** An owner-run architecture review of the Pass 3 stage corpus (three
+subagents + spot verification against code) surfaced spec defects that would trip a
+blind executing session. Verified against the cited files and applied as doc-only
+amendments to `docs/project-kernel/pass3/` (roadmap §4 passports, §5 table + tracks,
+and the affected stage headers/sections; this entry committed on branch
+`kernel/pass3-spec-fixup` — the kernel docs themselves live outside version control):
+
+- **Stage 7/8 key-table insert protocols** were unimplementable as written (key row
+  inserted first while `observation_keys.observation_id` / `domain_event_keys.event_id`
+  are NOT NULL and the identity id does not exist yet). Fixed: pre-allocate the id via
+  `nextval(pg_get_serial_sequence(…))`, the key insert carries it, the journal/event
+  row inserts with `OVERRIDING SYSTEM VALUE`. No rollback branch — the protocol stays
+  composable inside the webhook receiver's transaction.
+- **Dependency graph tightened:** 31 and 32 gain hard dep 11 (their entry criteria
+  already required the capture lane); 33 gains hard dep 20 (dashboard-on-SDK is its
+  substrate); 26 gains soft 19 (ESLint config); 28 ↔ 29 gain mutual soft deps (28's
+  acceptance-rate metric needs 29's class; 29's content tables rely on 28's lake
+  exclusion + erasure reach).
+- **Stage 20 method/path source fixed:** `routeSchemas` carries neither; the generator
+  recovers `{method, path}` by booting `buildApiServer` and joining registered routes
+  to registry keys by schema-object identity (the proven `generate.ts` pattern), with a
+  both-ways reconciliation assertion; explicit registry fields stay the fallback.
+- **Sensitive kinds excluded from the generic lake:** Stage 28's exporter exclusion
+  list gains a kind granularity (initially `desktop.guard_audit`); excluded kinds
+  export to `lake/restricted/…` (same manifest/verify discipline, restricted access)
+  so DETACH still loses nothing. Stage 11 records the kind on that list.
+
+**Reviewed and declined** (recorded so they are not re-litigated): splitting Stage 29
+into provider/budgets vs content capture — the mutual soft deps suffice; a
+`sensitivity_class` substrate before Stage 7 — DP 6-A full-content capture is an
+accepted owner decision and kind-level lake exclusion covers the gap; reordering 22
+before 11 — it would stall the capture track, and the lane's rate limit, body cap, and
+kind allowlist stand (a per-principal volume alert on `desktop.unknown:*` is noted as
+cheap hardening at execution time); resizing Stage 23 — its spec already carries the
+claim-lease schema, attribution, compensating-event undo, and v1-route removal the
+review believed missing.
