@@ -1795,3 +1795,47 @@ intact), buildApiServer as composition root, per-module role-matrix tests,
 relative-sibling lint walls (3–4 sessions); then Task 6 ops (inert deploy → 48 h
 log window → enforce flip → cleanup slice). Steps sketched in the stage's
 `## Progress` block.
+
+## Stage 19 Session 2 — Eight of Ten Modules Extracted (2026-07-05)
+
+**Decision #88:** Task 3 (module extraction) is 8/10 done on
+`kernel/stage-19-api-decomposition` @ 72ca544; full suite after the last
+extraction commit: **186 files / 1505 tests green**. server.ts shrank
+3,768 → 2,063 lines. One verified checkpoint commit per module — each gated on
+typecheck + an EMPTY `contracts:generate` diff + targeted suites + the new
+role matrix: workboard (2ba8c15, with the extraction scaffold), identity
+(383e649), ai (9f985a6), events (245df9b, the whole SSE lifecycle), 
+conversations (f88d611), ingest (a0718f6), audience (bc17a6a), finance
+(72ca544, incl. the overview aggregate and getRevenueDailySeries).
+
+Mechanics that bind the remaining work:
+- **Handlers moved byte-verbatim, guards intact** (deviation #87 holds). The
+  scaffold is `api/request-auth.ts` (createRequestAuth: the closure helpers
+  factored out unchanged; also pageScopeFor + auditCtx) + `modules/context.ts`
+  (ApiServer type — the logger generic must be AppContext["logger"], not
+  FastifyBaseLogger — and ApiModuleContext {appContext, auth, boss}); pg-boss
+  now boots before any route registers so modules can carry it.
+- **normalizeOpenApiDocument sorts spec.paths.** Extraction shuffles route
+  registration order and swagger's paths object follows it; the one-time
+  reorder diff (identity commit) was proven content-equal by
+  canonicalized-JSON comparison (121 path templates both sides). The byte-gate
+  is registration-order-independent from here on.
+- **Sorting decisions vs target §6.1** (recorded, not silent): read gateway +
+  ofapi commands → ingest (observation-producing custody lanes, kept with the
+  webhook receiver); the credits family → ops; overviewGrowth → audience;
+  the overview dashboard aggregate → finance; openApiJson stays in the
+  composition root next to swagger.
+- **Per-module role matrix** added to tests/auth-policy.integration.test.ts:
+  one representative route per module × four principals × BOTH enforcement
+  modes with log/enforce status parity asserted — behavior-level, so it holds
+  through the rest of the extraction untouched.
+- Verbatim-move exceptions: crossPageTransactions keeps its unused
+  platformByLabel local; serializePageMetric temporarily duplicated in finance
+  (server.ts copy still feeds serializeAssignedPage until catalog moves).
+
+Remaining for Task 3 (next session, resume map in the stage's `## Progress`):
+catalog (14 routes; onboarding/credentials handlers + the
+queueInitialOnboardingSync helper family), ops (40 routes, ~1,300 lines), the
+relative-sibling ESLint walls once the layout is final, and a dead-import
+sweep. Then Task 6 (inert deploy → 48 h log window → enforce flip → guard
+cleanup).
