@@ -1839,3 +1839,44 @@ queueInitialOnboardingSync helper family), ops (40 routes, ~1,300 lines), the
 relative-sibling ESLint walls once the layout is final, and a dead-import
 sweep. Then Task 6 (inert deploy → 48 h log window → enforce flip → guard
 cleanup).
+
+## Stage 19 Session 3 — Extraction Complete, server.ts Is a Composition Root (2026-07-05)
+
+**Decision #89:** Task 3 is DONE. All ten target-§6.1 modules now own their
+routes; `apps/runtime/src/api/server.ts` is a **497-line composition root**
+(fastify setup, the declarative-auth middleware + routePolicyTable collector,
+the requestAuth factory, pg-boss, module registration, swagger/openapi, the
+error handler, SPA static serving) — down from 3,768 lines at the stage's
+start. Full suite after the last commit: **186 files / 1505 tests green**.
+Session commits, each gated on typecheck + an empty `contracts:generate` diff
++ targeted suites + the role matrix:
+
+- 963db99 **catalog** (14 routes): model/page CRUD with the Stage 13 tombstone
+  delete, onboarding + the queueInitialOnboardingSync helper family (boss via
+  module ctx), credentials verify (public adapter surface only, per the
+  safeguard scope rule), proxy test, page-verify recovery, credentials-update
+  audit. serializeAssignedPage/rethrowAdminCatalogError/
+  isAdminPageVerifyBadRequest moved with it.
+- c8b8137 **ops slice 1** (23): health pair, the OFAPI credits family
+  including the hijacked CSV export, sync monitor + per-page blocks, the eight
+  admin sync triggers, connections.
+- 00fed94 **ops slice 2** (17): admin logs/queue/db-stats/incidents (raw-sql
+  reporting with the severity normalization), the Telegram notifications
+  surface, and the config surface (live PATCH, editable clear, advisory-locked
+  staged flips) — extraction complete.
+- cd2c17e **relative-sibling ESLint walls**, now that the layout is final
+  (every module = one modules/<name>/index.ts). Gotcha worth keeping: minimatch
+  `*` matches `..`, so the sibling group needs `!../../**` or every
+  `../../services/…` import trips the wall. Probe-verified: a sibling internal
+  import errors; `../<other>/index.ts` and parent traversal pass; the repo
+  lints clean.
+
+With #87/#88: Stage 19's §8 tasks 1–5 are all done. What remains is **Task 6
+(ops) only**: owner deploy (INERT — AUTH_POLICY_ENFORCEMENT defaults to log,
+no migrations in this stage) → 48 h log window (grep api logs for
+`auth-policy would-deny|would-allow`; zero unexplained divergence per module)
+→ flip AUTH_POLICY_ENFORCEMENT=enforce + restart + re-probe → the
+guard-deletion cleanup slice (in-handler requireX calls the middleware
+subsumes; REVENUE_ROUTE_ROLE_ENFORCEMENT retires with
+enforceRevenueRouteRoleScope) → stage exits. This branch is NOT part of
+Monday's merge chain; it merges independently after the chain lands.
