@@ -26,6 +26,7 @@ export type KernelOperationKey = keyof Schemas & string;
 export const SDK_EXCLUDED_OPERATIONS = [
   "ofapiWebhookReceive",
   "eventsStream",
+  "eventsV2Stream",
   "aiGatewayStream",
   "ofapiReadGateway",
   "adminOfapiCreditsLedgerCsv",
@@ -296,9 +297,13 @@ export function createKernelClient(
 
 import {
   aiGatewayStreamFrameSchema,
+  domainEventFrameSchema,
+  domainEventsSnapshotRequiredResponseSchema,
   syncEventSchema,
   syncSnapshotRequiredResponseSchema,
   type AiGatewayStreamFrame,
+  type DomainEventFrame,
+  type DomainEventsSnapshotRequired,
   type SyncEvent,
 } from "./routes.ts";
 import type { z as zod } from "zod";
@@ -549,4 +554,79 @@ export async function ofapiRead(options: KernelClientOptions, input: {
     query: input.query,
     headers: input.headers,
   });
+}
+
+/**
+ * Subscribe to the v2 domain-event stream (`GET /api/v1/events/v2/stream`,
+ * kernel Stage 21). The cursor is OPAQUE — persist the last delivered one and
+ * hand it back on reconnect. Single connection, no auto-reconnect (same
+ * contract as v1: the server bounds stream lifetime; consumers own the loop).
+ * A 409 becomes `onSnapshotRequired` with the per-account detail; recover via
+ * `client.eventsV2Snapshot(...)` and resubscribe with the fresh cursor.
+ */
+export function subscribeDomainEvents(options: KernelClientOptions, input: {
+  cursor?: string | null;
+  onFrame: (frame: { cursor: string; event: DomainEventFrame }) => void;
+  onSnapshotRequired?: (details: DomainEventsSnapshotRequired) => void;
+  signal?: AbortSignal;
+}): KernelStreamHandle {
+  const abort = new AbortController();
+  input.signal?.addEventListener("abort", () => abort.abort(), { once: true });
+
+  const done = (async () => {
+    const response = await openSseResponse({
+      options,
+      method: "GET",
+      path: "/api/v1/events/v2/stream",
+      headers: input.cursor ? { "last-event-id": input.cursor } : undefined,
+      signal: abort.signal,
+    });
+    if (response.status === 409) {
+      const body: unknown = await response.json();
+      const parsed = domainEventsSnapshotRequiredResponseSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new KernelApiError(
+          "events/v2/stream 409 body failed contract validation",
+          "contract",
+          409,
+          "response_validation_failed",
+          body,
+        );
+      }
+      input.onSnapshotRequired?.(parsed.data);
+      return;
+    }
+    if (!response.ok || !response.body) {
+      throw new KernelApiError(
+        `events/v2/stream failed with ${response.status}`,
+        response.status === 401 || response.status === 403 ? "auth" : "server",
+        response.status,
+        null,
+        await response.text().catch(() => null),
+      );
+    }
+    for await (const frame of parseSseStream(response.body)) {
+      if (frame.event !== "domain" || frame.data === "" || frame.id === null) {
+        continue;
+      }
+      const parsed = domainEventFrameSchema.safeParse(JSON.parse(frame.data));
+      if (!parsed.success) {
+        throw new KernelApiError(
+          `domain frame failed contract validation: ${parsed.error.message}`,
+          "contract",
+          200,
+          "frame_validation_failed",
+          frame.data,
+        );
+      }
+      input.onFrame({ cursor: frame.id, event: parsed.data });
+    }
+  })().catch((error: unknown) => {
+    if (abort.signal.aborted) {
+      return;
+    }
+    throw error;
+  });
+
+  return { done, close: () => abort.abort() };
 }

@@ -61,6 +61,8 @@ export const kernelOperations = {
   crossPageTransactions: { method: "GET", path: "/api/v1/transactions" },
   eventsSnapshot: { method: "GET", path: "/api/v1/events/snapshot" },
   eventsStream: { method: "GET", path: "/api/v1/events/stream" },
+  eventsV2Snapshot: { method: "GET", path: "/api/v1/events/v2/snapshot" },
+  eventsV2Stream: { method: "GET", path: "/api/v1/events/v2/stream" },
   fansSearch: { method: "GET", path: "/api/v2/fans/search" },
   getOfapiCommand: { method: "GET", path: "/api/v1/ofapi/commands/:commandId" },
   health: { method: "GET", path: "/api/v1/health" },

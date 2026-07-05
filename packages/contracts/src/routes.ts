@@ -2990,6 +2990,43 @@ export const syncSnapshotRequiredResponseSchema = z.object({
   snapshotPath: z.literal("/api/v1/events/snapshot"),
 });
 
+// --- Event stream v2 (kernel Stage 21): domain_events, per-account ordering ---
+
+export const domainEventFrameSchema = z.object({
+  accountId: z.number().int().positive(),
+  accountSeq: z.number().int().positive(),
+  // Canonical vocabulary (target §3.2). Deliberately open: clients MUST
+  // tolerate unknown types (the v1 union's forward-compat rule, now explicit).
+  type: z.string().min(1),
+  occurredAt: isoTimestamp,
+  data: z.unknown(),
+});
+
+export const domainEventsSnapshotRequiredAccountSchema = z.object({
+  accountId: z.number().int().positive(),
+  requestedSeq: z.number().int().nonnegative(),
+  oldestAvailableSeq: z.number().int().positive().nullable(),
+  currentSeq: z.number().int().nonnegative(),
+});
+
+export const domainEventsSnapshotRequiredResponseSchema = z.object({
+  error: z.literal("sync_snapshot_required"),
+  message: z.string(),
+  statusCode: z.literal(409),
+  version: z.literal(2),
+  accounts: z.array(domainEventsSnapshotRequiredAccountSchema),
+  snapshotPath: z.literal("/api/v1/events/v2/snapshot"),
+});
+
+export const domainEventsSnapshotResponseSchema = z.object({
+  // Fresh opaque cursor over the requested accounts' current high-waters.
+  cursor: z.string(),
+  accounts: z.array(z.object({
+    accountId: z.number().int().positive(),
+    currentSeq: z.number().int().nonnegative(),
+  })),
+});
+
 export const syncSnapshotQuerySchema = z.object({
   accountId: syncEventIdSchema,
   afterSeq: z.coerce.number().int().nonnegative(),
@@ -3947,6 +3984,47 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+    },
+  },
+  eventsV2Stream: {
+    auth: { kind: "any" },
+    tags: ["events"],
+    summary: "SSE stream of canonical domain events (v2) for granted accounts",
+    description: "`text/event-stream` of DomainEventFrame rows (`event: domain`, `data` = "
+      + "JSON frame, `id` = the OPAQUE resume cursor — pass it back verbatim via "
+      + "`Last-Event-ID` or `cursor`). Per-account gapless ordering; all platforms. "
+      + "A cursor below an account's retained floor (or ahead of its head) answers "
+      + "409 sync_snapshot_required with the per-account detail.",
+    querystring: z.object({
+      cursor: z.string().optional(),
+    }),
+    response: {
+      200: z.string().describe(
+        "text/event-stream — `event: domain` frames (see domainEventFrameSchema); "
+        + "`id` is the opaque v2 cursor.",
+      ),
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: domainEventsSnapshotRequiredResponseSchema,
+    },
+  },
+  eventsV2Snapshot: {
+    auth: { kind: "any" },
+    tags: ["events"],
+    summary: "Fresh v2 cursor (and per-account heads) for cold start or gap recovery",
+    description: "Returns the current per-account high-water cursor for the requested "
+      + "accounts (comma-separated ids; omitted = every granted account). State "
+      + "payloads ride the consumer stages (24/33) additively — v2's snapshot role "
+      + "here is the cursor-reset handshake.",
+    querystring: z.object({
+      accounts: z.string().regex(/^\d+(,\d+)*$/).optional(),
+    }),
+    response: {
+      200: domainEventsSnapshotResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
   adminOfapiWebhookStatus: {
@@ -5662,3 +5740,6 @@ export type WorkboardV2AiClassifyBody = z.infer<typeof workboardV2AiClassifyBody
 export type WorkboardV2AiClassifyResponse = z.infer<typeof workboardV2AiClassifyResponseSchema>;
 export type WorkboardV2AiRun = z.infer<typeof workboardV2AiRunSchema>;
 export type WorkboardV2AiRunsResponse = z.infer<typeof workboardV2AiRunsResponseSchema>;
+export type DomainEventFrame = z.infer<typeof domainEventFrameSchema>;
+export type DomainEventsSnapshotRequired = z.infer<typeof domainEventsSnapshotRequiredResponseSchema>;
+export type DomainEventsSnapshotResponse = z.infer<typeof domainEventsSnapshotResponseSchema>;
