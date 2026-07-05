@@ -1,6 +1,50 @@
+import { randomUUID } from "node:crypto";
+
 import { routeSchemas } from "@agency_hub_core/contracts";
+import {
+  clearConfigOverride,
+  ConfigOverrideVersionConflictError,
+  getLatestRealDeliveryAttempt,
+  getTelegramSettings,
+  insertDeliveryAttempt,
+  listDeliveryAttempts,
+  listNotificationIncidentsWithPages,
+  recordNotificationIncidentRecovery,
+  resolveNotificationIncident,
+  setConfigOverridesAtomic,
+  updateTelegramSettings,
+} from "@agency_hub_core/db";
+import {
+  collectCostWarnings,
+  encryptJson,
+  getDescriptor,
+  validateConfigOverride,
+  validateStagedOverride,
+  type ConfigOverrideValue,
+} from "@agency_hub_core/shared";
+import { sql } from "drizzle-orm";
 
 import { auditCtx, pageScopeFor } from "../../api/request-auth.ts";
+import { buildConfigView } from "../../services/app-config-service.ts";
+import { LIVE_CONFIG_KEYS } from "../../services/effective-config.ts";
+import { commitStagedConfigChange } from "../../services/staged-config.ts";
+import {
+  closeTelegramRequestOptions,
+  deriveTelegramConnectionState,
+  discoverTelegramChats,
+  resolveTelegramBotToken,
+  resolveTelegramCredentialSources,
+  resolveTelegramCredentials,
+  resolveTelegramRequestOptions,
+  sendTelegramMessage,
+  sendTelegramTestMessage,
+  TelegramDiscoveryError,
+  TelegramProxyConfigError,
+} from "../../services/telegram.ts";
+import {
+  buildDailyRevenueTelegramReport,
+  sendManualDailyRevenueTelegramReport,
+} from "../../services/telegram-report.ts";
 import {
   canAccessPage,
   recordAudit,
@@ -10,6 +54,8 @@ import {
 } from "../../services/auth.ts";
 import { listConnectionStatuses } from "../../services/connections.ts";
 import {
+  BadRequestError,
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   ServiceUnavailableError,
@@ -44,6 +90,18 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Ops module (target §6.1): sync health, credits, incidents, config,
 // diagnostics. Handlers relocated verbatim from server.ts (Stage 19 Task 3).
+
+function serializeTimestamp(value: Date | string) {
+  return new Date(value).toISOString();
+}
+
+function serializeNullableTimestamp(value: Date | string | null | undefined) {
+  return value == null ? null : serializeTimestamp(value);
+}
+
+function toNumber(value: number | string | bigint) {
+  return typeof value === "number" ? value : Number(value);
+}
 
 export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext, boss } = ctx;
@@ -396,5 +454,698 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return listConnectionStatuses(appContext, {
       pageIds: pageScopeFor(principal),
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Admin: logs, queue, db stats, incidents
+  // ---------------------------------------------------------------------------
+
+  server.get("/api/v1/admin/logs", {
+    schema: routeSchemas.adminLogs,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const { severity, limit } = request.query;
+    const normalizedSeverity = sql<string>`CASE
+      WHEN e.details->>'code' = 'after_ineffective'
+        AND e.severity = 'error'
+        AND e.details->>'earlyStoppedBeyondBoundary' = 'true'
+      THEN 'warn'
+      ELSE e.severity
+    END`;
+
+    const rows = severity
+      ? (await appContext.db.execute(sql`
+          SELECT e.id, e.sync_run_id as "syncRunId",
+                 e.provider, e.stream, e.event_type as "eventType",
+                 ${normalizedSeverity} as "severity", e.message, e.details,
+                 e.emitted_at as "emittedAt",
+                 pa.label as "pageLabel"
+          FROM sync_run_events e
+          INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
+          INNER JOIN pages pa ON pa.id = e.page_id
+          WHERE ${normalizedSeverity} = ${severity}
+          ORDER BY e.emitted_at DESC
+          LIMIT ${limit}
+        `)).rows
+      : (await appContext.db.execute(sql`
+          SELECT e.id, e.sync_run_id as "syncRunId",
+                 e.provider, e.stream, e.event_type as "eventType",
+                 ${normalizedSeverity} as "severity", e.message, e.details,
+                 e.emitted_at as "emittedAt",
+                 pa.label as "pageLabel"
+          FROM sync_run_events e
+          INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
+          INNER JOIN pages pa ON pa.id = e.page_id
+          ORDER BY e.emitted_at DESC
+          LIMIT ${limit}
+        `)).rows;
+
+    return rows.map((r: any) => ({
+      id: toNumber(r.id),
+      syncRunId: toNumber(r.syncRunId),
+      provider: r.provider,
+      stream: r.stream,
+      eventType: r.eventType,
+      severity: r.severity,
+      message: r.message,
+      details: r.details,
+      emittedAt: serializeTimestamp(r.emittedAt),
+      pageLabel: r.pageLabel,
+    }));
+  });
+
+  server.get("/api/v1/admin/queue/jobs", {
+    schema: routeSchemas.adminQueueJobs,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const { state, name, limit } = request.query;
+
+    let condition = sql`true`;
+    if (state) condition = sql`${condition} AND state = ${state}`;
+    if (name) condition = sql`${condition} AND name = ${name}`;
+
+    const rows = (await appContext.db.execute(sql`
+      SELECT id, name, state, data, created_on as "createdOn",
+             started_on as "startedOn", completed_on as "completedOn",
+             output, retry_limit as "retryLimit", retry_count as "retryCount"
+      FROM pgboss.job
+      WHERE ${condition}
+      ORDER BY created_on DESC
+      LIMIT ${limit}
+    `)).rows;
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      state: r.state,
+      data: r.data,
+      createdOn: serializeTimestamp(r.createdOn),
+      startedOn: serializeNullableTimestamp(r.startedOn),
+      completedOn: serializeNullableTimestamp(r.completedOn),
+      output: r.output,
+      retryLimit: toNumber(r.retryLimit),
+      retryCount: toNumber(r.retryCount),
+    }));
+  });
+
+  server.get("/api/v1/admin/db/stats", {
+    schema: routeSchemas.adminDbStats,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const tableRows = (await appContext.db.execute(sql`
+      SELECT schemaname as "schema", relname as "table",
+             n_live_tup::int as "rowEstimate",
+             pg_total_relation_size(schemaname || '.' || relname)::bigint as "totalBytes",
+             pg_indexes_size(schemaname || '.' || relname)::bigint as "indexBytes"
+      FROM pg_stat_user_tables
+      WHERE schemaname = 'public'
+      ORDER BY pg_total_relation_size(schemaname || '.' || relname) DESC
+    `)).rows;
+
+    const tables = tableRows.map((r: any) => ({
+      schema: r.schema,
+      table: r.table,
+      rowEstimate: toNumber(r.rowEstimate),
+      totalBytes: toNumber(r.totalBytes),
+      indexBytes: toNumber(r.indexBytes),
+    }));
+
+    let migrations: any[] = [];
+    try {
+      const migrationRows = (await appContext.db.execute(sql`
+        SELECT id as "name", applied_at as "appliedAt"
+        FROM schema_migrations
+        ORDER BY applied_at ASC, id ASC
+      `)).rows;
+      migrations = migrationRows.map((r: any) => ({
+        name: r.name,
+        appliedAt: serializeTimestamp(r.appliedAt),
+      }));
+    } catch {
+      // migrations table may not exist
+    }
+
+    return { tables, migrations };
+  });
+
+  server.get("/api/v1/admin/incidents", {
+    schema: routeSchemas.adminIncidents,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const { severity, code, limit } = request.query;
+    const normalizedSeverity = sql<string>`CASE
+      WHEN e.details->>'code' = 'after_ineffective'
+        AND e.severity = 'error'
+        AND e.details->>'earlyStoppedBeyondBoundary' = 'true'
+      THEN 'warn'
+      ELSE e.severity
+    END`;
+
+    let condition = sql`(e.severity IN ('warn', 'error') OR e.event_type = 'anomaly')`;
+    if (severity) condition = sql`${condition} AND ${normalizedSeverity} = ${severity}`;
+    if (code) condition = sql`${condition} AND e.details->>'code' = ${code}`;
+
+    const items = (await appContext.db.execute(sql`
+      SELECT e.id, e.sync_run_id as "syncRunId",
+             e.provider, e.stream, e.event_type as "eventType",
+             ${normalizedSeverity} as "severity", e.message, e.details,
+             e.emitted_at as "emittedAt",
+             pa.label as "pageLabel"
+      FROM sync_run_events e
+      INNER JOIN sync_runs sr ON sr.id = e.sync_run_id
+      INNER JOIN pages pa ON pa.id = e.page_id
+      WHERE ${condition}
+      ORDER BY e.emitted_at DESC
+      LIMIT ${limit}
+    `)).rows.map((r: any) => ({
+      id: toNumber(r.id),
+      syncRunId: toNumber(r.syncRunId),
+      provider: r.provider,
+      stream: r.stream,
+      eventType: r.eventType,
+      severity: r.severity,
+      message: r.message,
+      details: r.details,
+      emittedAt: serializeTimestamp(r.emittedAt),
+      pageLabel: r.pageLabel,
+    }));
+
+    const summary = (await appContext.db.execute(sql`
+      SELECT e.details->>'code' as "code", ${normalizedSeverity} as "severity", count(*)::int as "count"
+      FROM sync_run_events e
+      WHERE (e.severity IN ('warn', 'error') OR e.event_type = 'anomaly')
+        AND e.emitted_at > now() - interval '7 days'
+      GROUP BY e.details->>'code', ${normalizedSeverity}
+      ORDER BY count DESC
+      LIMIT 20
+    `)).rows.map((r: any) => ({
+      code: r.code,
+      severity: r.severity,
+      count: toNumber(r.count),
+    }));
+
+    return { summary, items };
+  });
+
+  // ---------------------------------------------------------------------------
+  // Notifications dashboard
+  // ---------------------------------------------------------------------------
+
+  function buildNotificationsSettingsResponse(
+    settings: Awaited<ReturnType<typeof getTelegramSettings>>,
+    lastRealAttempt: Awaited<ReturnType<typeof getLatestRealDeliveryAttempt>>,
+  ) {
+    const creds = resolveTelegramCredentials(appContext, settings);
+    const configured = creds !== null;
+    const { botTokenSource, chatIdSource } = resolveTelegramCredentialSources(appContext, settings);
+
+    // Only a real delivery (sent/failed) made AFTER the current credentials were
+    // saved counts toward the status — a stale success from a previous bot/chat,
+    // or a `skipped` attempt, must not read as "connected". `recentAttempt` is
+    // null when the latest real attempt predates the current credentials.
+    const { status: connectionStatus, recentAttempt } = deriveTelegramConnectionState(
+      configured,
+      settings.credentialsUpdatedAt,
+      lastRealAttempt,
+    );
+
+    return {
+      configured,
+      botTokenSet: !!settings.encryptedBotToken || !!appContext.config.telegramBotToken,
+      chatId: settings.chatId ?? appContext.config.telegramChatId ?? null,
+      botTokenSource,
+      chatIdSource,
+      enabled: settings.enabled,
+      dailyReportEnabled: settings.dailyReportEnabled,
+      syncFailureAlertsEnabled: settings.syncFailureAlertsEnabled,
+      reportHourUtc: settings.reportHourUtc,
+      connectionStatus,
+      lastMessageAt: recentAttempt?.createdAt?.toISOString() ?? null,
+      lastMessageError: recentAttempt?.status === "failed" ? (recentAttempt.error ?? null) : null,
+    };
+  }
+
+  server.get("/api/v1/admin/notifications/settings", {
+    schema: routeSchemas.notificationsSettings,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const settings = await getTelegramSettings(appContext.db, {
+      defaultReportHourUtc: appContext.config.telegramReportHourUtc,
+    });
+    const lastRealAttempt = await getLatestRealDeliveryAttempt(appContext.db);
+    return buildNotificationsSettingsResponse(settings, lastRealAttempt);
+  });
+
+  server.get("/api/v1/admin/config", {
+    schema: routeSchemas.adminConfig,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    // Thread the PRE-boot-apply env config so desiredEffective uses the env baseline for
+    // keys with no override (falls back to the boot-applied config for legacy contexts).
+    const envBaseline = (appContext.rawConfig ?? appContext.config) as unknown as Record<string, unknown>;
+    return buildConfigView(appContext.db, envBaseline);
+  });
+
+  // PATCH (the live editing path) rejects any key that is not wired to the runtime
+  // overlay (`runtimeApply === 'live'`), so an override can never be written for a key
+  // the runtime would not actually apply without a restart. Still required to be
+  // `editable` (the policy class) — staged/boot flags use the separate staged endpoint.
+  function assertLiveEditableReloadKey(key: string) {
+    if (!LIVE_CONFIG_KEYS.has(key)) {
+      throw new BadRequestError(`Config key is not runtime-editable: ${key}`);
+    }
+    const descriptor = getDescriptor(key);
+    if (!descriptor) {
+      throw new BadRequestError(`Unknown config key: ${key}`);
+    }
+    if (descriptor.editability !== "editable") {
+      throw new BadRequestError(`Config key is not editable: ${key}`);
+    }
+    if (descriptor.runtimeApply !== "live") {
+      throw new BadRequestError(`Config key does not apply at runtime: ${key}`);
+    }
+  }
+
+  // DELETE clears ONLY an `editability === 'editable'` override (a stuck editable knob —
+  // including a non-live editable tunable like ofapiDmDailyCreditBudget). It rejects
+  // 'staged' and 'never' keys: a staged (boot) flag is reverted to env exclusively via the
+  // staged endpoint (`desired: null`), which enforces the mandatory expectedVersion + ack
+  // and the order/disable rules — the generic DELETE would bypass all of that.
+  function assertClearableKey(key: string) {
+    const descriptor = getDescriptor(key);
+    if (!descriptor) {
+      throw new BadRequestError(`Unknown config key: ${key}`);
+    }
+    if (descriptor.editability !== "editable") {
+      throw new BadRequestError(`Config key is not editable: ${key}`);
+    }
+  }
+
+  server.patch("/api/v1/admin/config", {
+    schema: routeSchemas.adminConfigUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { patches, note } = request.body;
+    // A key may appear at most once per patch — duplicates would double-audit / double-
+    // bump the version (or self-conflict) inside the atomic apply.
+    const keys = patches.map((patch) => patch.key);
+    if (new Set(keys).size !== keys.length) {
+      throw new BadRequestError("A patch may not set the same key twice");
+    }
+    // Validate every key/value up front so a bad entry rejects the whole patch before
+    // anything is written. Persist the CLAMPED value so processes and UI agree.
+    const validatedPatches = patches.map((patch) => {
+      assertLiveEditableReloadKey(patch.key);
+      const validated = validateConfigOverride(patch.key, patch.value);
+      if (!validated.ok) {
+        throw new BadRequestError(validated.error);
+      }
+      return { key: patch.key, value: validated.value, expectedVersion: patch.expectedVersion };
+    });
+
+    // Fold the patched keys' descriptor costWarnings into the audit note so the warning that
+    // applied is durable evidence. The live path has no ack gate (unlike staged), so this is
+    // its only durable cost record; derived from the registry server-side, never the client.
+    const costWarnings = collectCostWarnings(validatedPatches.map((patch) => patch.key));
+    const auditNote =
+      Object.keys(costWarnings).length > 0
+        ? `${note ? `${note} ` : ""}[cost-warnings] ${Object.entries(costWarnings)
+            .map(([key, warning]) => `${key}: ${warning}`)
+            .join("; ")}`
+        : note;
+
+    try {
+      // One transaction, all-or-nothing: a conflict on any key rolls back every key.
+      const results = await setConfigOverridesAtomic(appContext.db, {
+        patches: validatedPatches,
+        userId: principal.user.id,
+        note: auditNote,
+        groupId: randomUUID(),
+      });
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.config_update",
+        metadata: {
+          keys: results.map((result) => ({ key: result.key, version: result.version })),
+          note: auditNote ?? null,
+        },
+      });
+      // The live PATCH only ever sends upserts (never a clear), so every result carries a
+      // non-null value/version — narrow the atomic writer's (now nullable) shape back.
+      return {
+        results: results as Array<{ key: string; value: ConfigOverrideValue; version: number }>,
+      };
+    } catch (error) {
+      if (error instanceof ConfigOverrideVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+  });
+
+  server.delete("/api/v1/admin/config/:key", {
+    schema: routeSchemas.adminConfigClear,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { key } = request.params;
+    assertClearableKey(key);
+
+    try {
+      await clearConfigOverride(appContext.db, {
+        key,
+        expectedVersion: request.query.expectedVersion,
+        userId: principal.user.id,
+        note: request.query.note,
+        groupId: randomUUID(),
+      });
+    } catch (error) {
+      if (error instanceof ConfigOverrideVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.config_clear",
+      metadata: { key, note: request.query.note ?? null },
+    });
+    return { ok: true as const, key };
+  });
+
+  // Staged-rollout flips (Stage C): write explicit boolean overrides for the boot-applied
+  // flag set in the prescribed enable order. These take effect only after a restart
+  // (applyBootOverrides at process start). The ordered enable/disable rules are checked
+  // against the APPLIED (running) state, so a prerequisite must be restarted/applied
+  // before the next step unlocks. expectedVersion is mandatory and the operator's `ack`
+  // is recorded in the audit note so the acknowledgement is auditable, not just UI.
+  server.patch("/api/v1/admin/config/staged", {
+    schema: routeSchemas.adminConfigStaged,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { patches, note, ack } = request.body;
+    if (ack !== true) {
+      throw new BadRequestError("acknowledgement required: staged flips take effect only after a restart");
+    }
+    // A key may appear at most once per patch — duplicates would double-audit / double-
+    // bump (or self-conflict) in the atomic apply, and confuse the order graph.
+    const keys = patches.map((patch) => patch.key);
+    if (new Set(keys).size !== keys.length) {
+      throw new BadRequestError("A patch may not set the same key twice");
+    }
+
+    // The desired-graph baseline is the CURRENT DB desired state, NOT the boot-applied
+    // config (which is stale relative to later staged writes that have not been deployed).
+    // A `desired: null` patch reverts the key to env (clears the override). It is VALIDATED
+    // as if setting the key to its current env baseline boolean (so reverting an env-off key
+    // runs the disable-dependent rule), but APPLIED as a clear (the row is deleted).
+    const rawConfig = (appContext.rawConfig ?? appContext.config) as unknown as Record<string, unknown>;
+    const resolvedDesired = (patch: { key: string; desired: boolean | null }): boolean =>
+      patch.desired === null ? rawConfig[patch.key] === true : patch.desired;
+
+    // Per-key value/wiring gate: every key must be a boot (staged) descriptor. A boolean
+    // patch is validated as-is; a null (clear) patch is validated as its env baseline
+    // boolean. Reject the whole patch on the first bad entry before any read/write (400).
+    for (const patch of patches) {
+      const validated = validateStagedOverride(patch.key, resolvedDesired(patch));
+      if (!validated.ok) {
+        throw new BadRequestError(validated.error);
+      }
+    }
+
+    // Structured audit note: the ack + operator note travel with every audit row so the
+    // acknowledgement is durable evidence, not merely a UI affordance.
+    const auditNote = JSON.stringify({
+      ack: true,
+      note: note ?? null,
+      // Registry-derived cost warnings for the flipped keys, so the warning that applied is
+      // durable evidence alongside the ack (never trusting the client to send it).
+      costWarnings: collectCostWarnings(patches.map((patch) => patch.key)),
+    });
+
+    try {
+      // BLOCKER 1: the read-validate-write is delegated to one advisory-locked transaction
+      // (commitStagedConfigChange). It re-reads the baseline + running snapshot INSIDE the
+      // lock, runs the order gate (validateStagedTransition) against that serialized
+      // snapshot, then applies the patches — so two concurrent staged commits on different
+      // keys can never both pass validation and persist an invalid graph. A transition
+      // failure throws BadRequestError (400); a version conflict surfaces as 409 below.
+      const results = await commitStagedConfigChange(appContext.db, {
+        patches: patches.map((patch) => ({
+          key: patch.key,
+          desired: patch.desired,
+          expectedVersion: patch.expectedVersion,
+        })),
+        resolvedDesired,
+        rawConfig,
+        userId: principal.user.id,
+        note: auditNote,
+        groupId: randomUUID(),
+      });
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.config_staged_update",
+        metadata: {
+          keys: patches.map((patch) => ({ key: patch.key, desired: patch.desired })),
+          note: auditNote,
+        },
+      });
+      // The atomic writer returns ConfigOverrideValue (boolean for an upsert; null for a
+      // cleared key, which reverts to env).
+      return { results: results.map((result) => ({ ...result, value: result.value as boolean | null })) };
+    } catch (error) {
+      if (error instanceof ConfigOverrideVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+  });
+
+  server.patch("/api/v1/admin/notifications/settings", {
+    schema: routeSchemas.notificationsSettingsUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    await getTelegramSettings(appContext.db, {
+      defaultReportHourUtc: appContext.config.telegramReportHourUtc,
+    }); // ensure singleton row exists
+
+    const { botToken, chatId, ...rest } = request.body;
+    const patch: Parameters<typeof updateTelegramSettings>[1] = { ...rest };
+
+    if (botToken !== undefined) {
+      patch.encryptedBotToken = botToken === null
+        ? null
+        : JSON.stringify(
+            encryptJson(botToken, appContext.config.encryptionKey, appContext.config.encryptionKeyVersion),
+          );
+    }
+    if (chatId !== undefined) {
+      patch.chatId = chatId;
+    }
+
+    const updated = await updateTelegramSettings(appContext.db, patch);
+    const lastRealAttempt = await getLatestRealDeliveryAttempt(appContext.db);
+    return buildNotificationsSettingsResponse(updated, lastRealAttempt);
+  });
+
+  server.post("/api/v1/admin/notifications/test", {
+    schema: routeSchemas.notificationsTestMessage,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const result = await sendTelegramTestMessage(appContext);
+
+    await insertDeliveryAttempt(appContext.db, {
+      kind: "test",
+      status: result.status,
+      messageId: result.status === "sent" ? result.messageId : null,
+      error: result.status === "failed"
+        ? result.error
+        : result.status === "skipped"
+          ? result.reason
+          : null,
+    });
+
+    return {
+      status: result.status,
+      error: result.status === "failed" ? result.error : null,
+    };
+  });
+
+  server.post("/api/v1/admin/notifications/discover-chats", {
+    schema: routeSchemas.notificationsDiscoverChats,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    // Prefer the just-typed token (not yet saved); otherwise use the stored/env one.
+    let botToken = request.body.botToken ?? null;
+    if (!botToken) {
+      const settings = await getTelegramSettings(appContext.db, {
+        defaultReportHourUtc: appContext.config.telegramReportHourUtc,
+      });
+      botToken = resolveTelegramBotToken(appContext, settings);
+    }
+    if (!botToken) {
+      throw new BadRequestError("Enter a bot token first");
+    }
+
+    try {
+      const requestOptions = await resolveTelegramRequestOptions(appContext);
+      try {
+        return await discoverTelegramChats(botToken, requestOptions);
+      } finally {
+        await closeTelegramRequestOptions(requestOptions);
+      }
+    } catch (error) {
+      if (error instanceof TelegramDiscoveryError || error instanceof TelegramProxyConfigError) {
+        throw new BadRequestError(error.message);
+      }
+      throw error;
+    }
+  });
+
+  server.get("/api/v1/admin/notifications/incidents", {
+    schema: routeSchemas.notificationsIncidents,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const query = request.query;
+    const result = await listNotificationIncidentsWithPages(appContext.db, {
+      status: query.status,
+      kind: query.kind,
+      pageLabel: query.pageLabel,
+      limit: query.limit,
+      offset: query.offset,
+    });
+
+    return {
+      items: result.items.map((item) => ({
+        ...item,
+        openedAt: item.openedAt.toISOString(),
+        lastSeenAt: item.lastSeenAt.toISOString(),
+        resolvedAt: item.resolvedAt?.toISOString() ?? null,
+      })),
+      total: result.total,
+    };
+  });
+
+  server.post("/api/v1/admin/notifications/incidents/:incidentId/resolve", {
+    schema: routeSchemas.notificationsResolveIncident,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const { incidentId } = request.params;
+    const rows = (await appContext.db.execute(
+      sql`SELECT incident_key FROM notification_incidents WHERE id = ${incidentId}`,
+    )).rows;
+
+    if (!rows[0]) {
+      throw new NotFoundError(`Incident ${incidentId} not found`);
+    }
+
+    const incidentKey = (rows[0] as any).incident_key as string;
+    const resolvedAt = new Date();
+    await recordNotificationIncidentRecovery(appContext.db, {
+      incidentKey,
+      recoveredAt: resolvedAt,
+      now: resolvedAt,
+    });
+    const resolved = await resolveNotificationIncident(appContext.db, {
+      incidentKey,
+      maxLastSeenAt: resolvedAt,
+      now: resolvedAt,
+    });
+
+    if (resolved) {
+      // Best-effort send "Manually resolved" to Telegram
+      const delivery = await sendTelegramMessage(appContext, {
+        text: `✅ Manually resolved\nIncident: ${incidentKey}`,
+      });
+
+      await insertDeliveryAttempt(appContext.db, {
+        kind: "incident_manually_resolved",
+        status: delivery.status,
+        notificationIncidentId: incidentId,
+        messageId: delivery.status === "sent" ? delivery.messageId : null,
+        error: delivery.status === "failed"
+          ? delivery.error
+          : delivery.status === "skipped"
+            ? delivery.reason
+            : null,
+      });
+    }
+
+    return { ok: true as const };
+  });
+
+  server.get("/api/v1/admin/notifications/reports/preview", {
+    schema: routeSchemas.notificationsReportPreview,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const report = await buildDailyRevenueTelegramReport(appContext);
+    return {
+      text: report.text,
+      reportDate: report.reportDate,
+    };
+  });
+
+  server.post("/api/v1/admin/notifications/reports/send", {
+    schema: routeSchemas.notificationsReportSend,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const result = await sendManualDailyRevenueTelegramReport(appContext);
+    return {
+      status: result.delivery.status,
+      error: result.delivery.status === "failed" ? result.delivery.error : null,
+      reportDate: result.report?.reportDate ?? null,
+    };
+  });
+
+  server.get("/api/v1/admin/notifications/reports/history", {
+    schema: routeSchemas.notificationsReportHistory,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    const attempts = await listDeliveryAttempts(appContext.db, {
+      kind: ["daily_report_scheduled", "daily_report_manual"],
+      limit: 50,
+    });
+
+    return {
+      items: attempts.map((a) => ({
+        id: a.id,
+        kind: a.kind as "daily_report_scheduled" | "daily_report_manual",
+        status: a.status,
+        reportDate: a.reportDate,
+        error: a.error,
+        createdAt: a.createdAt.toISOString(),
+      })),
+    };
   });
 }
