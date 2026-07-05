@@ -1923,3 +1923,30 @@ ban), Task 5 (drift gates in desktop/extension + the prove-the-gate drill),
 Task 6 (release ops — note: external git-tag installs need the runtime
 bundled from contracts at publish time; decide there). Resume map in the
 stage's `## Progress`.
+
+## Stage 20 Session 1 Addendum — Dashboard Adopted Same Session (2026-07-05)
+
+**Decision #91:** Task 3 landed in the same session (2d536cf): the dashboard
+runs end-to-end on @kernel/sdk. All 15 domain modules re-implemented over the
+typed operations through one `src/api/sdk.ts` (cookie mode); `client.ts` and
+`utils.ts` deleted; the two `ApiError` consumers moved to `KernelApiError`;
+the CSV download rides `raw()`; React Query keys are byte-stable and the
+workboard-v2 comma-joined `status` wire shape is preserved. The SDK's
+`onAuthError` gained an OPERATION argument so a failed `login` stays a form
+error while expired sessions still redirect. Where hooks take looser types
+than the contracts (period/platform/bucketKey strings), localized
+`Parameters<typeof kernel.X>[0][...]` casts keep hook signatures unchanged.
+Two recorded mechanics: (1) the lint ban is a TEST
+(tests/dashboard-sdk-ban.test.ts — no direct fetch in src/api, no client
+resurrection, every module through ./sdk.js) because the dashboard tree is
+not ESLint-covered — the same mechanism substitution as the contracts auth
+gate; (2) `@kernel/sdk` needs FOUR alias registrations (dashboard
+tsconfig/vite, root vitest, tsconfig.base — root tsc follows test imports
+into dashboard sources and cascades phantom errors without the base mapping).
+Dashboard `tsc -b` + `vite build` green; dashboard suite 18 files/113 green;
+full suite after the last commit: **189 files / 1528 tests green**.
+
+Stage 20 remaining: Task 5 (drift gates in desktop/extension CI + weekly
+bump-PR + the prove-the-gate drill — cross-repo, owner-visible PRs) and
+Task 6 (release step: sdk-vX.Y.Z tags; bundle the contracts runtime into the
+tag artifact for external installs — decide there).
