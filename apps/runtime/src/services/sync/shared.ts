@@ -1,5 +1,9 @@
+import { createHash, randomUUID } from "node:crypto";
+
 import {
   type Database,
+  getPageSyncExecutionContext,
+  insertObservation,
   insertRawPayload,
   updatePageMetadata,
 } from "@agency_hub_core/db";
@@ -80,6 +84,8 @@ export async function persistRawPayload(
   input: RawPayloadInsertInput,
   options?: {
     action?: string;
+    /** Producer platform for the observation (Stage 7); callers know theirs. */
+    platform?: "fansly" | "onlyfans";
   },
 ) {
   try {
@@ -88,6 +94,39 @@ export async function persistRawPayload(
     throw new SyncPayloadPersistenceError({
       endpoint: input.endpoint,
       action: options?.action ?? `inserting ${input.endpoint} raw payload`,
+      cause: error,
+    });
+  }
+
+  // Stage 7 producer 2: every fetched page is also an observation. As loud as
+  // the raw insert — a failed capture fails the chunk (which retries); never a
+  // silent drop. The idempotency key is unique per fetch by construction
+  // (page:stream:run:requestSeq); when a caller runs outside the page-executor
+  // context a UUID takes requestSeq's place — retries then produce extra
+  // observations with distinct keys, which the Stage 7 reconciliation expects.
+  const context = getPageSyncExecutionContext();
+  const stream = context?.stream ?? null;
+  const platform = options?.platform ?? null;
+  try {
+    await insertObservation(db, {
+      source: "pull",
+      producer: `sync:${platform ?? "unknown"}:${stream ?? input.endpoint}`,
+      platform,
+      accountId: input.platformAccountId,
+      kind: input.endpoint,
+      payload: input.responsePayload,
+      payloadHash: createHash("sha256").update(JSON.stringify(input.responsePayload)).digest(),
+      idempotencyKey: [
+        input.platformAccountId,
+        stream ?? input.endpoint,
+        input.syncRunId ?? "norun",
+        context?.requestSeq ?? randomUUID(),
+      ].join(":"),
+    });
+  } catch (error) {
+    throw new SyncPayloadPersistenceError({
+      endpoint: input.endpoint,
+      action: `inserting ${input.endpoint} observation`,
       cause: error,
     });
   }

@@ -1664,6 +1664,7 @@ export async function executeSubscribersChunk(
       retainUntil: retentionDate(),
     }, {
       action: "inserting subscribers raw payload",
+      platform: "fansly",
     });
 
     if (state.offset === 0 && page.items.length === 0) {
@@ -1914,6 +1915,7 @@ export async function executeFollowersChunk(
       retainUntil: retentionDate(),
     }, {
       action: "inserting followers raw payload",
+      platform: "fansly",
     });
 
     let reachedBoundary = false;
@@ -2182,6 +2184,7 @@ export async function executeFollowersReconcileChunk(
       retainUntil: retentionDate(),
     }, {
       action: "inserting followers raw payload",
+      platform: "fansly",
     });
 
     if (state.offset === 0 && page.items.length === 0 && state.sourceFollowerCount > 0) {
@@ -2782,6 +2785,7 @@ export async function executeDmConversationsChunk(
       retainUntil: dmRetentionDate(),
     }, {
       action: "inserting dm conversations raw payload",
+      platform: "fansly",
     });
 
     const accountsById = new Map(page.accounts.map((account) => [account.id, account]));
@@ -3373,6 +3377,7 @@ async function executeOnlyFansDmMessagesChunk(
           retainUntil: dmRetentionDate(),
         }, {
           action: "inserting dm_messages raw payload",
+          platform: "onlyfans",
         });
 
         const platformMessageIds = page.parsed.items.map((message) => onlyMonsterMessageId(message));
@@ -3863,6 +3868,7 @@ export async function executeDmMessagesChunk(
           retainUntil: dmRetentionDate(),
         }, {
           action: "inserting dm_messages raw payload",
+          platform: "fansly",
         });
 
         const existingIds = await getExistingPageDmMessageIds(app.db, {

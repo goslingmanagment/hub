@@ -619,6 +619,28 @@ describe("OFAPI DM messages sync", () => {
         Date.now() + 36000 * 24 * 60 * 60 * 1000,
       );
     }
+
+    // Stage 7 producer 2: each fetched page is also an observation with the
+    // documented pull idempotency key (page:stream:run:requestSeq).
+    const observations = await testDb.pool.query<{
+      producer: string;
+      kind: string;
+      account_id: string;
+      idempotency_key: string;
+    }>(
+      `select producer, kind, account_id::text as account_id, idempotency_key
+       from observations where source = 'pull' order by id`,
+    );
+    expect(observations.rows).toHaveLength(2);
+    for (const row of observations.rows) {
+      expect(row.producer).toBe("sync:onlyfans:dm_messages");
+      expect(row.kind).toBe("dm_messages");
+      expect(row.account_id).toBe(String(page.id));
+      // page:stream:run:<requestSeq under the page executor; UUID fallback
+      // here because the test drives the chunk outside the executor context>.
+      expect(row.idempotency_key).toMatch(new RegExp(`^${page.id}:dm_messages:\\d+:[\\w-]+$`));
+    }
+    expect(observations.rows[0]!.idempotency_key).not.toBe(observations.rows[1]!.idempotency_key);
   });
 
   it("tops up a diverged head incrementally and stops on overlap with stored messages", async (context) => {

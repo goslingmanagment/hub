@@ -927,6 +927,7 @@ export async function executeOfapiDmMessagesChunk(
         retainUntil: dmRetentionDate(),
       }, {
         action: "inserting dm_messages raw payload",
+        platform: "onlyfans",
       });
 
       // first_id is inclusive — drop the cursor echo before any bookkeeping.
