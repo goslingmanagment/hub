@@ -76,6 +76,13 @@ const canonicalizeDriverMocks = vi.hoisted(() => ({
   runCanonicalization: vi.fn(),
 }));
 
+const messageArchiveMocks = vi.hoisted(() => ({
+  MESSAGE_ARCHIVE_SWEEP_QUEUE: "projections.message-archive.sweep",
+  ensureMessageArchiveQueues: vi.fn(),
+  ensureMessageArchiveSchedule: vi.fn(),
+  runMessageArchiveProjection: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
@@ -92,6 +99,7 @@ vi.mock("../apps/runtime/src/services/ofapi-dm-analytics.ts", () => ofapiDmAnaly
 vi.mock("../apps/runtime/src/services/db-disk-alert.ts", () => dbDiskAlertMocks);
 vi.mock("../apps/runtime/src/services/observations-partitions.ts", () => observationsPartitionMocks);
 vi.mock("../apps/runtime/src/services/canonicalize-driver.ts", () => canonicalizeDriverMocks);
+vi.mock("../apps/runtime/src/services/projections/message-archive.ts", () => messageArchiveMocks);
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,

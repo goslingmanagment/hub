@@ -2541,6 +2541,24 @@ const telegramChatIdSchema = z
   .string()
   .trim()
   .regex(/^(-?\d+|@[A-Za-z0-9_]{5,32})$/, "Expected a numeric chat id (e.g. 123456789 or -100…) or @username");
+// Stage 10: platform-neutral message archive reads (owner/team_lead only).
+export const archiveMessageItemSchema = z.object({
+  id: intId,
+  accountId: intId,
+  platform: z.string(),
+  conversationRef: z.string().nullable(),
+  messageRef: z.string(),
+  fanNativeId: z.string().nullable(),
+  senderRole: z.string(),
+  isSentByMe: z.boolean(),
+  occurredAt: isoTimestamp.nullable(),
+  textPlain: z.string(),
+  priceMills: z.string().nullable(),
+  isTip: z.boolean(),
+  tipAmountMills: z.string(),
+  deletedAt: isoTimestamp.nullable(),
+});
+
 const notificationIncidentKindEnum = z.enum([
   "auth_blocked",
   "proxy_failed",
@@ -4896,6 +4914,36 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+    },
+  },
+  archiveConversationMessages: {
+    tags: ["archive"],
+    summary: "List archived messages for one conversation (paged, before-cursor)",
+    security: cookieOnlySecurity,
+    params: z.object({ ref: z.string().min(1).max(200) }),
+    querystring: z.object({
+      before: z.coerce.number().int().positive().optional(),
+      limit: z.coerce.number().int().min(1).max(500).optional(),
+    }),
+    response: {
+      200: z.array(archiveMessageItemSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  archiveSearch: {
+    tags: ["archive"],
+    summary: "Search archived message text (bounded ILIKE)",
+    security: cookieOnlySecurity,
+    querystring: z.object({
+      q: z.string().min(2).max(200),
+      fan: z.string().max(200).optional(),
+      limit: z.coerce.number().int().min(1).max(200).optional(),
+    }),
+    response: {
+      200: z.array(archiveMessageItemSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
   adminSyncRuns: {

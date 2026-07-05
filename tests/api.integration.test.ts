@@ -9826,6 +9826,66 @@ describe("api integration", () => {
     });
   }, 15_000);
 
+  it("gates archive reads to dashboard roles and scopes results (Stage 10)", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const ownerLogin = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" },
+    });
+    const ownerCookie = sessionCookieFrom(ownerLogin);
+
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, fan_native_id, sender_role, text_plain, occurred_at)
+       values ($1, 'fansly', 'conv-arch-1', 'am-1', 'fan-arch', 'fan', 'archived hello world', now())`,
+      [fixture.lanaPage.id],
+    );
+
+    const listed = await server.inject({
+      method: "GET",
+      url: "/api/v1/archive/conversations/conv-arch-1/messages",
+      headers: { cookie: ownerCookie },
+    });
+    expect(listed.statusCode, listed.body).toBe(200);
+    expect(listed.json()).toHaveLength(1);
+    expect(listed.json()[0]).toMatchObject({
+      messageRef: "am-1",
+      platform: "fansly",
+      textPlain: "archived hello world",
+    });
+
+    const searched = await server.inject({
+      method: "GET",
+      url: "/api/v1/archive/search?q=hello%20world",
+      headers: { cookie: ownerCookie },
+    });
+    expect(searched.statusCode, searched.body).toBe(200);
+    expect(searched.json()).toHaveLength(1);
+
+    // Chatter bearer keys are not a dashboard surface — 403 on both.
+    const appContext = createTestAppContext(testDb);
+    const chatterKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+    const chatterSearch = await server.inject({
+      method: "GET",
+      url: "/api/v1/archive/search?q=hello%20world",
+      headers: { authorization: `Bearer ${chatterKey.key}` },
+    });
+    expect(chatterSearch.statusCode).toBe(403);
+    const chatterList = await server.inject({
+      method: "GET",
+      url: "/api/v1/archive/conversations/conv-arch-1/messages",
+      headers: { authorization: `Bearer ${chatterKey.key}` },
+    });
+    expect(chatterList.statusCode).toBe(403);
+  });
+
   it("soft-deletes pages: tombstone keeps facts, RESTRICT blocks raw DELETE (Stage 13)", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

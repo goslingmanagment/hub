@@ -31,6 +31,12 @@ import {
   runCanonicalization,
 } from "./services/canonicalize-driver.ts";
 import {
+  MESSAGE_ARCHIVE_SWEEP_QUEUE,
+  ensureMessageArchiveQueues,
+  ensureMessageArchiveSchedule,
+  runMessageArchiveProjection,
+} from "./services/projections/message-archive.ts";
+import {
   ensureOfapiCreditQueues,
   ensureOfapiCreditSchedules,
   startOfapiCreditWorker,
@@ -157,6 +163,7 @@ export async function startWorkerServices(
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
+  await ensureMessageArchiveQueues(boss, createdQueues);
   await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
@@ -169,6 +176,7 @@ export async function startWorkerServices(
     ensureDbDiskUsageSchedule(boss),
     ensureObservationsPartitionSchedule(boss),
     ensureCanonicalizeSchedule(boss),
+    ensureMessageArchiveSchedule(boss),
   ]);
 
   await boss.work(SYNC_PLANNER_QUEUE, {
@@ -207,6 +215,13 @@ export async function startWorkerServices(
     const result = await runCanonicalization(app);
     if (result.scanned > 0) {
       app.logger.info(result, "Canonicalization sweep complete");
+    }
+  });
+
+  await boss.work(MESSAGE_ARCHIVE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    const result = await runMessageArchiveProjection(app);
+    if (result.eventsSeen > 0) {
+      app.logger.info(result, "Message-archive projection sweep complete");
     }
   });
 

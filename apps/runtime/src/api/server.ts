@@ -42,7 +42,9 @@ import {
   listSubscriberDailyForPage,
   listFollowerTotalsForPages,
   listSubscriberTotalsForPages,
+  listArchiveConversationMessages,
   listVisiblePages,
+  searchArchiveMessages,
   ModelHasPagesError,
   setFanFlags,
   updateModelBySlug,
@@ -2383,6 +2385,52 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     await requireOpenApiDocsOwner(request);
     return normalizeOpenApiDocument(server.swagger() as Record<string, any>);
+  });
+
+  // === Archive reads (Stage 10) — dashboard-grade, owner/team_lead only ===
+  const serializeArchiveMessage = (row: Awaited<ReturnType<typeof listArchiveConversationMessages>>[number]) => ({
+    id: row.id,
+    accountId: row.accountId,
+    platform: row.platform,
+    conversationRef: row.conversationRef,
+    messageRef: row.messageRef,
+    fanNativeId: row.fanNativeId,
+    senderRole: row.senderRole,
+    isSentByMe: row.isSentByMe,
+    occurredAt: row.occurredAt?.toISOString() ?? null,
+    textPlain: row.textPlain,
+    priceMills: row.priceMills,
+    isTip: row.isTip,
+    tipAmountMills: row.tipAmountMills,
+    deletedAt: row.deletedAt?.toISOString() ?? null,
+  });
+
+  server.get("/api/v1/archive/conversations/:ref/messages", {
+    schema: routeSchemas.archiveConversationMessages,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const rows = await listArchiveConversationMessages(appContext.db, {
+      ...(pageScopeFor(principal) !== undefined ? { accountIds: pageScopeFor(principal) } : {}),
+      conversationRef: request.params.ref,
+      beforeId: request.query.before ?? null,
+      ...(request.query.limit !== undefined ? { limit: request.query.limit } : {}),
+    });
+    return rows.map(serializeArchiveMessage);
+  });
+
+  server.get("/api/v1/archive/search", {
+    schema: routeSchemas.archiveSearch,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const rows = await searchArchiveMessages(appContext.db, {
+      ...(pageScopeFor(principal) !== undefined ? { accountIds: pageScopeFor(principal) } : {}),
+      query: request.query.q,
+      fanNativeId: request.query.fan ?? null,
+      ...(request.query.limit !== undefined ? { limit: request.query.limit } : {}),
+    });
+    return rows.map(serializeArchiveMessage);
   });
 
   // === Admin routes ===

@@ -35,6 +35,11 @@ import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import {
+  rebuildMessageArchiveProjection,
+  runMessageArchiveBackfills,
+  runMessageArchiveProjection,
+} from "./services/projections/message-archive.ts";
+import {
   assignPageToUser,
   createUserAccount,
   issueChatterApiKey,
@@ -916,6 +921,40 @@ export function buildProgram() {
             `deduped ${result.deduped}, stamped ${result.stamped}, ` +
             `scanned ${result.scanned}, skipped-unmapped ${result.skippedUnmapped}`,
         );
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("projection:rebuild")
+    .description("Stage 10: rebuild a projection from the domain-event ledger (truncate scope + replay)")
+    .argument("<projection>", "projection name (message_archive)")
+    .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
+    .action(async (projection, options) => {
+      if (projection !== "message_archive") {
+        throw new Error(`Unknown projection: ${projection}`);
+      }
+      const app = await createAppContext();
+      try {
+        const result = await rebuildMessageArchiveProjection(app, {
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+        });
+        console.log(JSON.stringify(result));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("archive:backfill")
+    .description("Stage 10: idempotent archive backfills from dm_message_archive + the hot table")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const result = await runMessageArchiveBackfills(app);
+        const swept = await runMessageArchiveProjection(app);
+        console.log(JSON.stringify({ ...result, projectionAfter: swept }));
       } finally {
         await app.close();
       }

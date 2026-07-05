@@ -14,6 +14,7 @@ export * from "./repositories/ai-usage.ts";
 export * from "./repositories/notifications.ts";
 export * from "./repositories/observations.ts";
 export * from "./repositories/domain-events.ts";
+export * from "./repositories/message-archive.ts";
 export * from "./repositories/ofapi.ts";
 export * from "./repositories/ofapi-commands.ts";
 export * from "./repositories/ofapi-sync-snapshot.ts";

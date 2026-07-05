@@ -2421,3 +2421,65 @@ export const domainEventSeq = pgTable(
     nextSeq: bigint("next_seq", { mode: "number" }).default(1).notNull(),
   },
 );
+
+// Stage 10: platform-neutral message archive — a rebuildable projection fed
+// by message.* domain events (facts live upstream in observations/events).
+export const messageArchive = pgTable(
+  "message_archive",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    accountId: bigint("account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: text("platform").notNull(),
+    nativeAccountRef: text("native_account_ref"),
+    conversationRef: text("conversation_ref"),
+    messageRef: text("message_ref").notNull(),
+    fanNativeId: text("fan_native_id"),
+    senderRole: text("sender_role").default("unknown").notNull(),
+    isSentByMe: boolean("is_sent_by_me").default(false).notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }),
+    textPlain: text("text_plain").default("").notNull(),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    isTip: boolean("is_tip").default(false).notNull(),
+    tipAmountMills: bigint("tip_amount_mills", { mode: "bigint" }).default(0n).notNull(),
+    inReplyToRef: text("in_reply_to_ref"),
+    mediaMetadata: jsonb("media_metadata").$type<Array<Record<string, unknown>>>().default([]).notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    sourceEventId: bigint("source_event_id", { mode: "number" }),
+    backfillSource: text("backfill_source"),
+    archivedAt: timestamp("archived_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    uniq: unique("message_archive_account_id_platform_message_ref_key").on(
+      table.accountId,
+      table.platform,
+      table.messageRef,
+    ),
+    accountConvIdx: index("message_archive_account_conv_idx").on(
+      table.accountId,
+      table.conversationRef,
+      table.occurredAt,
+    ),
+    accountOccurredIdx: index("message_archive_account_occurred_idx").on(
+      table.accountId,
+      table.occurredAt,
+    ),
+  }),
+);
+
+// The standard per-account event high-water (spec name projection_watermarks
+// was taken by the spender rebuild-timestamps table — recorded deviation).
+export const projectionSeqWatermarks = pgTable(
+  "projection_seq_watermarks",
+  {
+    projection: text("projection").notNull(),
+    accountId: bigint("account_id", { mode: "number" }).notNull(),
+    highSeq: bigint("high_seq", { mode: "number" }).default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.projection, table.accountId] }),
+  }),
+);
