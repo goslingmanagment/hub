@@ -17,6 +17,7 @@ const KIND_DESCRIPTIONS: Record<RouteAuthPolicy["kind"], string> = {
   "hmac": "HMAC signature over the raw body (in-handler)",
   "monitoring": "x-monitoring-token OR dashboard session",
   "session": "dashboard cookie session (owner/team_lead)",
+  "any-session": "any live cookie session, any human role",
   "owner-session": "dashboard cookie session, owner role only",
   "apiKey": "bearer API key",
   "any": "any authenticated principal",

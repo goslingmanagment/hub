@@ -159,6 +159,7 @@ export const users = pgTable("users", {
   username: text("username").notNull().unique(),
   role: userRoleEnum("role").notNull(),
   passwordHash: text("password_hash"),
+  mustChangePassword: boolean("must_change_password").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -1208,6 +1209,9 @@ export const workboardSnoozes = pgTable(
       .notNull(),
     snoozedUntil: timestamp("snoozed_until", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // Stage 22: who snoozed — attribution gap closed.
+    createdByUserId: bigint("created_by_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "set null" }),
   },
   (table) => ({
     platformAccountFanUniq: unique("workboard_snoozes_platform_account_id_fan_id_key").on(
@@ -1541,6 +1545,56 @@ export const apiKeys = pgTable(
   },
   (table) => ({
     userIdx: index("api_keys_user_idx").on(table.userId),
+  }),
+);
+
+// Kernel Stage 22: human-bound, expiring bearer credentials for machines.
+// Nothing is ever attributed to a bare device — the token resolves the OWNING
+// human's principal; the device id travels as metadata.
+export const deviceTokens = pgTable(
+  "device_tokens",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    label: text("label").default("").notNull(),
+    tokenDigest: text("token_digest").notNull().unique(),
+    keyPrefix: text("key_prefix").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedReason: text("revoked_reason"),
+  },
+  (table) => ({
+    userIdx: index("device_tokens_user_idx").on(table.userId),
+    expiryIdx: index("device_tokens_expiry_idx").on(table.expiresAt),
+  }),
+);
+
+// Kernel Stage 22: the append-only access log replacing hard-deleted page
+// assignments. scope_type 'org' is the future-proof label (single-tenant per
+// DP 9-A: no org table, scope_id = 0); 'model' grants expand to the model's
+// present AND future pages at read time.
+export const accessGrants = pgTable(
+  "access_grants",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    scopeType: text("scope_type").$type<"org" | "model" | "page">().notNull(),
+    scopeId: bigint("scope_id", { mode: "number" }).default(0).notNull(),
+    grantedBy: bigint("granted_by", { mode: "number" })
+      .references(() => users.id, { onDelete: "set null" }),
+    grantedAt: timestamp("granted_at", { withTimezone: true }).defaultNow().notNull(),
+    revokedBy: bigint("revoked_by", { mode: "number" })
+      .references(() => users.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => ({
+    scopeIdx: index("access_grants_scope_idx").on(table.scopeType, table.scopeId),
   }),
 );
 
@@ -1894,6 +1948,10 @@ export const workboardContactLog = pgTable(
     // Stage 2: undo marks the row retracted instead of deleting it (interim
     // form of Stage 23's contact.retracted compensating event). NULL = active.
     retractedAt: timestamp("retracted_at", { withTimezone: true }),
+    // Stage 22: who acted — attribution gap closed; SET NULL keeps history
+    // when a user row goes.
+    actedByUserId: bigint("acted_by_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "set null" }),
   },
   (table) => ({
     pageFanActedIdx: index("workboard_contact_log_page_fan_acted_idx").on(

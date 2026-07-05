@@ -92,7 +92,52 @@ export const authUserSchema = z.object({
   id: intId,
   username: z.string(),
   role: userRoleEnum,
+  // Stage 22: admin-set passwords may force a change on first session login.
+  mustChangePassword: z.boolean(),
   assignedPages: z.array(pageRefSchema),
+});
+
+// --- Stage 22: device tokens + access grants ---
+
+export const changePasswordBodySchema = z.object({
+  currentPassword: z.string().min(1).max(1024),
+  newPassword: z.string().min(8).max(256),
+});
+
+export const deviceTokenLabelBodySchema = z.object({
+  label: z.string().min(1).max(120),
+});
+
+export const issuedDeviceTokenResponseSchema = z.object({
+  // The raw bearer token — returned exactly once at issuance.
+  token: z.string(),
+  id: intId,
+  label: z.string(),
+  keyPrefix: z.string(),
+  expiresAt: isoTimestamp,
+});
+
+export const deviceTokenItemSchema = z.object({
+  id: intId,
+  label: z.string(),
+  keyPrefix: z.string(),
+  isActive: z.boolean(),
+  expiresAt: isoTimestamp,
+  lastUsedAt: isoTimestamp.nullable(),
+  createdAt: isoTimestamp,
+  revokedAt: isoTimestamp.nullable(),
+  revokedReason: z.string().nullable(),
+});
+
+export const accessGrantItemSchema = z.object({
+  id: intId,
+  scopeType: z.enum(["org", "model", "page"]),
+  scopeId: z.number().int(),
+  scopeLabel: z.string().nullable(),
+  grantedBy: z.number().int().nullable(),
+  grantedAt: isoTimestamp,
+  revokedBy: z.number().int().nullable(),
+  revokedAt: isoTimestamp.nullable(),
 });
 
 export const adminUserApiKeyStatusSchema = z.object({
@@ -107,7 +152,7 @@ export const adminUserSchema = authUserSchema.extend({
 });
 
 export const authStateSchema = z.object({
-  authMethod: z.enum(["session", "api_key"]),
+  authMethod: z.enum(["session", "api_key", "device_token"]),
   user: authUserSchema,
 });
 
@@ -1976,6 +2021,8 @@ export const adminCreateUserBodySchema = z.object({
 
 export const adminSetPasswordBodySchema = z.object({
   password: z.string().min(8).max(256),
+  // Stage 22: force a change on the first session login (chatter invite flow v1).
+  mustChangePassword: z.boolean().optional(),
 });
 
 export const adminAssignPageBodySchema = z.object({
@@ -3602,6 +3649,7 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 //   hmac           authenticated in-handler by HMAC over the raw body (OFAPI webhook)
 //   monitoring     x-monitoring-token OR a dashboard session (sync health)
 //   session        cookie-session dashboard roles (owner/team_lead)
+//   any-session    any live cookie session, any human role (self-serve auth)
 //   owner-session  cookie session with the owner role (admin surface, swagger/openapi)
 //   apiKey         bearer API key (desktop/extension lanes)
 //   any            any authenticated principal; finer scoping stays in the service
@@ -3611,7 +3659,7 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 // device tokens additively).
 export const routeAuthPolicySchema = z
   .object({
-    kind: z.enum(["public", "hmac", "monitoring", "session", "owner-session", "apiKey", "any"]),
+    kind: z.enum(["public", "hmac", "monitoring", "session", "any-session", "owner-session", "apiKey", "any"]),
     roles: z.array(userRoleEnum).nonempty().optional(),
     scope: z.enum(["page", "none"]).optional(),
   })
@@ -3633,6 +3681,7 @@ export function routeSecurityFromAuth(
     case "monitoring":
       return [{ cookieAuth: [] }, { monitoringTokenAuth: [] }];
     case "session":
+    case "any-session":
     case "owner-session":
       return [{ cookieAuth: [] }];
     case "apiKey":
@@ -5072,6 +5121,108 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  authChangePassword: {
+    auth: { kind: "any-session" },
+    tags: ["auth"],
+    summary: "Change the caller's own password",
+    description: "Verifies the current password, sets the new one, clears "
+      + "must_change_password, and revokes every session — log in again with the "
+      + "new credential.",
+    body: changePasswordBodySchema,
+    response: {
+      200: z.object({ ok: z.literal(true) }),
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  authIssueDeviceToken: {
+    auth: { kind: "any-session" },
+    tags: ["auth"],
+    summary: "Issue a device token for the caller (returned once)",
+    body: deviceTokenLabelBodySchema,
+    response: {
+      200: issuedDeviceTokenResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminListDeviceTokens: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "List a user's device tokens",
+    params: z.object({ username: z.string().min(1) }),
+    response: {
+      200: z.array(deviceTokenItemSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminIssueDeviceToken: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Issue a device token for a user (returned once)",
+    params: z.object({ username: z.string().min(1) }),
+    body: deviceTokenLabelBodySchema,
+    response: {
+      200: issuedDeviceTokenResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminRevokeDeviceTokens: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Revoke all of a user's device tokens",
+    params: z.object({ username: z.string().min(1) }),
+    response: {
+      200: z.object({ revokedCount: z.number().int().nonnegative() }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminGrantModel: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Grant a user model-scope access (present and future pages)",
+    params: z.object({ username: z.string().min(1) }),
+    body: z.object({ modelSlug: z.string().min(1) }),
+    response: {
+      200: z.object({ ok: z.literal(true) }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminRevokeModel: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Revoke a user's model-scope grant",
+    params: z.object({ username: z.string().min(1), modelSlug: z.string().min(1) }),
+    response: {
+      200: z.object({ ok: z.literal(true) }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminListUserGrants: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Access-grant history for one user (active and revoked)",
+    params: z.object({ username: z.string().min(1) }),
+    response: {
+      200: z.object({ grants: z.array(accessGrantItemSchema) }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   archiveConversationMessages: {
     auth: { kind: "session" },
     tags: ["archive"],
@@ -5743,3 +5894,7 @@ export type WorkboardV2AiRunsResponse = z.infer<typeof workboardV2AiRunsResponse
 export type DomainEventFrame = z.infer<typeof domainEventFrameSchema>;
 export type DomainEventsSnapshotRequired = z.infer<typeof domainEventsSnapshotRequiredResponseSchema>;
 export type DomainEventsSnapshotResponse = z.infer<typeof domainEventsSnapshotResponseSchema>;
+export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
+export type DeviceTokenItem = z.infer<typeof deviceTokenItemSchema>;
+export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponseSchema>;
+export type AccessGrantItem = z.infer<typeof accessGrantItemSchema>;

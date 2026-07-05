@@ -11,6 +11,7 @@ import {
   pages,
   userPageAssignments,
   users,
+  deviceTokens,
 } from "../schema.ts";
 
 export interface CreateUserInput {
@@ -266,4 +267,56 @@ export async function insertAuditEvent(db: Database, input: InsertAuditEventInpu
   }).returning();
 
   return created;
+}
+
+// --- Device tokens (kernel Stage 22): human-bound, expiring machine credentials ---
+
+export interface CreateDeviceTokenInput {
+  userId: number;
+  label: string;
+  tokenDigest: string;
+  keyPrefix: string;
+  expiresAt: Date;
+}
+
+export async function createDeviceToken(db: Database, input: CreateDeviceTokenInput) {
+  const [created] = await db.insert(deviceTokens).values(input).returning();
+  return created!;
+}
+
+export async function findDeviceTokenByDigest(db: Database, tokenDigest: string) {
+  return db.query.deviceTokens.findFirst({
+    where: eq(deviceTokens.tokenDigest, tokenDigest),
+  });
+}
+
+export async function updateDeviceTokenUse(db: Database, deviceTokenId: number, input: {
+  lastUsedAt: Date;
+  expiresAt?: Date;
+}) {
+  await db.update(deviceTokens).set({
+    lastUsedAt: input.lastUsedAt,
+    ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+  }).where(eq(deviceTokens.id, deviceTokenId));
+}
+
+export async function listDeviceTokensForUser(db: Database, userId: number) {
+  return db.query.deviceTokens.findMany({
+    where: eq(deviceTokens.userId, userId),
+    orderBy: (table, { desc }) => [desc(table.createdAt)],
+  });
+}
+
+export async function revokeDeviceTokensForUser(db: Database, userId: number, reason: string) {
+  return db.update(deviceTokens).set({
+    revokedAt: new Date(),
+    revokedReason: reason,
+  }).where(and(
+    eq(deviceTokens.userId, userId),
+    isNull(deviceTokens.revokedAt),
+  )).returning({ id: deviceTokens.id });
+}
+
+export async function updateUserMustChangePassword(db: Database, userId: number, value: boolean) {
+  await db.update(users).set({ mustChangePassword: value }).where(eq(users.id, userId));
 }
