@@ -1468,3 +1468,26 @@ the `fan_earnings_stats` projection writer (watermark pattern, on-demand fan ups
 forward-only observed_at) in the projection sweep + `projection:rebuild`. Stage 16's
 remaining deferral shrinks to: adapter typed schemas (cosmetic post-ramp) + the owner-grade
 read endpoint (Stage 33 or a later slice).
+
+## Stage 13 Exited — Live Webhook Spend Through the Gate (2026-07-05)
+
+**Decision #79:** Stage 13 flips to **exited** (prod-verified 2026-07-05 ~11:40 UTC).
+The §5 exit condition — the first live daytime webhook spend writing through the
+single-writer gate — was met twice over: a $4.99 subscription at 08:36 UTC and a
+$13.00 message purchase at 10:28 UTC, both stamped `source='ofapi:webhook'` with
+`source_observation_id` attached. Zero `wrong_transactions_writer` incidents; the two
+`transactions.new` webhook observations since deploy map 1:1 to the two written rows
+(no ingest backlog). Verified in a read-only session authorized by the owner.
+
+Consequence: Stage 14 (OFAPI transactions truth + historical backfills) is unblocked —
+its dependencies 13+5+3 are now all exited — and its build starts immediately per the
+owner's standing "continue without waiting".
+
+Same session, for the record: Stage 7 interim coverage healthy (webhook 3,130 obs /
+9 kinds, pull 1,662 / 9 kinds since the 02:47 deploy; `command_result`/`operator` at
+zero — traffic-dependent, watch at Monday's reconciliation). Read-gateway p95
+baseline-by-logs is NOT available (no gateway lines in api logs in 24 h) — Monday's
+pre-deploy baseline needs an active probe instead. The live `onlyfans/dm_messages`
+bug is now evidenced: pages lora-of/lora-vip-of have NEVER succeeded; ~400 attempts/24 h
+on `GET /:accountId/chats/:chatId/messages` (limit=100) all abort on the client-side
+timeout — diagnosis proceeding as non-stage work.
