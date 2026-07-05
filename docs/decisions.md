@@ -1283,3 +1283,33 @@ the owner verbatim):
 
 Remaining owner-independent tails: Stage 7 48 h reconciliation (~2026-07-07 morning),
 Stage 6 days 3–5.
+
+## Stage 13 Green-Local — Provenance, Currency, Single-Writer Gate (2026-07-05)
+
+**Decision #71:** Stage 13 built and green-local in one session on
+`kernel/stage-13-transactions-provenance` (5021ac2; suite 169 files / 1417 tests).
+Migrations 0055 (provenance columns, writer seed, backfill, `wrong_transactions_writer`
+incident kind) + 0056 (22 of 42 pages.id FKs → RESTRICT, classification recorded in the
+migration comment). Two deviations from the spec text, both recorded in the stage
+`## Progress`:
+
+1. **`source_observation_id` carries no FK constraint.** `observations` is partitioned
+   with PK `(id, received_at)`; PostgreSQL cannot FK a partitioned table on `id` alone —
+   the same limitation that forced the `observation_keys` companion in 0054. The column
+   is a documented plain bigint; the OFAPI ingest populates it TODAY (not a follow-up)
+   by resolving the webhook delivery key through `findObservationByKey`.
+2. **The writer-seed invariant continues at the write paths** (elaboration beyond the
+   spec): `createPlatformPage` births Fansly pages with `transactions_writer='fansly'`;
+   `setPageOfapiAccountId` assigns `'ofapi'` when unassigned. Without this, every page
+   created after the migration would refuse its own writer until Stage 14 — including
+   live onboarding. An explicit assignment is never overridden.
+
+Also notable: the Stage 2 handler-level 409 on fact-bearing page deletion is REPLACED by
+tombstone semantics per the spec's §5 (delete = `status='deleted'`, facts and config
+remain — a two-way door; only a raw SQL DELETE is refused, now at the FK level). The
+gate refuses NULL-writer pages for every writer; the OFAPI ingest skips only the refused
+page (rows stay pending and re-list), other pages keep applying.
+
+Remaining for exit: deploy (migrations 0055+0056), then §5 production checks — source
+coverage split, per-page/month revenue totals identical, wrong-writer probe, ingest
+flowing post-deploy.
