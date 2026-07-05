@@ -24,8 +24,8 @@ import {
 import { SPENDER_AUTO_LIST_BUCKETS, UTC_TIME_ZONE, millsToNumber, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import type { AuthPrincipal } from "../auth.ts";
-import { resolveAccessibleFanslyPage } from "../fansly-page.ts";
+import type { AuthPrincipal } from "../../services/auth.ts";
+import { resolveAccessibleWorkboardPage } from "./page-access.ts";
 import { resolveClosingSettings } from "./ai-settings.ts";
 import { isClosingMessage } from "./closing.ts";
 import { recomputeWorkboardFan, recomputeWorkboardPage } from "./recompute.ts";
@@ -133,7 +133,7 @@ export async function getWorkboardV2Report(
   pageLabel: string,
   query: WorkboardV2Query,
 ): Promise<WorkboardV2Response> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
 
   const [{ total, rows }, counts] = await Promise.all([
     listWorkboardV2(app.db, {
@@ -181,7 +181,7 @@ export async function getWorkboardV2Lists(
   principal: AuthPrincipal,
   pageLabel: string,
 ): Promise<WorkboardV2ListsResponse> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
 
   const { counts, rows } = await listWorkboardSpenderBands(app.db, {
     platformAccountId: page.id,
@@ -270,7 +270,7 @@ export async function recordWorkboardContactV2(
   pageLabel: string,
   body: WorkboardV2ContactBody,
 ): Promise<{ ok: true; fanId: number }> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
 
   await appendWorkboardContact(app.db, {
     modelId: page.modelId,
@@ -296,7 +296,7 @@ export async function snoozeWorkboardV2(
   pageLabel: string,
   body: { fanId: number; days: number },
 ): Promise<{ ok: true; fanId: number; snoozedUntil: string | null }> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
   const result = await snoozeWorkboardFanV2(app.db, { platformAccountId: page.id, fanId: body.fanId, days: body.days, createdByUserId: principal.user.id });
   await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId: body.fanId });
   return { ok: true, fanId: body.fanId, snoozedUntil: result ? result.snoozedUntil.toISOString() : null };
@@ -308,7 +308,7 @@ export async function unsnoozeWorkboardV2(
   pageLabel: string,
   fanId: number,
 ): Promise<{ ok: true; fanId: number }> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
   await unsnoozeWorkboardFan(app.db, { platformAccountId: page.id, fanId });
   await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId });
   return { ok: true, fanId };
@@ -320,7 +320,7 @@ export async function undoWorkboardContactV2(
   pageLabel: string,
   fanId: number,
 ): Promise<{ ok: true; fanId: number }> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
   await retractLastWorkboardContact(app.db, page.id, fanId);
   await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId });
   return { ok: true, fanId };
@@ -331,7 +331,7 @@ export async function triggerWorkboardV2Recompute(
   principal: AuthPrincipal,
   pageLabel: string,
 ): Promise<{ ok: true; evaluated: number }> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
   const result = await recomputeWorkboardPage(app.db, { platformAccountId: page.id });
   return { ok: true, evaluated: result.evaluated };
 }

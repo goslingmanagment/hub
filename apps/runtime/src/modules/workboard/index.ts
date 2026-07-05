@@ -15,14 +15,28 @@ import {
   triggerWorkboardV2Recompute,
   undoWorkboardContactV2,
   unsnoozeWorkboardV2,
-} from "../../services/workboard-v2/report.ts";
+} from "./report.ts";
 import {
   getWorkboardV2AiReport,
   listWorkboardV2AiRuns,
   runWorkboardV2AiClassify,
   updateWorkboardV2AiSettings,
-} from "../../services/workboard-v2/ai-analytics.ts";
+} from "./ai-analytics.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+
+// The module's exported service interface (worker sweeps, classifier, tests
+// reach engine internals ONLY through here — the Stage 19 walls enforce it).
+export * from "./engine.ts";
+export * from "./recompute.ts";
+export * from "./closing-classifier.ts";
+export * from "./classify-closing.ts";
+export * from "./ai-analytics.ts";
+export * from "./report.ts";
+export * from "./types.ts";
+export * from "./ai-settings.ts";
+export * from "./closing.ts";
+export * from "./spender-diagnostics.ts";
+export * from "./page-access.ts";
 
 // Workboard module (target §6.1): board reads, contact log, snoozes, classifier
 // admin. Handlers relocated verbatim from server.ts (Stage 19 Task 3) — the

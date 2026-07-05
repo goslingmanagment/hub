@@ -4,7 +4,7 @@ import {
   estimateCostUsd,
   modelPricing,
   resolveClosingSettings,
-} from "../apps/runtime/src/services/workboard-v2/ai-settings.ts";
+} from "../apps/runtime/src/modules/workboard/index.ts";
 
 const ENV = {
   anthropicApiKey: "sk-test",

@@ -30,10 +30,10 @@ import {
 } from "@agency_hub_core/db";
 import { dollarsToMills, SPENDER_AUTO_LIST_BUCKETS, toBusinessDate, UTC_TIME_ZONE } from "@agency_hub_core/shared";
 
-import { recomputeWorkboardPage } from "../apps/runtime/src/services/workboard-v2/recompute.ts";
-import { CLOSING_CLASSIFIER_FEATURE, runClosingClassificationForPage } from "../apps/runtime/src/services/workboard-v2/classify-closing.ts";
-import type { ClosingClassifier } from "../apps/runtime/src/services/workboard-v2/closing-classifier.ts";
-import { summarizeSpenderDiagnostics } from "../apps/runtime/src/services/workboard-v2/spender-diagnostics.ts";
+import { recomputeWorkboardPage } from "../apps/runtime/src/modules/workboard/index.ts";
+import { CLOSING_CLASSIFIER_FEATURE, runClosingClassificationForPage } from "../apps/runtime/src/modules/workboard/index.ts";
+import type { ClosingClassifier } from "../apps/runtime/src/modules/workboard/index.ts";
+import { summarizeSpenderDiagnostics } from "../apps/runtime/src/modules/workboard/index.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
 const DAY = 86_400_000;

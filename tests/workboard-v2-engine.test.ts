@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isClosingMessage } from "../apps/runtime/src/services/workboard-v2/closing.ts";
+import { isClosingMessage } from "../apps/runtime/src/modules/workboard/index.ts";
 import {
   WB,
   combineUrgency,
@@ -9,8 +9,8 @@ import {
   computeValue,
   deriveTab,
   evaluateFan,
-} from "../apps/runtime/src/services/workboard-v2/engine.ts";
-import type { FanSignals } from "../apps/runtime/src/services/workboard-v2/types.ts";
+} from "../apps/runtime/src/modules/workboard/index.ts";
+import type { FanSignals } from "../apps/runtime/src/modules/workboard/index.ts";
 
 const FSM_CTX = { q: 0, qConfidence: "low" as const, freeloaderStatus: "none" as const };
 

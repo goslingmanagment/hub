@@ -23,9 +23,9 @@ import {
 import { UTC_TIME_ZONE, addUtcDays, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import type { AuthPrincipal } from "../auth.ts";
-import { BadRequestError } from "../errors.ts";
-import { resolveAccessibleFanslyPage } from "../fansly-page.ts";
+import type { AuthPrincipal } from "../../services/auth.ts";
+import { BadRequestError } from "../../services/errors.ts";
+import { resolveAccessibleWorkboardPage } from "./page-access.ts";
 import { type ClosingSettingsOverride, DEFAULT_MODEL, estimateCostUsd, resolveClosingSettings } from "./ai-settings.ts";
 import { CLOSING_CLASSIFIER_FEATURE, runClosingClassificationForPage } from "./classify-closing.ts";
 import { isClosingMessage } from "./closing.ts";
@@ -52,7 +52,7 @@ export async function getWorkboardV2AiReport(
   principal: AuthPrincipal,
   pageLabel: string,
 ): Promise<WorkboardV2AiReport> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
   const now = new Date();
   const today = toBusinessDate(now, UTC_TIME_ZONE);
   const fromDate = toBusinessDate(addUtcDays(now, -USAGE_DAYS), UTC_TIME_ZONE);
@@ -146,7 +146,7 @@ export async function updateWorkboardV2AiSettings(
   pageLabel: string,
   body: WorkboardV2AiSettingsBody,
 ): Promise<WorkboardV2AiReport> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
   await upsertClosingSettings(app.db, {
     platformAccountId: page.id,
     enabled: body.enabled,
@@ -199,7 +199,7 @@ export async function runWorkboardV2AiClassify(
   pageLabel: string,
   body: WorkboardV2AiClassifyBody,
 ): Promise<WorkboardV2AiClassifyResponse> {
-  const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
   if (!app.config.anthropicApiKey) {
     throw new BadRequestError("ANTHROPIC_API_KEY is not configured");
   }

@@ -78,8 +78,8 @@ import {
   WORKBOARD_CLASSIFY_QUEUE,
   WORKBOARD_RECOMPUTE_QUEUE,
 } from "./services/sync-queue.ts";
-import { recomputeAllWorkboardPages } from "./services/workboard-v2/recompute.ts";
-import { runClosingClassificationAllPages } from "./services/workboard-v2/classify-closing.ts";
+import { recomputeAllWorkboardPages } from "./modules/workboard/index.ts";
+import { runClosingClassificationAllPages } from "./modules/workboard/index.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
