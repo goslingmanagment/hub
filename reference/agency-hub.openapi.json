@@ -46064,7 +46064,8 @@
                 "ofapi_webhook_silence",
                 "ofapi_burn_rate",
                 "db_disk_usage",
-                "observations_partitions"
+                "observations_partitions",
+                "wrong_transactions_writer"
               ]
             },
             "in": "query",
@@ -46140,7 +46141,8 @@
                               "ofapi_webhook_silence",
                               "ofapi_burn_rate",
                               "db_disk_usage",
-                              "observations_partitions"
+                              "observations_partitions",
+                              "wrong_transactions_writer"
                             ]
                           },
                           "pageLabel": {
