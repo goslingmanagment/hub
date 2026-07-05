@@ -17,7 +17,7 @@ import type { FastifyReply } from "fastify";
 import { pageScopeFor } from "../../api/request-auth.ts";
 import {
   SESSION_COOKIE_NAME,
-  authenticateApiKeyToken,
+  authenticateBearerToken,
   authenticateSessionToken,
   requireApiKeyUser,
   type AuthPrincipal,
@@ -201,7 +201,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           return;
         }
         const refreshed = apiKeyToken
-          ? await authenticateApiKeyToken(appContext, apiKeyToken)
+          ? await authenticateBearerToken(appContext, apiKeyToken)
           : null;
         if (!refreshed) {
           request.log.warn("SSE API key no longer authenticates; closing stream");
@@ -455,7 +455,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           return;
         }
         const refreshed = apiKeyToken
-          ? await authenticateApiKeyToken(appContext, apiKeyToken)
+          ? await authenticateBearerToken(appContext, apiKeyToken)
           : sessionToken
             ? await authenticateSessionToken(appContext, sessionToken)
             : null;

@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { AppContext } from "../bootstrap.ts";
 import {
   SESSION_COOKIE_NAME,
-  authenticateApiKeyToken,
+  authenticateBearerToken,
   authenticateSessionToken,
   requireDashboardUser,
   type AuthPrincipal,
@@ -48,7 +48,9 @@ export function createRequestAuth(appContext: AppContext) {
       : null;
     if (bearerMatch) {
       const token = bearerMatch[1]?.trim() ?? "";
-      request.auth = token ? await authenticateApiKeyToken(appContext, token) : null;
+      // Stage 22: prefix-discriminated — agency_hub_core_ api keys and
+      // agency_hub_device_ device tokens are both first-class bearers.
+      request.auth = token ? await authenticateBearerToken(appContext, token) : null;
       return request.auth;
     }
 

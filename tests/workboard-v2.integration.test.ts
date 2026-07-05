@@ -162,6 +162,7 @@ describe("workboard v2 recompute + read (integration)", () => {
       businessDate: toBusinessDate(now, UTC_TIME_ZONE),
       action: "handled",
       wasProductive: true,
+      actedByUserId: null,
     });
   });
 
@@ -459,6 +460,7 @@ describe("workboard v2 recompute + read (integration)", () => {
       businessDate,
       action: "handled",
       wasProductive: true,
+      actedByUserId: null,
     });
     await appendWorkboardContact(harness.db, {
       modelId: model.id,
@@ -467,6 +469,7 @@ describe("workboard v2 recompute + read (integration)", () => {
       businessDate,
       action: "handled",
       wasProductive: true,
+      actedByUserId: null,
     });
     // Old-mass state row so the residual-cap read (countOldMassContactsToday)
     // counts this fan's touches.

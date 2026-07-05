@@ -21,6 +21,7 @@ function principalOf(input: {
       id: 42,
       username: "grid",
       role: input.role,
+      mustChangePassword: false,
       assignedPages: [],
     },
     assignedPageIds: input.assignedPageIds ?? [],

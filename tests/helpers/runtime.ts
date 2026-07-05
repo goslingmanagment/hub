@@ -63,6 +63,7 @@ export function createTestAppContext(
     telegramProxyPageLabel?: string | null;
     trustProxy?: boolean;
     authPolicyEnforcement?: "log" | "enforce";
+    accessGrantsReadEnabled?: boolean;
     revenueRouteRoleEnforcement?: "log" | "enforce";
   },
 ) {
@@ -150,6 +151,7 @@ export function createTestAppContext(
         overrides?.chatMuseAiGatewayRequestMicroUsdLimit ?? 5_000_000,
       onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
       authPolicyEnforcement: overrides?.authPolicyEnforcement ?? "log",
+      accessGrantsReadEnabled: overrides?.accessGrantsReadEnabled ?? false,
       revenueRouteRoleEnforcement: overrides?.revenueRouteRoleEnforcement ?? "log",
     } as AppContext["config"];
 

@@ -279,6 +279,7 @@ export async function recordWorkboardContactV2(
     businessDate: toBusinessDate(new Date(), UTC_TIME_ZONE),
     action: body.action,
     wasProductive: body.wasProductive,
+    actedByUserId: principal.user.id,
   });
   if (body.wasProductive) {
     await markReactivationAttemptedIfDead(app.db, { platformAccountId: page.id, fanId: body.fanId });
@@ -296,7 +297,7 @@ export async function snoozeWorkboardV2(
   body: { fanId: number; days: number },
 ): Promise<{ ok: true; fanId: number; snoozedUntil: string | null }> {
   const page = await resolveAccessibleFanslyPage(app, principal, pageLabel, FEATURE_LABEL);
-  const result = await snoozeWorkboardFanV2(app.db, { platformAccountId: page.id, fanId: body.fanId, days: body.days });
+  const result = await snoozeWorkboardFanV2(app.db, { platformAccountId: page.id, fanId: body.fanId, days: body.days, createdByUserId: principal.user.id });
   await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId: body.fanId });
   return { ok: true, fanId: body.fanId, snoozedUntil: result ? result.snoozedUntil.toISOString() : null };
 }

@@ -181,6 +181,7 @@ export async function snoozeWorkboardFanReport(
     platformAccountId: page.id,
     fanId: body.fanId,
     days: body.days,
+    createdByUserId: principal.user.id,
   });
   if (!result) {
     throw new NotFoundError(`Fan "${body.fanId}" not found on page "${pageLabel}"`);

@@ -557,6 +557,8 @@ export interface AppendContactInput {
   businessDate: string; // 'YYYY-MM-DD'
   action: "opened" | "handled" | "snoozed";
   wasProductive: boolean;
+  /** Stage 22 attribution: the acting human (SET NULL if the user row goes). */
+  actedByUserId: number | null;
 }
 
 export async function appendWorkboardContact(db: Database, input: AppendContactInput): Promise<void> {
@@ -567,6 +569,7 @@ export async function appendWorkboardContact(db: Database, input: AppendContactI
     businessDate: input.businessDate,
     action: input.action,
     wasProductive: input.wasProductive,
+    actedByUserId: input.actedByUserId,
   });
 }
 
@@ -611,13 +614,14 @@ export async function countOldMassContactsToday(
 /** Snooze a fan for an arbitrary number of days (v2; shares the workboard_snoozes table). */
 export async function snoozeWorkboardFanV2(
   db: Database,
-  input: { platformAccountId: number; fanId: number; days: number },
+  input: { platformAccountId: number; fanId: number; days: number; createdByUserId: number | null },
 ): Promise<{ snoozedUntil: Date } | null> {
   const result = await db.execute<{ snoozed_until: Date }>(sql`
-    insert into workboard_snoozes (platform_account_id, fan_id, snoozed_until)
-    values (${input.platformAccountId}, ${input.fanId}, now() + (${input.days} || ' days')::interval)
+    insert into workboard_snoozes (platform_account_id, fan_id, snoozed_until, created_by_user_id)
+    values (${input.platformAccountId}, ${input.fanId}, now() + (${input.days} || ' days')::interval, ${input.createdByUserId})
     on conflict (platform_account_id, fan_id)
-    do update set snoozed_until = excluded.snoozed_until, created_at = now()
+    do update set snoozed_until = excluded.snoozed_until, created_at = now(),
+                  created_by_user_id = excluded.created_by_user_id
     returning snoozed_until
   `);
   const row = result.rows[0];

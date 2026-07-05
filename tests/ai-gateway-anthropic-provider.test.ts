@@ -41,6 +41,7 @@ function providerInput(
         id: 7,
         username: "chatter",
         role: "chatter",
+      mustChangePassword: false,
         assignedPages: [],
       },
       assignedPageIds: [11],

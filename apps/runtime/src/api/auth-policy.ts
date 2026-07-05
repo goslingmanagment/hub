@@ -5,6 +5,7 @@ import {
   requireApiKeyUser,
   requireDashboardUser,
   requireOwner,
+  requireSessionUser,
   type AuthPrincipal,
 } from "../services/auth.ts";
 
@@ -97,6 +98,9 @@ export async function computeAuthPolicyVerdict(
     case "monitoring":
     case "session":
       kindVerdict = guardVerdict(() => requireDashboardUser(principal), "dashboard_session_required");
+      break;
+    case "any-session":
+      kindVerdict = guardVerdict(() => requireSessionUser(principal), "session_required");
       break;
     case "owner-session":
       kindVerdict = guardVerdict(() => requireOwner(principal), "owner_session_required");

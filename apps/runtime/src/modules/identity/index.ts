@@ -6,14 +6,23 @@ import type { AppContext } from "../../bootstrap.ts";
 import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
+  changeOwnPassword,
   createUserAccount,
   getAuthenticatedUserByUsername,
+  grantModelToUser,
   issueChatterApiKey,
+  issueDeviceToken,
+  issueDeviceTokenForUsername,
   listApiKeysForUsers,
+  listDeviceTokensForUsername,
+  listUserGrants,
   listUsersDetailed,
   loginWithPassword,
   logoutSessionToken,
   requireOwner,
+  requireSessionUser,
+  revokeDeviceTokensForUsername,
+  revokeModelFromUser,
   revokeUserApiKeys,
   setUserPassword,
   unassignPageFromUser,
@@ -119,6 +128,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     await setUserPassword(appContext, {
       username: request.params.username,
       password: request.body.password,
+      mustChangePassword: request.body.mustChangePassword,
     }, auditCtx(principal));
     return { ok: true as const };
   });
@@ -190,5 +200,105 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       username: request.params.username,
     }, auditCtx(principal));
     return { revokedCount: revoked.length };
+  });
+
+  // --- Stage 22: self-serve auth surface (any live session, any human role) ---
+
+  server.post("/api/v1/auth/change-password", {
+    schema: routeSchemas.authChangePassword,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireSessionUser(principal);
+    return changeOwnPassword(appContext, {
+      userId: principal.user.id,
+      currentPassword: request.body.currentPassword,
+      newPassword: request.body.newPassword,
+    });
+  });
+
+  server.post("/api/v1/auth/device-tokens", {
+    schema: routeSchemas.authIssueDeviceToken,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireSessionUser(principal);
+    const issued = await issueDeviceToken(appContext, {
+      userId: principal.user.id,
+      label: request.body.label,
+    }, auditCtx(principal));
+    return {
+      token: issued.token,
+      id: issued.id,
+      label: issued.label,
+      keyPrefix: issued.keyPrefix,
+      expiresAt: issued.expiresAt.toISOString(),
+    };
+  });
+
+  // --- Stage 22: device-token + grant admin (owner) ---
+
+  server.get("/api/v1/admin/users/:username/device-tokens", {
+    schema: routeSchemas.adminListDeviceTokens,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return listDeviceTokensForUsername(appContext, request.params.username);
+  });
+
+  server.post("/api/v1/admin/users/:username/device-tokens", {
+    schema: routeSchemas.adminIssueDeviceToken,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const issued = await issueDeviceTokenForUsername(appContext, {
+      username: request.params.username,
+      label: request.body.label,
+    }, auditCtx(principal));
+    return {
+      token: issued.token,
+      id: issued.id,
+      label: issued.label,
+      keyPrefix: issued.keyPrefix,
+      expiresAt: issued.expiresAt.toISOString(),
+    };
+  });
+
+  server.delete("/api/v1/admin/users/:username/device-tokens", {
+    schema: routeSchemas.adminRevokeDeviceTokens,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return revokeDeviceTokensForUsername(appContext, {
+      username: request.params.username,
+    }, auditCtx(principal));
+  });
+
+  server.post("/api/v1/admin/users/:username/models", {
+    schema: routeSchemas.adminGrantModel,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return grantModelToUser(appContext, {
+      username: request.params.username,
+      modelSlug: request.body.modelSlug,
+    }, auditCtx(principal));
+  });
+
+  server.delete("/api/v1/admin/users/:username/models/:modelSlug", {
+    schema: routeSchemas.adminRevokeModel,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return revokeModelFromUser(appContext, {
+      username: request.params.username,
+      modelSlug: request.params.modelSlug,
+    }, auditCtx(principal));
+  });
+
+  server.get("/api/v1/admin/users/:username/grants", {
+    schema: routeSchemas.adminListUserGrants,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return { grants: await listUserGrants(appContext, request.params.username) };
   });
 }

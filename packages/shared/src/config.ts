@@ -170,6 +170,10 @@ const envSchema = z.object({
   // before any handler runs. Legacy guards stay in place either way until the
   // post-flip cleanup.
   AUTH_POLICY_ENFORCEMENT: z.enum(["log", "enforce"]).default("log"),
+  // Stage 22 grants read-path flip: false = assignments table (legacy shadow,
+  // dual-written); true = the access_grants projection. Flip only after the
+  // prod parity diff is exactly zero.
+  ACCESS_GRANTS_READ_ENABLED: booleanSchema.default(false),
   CHATMUSE_AI_GATEWAY_ENABLED: booleanSchema.default(false),
   CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(200),
   CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
@@ -278,6 +282,7 @@ export interface AppConfig {
   diskUsageAlertPercent?: number;
   revenueRouteRoleEnforcement?: "log" | "enforce";
   authPolicyEnforcement?: "log" | "enforce";
+  accessGrantsReadEnabled?: boolean;
   chatMuseAiGatewayEnabled?: boolean;
   chatMuseAiGatewayDailyRequestLimit?: number;
   chatMuseAiGatewayDailyMicroUsdLimit?: number;
@@ -473,6 +478,7 @@ export function loadConfig(
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
     revenueRouteRoleEnforcement: parsed.REVENUE_ROUTE_ROLE_ENFORCEMENT,
     authPolicyEnforcement: parsed.AUTH_POLICY_ENFORCEMENT,
+    accessGrantsReadEnabled: parsed.ACCESS_GRANTS_READ_ENABLED,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,
     chatMuseAiGatewayDailyRequestLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT,
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,

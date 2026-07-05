@@ -282,11 +282,13 @@ describe("workboard repository integration", () => {
       platformAccountId: page.id,
       fanId: seeded.snoozedSubscriber.id,
       days: 7,
+      createdByUserId: null,
     });
     await snoozeWorkboardFan(testDb.db, {
       platformAccountId: page.id,
       fanId: seeded.deletedSubscriber.id,
       days: 30,
+      createdByUserId: null,
     });
 
     const [subscribers, activeSpenders, allSpenders, snoozed] = await Promise.all([
@@ -335,6 +337,7 @@ describe("workboard repository integration", () => {
       platformAccountId: page.id,
       fanId: seeded.snoozedSubscriber.id,
       days: 14,
+      createdByUserId: null,
     });
     await unsnoozeWorkboardFan(testDb.db, {
       platformAccountId: page.id,
@@ -379,6 +382,7 @@ describe("workboard repository integration", () => {
       platformAccountId: page.id,
       fanId: otherFan.id,
       days: 7,
+      createdByUserId: null,
     })).resolves.toBeNull();
 
     await testDb.pool.query(`

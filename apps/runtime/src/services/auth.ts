@@ -27,6 +27,19 @@ import {
   touchAuthSession,
   unassignUserFromPage,
   updateUserPasswordHash,
+  createDeviceToken,
+  findDeviceTokenByDigest,
+  findModelBySlug,
+  insertAccessGrant,
+  listDeviceTokensForUser,
+  listGrantsForUser,
+  listModelsByIds,
+  listPagesByIds,
+  resolveGrantedPageAssignments,
+  revokeAccessGrants,
+  revokeDeviceTokensForUser,
+  updateDeviceTokenUse,
+  updateUserMustChangePassword,
 } from "@agency_hub_core/db";
 import {
   creatableUserRoles,
@@ -66,6 +79,7 @@ export interface AuthenticatedUser {
     modelSlug: string;
     modelName: string;
   }>;
+  mustChangePassword: boolean;
 }
 
 export interface AdminUserApiKeyStatus {
@@ -80,7 +94,7 @@ export interface AdminUserDetailed extends AuthenticatedUser {
 }
 
 export interface AuthPrincipal {
-  authMethod: "session" | "api_key";
+  authMethod: "session" | "api_key" | "device_token";
   user: AuthenticatedUser;
   assignedPageIds: number[];
 }
@@ -94,7 +108,26 @@ function roleCanUseApiKey(role: UserRole) {
 }
 
 function roleCanUseSession(role: UserRole) {
+  // Stage 22: every human role is session-capable (the workboard's substrate);
+  // dashboard route access stays a separate, narrower check below.
+  return role === "owner" || role === "team_lead" || role === "chatter";
+}
+
+function roleCanUseDashboard(role: UserRole) {
   return role === "owner" || role === "team_lead";
+}
+
+/**
+ * Stage 22 read-path toggle: assignments (legacy shadow) or the grants
+ * projection. Both produce the exact listUserPageAssignments row shape — the
+ * `assignedPageIds` enforcement shape is load-bearing for the middleware and
+ * SSE filtering.
+ */
+async function listEffectivePageAssignments(app: AppContext, userId: number) {
+  if (app.config?.accessGrantsReadEnabled) {
+    return resolveGrantedPageAssignments(app.db, userId);
+  }
+  return listUserPageAssignments(app.db, userId);
 }
 
 function mapAssignedPages(
@@ -115,11 +148,12 @@ async function getAuthenticatedUserById(app: AppContext, userId: number) {
     return null;
   }
 
-  const assignedPages = await listUserPageAssignments(app.db, user.id);
+  const assignedPages = await listEffectivePageAssignments(app, user.id);
   return {
     id: user.id,
     username: user.username,
     role: user.role,
+    mustChangePassword: user.mustChangePassword,
     assignedPages: mapAssignedPages(assignedPages),
   } satisfies AuthenticatedUser;
 }
@@ -140,7 +174,7 @@ async function getAdminUserById(app: AppContext, userId: number) {
   }
 
   const [assignedPages, activeApiKeys] = await Promise.all([
-    listUserPageAssignments(app.db, user.id),
+    listEffectivePageAssignments(app, user.id),
     roleCanUseApiKey(user.role) ? findActiveApiKeysForUser(app.db, user.id) : Promise.resolve([]),
   ]);
 
@@ -148,6 +182,7 @@ async function getAdminUserById(app: AppContext, userId: number) {
     id: user.id,
     username: user.username,
     role: user.role,
+    mustChangePassword: user.mustChangePassword,
     assignedPages: mapAssignedPages(assignedPages),
     apiKeyStatus: roleCanUseApiKey(user.role)
       ? {
@@ -291,6 +326,7 @@ export async function setUserPassword(
   input: {
     username: string;
     password: string;
+    mustChangePassword?: boolean;
   },
   audit: AuditContext,
 ) {
@@ -298,7 +334,9 @@ export async function setUserPassword(
   if (!user) {
     throw new NotFoundError(`User "${input.username}" not found`);
   }
-  if (!roleNeedsPassword(user.role)) {
+  // Stage 22: every session-capable role may hold a password (the chatter
+  // invite flow v1 is admin-set-password); content_manager stays out.
+  if (!roleCanUseSession(user.role)) {
     throw new BadRequestError(`Role "${user.role}" cannot use password login`);
   }
 
@@ -310,6 +348,7 @@ export async function setUserPassword(
       user.id,
       passwordHash,
     );
+    await updateUserMustChangePassword(dbTx, user.id, input.mustChangePassword ?? false);
     const revokedSessions = await revokeAuthSessionsForUser(
       dbTx,
       user.id,
@@ -323,9 +362,49 @@ export async function setUserPassword(
       metadata: {
         username: user.username,
         revokedSessions: revokedSessions.length,
+        mustChangePassword: input.mustChangePassword ?? false,
       },
     });
   });
+}
+
+/**
+ * Self-serve password change (Stage 22): verifies the current password, sets
+ * the new one, clears must_change_password, and revokes every session — the
+ * caller re-logs-in with the new credential.
+ */
+export async function changeOwnPassword(
+  app: AppContext,
+  input: {
+    userId: number;
+    currentPassword: string;
+    newPassword: string;
+  },
+) {
+  const user = await findUserById(app.db, input.userId);
+  if (!user || !user.passwordHash) {
+    throw new UnauthorizedError("Invalid current password");
+  }
+  const isValid = await argon2.verify(user.passwordHash, input.currentPassword);
+  if (!isValid) {
+    throw new UnauthorizedError("Invalid current password");
+  }
+
+  const passwordHash = await argon2.hash(input.newPassword, { type: argon2.argon2id });
+  await app.db.transaction(async (tx) => {
+    const dbTx = tx as unknown as typeof app.db;
+    await updateUserPasswordHash(dbTx, user.id, passwordHash);
+    await updateUserMustChangePassword(dbTx, user.id, false);
+    const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "password_changed");
+    await recordAudit({ db: dbTx }, {
+      source: "api",
+      actorUserId: user.id,
+      eventType: "user.password_changed_self",
+      targetUserId: user.id,
+      metadata: { username: user.username, revokedSessions: revokedSessions.length },
+    });
+  });
+  return { ok: true as const };
 }
 
 export async function assignPageToUser(
@@ -346,7 +425,17 @@ export async function assignPageToUser(
     throw new NotFoundError(`Page "${input.pageLabel}" not found`);
   }
 
-  await assignUserToPage(app.db, user.id, page.id);
+  // Stage 22: the grant log is the durable record; the legacy assignment row
+  // is dual-written until the read path flips (then the table freezes).
+  await insertAccessGrant(app.db, {
+    userId: user.id,
+    scopeType: "page",
+    scopeId: page.id,
+    grantedBy: audit.actorUserId ?? null,
+  });
+  if (!app.config?.accessGrantsReadEnabled) {
+    await assignUserToPage(app.db, user.id, page.id);
+  }
 
   await recordAudit(app, {
     ...audit,
@@ -378,7 +467,17 @@ export async function unassignPageFromUser(
     throw new NotFoundError(`Page "${input.pageLabel}" not found`);
   }
 
-  await unassignUserFromPage(app.db, user.id, page.id);
+  // Stage 22: revoke = a stamp on the grant log, never a delete. The legacy
+  // hard-delete continues only while assignments are still the read path.
+  await revokeAccessGrants(app.db, {
+    userId: user.id,
+    scopeType: "page",
+    scopeId: page.id,
+    revokedBy: audit.actorUserId ?? null,
+  });
+  if (!app.config?.accessGrantsReadEnabled) {
+    await unassignUserFromPage(app.db, user.id, page.id);
+  }
 
   await recordAudit(app, {
     ...audit,
@@ -423,7 +522,15 @@ export async function issueChatterApiKey(
     const dbTx = tx as unknown as typeof app.db;
     await lockUserForApiKeyRotation(dbTx, user.id);
     if (page) {
-      await assignUserToPage(dbTx, user.id, page.id);
+      await insertAccessGrant(dbTx, {
+        userId: user.id,
+        scopeType: "page",
+        scopeId: page.id,
+        grantedBy: audit.actorUserId ?? null,
+      });
+      if (!app.config?.accessGrantsReadEnabled) {
+        await assignUserToPage(dbTx, user.id, page.id);
+      }
     }
 
     const activeKeys = await findActiveApiKeysForUser(dbTx, user.id);
@@ -453,7 +560,7 @@ export async function issueChatterApiKey(
     );
   });
 
-  const assignedPages = await listUserPageAssignments(app.db, user.id);
+  const assignedPages = await listEffectivePageAssignments(app, user.id);
 
   return {
     key: rawKey,
@@ -748,8 +855,15 @@ export function requireDashboardUser(principal: AuthPrincipal) {
   if (principal.authMethod !== "session") {
     throw new ForbiddenError("Dashboard routes require a cookie session");
   }
-  if (!roleCanUseSession(principal.user.role)) {
+  if (!roleCanUseDashboard(principal.user.role)) {
     throw new ForbiddenError("This role cannot access dashboard routes");
+  }
+}
+
+/** Any live cookie session, any human role (self-serve auth surface). */
+export function requireSessionUser(principal: AuthPrincipal) {
+  if (principal.authMethod !== "session") {
+    throw new ForbiddenError("This route requires a cookie session");
   }
 }
 
@@ -761,8 +875,8 @@ export function requireOwner(principal: AuthPrincipal) {
 }
 
 export function requireApiKeyUser(principal: AuthPrincipal) {
-  if (principal.authMethod !== "api_key") {
-    throw new ForbiddenError("API key required");
+  if (principal.authMethod !== "api_key" && principal.authMethod !== "device_token") {
+    throw new ForbiddenError("Bearer credential required");
   }
 }
 
@@ -793,6 +907,237 @@ export function enforceRevenueRouteRoleScope(
       authMethod: principal.authMethod,
     }, "would-deny: revenue route requires a dashboard session role (log-only mode)");
   }
+}
+
+
+// --- Device tokens (kernel Stage 22) ---
+
+export const DEVICE_TOKEN_PREFIX = "agency_hub_device_";
+const DEVICE_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+/** Sliding refresh never extends past creation + this hard cap. */
+const DEVICE_TOKEN_MAX_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
+/** Refresh writes are throttled: bump only when it gains at least a day. */
+const DEVICE_TOKEN_REFRESH_GRANULARITY_MS = 24 * 60 * 60 * 1000;
+
+export async function issueDeviceToken(
+  app: AppContext,
+  input: {
+    userId: number;
+    label: string;
+  },
+  audit: AuditContext,
+) {
+  const user = await findUserById(app.db, input.userId);
+  if (!user) {
+    throw new NotFoundError("User not found");
+  }
+  if (!roleCanUseSession(user.role)) {
+    throw new BadRequestError(`Role "${user.role}" cannot hold device tokens`);
+  }
+
+  const tokenBody = randomToken(24);
+  const rawToken = `${DEVICE_TOKEN_PREFIX}${tokenBody}`;
+  const keyPrefix = `${DEVICE_TOKEN_PREFIX}${tokenBody.slice(0, API_KEY_DISPLAY_LENGTH)}`;
+  const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
+  const created = await createDeviceToken(app.db, {
+    userId: user.id,
+    label: input.label,
+    tokenDigest: sha256Hex(rawToken),
+    keyPrefix,
+    expiresAt,
+  });
+
+  await recordAudit(app, {
+    ...audit,
+    eventType: "device_token.issued",
+    targetUserId: user.id,
+    metadata: { username: user.username, label: input.label, keyPrefix },
+  });
+
+  return {
+    token: rawToken,
+    id: created.id,
+    label: created.label,
+    keyPrefix,
+    expiresAt,
+  };
+}
+
+export async function authenticateDeviceToken(app: AppContext, deviceToken: string) {
+  const record = await findDeviceTokenByDigest(app.db, sha256Hex(deviceToken));
+  const now = new Date();
+  if (!record || record.revokedAt || record.expiresAt <= now) {
+    return null;
+  }
+
+  const user = await getAuthenticatedUserById(app, record.userId);
+  if (!user || !roleCanUseSession(user.role)) {
+    return null;
+  }
+
+  // Sliding expiry: each (throttled) use extends the token up to the hard cap;
+  // an idle device dies at expires_at.
+  const cap = new Date(record.createdAt.getTime() + DEVICE_TOKEN_MAX_LIFETIME_MS);
+  const slid = new Date(Math.min(now.getTime() + DEVICE_TOKEN_TTL_MS, cap.getTime()));
+  const worthBumping = slid.getTime() - record.expiresAt.getTime() >= DEVICE_TOKEN_REFRESH_GRANULARITY_MS;
+  await updateDeviceTokenUse(app.db, record.id, {
+    lastUsedAt: now,
+    ...(worthBumping ? { expiresAt: slid } : {}),
+  });
+
+  return {
+    authMethod: "device_token" as const,
+    user,
+    assignedPageIds: user.assignedPages.map((page) => page.id),
+  } satisfies AuthPrincipal;
+}
+
+/** Prefix-discriminated bearer authentication: api key or device token. */
+export async function authenticateBearerToken(app: AppContext, token: string) {
+  if (token.startsWith(DEVICE_TOKEN_PREFIX)) {
+    return authenticateDeviceToken(app, token);
+  }
+  return authenticateApiKeyToken(app, token);
+}
+
+export async function listDeviceTokensForUsername(app: AppContext, username: string) {
+  const user = await findUserByUsername(app.db, username);
+  if (!user) {
+    throw new NotFoundError(`User "${username}" not found`);
+  }
+  const tokens = await listDeviceTokensForUser(app.db, user.id);
+  return tokens.map((token) => ({
+    id: token.id,
+    label: token.label,
+    keyPrefix: token.keyPrefix,
+    isActive: token.revokedAt === null && token.expiresAt > new Date(),
+    expiresAt: token.expiresAt.toISOString(),
+    lastUsedAt: token.lastUsedAt?.toISOString() ?? null,
+    createdAt: token.createdAt.toISOString(),
+    revokedAt: token.revokedAt?.toISOString() ?? null,
+    revokedReason: token.revokedReason ?? null,
+  }));
+}
+
+export async function issueDeviceTokenForUsername(
+  app: AppContext,
+  input: { username: string; label: string },
+  audit: AuditContext,
+) {
+  const user = await findUserByUsername(app.db, input.username);
+  if (!user) {
+    throw new NotFoundError(`User "${input.username}" not found`);
+  }
+  return issueDeviceToken(app, { userId: user.id, label: input.label }, audit);
+}
+
+export async function revokeDeviceTokensForUsername(
+  app: AppContext,
+  input: { username: string },
+  audit: AuditContext,
+) {
+  const user = await findUserByUsername(app.db, input.username);
+  if (!user) {
+    throw new NotFoundError(`User "${input.username}" not found`);
+  }
+  const revoked = await revokeDeviceTokensForUser(app.db, user.id, "revoked");
+  await recordAudit(app, {
+    ...audit,
+    eventType: "device_token.revoked",
+    targetUserId: user.id,
+    metadata: { username: user.username, revokedCount: revoked.length },
+  });
+  return { revokedCount: revoked.length };
+}
+
+// --- Model-scope grants (kernel Stage 22) ---
+
+export async function grantModelToUser(
+  app: AppContext,
+  input: { username: string; modelSlug: string },
+  audit: AuditContext,
+) {
+  const user = await findUserByUsername(app.db, input.username);
+  if (!user) {
+    throw new NotFoundError(`User "${input.username}" not found`);
+  }
+  const model = await findModelBySlug(app.db, input.modelSlug);
+  if (!model) {
+    throw new NotFoundError(`Model "${input.modelSlug}" not found`);
+  }
+  await insertAccessGrant(app.db, {
+    userId: user.id,
+    scopeType: "model",
+    scopeId: model.id,
+    grantedBy: audit.actorUserId ?? null,
+  });
+  await recordAudit(app, {
+    ...audit,
+    eventType: "user.model_granted",
+    targetUserId: user.id,
+    metadata: { username: user.username, modelSlug: model.slug },
+  });
+  return { ok: true as const };
+}
+
+export async function revokeModelFromUser(
+  app: AppContext,
+  input: { username: string; modelSlug: string },
+  audit: AuditContext,
+) {
+  const user = await findUserByUsername(app.db, input.username);
+  if (!user) {
+    throw new NotFoundError(`User "${input.username}" not found`);
+  }
+  const model = await findModelBySlug(app.db, input.modelSlug);
+  if (!model) {
+    throw new NotFoundError(`Model "${input.modelSlug}" not found`);
+  }
+  await revokeAccessGrants(app.db, {
+    userId: user.id,
+    scopeType: "model",
+    scopeId: model.id,
+    revokedBy: audit.actorUserId ?? null,
+  });
+  await recordAudit(app, {
+    ...audit,
+    eventType: "user.model_revoked",
+    targetUserId: user.id,
+    metadata: { username: user.username, modelSlug: model.slug },
+  });
+  return { ok: true as const };
+}
+
+/** Grant history for the admin surface — scope labels resolved for display. */
+export async function listUserGrants(app: AppContext, username: string) {
+  const user = await findUserByUsername(app.db, username);
+  if (!user) {
+    throw new NotFoundError(`User "${username}" not found`);
+  }
+  const grants = await listGrantsForUser(app.db, user.id);
+  const modelIds = grants.filter((g) => g.scopeType === "model").map((g) => g.scopeId);
+  const pageIds = grants.filter((g) => g.scopeType === "page").map((g) => g.scopeId);
+  const [modelRows, pageRows] = await Promise.all([
+    modelIds.length > 0 ? listModelsByIds(app.db, modelIds) : Promise.resolve([]),
+    pageIds.length > 0 ? listPagesByIds(app.db, pageIds) : Promise.resolve([]),
+  ]);
+  const modelLabels = new Map(modelRows.map((row) => [row.id, row.slug]));
+  const pageLabels = new Map(pageRows.map((row) => [row.id, row.label]));
+
+  return grants.map((grant) => ({
+    id: grant.id,
+    scopeType: grant.scopeType,
+    scopeId: grant.scopeId,
+    scopeLabel: grant.scopeType === "model"
+      ? modelLabels.get(grant.scopeId) ?? null
+      : grant.scopeType === "page"
+        ? pageLabels.get(grant.scopeId) ?? null
+        : null,
+    grantedBy: grant.grantedBy,
+    grantedAt: grant.grantedAt.toISOString(),
+    revokedBy: grant.revokedBy,
+    revokedAt: grant.revokedAt?.toISOString() ?? null,
+  }));
 }
 
 export { getAuthenticatedUserByUsername };

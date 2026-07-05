@@ -8,6 +8,7 @@ describe("findAdminUserByUsername", () => {
       id: 7,
       username: "anton",
       role: "chatter" as const,
+      mustChangePassword: false,
       assignedPages: [],
       apiKeyStatus: null,
     };

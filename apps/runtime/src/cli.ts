@@ -961,6 +961,39 @@ export function buildProgram() {
     });
 
   program
+    .command("grants:parity")
+    .description("Stage 22: diff the access-grants projection against user_page_assignments for every user (must be exactly zero before the read-path flip)")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const { listUsers, listUserPageAssignments, resolveGrantedPageAssignments } = await import("@agency_hub_core/db");
+        const users = await listUsers(app.db);
+        let mismatchedUsers = 0;
+        for (const user of users) {
+          const [assignments, granted] = await Promise.all([
+            listUserPageAssignments(app.db, user.id),
+            resolveGrantedPageAssignments(app.db, user.id),
+          ]);
+          const left = assignments.map((row) => row.pageId).sort((a, b) => a - b);
+          const right = granted.map((row) => row.pageId).sort((a, b) => a - b);
+          const equal = left.length === right.length && left.every((id, i) => id === right[i]);
+          if (!equal) {
+            mismatchedUsers += 1;
+            console.log(`MISMATCH ${user.username}: assignments=[${left.join(",")}] grants=[${right.join(",")}]`);
+          }
+        }
+        console.log(mismatchedUsers === 0
+          ? `PARITY OK across ${users.length} users`
+          : `PARITY FAILED for ${mismatchedUsers}/${users.length} users`);
+        if (mismatchedUsers > 0) {
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("harvest:reconcile")
     .description("Stage 12: reconcile a machine's harvest manifest against kernel observation counts")
     .requiredOption("--manifest <path>", "chatgoose-harvest-manifest-<machineId>-<stamp>.json")

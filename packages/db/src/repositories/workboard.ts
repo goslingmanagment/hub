@@ -763,16 +763,17 @@ export async function listWorkboardAllSpenders(
 
 export async function snoozeWorkboardFan(
   db: Database,
-  input: { platformAccountId: number; fanId: number; days: 7 | 14 | 30 },
+  input: { platformAccountId: number; fanId: number; days: 7 | 14 | 30; createdByUserId: number | null },
 ): Promise<{ fanId: number; snoozedUntil: Date } | null> {
   const result = await db.execute<{
     fanId: NumericValue;
     snoozedUntil: TimestampValue;
   }>(sql`
-    insert into workboard_snoozes (platform_account_id, fan_id, snoozed_until)
+    insert into workboard_snoozes (platform_account_id, fan_id, snoozed_until, created_by_user_id)
     select fp.platform_account_id,
            fp.fan_id,
-           now() + (${input.days} || ' days')::interval
+           now() + (${input.days} || ' days')::interval,
+           ${input.createdByUserId}
     from page_fans fp
     inner join fans f on f.id = fp.fan_id
     where fp.platform_account_id = ${input.platformAccountId}
@@ -780,7 +781,8 @@ export async function snoozeWorkboardFan(
       and f.deleted_detected_at is null
     on conflict (platform_account_id, fan_id)
     do update set snoozed_until = excluded.snoozed_until,
-                  created_at = now()
+                  created_at = now(),
+                  created_by_user_id = excluded.created_by_user_id
     returning fan_id as "fanId", snoozed_until as "snoozedUntil"
   `);
 
