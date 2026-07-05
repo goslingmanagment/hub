@@ -109,10 +109,77 @@ export async function appendDomainEvents(
         update domain_event_seq set next_seq = ${nextSeq}
         where account_id = ${accountId}
       `);
+      // Stage 21 fan-out: one wake-up per (account, batch), fired on COMMIT.
+      // The payload is advisory — the hub drains forward from its own
+      // watermark, never builds frames from notifications.
+      await tx.execute(sql`
+        select pg_notify(${DOMAIN_EVENTS_APPENDED_CHANNEL}, ${`${accountId}:${nextSeq - 1}`})
+      `);
     }
 
     return { appended, deduped, highWater: nextSeq - 1 };
   });
+}
+
+/** LISTEN/NOTIFY channel for domain-event appends (kernel Stage 21). */
+export const DOMAIN_EVENTS_APPENDED_CHANNEL = "domain_events_appended";
+
+/** Every account's high-water sequence (next_seq - 1), the v2 "now" cursor source. */
+export async function listDomainEventHighWaters(db: Database): Promise<Map<number, number>> {
+  const result = await db.execute<{ account_id: number; high: string }>(sql`
+    select account_id, (next_seq - 1)::text as high from domain_event_seq
+  `);
+  const map = new Map<number, number>();
+  for (const row of result.rows) {
+    map.set(Number(row.account_id), Number(row.high));
+  }
+  return map;
+}
+
+export interface DomainEventAccountBounds {
+  accountId: number;
+  /** Lowest retained account_seq (null when the account has no retained rows). */
+  oldestRetainedSeq: number | null;
+  /** High-water from the gapless counter (authoritative even with zero rows). */
+  currentSeq: number;
+}
+
+/**
+ * Retention bounds per account for the v2 gap rule: a resume watermark below
+ * `oldestRetainedSeq - 1` cannot be replayed (rows pruned — real after
+ * Stage 28's tiering), and one ahead of `currentSeq` never existed.
+ */
+export async function listDomainEventAccountBounds(
+  db: Database,
+  accountIds: readonly number[],
+): Promise<Map<number, DomainEventAccountBounds>> {
+  const bounds = new Map<number, DomainEventAccountBounds>();
+  if (accountIds.length === 0) {
+    return bounds;
+  }
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select s.account_id,
+           (s.next_seq - 1)::text as current_seq,
+           min(de.account_seq)::text as oldest_retained
+    from domain_event_seq s
+    left join domain_events de on de.account_id = s.account_id
+    where s.account_id in (${sql.join(accountIds.map((id) => sql`${id}`), sql`, `)})
+    group by s.account_id, s.next_seq
+  `);
+  for (const row of result.rows) {
+    bounds.set(Number(row.account_id), {
+      accountId: Number(row.account_id),
+      oldestRetainedSeq: row.oldest_retained == null ? null : Number(row.oldest_retained),
+      currentSeq: Number(row.current_seq),
+    });
+  }
+  // Accounts with no counter row yet: zero events, currentSeq 0.
+  for (const accountId of accountIds) {
+    if (!bounds.has(accountId)) {
+      bounds.set(accountId, { accountId, oldestRetainedSeq: null, currentSeq: 0 });
+    }
+  }
+  return bounds;
 }
 
 /** The account's highest assigned account_seq (0 when no events yet). */
