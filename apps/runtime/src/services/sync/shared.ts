@@ -107,6 +107,9 @@ export async function persistRawPayload(
   const context = getPageSyncExecutionContext();
   const stream = context?.stream ?? null;
   const platform = options?.platform ?? null;
+  // Normalized so an adapter (or test stub) handing back undefined still
+  // hashes and journals deterministically as JSON null.
+  const observedPayload = input.responsePayload ?? null;
   try {
     await insertObservation(db, {
       source: "pull",
@@ -114,8 +117,8 @@ export async function persistRawPayload(
       platform,
       accountId: input.platformAccountId,
       kind: input.endpoint,
-      payload: input.responsePayload,
-      payloadHash: createHash("sha256").update(JSON.stringify(input.responsePayload)).digest(),
+      payload: observedPayload,
+      payloadHash: createHash("sha256").update(JSON.stringify(observedPayload)).digest(),
       idempotencyKey: [
         input.platformAccountId,
         stream ?? input.endpoint,

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   insertRawPayload: vi.fn(),
+  insertObservation: vi.fn(),
+  getPageSyncExecutionContext: vi.fn(() => null),
   reserveSyncProviderRateLimit: vi.fn(),
   updatePageMetadata: vi.fn(),
 }));
