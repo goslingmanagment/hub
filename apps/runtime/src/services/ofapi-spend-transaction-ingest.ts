@@ -82,6 +82,10 @@ async function applyPageRows(
         row.eventStatus,
         row.creatorNetAmountMills,
       );
+      // Stage 14: fees ride along with the same reversal sign treatment as the
+      // amounts, so per-row gross − fee = net stays coherent on refunds too.
+      const normalizeFee = (value: bigint | null) =>
+        value === null ? null : normalizeOfapiSpendAmountMills(row.eventStatus, value);
       // Best-effort observation link: the webhook delivery key doubles as the
       // Stage 7 observation key; deliveries older than the journal deploy
       // resolve to null (legacy rows carry source only, per the passport).
@@ -101,6 +105,9 @@ async function applyPageRows(
         grossAmountMills,
         sourceDestinationAmountMills: grossAmountMills,
         creatorNetAmountMills,
+        platformFeeMills: normalizeFee(row.platformFeeMills),
+        vatAmountMills: normalizeFee(row.vatAmountMills),
+        taxAmountMills: normalizeFee(row.taxAmountMills),
         senderId: row.fanPlatformUserId,
         occurredAt: row.occurredAt,
         sourceUpdatedAt: row.occurredAt,

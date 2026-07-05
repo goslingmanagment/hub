@@ -77,6 +77,9 @@ type NormalizedBackfillTransaction = {
   eventStatus: "pending" | "settled" | "reversed";
   grossAmountMills: bigint;
   creatorNetAmountMills: bigint;
+  platformFeeMills: bigint | null;
+  vatAmountMills: bigint | null;
+  taxAmountMills: bigint | null;
   occurredAt: Date;
 };
 
@@ -271,11 +274,18 @@ function normalizeRestTransaction(
   const explicitNet = parseDollarMills(
     row.net ?? row.net_amount ?? row.netAmount ?? row.creator_net_amount ?? row.creatorNetAmount,
   );
-  const fee = parseDollarMills(row.fee ?? row.platform_fee ?? row.platformFee);
+  const fee = parseDollarMills(row.fee_amount ?? row.fee ?? row.platform_fee ?? row.platformFee);
   const creatorNetAmountMills = explicitNet ?? (fee === null ? null : grossAmountMills - fee);
   if (creatorNetAmountMills === null) {
     return { status: "skipped", reason: "missing_net_amount" };
   }
+  // Stage 14 fee capture — same dollars-float field family as the webhook
+  // payload (fee_amount/vat_amount/tax_amount). Only explicitly reported
+  // values are stored; NULL keeps "derivable as gross − net" a query-time
+  // fallback instead of baking a derivation into the explicit-fee column.
+  const platformFeeMills = fee;
+  const vatAmountMills = parseDollarMills(row.vat_amount ?? row.vatAmount ?? row.vat);
+  const taxAmountMills = parseDollarMills(row.tax_amount ?? row.taxAmount ?? row.tax);
 
   const rawType = typeof row.type === "string" && row.type.trim().length > 0
     ? row.type.trim()
@@ -297,6 +307,9 @@ function normalizeRestTransaction(
       eventStatus,
       grossAmountMills,
       creatorNetAmountMills,
+      platformFeeMills,
+      vatAmountMills,
+      taxAmountMills,
       occurredAt,
     },
   };
@@ -712,6 +725,9 @@ async function writeBackfillRows(
         row.eventStatus,
         row.creatorNetAmountMills,
       );
+      // Stage 14: fees carry the same reversal sign treatment as the amounts.
+      const normalizeFee = (value: bigint | null) =>
+        value === null ? null : normalizeOfapiSpendAmountMills(row.eventStatus, value);
       // Audit B2: the webhook→projection ingest path is canonical. The REST
       // backfill writes the SAME row shape for the same (transactionId,
       // eventStatus) — identical rawType (`ofapi:<category>`), canonicalType,
@@ -735,6 +751,9 @@ async function writeBackfillRows(
         grossAmountMills,
         sourceDestinationAmountMills: grossAmountMills,
         creatorNetAmountMills,
+        platformFeeMills: normalizeFee(row.platformFeeMills),
+        vatAmountMills: normalizeFee(row.vatAmountMills),
+        taxAmountMills: normalizeFee(row.taxAmountMills),
         senderId: row.fanPlatformUserId,
         occurredAt: row.occurredAt,
         sourceUpdatedAt: row.occurredAt,

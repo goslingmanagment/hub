@@ -107,6 +107,9 @@ async function seedProjectedTransaction(input: {
   category?: "message" | "tip" | "subscription" | "post" | "stream" | "other";
   grossAmountMills: bigint;
   creatorNetAmountMills: bigint;
+  platformFeeMills?: bigint | null;
+  vatAmountMills?: bigint | null;
+  taxAmountMills?: bigint | null;
   eventStatus: "pending" | "settled" | "reversed";
   occurredAt: Date;
 }) {
@@ -126,6 +129,9 @@ async function seedProjectedTransaction(input: {
     currency: "USD",
     grossAmountMills: input.grossAmountMills,
     creatorNetAmountMills: input.creatorNetAmountMills,
+    platformFeeMills: input.platformFeeMills ?? null,
+    vatAmountMills: input.vatAmountMills ?? null,
+    taxAmountMills: input.taxAmountMills ?? null,
     eventStatus: input.eventStatus,
   });
 }
@@ -166,12 +172,32 @@ describe("OFAPI spend transaction ingest", () => {
       fanPlatformUserId: "1000003",
       grossAmountMills: 17_000n,
       creatorNetAmountMills: 13_600n,
+      platformFeeMills: 3_400n,
+      vatAmountMills: 2_210n,
+      taxAmountMills: 0n,
       eventStatus: "settled",
       occurredAt,
     });
 
     expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(1);
     expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
+
+    // Stage 14: explicit fees carried shadow row -> truth row.
+    const feeRows = await testDb.pool.query<{
+      platform_fee_mills: string | null;
+      vat_amount_mills: string | null;
+      tax_amount_mills: string | null;
+    }>(
+      `select platform_fee_mills::text, vat_amount_mills::text, tax_amount_mills::text
+       from transactions
+       where platform_account_id = $1 and transaction_id = 'tx-settled'`,
+      [page.id],
+    );
+    expect(feeRows.rows).toEqual([{
+      platform_fee_mills: "3400",
+      vat_amount_mills: "2210",
+      tax_amount_mills: "0",
+    }]);
 
     const { rows } = await testDb.pool.query<{
       transaction_state: string;
@@ -609,6 +635,9 @@ describe("OFAPI REST transactions backfill", () => {
             status: "done",
             amount: "45.00",
             net: "36.00",
+            fee_amount: "9.00",
+            vat_amount: "5.85",
+            tax_amount: 0,
             createdAt: "2026-06-26T22:36:00+00:00",
             user: { id: "fan-rest-1" },
           }],
@@ -648,6 +677,9 @@ describe("OFAPI REST transactions backfill", () => {
              t.raw_status,
              t.gross_amount_mills::text,
              t.creator_net_amount_mills::text,
+             t.platform_fee_mills::text,
+             t.vat_amount_mills::text,
+             t.tax_amount_mills::text,
              f.platform_user_id as fan_platform_user_id,
              coalesce(slp.creator_net_amount_mills, 0)::text as lifetime_net,
              coalesce(rd.transaction_count, 0)::int as revenue_count,
@@ -676,6 +708,9 @@ describe("OFAPI REST transactions backfill", () => {
       raw_status: "settled",
       gross_amount_mills: "45000",
       creator_net_amount_mills: "36000",
+      platform_fee_mills: "9000",
+      vat_amount_mills: "5850",
+      tax_amount_mills: "0",
       fan_platform_user_id: "fan-rest-1",
       lifetime_net: "36000",
       revenue_count: 1,

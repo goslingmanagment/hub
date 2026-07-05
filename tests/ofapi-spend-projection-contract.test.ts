@@ -64,7 +64,33 @@ describe("OFAPI spend projection contract mapper", () => {
       currency: "USD",
       grossAmountMills: 17_000,
       creatorNetAmountMills: 13_600,
+      // Stage 14 fee capture: dollars-float fee_amount/vat_amount/tax_amount
+      // from the same live payload, in integer mills (gross − fee = net).
+      platformFeeMills: 3_400,
+      vatAmountMills: 2_210,
+      taxAmountMills: 0,
       status: "pending",
+    });
+  });
+
+  it("keeps fee columns null when the payload omits the fee fields", async () => {
+    const fixture = await loadFixture("transactions_new.json");
+    const { fee_amount: _fee, vat_amount: _vat, tax_amount: _tax, ...payload } = fixture.payload;
+
+    const result = mapOfapiWebhookToSpendProjectionEvent({
+      context: projectionContext(fixture.account_id),
+      eventType: fixture.event,
+      payload,
+    });
+
+    expect(result.status).toBe("projectable");
+    if (result.status !== "projectable") {
+      return;
+    }
+    expect(result.event).toMatchObject({
+      platformFeeMills: null,
+      vatAmountMills: null,
+      taxAmountMills: null,
     });
   });
 

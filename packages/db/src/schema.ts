@@ -1247,6 +1247,12 @@ export const transactions = pgTable(
       mode: "bigint",
     }).notNull(),
     creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" }).notNull(),
+    // Stage 14 explicit fee capture (target §3.5 door 4.8): nullable — only the
+    // OFAPI writers populate them going forward; legacy rows keep NULL (fee is
+    // derivable as gross − net where needed).
+    platformFeeMills: bigint("platform_fee_mills", { mode: "bigint" }),
+    vatAmountMills: bigint("vat_amount_mills", { mode: "bigint" }),
+    taxAmountMills: bigint("tax_amount_mills", { mode: "bigint" }),
     rawDestinationTax: integer("raw_destination_tax"),
     newBalanceMills: bigint("new_balance_mills", { mode: "bigint" }),
     senderId: text("sender_id"),
@@ -2130,6 +2136,11 @@ export const ofapiSpendProjectionEvents = pgTable(
     currency: text("currency"),
     grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }),
     creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" }),
+    // Stage 14: fee/VAT/tax carried from the webhook payload through the shadow
+    // row into the truth ingest (all three are dollars-float in the payload).
+    platformFeeMills: bigint("platform_fee_mills", { mode: "bigint" }),
+    vatAmountMills: bigint("vat_amount_mills", { mode: "bigint" }),
+    taxAmountMills: bigint("tax_amount_mills", { mode: "bigint" }),
     eventStatus: text("event_status"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

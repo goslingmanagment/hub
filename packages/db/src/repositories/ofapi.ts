@@ -368,6 +368,9 @@ export interface UpsertOfapiSpendProjectionEventInput {
   currency?: "USD" | null;
   grossAmountMills?: bigint | null;
   creatorNetAmountMills?: bigint | null;
+  platformFeeMills?: bigint | null;
+  vatAmountMills?: bigint | null;
+  taxAmountMills?: bigint | null;
   eventStatus?: "pending" | "settled" | "reversed" | "estimated" | null;
 }
 
@@ -392,6 +395,9 @@ export async function upsertOfapiSpendProjectionEvent(
     currency: input.currency ?? null,
     grossAmountMills: input.grossAmountMills ?? null,
     creatorNetAmountMills: input.creatorNetAmountMills ?? null,
+    platformFeeMills: input.platformFeeMills ?? null,
+    vatAmountMills: input.vatAmountMills ?? null,
+    taxAmountMills: input.taxAmountMills ?? null,
     eventStatus: input.eventStatus ?? null,
     updatedAt: new Date(),
   };
@@ -455,6 +461,9 @@ export interface OfapiSpendProjectionTransactionIngestRow {
   category: "message" | "tip" | "subscription" | "post" | "stream" | "other";
   grossAmountMills: bigint;
   creatorNetAmountMills: bigint;
+  platformFeeMills: bigint | null;
+  vatAmountMills: bigint | null;
+  taxAmountMills: bigint | null;
   eventStatus: "pending" | "settled" | "reversed";
   journalId: number;
   /** The webhook delivery key — also the Stage 7 observation key (source='webhook'). */
@@ -485,6 +494,9 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
       category: ofapiSpendProjectionEvents.category,
       grossAmountMills: ofapiSpendProjectionEvents.grossAmountMills,
       creatorNetAmountMills: ofapiSpendProjectionEvents.creatorNetAmountMills,
+      platformFeeMills: ofapiSpendProjectionEvents.platformFeeMills,
+      vatAmountMills: ofapiSpendProjectionEvents.vatAmountMills,
+      taxAmountMills: ofapiSpendProjectionEvents.taxAmountMills,
       eventStatus: ofapiSpendProjectionEvents.eventStatus,
       journalId: ofapiSpendProjectionEvents.journalId,
       sourceIdempotencyKey: ofapiSpendProjectionEvents.sourceIdempotencyKey,
@@ -572,6 +584,9 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
       category: row.category as OfapiSpendProjectionTransactionIngestRow["category"],
       grossAmountMills: row.grossAmountMills!,
       creatorNetAmountMills: row.creatorNetAmountMills!,
+      platformFeeMills: row.platformFeeMills,
+      vatAmountMills: row.vatAmountMills,
+      taxAmountMills: row.taxAmountMills,
       eventStatus: row.eventStatus as OfapiSpendProjectionTransactionIngestRow["eventStatus"],
       journalId: row.journalId,
       sourceIdempotencyKey: row.sourceIdempotencyKey,

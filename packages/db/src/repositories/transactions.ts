@@ -51,6 +51,11 @@ export interface UpsertTransactionInput {
   grossAmountMills: bigint;
   sourceDestinationAmountMills: bigint;
   creatorNetAmountMills: bigint;
+  /** Stage 14 explicit fees: fill-only — a writer that omits them never erases
+   *  values another writer stored (coalesce on conflict, like fanId). */
+  platformFeeMills?: bigint | null;
+  vatAmountMills?: bigint | null;
+  taxAmountMills?: bigint | null;
   rawDestinationTax?: number | null;
   newBalanceMills?: bigint | null;
   senderId?: string | null;
@@ -77,6 +82,9 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     grossAmountMills: input.grossAmountMills,
     sourceDestinationAmountMills: input.sourceDestinationAmountMills,
     creatorNetAmountMills: input.creatorNetAmountMills,
+    platformFeeMills: input.platformFeeMills ?? null,
+    vatAmountMills: input.vatAmountMills ?? null,
+    taxAmountMills: input.taxAmountMills ?? null,
     rawDestinationTax: input.rawDestinationTax ?? null,
     newBalanceMills: input.newBalanceMills ?? null,
     senderId: input.senderId ?? null,
@@ -91,6 +99,9 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
   const updateSet = {
     ...insertValues,
     fanId: sql<number | null>`coalesce(excluded.fan_id, ${transactions.fanId})`,
+    platformFeeMills: sql<bigint | null>`coalesce(excluded.platform_fee_mills, ${transactions.platformFeeMills})`,
+    vatAmountMills: sql<bigint | null>`coalesce(excluded.vat_amount_mills, ${transactions.vatAmountMills})`,
+    taxAmountMills: sql<bigint | null>`coalesce(excluded.tax_amount_mills, ${transactions.taxAmountMills})`,
     scanToken: input.scanToken === undefined
       ? sql`${transactions.scanToken}`
       : (input.scanToken ?? null),

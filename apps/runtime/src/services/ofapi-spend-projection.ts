@@ -149,6 +149,9 @@ async function writeProjectedEvent(
     creatorNetAmountMills: event.creatorNetAmountMills === null
       ? null
       : BigInt(event.creatorNetAmountMills),
+    platformFeeMills: event.platformFeeMills === null ? null : BigInt(event.platformFeeMills),
+    vatAmountMills: event.vatAmountMills === null ? null : BigInt(event.vatAmountMills),
+    taxAmountMills: event.taxAmountMills === null ? null : BigInt(event.taxAmountMills),
     eventStatus: event.status,
   });
 }

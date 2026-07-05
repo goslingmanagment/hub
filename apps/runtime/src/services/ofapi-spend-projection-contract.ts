@@ -53,6 +53,12 @@ export interface CoreSpendProjectionEvent {
   currency: "USD";
   grossAmountMills: number | null;
   creatorNetAmountMills: number | null;
+  // Stage 14 fee capture. Verified live payload shape (prod journal
+  // 2026-07-05): fee_amount/vat_amount/tax_amount are dollars-float siblings
+  // of amount/net_amount, with gross − fee = net; VAT is buyer-side on top.
+  platformFeeMills: number | null;
+  vatAmountMills: number | null;
+  taxAmountMills: number | null;
   status: OfapiSpendProjectionStatus;
 }
 
@@ -193,6 +199,9 @@ function baseEvent(
   | "currency"
   | "grossAmountMills"
   | "creatorNetAmountMills"
+  | "platformFeeMills"
+  | "vatAmountMills"
+  | "taxAmountMills"
   | "status"
 > & { sourceEventType: OfapiSpendProjectionEventType } {
   return {
@@ -245,6 +254,9 @@ function mapTransactionsNew(
       currency: "USD",
       grossAmountMills,
       creatorNetAmountMills,
+      platformFeeMills: parseDollarMills(payload.fee_amount),
+      vatAmountMills: parseDollarMills(payload.vat_amount),
+      taxAmountMills: parseDollarMills(payload.tax_amount),
       status,
     },
   };
@@ -280,6 +292,9 @@ function mapPpvUnlocked(
       currency: "USD",
       grossAmountMills: ppvEstimatedAmountMills(payload),
       creatorNetAmountMills: null,
+      platformFeeMills: null,
+      vatAmountMills: null,
+      taxAmountMills: null,
       status: "estimated",
     },
   };
